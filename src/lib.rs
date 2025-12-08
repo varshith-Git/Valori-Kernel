@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 #![no_std]
 
 //! valori-kernel: A deterministic, no_std, fixed-point vector + knowledge graph engine.

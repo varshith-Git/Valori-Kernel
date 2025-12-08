@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from typing import Optional
 from .local import LocalClient
 from .remote import RemoteClient

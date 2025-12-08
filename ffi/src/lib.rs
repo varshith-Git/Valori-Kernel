@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use pyo3::prelude::*;
 use std::sync::Mutex;
 use valori_kernel::state::kernel::KernelState;

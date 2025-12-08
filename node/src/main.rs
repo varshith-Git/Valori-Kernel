@@ -1,7 +1,9 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use valori_node::config::NodeConfig;
 use valori_node::server::{build_router, ConcreteEngine, SharedEngine};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -24,6 +26,6 @@ async fn main() {
     
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
