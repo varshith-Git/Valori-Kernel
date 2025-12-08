@@ -95,6 +95,39 @@ class MemoryClient:
             "chunk_count": len(chunks)
         }
 
+    def upsert_vector(
+        self,
+        vector: List[float],
+        attach_to_document_node: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Directly upsert a vector, optionally attaching to a doc node.
+        Returns singular dict of IDs.
+        """
+        if len(vector) != EXPECTED_DIM:
+            raise ValueError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
+
+        # Insert vector
+        rid = self._db.insert(vector)
+
+        # Doc node
+        if attach_to_document_node is None:
+            doc_node_id = self._db.create_node(kind=NODE_DOCUMENT, record_id=None)
+        else:
+            doc_node_id = attach_to_document_node
+            
+        # Chunk node
+        chunk_node_id = self._db.create_node(kind=NODE_CHUNK, record_id=rid)
+        
+        # Link
+        self._db.create_edge(from_id=doc_node_id, to_id=chunk_node_id, kind=EDGE_PARENT_OF)
+        
+        return {
+            "record_id": rid,
+            "document_node_id": doc_node_id,
+            "chunk_node_id": chunk_node_id,
+        }
+
     def semantic_search(
         self,
         query: str,

@@ -22,6 +22,12 @@ class MemoryUpsertResponse(TypedDict):
     chunk_node_ids: List[int]
     chunk_count: int
 
+class MemoryUpsertVectorResponse(TypedDict):
+    memory_id: str
+    record_id: int
+    document_node_id: int
+    chunk_node_id: int
+
 class MemorySearchResponseHit(TypedDict):
     memory_id: str
     record_id: int
@@ -52,6 +58,12 @@ class ProtocolClient:
     @staticmethod
     def _memory_id_from_record_id(record_id: int) -> str:
         return f"rec:{record_id}"
+    
+    def snapshot(self) -> bytes:
+        return self._memory._db.snapshot()
+
+    def restore(self, data: bytes) -> None:
+        self._memory._db.restore(data)
 
     def upsert_text(
         self,
@@ -99,40 +111,24 @@ class ProtocolClient:
         attach_to_document_node: Optional[int] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> MemoryUpsertResponse:
+    ) -> MemoryUpsertVectorResponse:
         """
         Vector-first API:
         - Insert a single vector.
         - Optionally attach to an existing document node.
         - Creates a CHUNK node pointing to the record.
         """
-        # Validate dimension
-        if len(vector) != EXPECTED_DIM:
-            raise ValueError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
-
-        # Insert vector
-        record_id = self._memory._db.insert(vector)  # _db is the underlying Valori client
-
-        # Create or reuse document node
-        if attach_to_document_node is None:
-            doc_node_id = self._memory._db.create_node(kind=NODE_DOCUMENT, record_id=None)
-        else:
-            doc_node_id = attach_to_document_node
-
-        # Create chunk node
-        chunk_node_id = self._memory._db.create_node(kind=NODE_CHUNK, record_id=record_id)
+        # Call MemoryClient helper
+        res = self._memory.upsert_vector(vector, attach_to_document_node)
         
-        # Link doc -> chunk
-        self._memory._db.create_edge(from_id=doc_node_id, to_id=chunk_node_id, kind=EDGE_PARENT_OF)
-
+        record_id = res["record_id"]
         memory_id = self._memory_id_from_record_id(record_id)
 
         return {
-            "memory_ids": [memory_id],
-            "record_ids": [record_id],
-            "document_node_id": doc_node_id,
-            "chunk_node_ids": [chunk_node_id],
-            "chunk_count": 1,
+            "memory_id": memory_id,
+            "record_id": record_id,
+            "document_node_id": res["document_node_id"],
+            "chunk_node_id": res["chunk_node_id"],
         }
 
     def search_text(self, query: str, k: int = 5) -> MemorySearchResponse:

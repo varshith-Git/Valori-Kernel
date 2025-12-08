@@ -35,3 +35,16 @@ class Client:
         data = {"from": from_id, "to": to_id, "kind": kind}
         resp = self._post("/graph/edge", data)
         return resp["edge_id"]
+    def snapshot(self) -> bytes:
+        """Download snapshot from remote."""
+        url = self.base_url + "/snapshot"
+        resp = self.session.post(url)
+        resp.raise_for_status()
+        return resp.content
+
+    def restore(self, data: bytes) -> None:
+        """Upload snapshot to remote."""
+        url = self.base_url + "/restore"
+        headers = {"Content-Type": "application/octet-stream"}
+        resp = self.session.post(url, data=data, headers=headers)
+        resp.raise_for_status()

@@ -44,28 +44,21 @@ def test_upsert_vector_explicit(protocol_client):
     
     res = protocol_client.upsert_vector(vec)
     
-    assert len(res["memory_ids"]) == 1
-    assert res["chunk_count"] == 1
+    assert res["memory_id"].startswith("rec:")
+    assert res["record_id"] >= 0
+    assert res["chunk_node_id"] > 0
     assert res["document_node_id"] >= 0
     
     # Search vector
     hits = protocol_client.search_vector(vec, k=1)
     assert len(hits["results"]) >= 1
-    # We might match the one we just inserted or previous ones if unrelated state
-    # But score should be very low (distance ~0) or high (similarity)?
-    # Values are L2 squared distance. So 0 is perfect match.
-    # Note: Search returns (id, score). 
-    # For L2 sq, score = dist_sq. 0 is best.
     
     best = hits["results"][0]
-    # If we just inserted, it should be the best match (0 distance)
-    # unless there's a collision.
-    # We are using floats 0.5. Converted to fixed point.
     
     # Check if we found our record
     found = False
     for h in hits["results"]:
-        if h["memory_id"] == res["memory_ids"][0]:
+        if h["memory_id"] == res["memory_id"]:
             found = True
             break
     assert found
