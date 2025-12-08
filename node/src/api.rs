@@ -1,0 +1,71 @@
+use serde::{Deserialize, Serialize};
+
+// Note: We need to make sure valori-kernel exports NodeKind/EdgeKind publicly or we redefine/wrap them.
+// Since valori-kernel is a dependency, we can use its types if they are pub.
+// Assuming valori_kernel::types::enums::* is pub.
+
+#[derive(Deserialize)]
+pub struct InsertRecordRequest {
+    pub values: Vec<f32>,
+}
+
+#[derive(Serialize)]
+pub struct InsertRecordResponse {
+    pub id: u32,
+}
+
+#[derive(Deserialize)]
+pub struct SearchRequest {
+    pub query: Vec<f32>,
+    pub k: usize,
+}
+
+#[derive(Serialize)]
+pub struct SearchHit {
+    pub id: u32,
+    pub score: i64, 
+    // Raw fixed-point distance (Q16.16) cast to i64.
+    // Underlying type is FxpScalar(i32) but sq dist can exceed range, so we expose as i64.
+}
+
+#[derive(Serialize)]
+pub struct SearchResponse {
+    pub results: Vec<SearchHit>,
+}
+
+#[derive(Deserialize)]
+pub struct CreateNodeRequest {
+    pub record_id: Option<u32>,
+    // NodeKind needs to be deserializable. 
+    // valori-kernel NodeKind derives Copy, Clone, Debug, PartialEq. Does it derive Serialize/Deserialize?
+    // If not, we need a mirror enum or manual impl.
+    // The user didn't ask to modify kernel. 
+    // So we must redefine or use `#[serde(remote = ...)]`?
+    // Or just "kind": u8 ?
+    // User request: "You can define NodeKind and EdgeKind via valori-kernel’s enums (they are #[repr(u8)] + serde)."
+    // Ah, the user implied they *are* serde? 
+    // Or I should make them serde in kernel?
+    // "Do NOT modify valori-kernel".
+    // "You can define NodeKind ... via valori-kernel's enums (they are #[repr(u8)] + serde)" -> Maybe the user thinks they are serde?
+    // Or maybe "You can define [your own API types] via ..."
+    // I will redefine them here for serde support if kernel ones don't have it.
+    // Let's assume for now I wrap them: kind: u8 in JSON, mapped to enum.
+    pub kind: u8, 
+}
+
+#[derive(Serialize)]
+pub struct CreateNodeResponse {
+    pub node_id: u32,
+}
+
+#[derive(Deserialize)]
+pub struct CreateEdgeRequest {
+    pub from: u32,
+    pub to: u32,
+    pub kind: u8,
+}
+
+#[derive(Serialize)]
+pub struct CreateEdgeResponse {
+    pub edge_id: u32,
+}
