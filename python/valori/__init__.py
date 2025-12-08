@@ -16,4 +16,6 @@ class Valori:
         else:
             return RemoteClient(base_url=remote)
 
-__all__ = ["Valori", "RemoteClient", "LocalClient"]
+from .memory import MemoryClient
+
+__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient"]

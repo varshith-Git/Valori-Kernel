@@ -8,7 +8,8 @@ pub enum NodeKind {
     Agent = 2,
     User = 3,
     Tool = 4,
-    // Add more as needed
+    Document = 5,
+    Chunk = 6,
 }
 
 impl NodeKind {
@@ -19,6 +20,8 @@ impl NodeKind {
             2 => Some(NodeKind::Agent),
             3 => Some(NodeKind::User),
             4 => Some(NodeKind::Tool),
+            5 => Some(NodeKind::Document),
+            6 => Some(NodeKind::Chunk),
             _ => None,
         }
     }
