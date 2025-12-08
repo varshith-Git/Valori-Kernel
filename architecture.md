@@ -21,33 +21,51 @@ graph TD
 
     subgraph Interface["Interface Layer"]
         NodeService["Values Node (HTTP Server)<br/>(Tokio / Axum)"]
-        PythonPkg["Python Package<br/>(valori_ffi)"]
+        PythonPkg["Python Package<br/>(valori)"]
+        
+        subgraph Protocol["Valori Memory Protocol (VMP)"]
+            VMP_Py[ProtocolClient / MemoryClient]
+            VMP_API[Axum Handlers (/v1/memory)]
+        end
     end
 
-    subgraph Core["Core Logic"]
-        Kernel["Valori Kernel<br/>(no_std, Pure Rust)"]
+    subgraph Core["Core Kernel (Rust)"]
+        Kernel["Valori Kernel<br/>(no_std, Deterministic)"]
         
         FXP[Fixed-Point Math]
         Graph[Knowledge Graph]
         Vector[Vector Storage]
+        
+        subgraph Abstractions["Traits"]
+            Index[VectorIndex<br/>(BruteForce / HNSW*)]
+            Quant[Quantizer<br/>(None / Scalar*)]
+        end
     end
 
     %% Relationships
     User -->|HTTP / REST| NodeService
     PyScript -->|Import| PythonPkg
     
+    PythonPkg --> VMP_Py
+    NodeService --> VMP_API
+    
+    VMP_Py -->|FFI| Kernel
+    VMP_Py -->|HTTP| NodeService
+    
     NodeService -->|Embeds| Kernel
-    PythonPkg -->|FFI PyO3| Kernel
+    VMP_API --> Kernel
 
     Kernel --- FXP
     Kernel --- Graph
     Kernel --- Vector
+    Kernel --- Index
+    Kernel --- Quant
 
     %% Apply Classes
     class User,PyScript external;
-    class NodeService,PythonPkg interface;
+    class NodeService,PythonPkg,VMP_Py,VMP_API interface;
     class Kernel core;
-    class FXP,Graph,Vector internal;
+    class FXP,Graph,Vector,Index,Quant internal;
 ```
 
 ## Core Components
@@ -58,16 +76,19 @@ The foundation of the system.
 *   **Fixed-Point Arithmetic (FXP)**: All numeric operations use fixed-point integers (e.g., Q16.16) instead of floating-point numbers (`f32`/`f64`).
     *   **Why?** Floating-point math can vary slightly across different CPU architectures and compiler optimizations (e.g. FMA instructions).
     *   **Benefit**: This guarantees **Bit-Identical Determinism**. The same sequence of inputs will produce the exact same binary state hash on an Intel laptop, an ARM server, or a WASM browser runtime.
+*   **Abstractions (Traits)**:
+    *   **`VectorIndex`**: Pluggable indexing strategy. Default is `BruteForceIndex` (exact). Future support for `HNSW` or `IVF`.
+    *   **`Quantizer`**: Pluggable vector compression. Default is `NoQuantizer` (full precision). Future support for `Scalar` or `Product` quantization.
 *   **State Machine**: The kernel operates as a pure state machine (`State + Command -> New State`).
 
 ### 2. Valori Node (Service Layer)
 *   Wraps the kernel in an **HTTP Server** using `axum` and `tokio`.
-*   Exposes the kernel's capabilities (knowledge graph operations, vector search) via a RESTful API.
-*   Allows the kernel to act as a microservice in a larger distributed system.
+*   **Configurable**: Loads `IndexKind` and `QuantizationKind` from configuration at startup.
+*   **VMP Support**: Implements the **Valori Memory Protocol v0** (`/v1/memory/*`), handling high-level operations like creating Document/Chunk nodes and linking them automatically.
 
-### 3. FFI & Python Bindings
-*   **`valori-ffi`** uses `pyo3` to expose the kernel's Rust types directly to Python.
-*   Enables data scientists and developers to use the kernel within Python scripts or Jupyter notebooks while keeping the high performance and determinism of the Rust core.
+### 3. FFI & Python Client
+*   **`valori` Package**: A unified Python client that can talk to a local FFI kernel OR a remote HTTP Node transparently.
+*   **Protocol Layer**: `ProtocolClient` orchestrates complex flows like text chunking and embedding before sending vectors to the memory layer.
 
 ## Why Determinism Matters
 
