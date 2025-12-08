@@ -1,6 +1,6 @@
 # Rust
-/target
-/target_tmp
+target/
+target_tmp/
 **/*.rs.bk
 debug/
 release/
