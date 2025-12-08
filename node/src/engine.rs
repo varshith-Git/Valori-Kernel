@@ -1,13 +1,14 @@
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::state::command::Command;
 use valori_kernel::types::vector::FxpVector;
-use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
-use valori_kernel::index::brute_force::SearchResult;
+use valori_kernel::index::SearchResult;
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
+use valori_kernel::fxp::ops::from_f32;
 
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
+use crate::errors::EngineError;
 
 pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
     state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
@@ -25,21 +26,8 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         Self {
             state: KernelState::new(),
-            index_kind: cfg.index_kind, // moved value? Enum is not Copy? Need Copy/Clone on Enums. I should check config.rs edit.
-            // Oh, I didn't verify if I derived Copy. The plan says "simple enums".
-            // I should use "pub enum" and they likely need Clone/Copy.
-            // Let's assume I missed derive in config.rs or fix it here by matching.
-            // Wait, I put the code in config.rs. I didn't put specific derives. 
-            // In Rust enums don't get Copy by default.
-            // I should have added derives. I will fix config.rs first? No, I can't backtrack too much.
-            // But let's check what I replaced. 
-            // I wrote: `pub enum IndexKind { BruteForce }`. No derives.
-            // I will fix `config.rs` to add derives OR use manual match.
-            // Better to add derives in `config.rs` in a subsequent step if compilation fails, 
-            // OR use a "fix" step now.
-            // I'll update engine but I suspect I need to fix config.rs derives.
-            quantization_kind: match cfg.quantization_kind { QuantizationKind::None => QuantizationKind::None }, 
-            index_kind: match cfg.index_kind { IndexKind::BruteForce => IndexKind::BruteForce },
+            index_kind: cfg.index_kind,
+            quantization_kind: cfg.quantization_kind,
         }
     }
 

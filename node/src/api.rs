@@ -65,6 +65,11 @@ pub struct CreateEdgeRequest {
     pub kind: u8,
 }
 
+#[derive(Serialize)]
+pub struct CreateEdgeResponse {
+    pub edge_id: u32,
+}
+
 #[derive(Deserialize)]
 pub struct MemoryUpsertVectorRequest {
     pub vector: Vec<f32>,

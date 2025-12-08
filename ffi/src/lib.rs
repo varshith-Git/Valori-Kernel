@@ -5,7 +5,7 @@ use valori_kernel::state::command::Command;
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::RecordId;
-use valori_kernel::index::brute_force::SearchResult;
+use valori_kernel::index::SearchResult;
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
 
 // Constants for KernelState
