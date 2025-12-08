@@ -17,5 +17,6 @@ class Valori:
             return RemoteClient(base_url=remote)
 
 from .memory import MemoryClient
+from .protocol import ProtocolClient
 
-__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient"]
+__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient", "ProtocolClient"]

@@ -65,7 +65,39 @@ pub struct CreateEdgeRequest {
     pub kind: u8,
 }
 
+#[derive(Deserialize)]
+pub struct MemoryUpsertVectorRequest {
+    pub vector: Vec<f32>,
+    pub attach_to_document_node: Option<u32>,
+    // Reserved for future use:
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
 #[derive(Serialize)]
-pub struct CreateEdgeResponse {
-    pub edge_id: u32,
+pub struct MemoryUpsertResponse {
+    pub memory_id: String,
+    pub record_id: u32,
+    pub document_node_id: u32,
+    pub chunk_node_id: u32,
+}
+
+#[derive(Deserialize)]
+pub struct MemorySearchVectorRequest {
+    pub query_vector: Vec<f32>,
+    pub k: usize,
+}
+
+#[derive(Serialize)]
+pub struct MemorySearchHit {
+    pub memory_id: String,
+    pub record_id: u32,
+    pub score: i64,
+}
+
+#[derive(Serialize)]
+pub struct MemorySearchResponse {
+    pub results: Vec<MemorySearchHit>,
 }
