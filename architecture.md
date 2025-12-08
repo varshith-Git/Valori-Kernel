@@ -24,8 +24,8 @@ graph TD
         PythonPkg["Python Package<br/>(valori)"]
         
         %% Protocol Components
-        VMP_Py[ProtocolClient / MemoryClient]
-        VMP_API[Axum Handlers (/v1/memory)]
+        VMP_Py["ProtocolClient / MemoryClient"]
+        VMP_API["Axum Handlers (/v1/memory)"]
     end
 
     subgraph Core["Core Kernel (Rust)"]
@@ -36,8 +36,8 @@ graph TD
         Vector[Vector Storage]
         
         %% Traits
-        Index[VectorIndex<br/>(BruteForce / HNSW)]
-        Quant[Quantizer<br/>(None / Scalar)]
+        Index["VectorIndex<br/>(BruteForce / HNSW)"]
+        Quant["Quantizer<br/>(None / Scalar)"]
     end
 
     %% Relationships
