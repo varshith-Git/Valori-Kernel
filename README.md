@@ -62,6 +62,19 @@ let sum = fxp_add(a, b);
 // sum represents 3.0
 ```
 
+## How to decide when to use which
+
+**Use Local / FFI mode when:**
+*   You’re in a single Python process.
+*   You want zero overhead.
+*   You’re doing research, prototyping, agents, notebooks.
+
+**Use Remote / Node mode when:**
+*   Multiple services need shared memory.
+*   You want to deploy Valori as infra.
+*   You’re building a SaaS or team-wide memory system.
+*   You care about scaling, auth, monitoring.
+
 ## Architecture Phases
 
 1.  **Skeleton + FXP Core**: Basics of fixed-point math. (Completed)
