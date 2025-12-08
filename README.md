@@ -87,4 +87,7 @@ let sum = fxp_add(a, b);
 
 ## License
 
-[Your License Here]
+Valori is open-source software licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](LICENSE).
+
+### Commercial License
+For proprietary use, embedding in closed-source devices, or SaaS hosting without open-sourcing your stack, a Commercial License is available. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
