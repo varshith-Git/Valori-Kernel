@@ -1,10 +1,10 @@
 use crate::types::vector::FxpVector;
 use crate::storage::pool::RecordPool;
-use crate::index::brute_force::{BruteForceIndex, SearchResult};
+use crate::index::{SearchResult, VectorIndex};
+use crate::index::brute_force::BruteForceIndex;
 use crate::types::id::RecordId;
 use crate::types::scalar::FxpScalar;
 use crate::fxp::ops::from_f32;
-use std::vec::Vec;
 
 #[test]
 fn test_brute_force_search() {

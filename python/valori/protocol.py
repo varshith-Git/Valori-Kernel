@@ -49,10 +49,16 @@ class ProtocolClient:
         self,
         embed: EmbedFn,
         remote: Optional[str] = None,
+        index_kind: str = "bruteforce",
+        quantization: str = "none",
     ) -> None:
         self._embed = embed
         # MemoryClient already wraps Valori(remote=...)
-        self._memory = MemoryClient(remote=remote)
+        self._memory = MemoryClient(
+            remote=remote,
+            index_kind=index_kind,
+            quantization=quantization,
+        )
 
     # Helpers to construct canonical memory ids
     @staticmethod

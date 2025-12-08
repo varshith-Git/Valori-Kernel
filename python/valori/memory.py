@@ -11,13 +11,20 @@ EmbedFn = Callable[[str], List[float]]
 EXPECTED_DIM = 16  # must match kernel D
 
 class MemoryClient:
-    def __init__(self, remote: Optional[str] = None):
+    def __init__(
+        self,
+        remote: Optional[str] = None,
+        index_kind: str = "bruteforce",
+        quantization: str = "none",
+    ):
         """
         Wraps a Valori instance (local or remote).
         If remote is None -> Local (FFI).
         Else -> Remote (HTTP).
         """
         self._db = Valori(remote=remote)
+        self._index_kind = index_kind
+        self._quantization = quantization
 
     def add_document(
         self,

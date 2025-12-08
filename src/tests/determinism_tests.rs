@@ -1,11 +1,11 @@
 use crate::state::kernel::KernelState;
 use crate::state::command::Command;
-use crate::types::id::{RecordId, NodeId, EdgeId, Version};
+use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
 use crate::snapshot::hash::hash_state;
 use crate::types::enums::{NodeKind, EdgeKind};
 use crate::fxp::ops::from_f32;
-use std::vec::Vec;
+
 
 /// A simple deterministic RNG for tests.
 struct Pcg32 {

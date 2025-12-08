@@ -1,52 +1,30 @@
 //! Brute-force index.
 
+use crate::index::{SearchResult, VectorIndex};
 use crate::storage::pool::RecordPool;
 use crate::types::vector::FxpVector;
 use crate::types::id::RecordId;
 use crate::types::scalar::FxpScalar;
 use crate::math::l2::fxp_l2_sq;
-use core::cmp::Ordering;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct SearchResult {
-    // Determine sort order: Score ascending, then ID ascending (stable).
-    pub score: FxpScalar,
-    pub id: RecordId,
-}
-
-impl PartialOrd for SearchResult {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for SearchResult {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.score.cmp(&other.score) {
-            Ordering::Equal => self.id.cmp(&other.id),
-            other_ord => other_ord,
-        }
-    }
-}
 
 /// A stateless brute-force index that scans the RecordPool.
 #[derive(Default)]
 pub struct BruteForceIndex;
 
 impl BruteForceIndex {
-    /// Hook called when a record is inserted.
-    pub fn on_insert<const D: usize>(&mut self, _id: RecordId, _vec: &FxpVector<D>) { }
+    // Keep internal implementation for direct use or trait delegation
+}
 
-    /// Hook called when a record is deleted.
-    pub fn on_delete(&mut self, _id: RecordId) { }
+impl<const MAX_RECORDS: usize, const D: usize> VectorIndex<MAX_RECORDS, D> for BruteForceIndex {
+    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector<D>) { }
 
-    /// Rebuilds the index from the pool (if needed).
-    pub fn rebuild<const CAP: usize, const D: usize>(&mut self, _pool: &RecordPool<CAP, D>) { }
+    fn on_delete(&mut self, _id: RecordId) { }
 
-    /// Searches the pool for the k nearest neighbors to `query`.
-    pub fn search<const CAP: usize, const D: usize>(
+    fn rebuild(&mut self, _pool: &RecordPool<MAX_RECORDS, D>) { }
+
+    fn search(
         &self,
-        pool: &RecordPool<CAP, D>,
+        pool: &RecordPool<MAX_RECORDS, D>,
         query: &FxpVector<D>,
         results: &mut [SearchResult],
     ) -> usize {
@@ -88,20 +66,22 @@ impl BruteForceIndex {
 
         count
     }
+}
 
+impl BruteForceIndex {
     /// Helper: returns a fixed-size array of top-K results.
-    /// 
-    /// If fewer than K results are found, the remaining slots contain
-    /// `SearchResult { score: MAX, id: MAX }`.
     pub fn search_topk<const CAP: usize, const D: usize, const K: usize>(
         &self,
         pool: &RecordPool<CAP, D>,
         query: &FxpVector<D>,
     ) -> [SearchResult; K] {
         let mut buf = [SearchResult::default(); K];
-        // Initialize default is not max, so we should rely on search to init?
-        // search() does init with MAX.
-        self.search(pool, query, &mut buf);
+        // Use the trait method here or self implementation if we duplicated?
+        // Let's call the trait method explicitly via UFCS or just impl logic?
+        // To strictly avoid code dup, we could move implementation to a standalone fn or keep it here.
+        // For simplicity: duplicate logic or re-use? 
+        // We implemented the trait. Let's make this helper use the trait impl.
+        VectorIndex::search(self, pool, query, &mut buf);
         buf
     }
 }

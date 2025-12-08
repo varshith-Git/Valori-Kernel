@@ -8,3 +8,4 @@ pub mod state_tests;
 pub mod snapshot_tests;
 pub mod determinism_tests;
 pub mod e2e_tests;
+pub mod quant_tests;

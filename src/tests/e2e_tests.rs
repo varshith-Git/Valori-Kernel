@@ -9,7 +9,7 @@ use crate::types::vector::FxpVector;
 use crate::types::scalar::FxpScalar;
 use crate::types::enums::{NodeKind, EdgeKind};
 use crate::snapshot::{encode::encode_state, decode::decode_state, hash::hash_state};
-use crate::index::brute_force::SearchResult;
+use crate::index::SearchResult;
 use crate::fxp::ops::from_f32;
 use crate::error::KernelError;
 

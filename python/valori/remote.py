@@ -37,16 +37,15 @@ class RemoteClient:
         return resp["edge_id"]
 
     def snapshot(self) -> bytes:
-         # Not yet exposed in remote client in previous phase, but node has it.
-         # Node API: GET /snapshot?
-         # Wait, node/src/server.rs impl: "/snapshot" get -> handle_snapshot
-         url = self.base_url + "/snapshot"
-         resp = self.session.get(url)
-         resp.raise_for_status()
-         return resp.content
+        """Download snapshot from remote."""
+        url = self.base_url + "/snapshot"
+        resp = self.session.post(url)
+        resp.raise_for_status()
+        return resp.content
 
     def restore(self, data: bytes) -> None:
-         # Node API: POST /restore body=bytes
-         url = self.base_url + "/restore"
-         resp = self.session.post(url, data=data)
-         resp.raise_for_status()
+        """Upload snapshot to remote."""
+        url = self.base_url + "/restore"
+        headers = {"Content-Type": "application/octet-stream"}
+        resp = self.session.post(url, data=data, headers=headers)
+        resp.raise_for_status()

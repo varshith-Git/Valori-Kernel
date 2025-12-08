@@ -3,7 +3,8 @@
 use crate::types::id::Version;
 use crate::storage::pool::RecordPool;
 use crate::graph::pool::{NodePool, EdgePool};
-use crate::index::brute_force::{BruteForceIndex, SearchResult};
+use crate::index::brute_force::BruteForceIndex;
+use crate::index::{SearchResult, VectorIndex};
 use crate::state::command::Command;
 use crate::error::{Result, KernelError};
 use crate::graph::node::GraphNode;
@@ -58,11 +59,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                 if allocated_id != *id {
                      return Err(KernelError::InvalidOperation);
                 }
-                self.index.on_insert(allocated_id, vector);
+                <BruteForceIndex as VectorIndex<MAX_RECORDS, D>>::on_insert(&mut self.index, allocated_id, vector);
             }
             Command::DeleteRecord { id } => {
                 self.records.delete(*id)?;
-                self.index.on_delete(*id);
+                <BruteForceIndex as VectorIndex<MAX_RECORDS, D>>::on_delete(&mut self.index, *id);
             }
             Command::CreateNode { node_id, kind, record } => {
                 if let Some(rid) = record {

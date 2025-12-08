@@ -12,8 +12,9 @@ pub mod fxp;
 pub mod types;
 pub mod math;
 pub mod storage;
-pub mod graph;
 pub mod index;
+pub mod quant;
+pub mod graph;
 pub mod state;
 pub mod snapshot;
 
