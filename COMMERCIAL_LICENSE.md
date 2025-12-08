@@ -24,5 +24,4 @@ You **must** purchase a Commercial License if:
 
 ## Contact
 To acquire a commercial license, please contact:
-**licensing@valori.ai** 
-*(Replace with your actual contact or pricing page link)*
+**varshith.gudur17@gmail.com**
