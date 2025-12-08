@@ -23,10 +23,9 @@ graph TD
         NodeService["Values Node (HTTP Server)<br/>(Tokio / Axum)"]
         PythonPkg["Python Package<br/>(valori)"]
         
-        subgraph Protocol["Valori Memory Protocol (VMP)"]
-            VMP_Py[ProtocolClient / MemoryClient]
-            VMP_API[Axum Handlers (/v1/memory)]
-        end
+        %% Protocol Components
+        VMP_Py[ProtocolClient / MemoryClient]
+        VMP_API[Axum Handlers (/v1/memory)]
     end
 
     subgraph Core["Core Kernel (Rust)"]
@@ -36,10 +35,9 @@ graph TD
         Graph[Knowledge Graph]
         Vector[Vector Storage]
         
-        subgraph Abstractions["Traits"]
-            Index[VectorIndex<br/>(BruteForce / HNSW*)]
-            Quant[Quantizer<br/>(None / Scalar*)]
-        end
+        %% Traits
+        Index[VectorIndex<br/>(BruteForce / HNSW)]
+        Quant[Quantizer<br/>(None / Scalar)]
     end
 
     %% Relationships
