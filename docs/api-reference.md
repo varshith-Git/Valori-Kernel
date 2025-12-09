@@ -1,6 +1,6 @@
-# Valori Kernel Node.js API Reference
+# Valori Server API Reference
 
-The `valori-node` server exposes the kernel over HTTP, allowing it to be used as a backend service.
+The `valori-node` server exposes the kernel over HTTP, allowing it to be used as a backend service. This server is written in **Rust** (not Node.js) but acts as a network "node" in a distributed system.
 
 **Base URL**: `http://localhost:3000` (Default)
 

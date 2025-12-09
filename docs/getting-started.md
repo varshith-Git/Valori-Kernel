@@ -1,19 +1,4 @@
-# Getting Started with Valori Kernel
-
-Valori Kernel is a deterministic, `no_std` vector database and knowledge graph engine. It allows you to store vectors, form relationships between concepts, and replay execution state identically across any platform.
-
-## 1. Choose Your Interface
-
-Valori is designed to be embedded. You rarely interact with the "Kernel" directly unless you are writing Rust. Instead, you use one of the two primary interfaces:
-
-| Interface | Use Case |
-| :--- | :--- |
-| **Python FFI (`valori-ffi`)** | **Local / Research**: Single-process scripts, Jupyter notebooks, agents, prototyping. Minimal overhead, direct memory access. |
-| **Node.js Service (`valori-node`)** | **Remote / Infrastructure**: Microservices, shared memory across apps, SaaS deployment. Accessible via HTTP/REST. |
-
----
-
-## Getting Started with Valori
+# Getting Started with Valori
 
 This guide will take you from zero to running your first Deterministic Memory Engine.
 
@@ -92,42 +77,9 @@ When you are ready to scale, run the Valori Node server.
 
 3.  **Run**:
     Only the `client` logic changes. The data now lives in the `valori-node` process!
- Insert a vector (16 dimensions)
-vec = [0.1] * 16
-id_1 = db.insert(vec)
-print(f"Inserted record with ID: {id_1}")
-
-# 2. Search
-hits = db.search(vec, k=5)
-print(f"Nearest neighbors: {hits}")
-
-# 3. Create Graph Nodes
-node_id = db.create_node(kind=1, record_id=id_1)
-```
-
-## 4. Quick Start (HTTP / Node)
-
-Start the server:
-```bash
-cargo run --bin valori-node
-```
-
-Interact via curl or HTTP client:
-
-```bash
-# Insert Record
-curl -X POST http://localhost:3000/records \
-  -H "Content-Type: application/json" \
-  -d '{"values": [0.1, 0.1, ...]}'
-
-# Search
-curl -X POST http://localhost:3000/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": [0.1, 0.1, ...], "k": 5}'
-```
 
 ## Next Steps
 
 *   [Core Concepts](./core-concepts.md) - Learn about Determinism, Fixed-Point Math, and Snapshots.
-*   [Python Reference](./python-reference.md) - Detailed PyKernel API documentation.
-*   [Node.js Reference](./node-reference.md) - API endpoints and schemas.
+*   [Remote Mode Guide](./remote-mode.md) - Detailed production guide.
+*   [API Reference](./api-reference.md) - HTTP endpoints for the Node server.
