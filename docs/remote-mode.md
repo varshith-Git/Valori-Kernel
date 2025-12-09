@@ -1,16 +1,25 @@
 # Valori Remote Mode Guide
 
-Valori is designed to be **"Local First, Remote Ready"**. This means you can write your application code *once* using the `ProtocolClient`, and switch between embedded execution and client-server architecture just by changing a config string.
+Valori is designed to be **"Local First, Remote Ready"**. This means you can write your application code *once* using the `ProtocolClient`, and switch between embedded execution and client-server architecture just by modifying the configuration.
 
-## Architecture
+---
 
-*   **Local Mode**: The Python library (`valori`) loads the Rust Kernel (`valori-node`) as a shared library (`.so` / `.dll`). Memory is stored in your process's RAM.
-*   **Remote Mode**: You act as a client. The `valori-node` binary runs as a standalone HTTP server. Your Python code uses `requests` to send vectors to the node.
+## 🏗️ Architecture Comparison
+
+| Feature | Local Mode (FFI) | Remote Mode (HTTP) |
+| :--- | :--- | :--- |
+| **Where it runs** | Inside your Python process (as a C library) | In a separate process / server / docker container |
+| **Communication** | Direct Memory Access (Zero latency) | HTTP / JSON over Network |
+| **Concurrency** | Single Process Lock | Multi-Client Concurrent Access |
+| **Best For** | Scripts, CLI tools, Embedded Agents | Web Apps, Cloud Backends, Multi-Agent Swarms |
+
+---
 
 ## 1. Starting the Server
 
-Build and run the node binary:
+The `valori-node` binary is a high-performance HTTP server powered by **Axum** (Rust).
 
+### Build & Run
 ```bash
 # Production build
 cargo build -p valori-node --release
@@ -19,18 +28,26 @@ cargo build -p valori-node --release
 ./target/release/valori-node
 ```
 
-You can configure it via environment variables:
-*   `VALORI_MAX_RECORDS`: Max capacity (default 1024)
-*   `VALORI_BIND`: Address to listen on (e.g., `0.0.0.0:8080`)
+### Configuration
+You can configure the node via environment variables:
+*   `VALORI_MAX_RECORDS`: Max vector capacity (default: 1024).
+*   `VALORI_BIND`: Address to listen on (default: `127.0.0.1:3000`).
 
-## 2. Using the Client
+Example:
+```bash
+VALORI_BIND=0.0.0.0:8080 VALORI_MAX_RECORDS=100000 ./valori-node
+```
+
+---
+
+## 2. Connecting the Client
 
 Install the Python package:
 ```bash
 pip install valori
 ```
 
-In your code:
+Usage:
 
 ```python
 from valori import ProtocolClient
@@ -42,21 +59,33 @@ def dummy_embed(text):
 client = ProtocolClient(embed=dummy_embed, remote="http://localhost:3000")
 
 # Now just use the standard API
+# Text is chunked LOCALLY, then vectors are sent to the server.
 client.upsert_text("Hello from the client!")
+
+# Search
 hits = client.search_text("Hello")
+print(hits)
 ```
 
-## 3. Why use Remote Mode?
+---
 
-1.  **Persistence**: The Server can be configured to save snapshots periodically (coming soon) or you can trigger `client.snapshot()` to get the entire database state as bytes and save it to S3.
-2.  **Concurrency**: Multiple Python scripts (e.g., a web scraper and a chatbot) can read/write to the same memory.
-3.  **Language Agnostic**: Since the server speaks HTTP + JSON, you can interact with it using curl, Node.js, or Go (though we only provide a Python SDK currently).
+## 3. Remote Capabilities
 
-## API Reference
+### 💾 Snapshot & Restore
+You can download the entire database state as a binary blob and save it (e.g., to S3).
 
-The server exposes the following generic endpoints for vectors:
+```python
+# Download snapshot (binary)
+backup_bytes = client.snapshot() 
+with open("backup.bin", "wb") as f:
+    f.write(backup_bytes)
 
-*   `POST /v1/memory/upsert_vector`: Store a raw vector.
-*   `POST /v1/memory/search_vector`: Query nearest neighbors.
-*   `POST /snapshot`: Download full DB state.
-*   `POST /restore`: Upload full DB state.
+# Restore snapshot to a fresh server
+client.restore(backup_bytes)
+```
+
+### 🧠 Distributed Memory
+Multiple agents can share the same memory:
+*   **Agent A** writes to `http://valori-cloud:3000`.
+*   **Agent B** reads from `http://valori-cloud:3000`.
+*   They instantly share context without any sync code.
