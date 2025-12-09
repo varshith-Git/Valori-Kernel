@@ -98,3 +98,30 @@
 
 ## src/error.rs
 - `KernelResult<T>`: Alias for `Result<T, KernelError>`.
+
+# Valori Node Functions (Host Extensions)
+
+## node/src/structure/index.rs
+- `VectorIndex`: Trait for pluggable indexing.
+    - `snapshot() -> Result<Vec<u8>>`: Serializes index state.
+    - `restore(&[u8]) -> Result<()>`: Restores index state.
+- `BruteForceIndex`: Default exact-search implementation.
+
+## node/src/structure/hnsw.rs (HNSW Index)
+- `HnswIndex::new() -> Self`: Creates a deterministic HNSW index.
+- `HnswIndex::insert(&mut self, id, vec)`: Inserts vector into graph.
+- `HnswIndex::search(&self, query, k) -> Vec<(id, dist)>`: Approximate nearest neighbor search.
+- `HnswIndex::deterministic_level(id) -> usize`: Computes layer level using FNV1a hash (no RNG).
+- `HnswIndex::snapshot() -> Result<Vec<u8>>`: Deterministic serialization (sorted maps).
+
+## node/src/persistence.rs
+- `SnapshotManager::save(path, kernel, meta, index)`: Atomically saves snapshot (V2 format) with rotation.
+- `SnapshotManager::parse(buffer) -> Result<(Meta, Kernel, MetaStore, Index)>`: Validates and parses snapshot blob.
+
+## node/src/metadata.rs
+- `MetadataStore::set(id, json)`: Stores arbitrary JSON metadata.
+- `MetadataStore::get(id) -> Option<Value>`: Retrieves metadata.
+
+## node/src/engine.rs
+- `Engine::snapshot() -> Result<Vec<u8>>`: orchestrates full system snapshot.
+- `Engine::restore(data)`: Restores Kernel, Metadata, and Index (rebuilding Index if needed).

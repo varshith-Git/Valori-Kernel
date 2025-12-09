@@ -54,10 +54,20 @@ Defines how vectors are compressed (lossy compression) to save memory/bandwidth.
 Wraps the Kernel in a `tokio` async runtime. Use `Arc<Mutex<Engine>>` for sharing.
 
 ### `Engine::new(config: NodeConfig)`
-*   **Purpose**: Initializes a new Kernel with specified `IndexKind` and `QuantizationKind`.
-*   **Analysis**: This is where dependency injection happens. The specific `VectorIndex` implementation (e.g., BruteForce) is selected here at compile time or runtime startup.
+*   **Purpose**: Initializes a new Kernel with specified `IndexKind` (e.g., `Hnsw`) and `QuantizationKind`.
+*   **Analysis**: This is where dependency injection happens. The specific `VectorIndex` implementation (e.g., BruteForce, HNSW) is selected here at compile time or runtime startup.
+
+### `Engine::snapshot() -> Vec<u8>` & `restore(&[u8])`
+*   **Purpose**: Manages the lifecycle of the entire system state.
+*   **Behavior (Checkpointing)**:
+    *   **Format**: Multipart binary (`[Header][Meta][Kernel][Metadata][Index][CRC]`).
+    *   **HNSW**: Uses deterministic serialization (sorting internal HashMaps) to ensure bit-identical snapshots.
+    *   **Safety**: Validates bounds and checksums before loading.
+    *   **Fallback**: If the Index blob is missing or incompatible, the Engine rebuilds the index from the Kernel records.
 
 ### API Endpoints
+
+#### Memory Protocol (V0)
 *   **`POST /v1/memory/upsert_vector`**:
     *   **Logic**:
         1. Insert Vector -> Get `RecordId`.
@@ -67,6 +77,14 @@ Wraps the Kernel in a `tokio` async runtime. Use `Arc<Mutex<Engine>>` for sharin
     *   **Atomicity**: Not fully atomic over HTTP (multiple kernel commands). Future work: Batched Commands.
 *   **`POST /v1/memory/search_vector`**:
     *   **Logic**: Calls `search_l2` and formats results with `memory_id` (`rec:{id}`).
+
+#### Metadata (V1)
+*   **`POST /v1/memory/meta/set`**: Key-Value metadata storage separate from the graph.
+*   **`GET /v1/memory/meta/get`**: Retrieve metadata by ID.
+
+#### Admin / Snapshot (V1)
+*   **`POST /v1/snapshot/save`**: Trigger a manual snapshot to the configured path. Supports rotation (keeps `.prev`).
+*   **`POST /v1/snapshot/restore`**: Load state from a specified file path. (Warning: Overwrites current state).
 
 ---
 
@@ -84,9 +102,9 @@ Wraps the Kernel in a `tokio` async runtime. Use `Arc<Mutex<Engine>>` for sharin
     1. **Chunking**: Splits text into chunks locally (client-side).
     2. **Embedding**: Runs `EmbedFn` locally.
     3. **Transport**:
-        *   **Local**: Direct memory write via C-ABI.
-        *   **Remote**: Sends `POST /v1/memory/upsert_vector` for each chunk to the server.
-*   **Benefit**: Keeps sensitive text/embedding models on the client side; only vectors leave the machine (privacy).
+    *   **Local**: Direct memory write.
+    *   **Remote**: Sends `POST /v1/memory/upsert_vector`.
+    4. **Metadata**: Calls `set_metadata` automatically if metadata is provided.
 
 #### `snapshot() / restore(bytes)`
 *   **Local**: Calls Rust `KernelState::snapshot` directly.
@@ -98,5 +116,5 @@ Wraps the Kernel in a `tokio` async runtime. Use `Arc<Mutex<Engine>>` for sharin
 ______________________________________________________________________
 **Note on Performance vs. Correctness**:
 Valori prioritizes **Correctness (Determinism)** > **Performance**.
-*   All floating-point inputs are converted to Fixed-Point (Q16.16) at the boundary (Client/Node).
-*   No floating-point math occurs inside the Kernel.
+*   **Fixed-Point**: All floating-point inputs are converted to Fixed-Point (Q16.16).
+*   **Deterministic Indexing**: Even complex structures like HNSW are implemented to be bit-exact reproducible, sacrificing some parallelism for consistency if necessary (though current implementation is single-threaded).

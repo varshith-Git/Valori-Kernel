@@ -46,6 +46,12 @@ graph TD
     subgraph Extensions["Host Extensions (valori-node)"]
         HNSW["HnswIndex<br/>(Auto-Quantized)"]
         ScalarQ["ScalarQuantizer"]
+        MetaStore["MetadataStore<br/>(JSON KV)"]
+    end
+
+    subgraph Persistence["Persistence Layer"]
+        SnapMgr["SnapshotManager<br/>(Atomic Writes)"]
+        Disk[(Disk Storage)]
     end
 
     %% Relationships
@@ -70,6 +76,13 @@ graph TD
     HNSW -.->|Impl| IndexTrait
     NodeService -.-> ScalarQ
     ScalarQ -.->|Impl| QuantTrait
+    NodeService --> MetaStore
+    
+    NodeService --> SnapMgr
+    SnapMgr --> Disk
+    SnapMgr -.->|Serialize| Kernel
+    SnapMgr -.->|Serialize| HNSW
+    SnapMgr -.->|Serialize| MetaStore
     
     Kernel --- IndexTrait
     Kernel --- QuantTrait
@@ -77,8 +90,9 @@ graph TD
     %% Apply Classes
     class User,PyScript external;
     class NodeService,PythonPkg,Protocol,Local,Remote,VMP_API interface;
-    class Kernel core;
+    class Kernel,MetaStore core;
     class FXP,Graph,Vector internal;
+    class SnapMgr,Disk internal;
 ```
 
 ## Core Components

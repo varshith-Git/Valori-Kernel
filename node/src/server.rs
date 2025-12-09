@@ -43,6 +43,9 @@ pub fn build_router(state: SharedEngine) -> Router {
         .route("/graph/edge", post(create_edge))
         .route("/snapshot", post(snapshot))
         .route("/restore", post(restore))
+        // Admin V1
+        .route("/v1/snapshot/save", post(snapshot_save))
+        .route("/v1/snapshot/restore", post(snapshot_restore))
         // Memory Protocol v0
         .route("/v1/memory/upsert_vector", post(memory_upsert_vector))
         .route("/v1/memory/search_vector", post(memory_search_vector))
@@ -53,6 +56,40 @@ pub fn build_router(state: SharedEngine) -> Router {
 }
 
 // ... existing handlers ...
+
+async fn snapshot_save(
+    State(state): State<SharedEngine>,
+    Json(req): Json<SnapshotSaveRequest>,
+) -> Result<Json<SnapshotSaveResponse>, EngineError> {
+    let engine = state.lock().await;
+    let path = req.path.map(std::path::PathBuf::from);
+    // Use engine default if path None
+    let used_path = engine.save_snapshot(path.as_deref())?;
+    
+    Ok(Json(SnapshotSaveResponse {
+        success: true,
+        path: used_path.to_string_lossy().to_string(),
+    }))
+}
+
+async fn snapshot_restore(
+    State(state): State<SharedEngine>,
+    Json(req): Json<SnapshotRestoreRequest>,
+) -> Result<Json<SnapshotRestoreResponse>, EngineError> {
+    let mut engine = state.lock().await;
+    let path = std::path::PathBuf::from(req.path);
+    
+    if !path.exists() {
+        return Err(EngineError::InvalidInput(format!("Snapshot not found at {:?}", path)));
+    }
+    
+    // We must read the file into bytes
+    let data = tokio::fs::read(&path).await.map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+    
+    engine.restore(&data)?;
+    
+    Ok(Json(SnapshotRestoreResponse { success: true }))
+}
 
 async fn meta_set(
     State(state): State<SharedEngine>,

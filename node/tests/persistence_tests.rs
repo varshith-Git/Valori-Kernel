@@ -33,7 +33,7 @@ async fn test_index_persistence() {
         assert_eq!(results[0].0, 0);
         
         // Save Snapshot
-        engine.save_snapshot(&snap_path).expect("Snapshot failed");
+        engine.save_snapshot(Some(&snap_path)).expect("Snapshot failed");
         assert!(snap_path.exists());
     }
 
@@ -63,5 +63,17 @@ async fn test_index_persistence() {
         let res = engine3.restore(&data);
         assert!(res.is_err());
         println!("Corruption check passed: {:?}", res.err());
+    }
+
+    // 4. Test Truncation
+    {
+        let mut data = std::fs::read(&snap_path).unwrap();
+        // Truncate to half
+        data.truncate(data.len() / 2);
+        
+        let mut engine4 = Engine::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>::new(&cfg);
+        let res = engine4.restore(&data);
+        assert!(res.is_err());
+        println!("Truncation check passed: {:?}", res.err());
     }
 }

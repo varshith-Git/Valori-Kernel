@@ -20,18 +20,16 @@ pub trait VectorIndex {
     fn insert(&mut self, id: u32, vec: &[f32]);
 
     /// Serializes the index to a binary blob.
-    fn snapshot(&self) -> Vec<u8>;
+    fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
 
     /// Restores the index from a binary blob.
-    fn restore(&mut self, data: &[u8]);
+    fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
 /// A simple Brute-Force index (scan all).
 /// Strictly deterministic.
 pub struct BruteForceIndex {
     // We store a local copy of vectors as f32 for the shim.
-    // Ideally we'd borrow from Kernel, but Kernel is no_std fixed-point.
-    // This duplication is the price of the "HostShim" architecture requested.
     vectors: HashMap<u32, Vec<f32>>,
 }
 
@@ -72,11 +70,15 @@ impl VectorIndex for BruteForceIndex {
         scores
     }
 
-    fn snapshot(&self) -> Vec<u8> {
-        Vec::new()
+    fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        // We don't snapshot BruteForceIndex because Engine rebuilds it from Kernel State easily.
+        // It's just a cache.
+        Ok(Vec::new())
     }
 
-    fn restore(&mut self, _data: &[u8]) {
+    fn restore(&mut self, _data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // No-op
+        Ok(())
     }
 }
 

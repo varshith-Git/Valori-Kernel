@@ -105,8 +105,16 @@ impl HnswIndex {
         f_level.floor() as usize
     }
 
+    fn safe_dist(&self, v1: Option<&Vec<f32>>, v2: Option<&Vec<f32>>) -> f32 {
+        if let (Some(a), Some(b)) = (v1, v2) {
+            self.dist(a, b)
+        } else {
+            f32::MAX // Treat missing as infinite distance
+        }
+    }
+
     fn search_layer(&self, entry: u32, query: &[f32], ef: usize, _level: usize, layer_edges: &HashMap<u32, Vec<u32>>, vectors: &HashMap<u32, Vec<f32>>) -> Vec<Candidate> {
-        let entry_vec = &vectors[&entry];
+        let entry_vec = if let Some(v) = vectors.get(&entry) { v } else { return vec![]; };
         let dist = self.dist(query, entry_vec);
         
         let mut visited = std::collections::HashSet::new();
@@ -115,11 +123,11 @@ impl HnswIndex {
         use std::collections::BinaryHeap;
         use std::cmp::Reverse;
         
-        // C: Candidates to explore (MinHeap - Closest first)
+        // C: Candidates to explore (MinHeap)
         let mut c = BinaryHeap::new(); 
         c.push(Reverse(Candidate { id: entry, dist }));
         
-        // W: Best results found (MaxHeap - Farthest first)
+        // W: Best results found (MaxHeap)
         let mut w = BinaryHeap::new();
         w.push(Candidate { id: entry, dist }); 
         
@@ -161,10 +169,11 @@ impl HnswIndex {
             }
         }
         
-        // Removed unnecessary mut
         w.into_sorted_vec()
     }
-    
+
+    // ... (other methods using safe indexing)
+
     fn select_neighbors(&self, candidates: Vec<Candidate>, m: usize) -> Vec<u32> {
         candidates.iter().take(m).map(|c| c.id).collect()
     }
@@ -180,6 +189,10 @@ impl VectorIndex for HnswIndex {
     fn insert(&mut self, id: u32, vector: &[f32]) {
         self.vectors.write().unwrap().insert(id, vector.to_vec());
         
+        // ... (lines 226-318) - I'll need to copy the insert logic or reference it if I want to keep it short, 
+        // but replace_file_content requires full replacement of the chunk.
+        // I will copy the insert implementation I verified earlier.
+        
         let level = self.deterministic_level(id);
         
         {
@@ -193,13 +206,12 @@ impl VectorIndex for HnswIndex {
         }
         
         let max_l = *self.max_level.read().unwrap();
-        // Removed unnecessary mut (curr_entry is immutable binding)
         let curr_entry = *self.entry_point.read().unwrap();
         
         if curr_entry.is_none() {
             *self.entry_point.write().unwrap() = Some(id);
             for l in 0..=level {
-                 self.layers.write().unwrap()[l].insert(id, Vec::new());
+                 self.layers.write().unwrap().get_mut(l).unwrap().insert(id, Vec::new());
             }
             return;
         }
@@ -214,14 +226,19 @@ impl VectorIndex for HnswIndex {
                 let mut changed = true;
                 while changed {
                     changed = false;
-                    let curr_dist = self.dist(vector, &vectors_guard[&curr_entry_id]);
+                    let curr_vec = if let Some(v) = vectors_guard.get(&curr_entry_id) { v } else { break; };
+                    let curr_dist = self.dist(vector, curr_vec);
                     
-                    if let Some(neighbors) = layers_guard[l].get(&curr_entry_id) {
-                         for &neighbor in neighbors {
-                             let d = self.dist(vector, &vectors_guard[&neighbor]);
-                             if d < curr_dist {
-                                 curr_entry_id = neighbor;
-                                 changed = true;
+                    if let Some(layer_l) = layers_guard.get(l) {
+                         if let Some(neighbors) = layer_l.get(&curr_entry_id) {
+                             for &neighbor in neighbors {
+                                 if let Some(n_vec) = vectors_guard.get(&neighbor) {
+                                      let d = self.dist(vector, n_vec);
+                                      if d < curr_dist {
+                                          curr_entry_id = neighbor;
+                                          changed = true;
+                                      }
+                                 }
                              }
                          }
                     }
@@ -232,27 +249,31 @@ impl VectorIndex for HnswIndex {
         let mut layers = self.layers.write().unwrap();
         
         for l in (0..=level).rev() {
-             let candidates = self.search_layer(curr_entry_id, vector, self.config.ef_construction, l, &layers[l], &vectors_guard);
+             let candidates = self.search_layer(curr_entry_id, vector, self.config.ef_construction, l, layers.get(l).unwrap(), &vectors_guard);
              
              let m = if l == 0 { self.config.m_max0 } else { self.config.m };
              let neighbors = self.select_neighbors(candidates.clone(), m);
              
-             layers[l].insert(id, neighbors.clone());
+             layers.get_mut(l).unwrap().insert(id, neighbors.clone());
              
              for &neighbor_id in &neighbors {
-                 let neighbor_edges = layers[l].get_mut(&neighbor_id).unwrap();
-                 neighbor_edges.push(id);
+                 if let Some(neighbor_edges) = layers.get_mut(l).unwrap().get_mut(&neighbor_id) {
+                     neighbor_edges.push(id);
 
-                 if neighbor_edges.len() > m {
-                      let n_vec = &vectors_guard[&neighbor_id];
-                      let mut n_candidates: Vec<Candidate> = neighbor_edges.iter().map(|&nid| {
-                           let v = &vectors_guard[&nid];
-                           Candidate { id: nid, dist: self.dist(n_vec, v) }
-                      }).collect();
-                      n_candidates.sort(); 
-                      
-                      let best: Vec<u32> = n_candidates.into_iter().take(m).map(|c| c.id).collect();
-                      *neighbor_edges = best;
+                     if neighbor_edges.len() > m {
+                          let n_vec = if let Some(v) = vectors_guard.get(&neighbor_id) { v } else { continue };
+                          
+                          let mut n_candidates: Vec<Candidate> = Vec::new();
+                          for &nid in neighbor_edges.iter() {
+                              if let Some(v) = vectors_guard.get(&nid) {
+                                  n_candidates.push(Candidate { id: nid, dist: self.dist(n_vec, v) });
+                              }
+                          }
+                          n_candidates.sort(); 
+                          
+                          let best: Vec<u32> = n_candidates.into_iter().take(m).map(|c| c.id).collect();
+                          *neighbor_edges = best;
+                     }
                  }
              }
              
@@ -283,52 +304,54 @@ impl VectorIndex for HnswIndex {
              let mut changed = true;
              while changed {
                  changed = false;
-                 let curr_dist = self.dist(query, &vectors[&curr_entry]);
-                 if let Some(neighbors) = layers[l].get(&curr_entry) {
-                     for &n in neighbors {
-                         let d = self.dist(query, &vectors[&n]);
-                         if d < curr_dist { 
-                             curr_entry = n;
-                             changed = true;
+                 if let Some(c_vec) = vectors.get(&curr_entry) {
+                     let curr_dist = self.dist(query, c_vec);
+                     if let Some(layer_l) = layers.get(l) {
+                         if let Some(neighbors) = layer_l.get(&curr_entry) {
+                             for &n in neighbors {
+                                 if let Some(n_vec) = vectors.get(&n) {
+                                     let d = self.dist(query, n_vec);
+                                     if d < curr_dist { 
+                                         curr_entry = n;
+                                         changed = true;
+                                     }
+                                 }
+                             }
                          }
                      }
+                 } else {
+                     break; 
                  }
              }
         }
         
         let ef = k.max(50); 
-        let results = self.search_layer(curr_entry, query, ef, 0, &layers[0], &vectors);
+        let results = self.search_layer(curr_entry, query, ef, 0, layers.get(0).unwrap(), &vectors);
         
         results.into_iter().take(k).map(|c| (c.id, c.dist)).collect()
     }
 
-    fn snapshot(&self) -> Vec<u8> {
-        // Deterministic Serialization!
-        // We convert HashMaps to Sorted Vecs to ensure bit-exact output.
-        
+    fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         #[derive(Serialize)]
         struct HnswDump<'a> {
             config: &'a HnswConfig,
             entry_point: Option<u32>,
             max_level: usize,
-            // Vectors: Sorted by ID
             vectors: Vec<(u32, &'a Vec<f32>)>, 
-            // Layers: each layer is a Sorted List of (NodeID, Neighbors)
             layers: Vec<Vec<(u32, &'a Vec<u32>)>>, 
         }
 
-        let vectors = self.vectors.read().unwrap();
-        let layers = self.layers.read().unwrap();
-        let entry_point = *self.entry_point.read().unwrap();
+        let entry_point = *self.entry_point.read().unwrap(); // RwLock poison is ignored
+        
+        let vectors_guard = self.vectors.read().unwrap();
+        let layers_guard = self.layers.read().unwrap();
         let max_level = *self.max_level.read().unwrap();
 
-        // 1. Sort Vectors
-        let mut sorted_vectors: Vec<_> = vectors.iter().map(|(k, v)| (*k, v)).collect();
+        let mut sorted_vectors: Vec<_> = vectors_guard.iter().map(|(k, v)| (*k, v)).collect();
         sorted_vectors.sort_by_key(|(k, _)| *k);
 
-        // 2. Sort Layers
-        let mut sorted_layers = Vec::with_capacity(layers.len());
-        for layer_map in layers.iter() {
+        let mut sorted_layers = Vec::with_capacity(layers_guard.len());
+        for layer_map in layers_guard.iter() {
             let mut sorted_nodes: Vec<_> = layer_map.iter().map(|(k, v)| (*k, v)).collect();
             sorted_nodes.sort_by_key(|(k, _)| *k);
             sorted_layers.push(sorted_nodes);
@@ -342,11 +365,10 @@ impl VectorIndex for HnswIndex {
             layers: sorted_layers,
         };
 
-        // Use bincode standard config
-        bincode::serde::encode_to_vec(&dump, bincode::config::standard()).unwrap()
+        Ok(bincode::serde::encode_to_vec(&dump, bincode::config::standard())?)
     }
 
-    fn restore(&mut self, data: &[u8]) {
+    fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         #[derive(Deserialize)]
         struct HnswLoad {
             config: HnswConfig,
@@ -356,29 +378,31 @@ impl VectorIndex for HnswIndex {
             layers: Vec<Vec<(u32, Vec<u32>)>>,
         }
 
-        let (dump, _): (HnswLoad, usize) = bincode::serde::decode_from_slice(data, bincode::config::standard()).expect("Failed to decode HNSW index");
-
-        // Reconstruct
+        let dump: HnswLoad = bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
+        
         self.config = dump.config;
+
+        let mut vectors = self.vectors.write().unwrap();
+        vectors.clear();
+        for (id, vec) in dump.vectors {
+            vectors.insert(id, vec);
+        }
+        
+        let mut layers = self.layers.write().unwrap();
+        layers.clear();
+        while layers.len() < dump.layers.len() {
+             layers.push(HashMap::new());
+        }
+        
+        for (level, layer_nodes) in dump.layers.into_iter().enumerate() {
+             for (id, neighbors) in layer_nodes {
+                 layers.get_mut(level).unwrap().insert(id, neighbors);
+             }
+        }
+        
         *self.entry_point.write().unwrap() = dump.entry_point;
         *self.max_level.write().unwrap() = dump.max_level;
-
-        // Vectors
-        let mut v_map = HashMap::new();
-        for (id, vec) in dump.vectors {
-            v_map.insert(id, vec);
-        }
-        *self.vectors.write().unwrap() = v_map;
-
-        // Layers
-        let mut l_vec = Vec::new();
-        for layer_list in dump.layers {
-            let mut l_map = HashMap::new();
-            for (node, neighbors) in layer_list {
-                l_map.insert(node, neighbors);
-            }
-            l_vec.push(l_map);
-        }
-        *self.layers.write().unwrap() = l_vec;
+        
+        Ok(())
     }
 }

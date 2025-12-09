@@ -24,6 +24,7 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     index: Box<dyn VectorIndex + Send + Sync>,
     quant: Box<dyn Quantizer + Send + Sync>,
     pub metadata: Arc<MetadataStore>,
+    pub snapshot_path: Option<std::path::PathBuf>,
 }
 
 impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> Engine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> {
@@ -56,6 +57,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             index,
             quant,
             metadata: Arc::new(MetadataStore::new()),
+            snapshot_path: cfg.snapshot_path.clone(),
         }
     }
 
@@ -194,14 +196,16 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         )
     }
 
-    pub fn save_snapshot(&self, path: &std::path::Path) -> Result<(), EngineError> {
+    pub fn save_snapshot(&self, path_override: Option<&std::path::Path>) -> Result<std::path::PathBuf, EngineError> {
+        let path = path_override.or(self.snapshot_path.as_deref())
+            .ok_or(EngineError::InvalidInput("No snapshot path configured".to_string()))?;
         // 1. Snapshot Components
         let mut k_buf = vec![0u8; 10 * 1024 * 1024]; // 10MB alloc
         let k_len = encode_state(&self.state, &mut k_buf).map_err(EngineError::Kernel)?;
         k_buf.truncate(k_len);
         
         let meta_buf = self.metadata.snapshot();
-        let index_buf = self.index.snapshot();
+        let index_buf = self.index.snapshot().map_err(|e| EngineError::InvalidInput(e.to_string()))?;
 
         // 2. Prepare Header
         let mut meta = crate::persistence::SnapshotMeta {
@@ -223,7 +227,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             &index_buf
         ).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
 
-        Ok(())
+        Ok(path.to_path_buf())
     }
 
     // Legacy method for API (in-memory). 
@@ -233,7 +237,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let uuid = uuid::Uuid::new_v4(); // Need UUID or random
         let tmp_path = tmp_dir.join(format!("valori_snap_{}", uuid));
         
-        self.save_snapshot(&tmp_path)?;
+        self.save_snapshot(Some(&tmp_path))?;
         
         let bytes = std::fs::read(&tmp_path).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         let _ = std::fs::remove_file(tmp_path);
@@ -281,7 +285,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         if let Some(blob) = i_data {
              if !blob.is_empty() {
                  println!("Restoring index from snapshot (fast load)...");
-                 self.index.restore(blob);
+                 self.index.restore(blob).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
                  return Ok(());
              }
         }

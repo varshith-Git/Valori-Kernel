@@ -73,6 +73,12 @@ impl SnapshotManager {
             file.write_all(&checksum.to_le_bytes())?; 
         }
 
+        // ROTATION LOGIC: Keep one previous version
+        if path.exists() {
+            let prev_path = path.with_extension("bin.prev");
+            let _ = std::fs::rename(path, prev_path); // Ignore error if rename fails (e.g. permission)
+        }
+
         std::fs::rename(tmp_path, path)?;
         Ok(())
     }
@@ -101,6 +107,11 @@ impl SnapshotManager {
         let meta_len = u32::from_le_bytes(content[8..12].try_into().unwrap()) as usize;
         let meta_end = 12 + meta_len;
         
+        // BOUNDS CHECK 1: Meta
+        if content.len() < meta_end {
+             return Err("Truncated metadata".into());
+        }
+
         // Parse Meta
         let meta: SnapshotMeta = serde_json::from_slice(&content[12..meta_end])?;
 
@@ -108,6 +119,14 @@ impl SnapshotManager {
         let k_len = meta.kernel_len as usize;
         let m_len = meta.metadata_len as usize;
         let i_len = meta.index_len as usize;
+
+        // BOUNDS CHECK 2: Body consistency
+        let remaining_len = content.len() - meta_end;
+        let expected_len = k_len + m_len + i_len;
+        
+        if remaining_len != expected_len {
+            return Err(format!("Snapshot corrupted: Meta claims {} bytes, found {}", expected_len, remaining_len).into());
+        }
 
         let k_start = meta_end;
         let k_end = k_start + k_len;
@@ -118,7 +137,8 @@ impl SnapshotManager {
         let i_start = m_end;
         let i_end = i_start + i_len;
         
-        if content.len() < i_end { return Err("Truncated body".into()); }
+        // Redundant but safe final check
+        if i_end > content.len() { return Err("Truncated body".into()); }
 
         let k_data = content[k_start..k_end].to_vec();
         let m_data = content[m_start..m_end].to_vec();

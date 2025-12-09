@@ -131,3 +131,25 @@ pub struct MetadataGetResponse {
     pub metadata: Option<serde_json::Value>,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SnapshotSaveRequest {
+    // Optional path override. If None, uses configured snapshot path.
+    pub path: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SnapshotSaveResponse {
+    pub success: bool,
+    pub path: String,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SnapshotRestoreRequest {
+    // Path to load from.
+    pub path: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct SnapshotRestoreResponse {
+    pub success: bool,
+}
