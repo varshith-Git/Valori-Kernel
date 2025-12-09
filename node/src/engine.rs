@@ -189,24 +189,48 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
         // 1. Kernel Snapshot
-        let mut buf = vec![0u8; 10 * 1024 * 1024]; // 10MB
-        let len = encode_state(&self.state, &mut buf).map_err(EngineError::Kernel)?;
-        buf.truncate(len);
+        let mut k_buf = vec![0u8; 10 * 1024 * 1024]; // 10MB alloc
+        let k_len = encode_state(&self.state, &mut k_buf).map_err(EngineError::Kernel)?;
+        k_buf.truncate(k_len);
         
-        // 2. Metadata Snapshot ?
-        // Current API `/snapshot` expects single binary blob.
-        // We should append Metadata?
-        // Or user explicitly requests separate?
-        // Proposed Protocol V1 says "The system maintains data.bin ... and meta.json".
-        // But the `/snapshot` endpoint is a single blob.
-        // I will implement a "Container Format" later. For now, just Kernel state.
+        // 2. Metadata Snapshot
+        let meta_buf = self.metadata.snapshot();
         
-        Ok(buf)
+        // 3. Bundle: [k_len: 8B][k_bytes][meta_bytes]
+        let mut final_buf = Vec::with_capacity(8 + k_len + meta_buf.len());
+        final_buf.extend_from_slice(&(k_len as u64).to_le_bytes());
+        final_buf.extend_from_slice(&k_buf);
+        final_buf.extend_from_slice(&meta_buf);
+        
+        Ok(final_buf)
     }
 
     pub fn restore(&mut self, data: &[u8]) -> Result<(), EngineError> {
-        let new_state = decode_state::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(data).map_err(EngineError::Kernel)?;
+        // Validation for header
+        if data.len() < 8 {
+             return Err(EngineError::InvalidInput("Snapshot too short".into()));
+        }
+
+        // 1. Read Kernel Len
+        let k_len_bytes: [u8; 8] = data[0..8].try_into().unwrap();
+        let k_len = u64::from_le_bytes(k_len_bytes) as usize;
+        
+        if data.len() < 8 + k_len {
+             return Err(EngineError::InvalidInput("Snapshot corrupted or truncated".into()));
+        }
+        
+        let kernel_data = &data[8..8+k_len];
+        let meta_data = &data[8+k_len..];
+        
+        // 2. Restore Kernel
+        let new_state = decode_state::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(kernel_data).map_err(EngineError::Kernel)?;
         self.state = new_state;
+
+        // 3. Restore Metadata
+        // Only if there is data left
+        if !meta_data.is_empty() {
+            self.metadata.restore(meta_data);
+        }
         
         // Rebuild Host Index from Kernel State!
         // We recreate the index to ensure it is fresh.

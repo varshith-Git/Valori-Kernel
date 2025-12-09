@@ -376,9 +376,8 @@ class ProtocolClient:
         }
 
     def search_text(self, query: str, k: int = 5) -> MemorySearchResponse:
-        if self._impl:
-            return self._impl.search_text(query, k=k)
-
+        # ProtocolRemoteClient doesn't support search_text (server has no embedder).
+        # We must embed locally and call search_vector.
         vec = self._embed(query)
         return self.search_vector(vec, k=k)
 
