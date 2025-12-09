@@ -4,3 +4,5 @@ pub mod errors;
 pub mod api;
 pub mod engine;
 pub mod server;
+pub mod structure;
+pub mod metadata;

@@ -32,6 +32,9 @@ pub type SharedEngine = Arc<Mutex<ConcreteEngine>>;
 
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 
+// ... existing imports ...
+use axum::extract::Query;
+
 pub fn build_router(state: SharedEngine) -> Router {
     Router::new()
         .route("/records", post(insert_record))
@@ -40,11 +43,38 @@ pub fn build_router(state: SharedEngine) -> Router {
         .route("/graph/edge", post(create_edge))
         .route("/snapshot", post(snapshot))
         .route("/restore", post(restore))
-        // New Memory Protocol v0 endpoints
+        // Memory Protocol v0
         .route("/v1/memory/upsert_vector", post(memory_upsert_vector))
         .route("/v1/memory/search_vector", post(memory_search_vector))
+        // Metadata v1
+        .route("/v1/memory/meta/set", post(meta_set))
+        .route("/v1/memory/meta/get", axum::routing::get(meta_get))
         .with_state(state)
 }
+
+// ... existing handlers ...
+
+async fn meta_set(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<MetadataSetRequest>,
+) -> Result<Json<MetadataSetResponse>, EngineError> {
+    let engine = state.lock().await;
+    engine.metadata.set(payload.target_id, payload.metadata);
+    Ok(Json(MetadataSetResponse { success: true }))
+}
+
+async fn meta_get(
+    State(state): State<SharedEngine>,
+    Query(payload): Query<MetadataGetRequest>,
+) -> Result<Json<MetadataGetResponse>, EngineError> {
+    let engine = state.lock().await;
+    let val = engine.metadata.get(&payload.target_id);
+    Ok(Json(MetadataGetResponse {
+        target_id: payload.target_id,
+        metadata: val,
+    }))
+}
+
 
 async fn insert_record(
     State(state): State<SharedEngine>,

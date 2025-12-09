@@ -102,7 +102,32 @@ pub struct MemorySearchHit {
     pub score: i64,
 }
 
+// ... existing content ...
+
 #[derive(Serialize)]
 pub struct MemorySearchResponse {
     pub results: Vec<MemorySearchHit>,
 }
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct MetadataSetRequest {
+    pub target_id: String,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Serialize, Debug)]
+pub struct MetadataSetResponse {
+    pub success: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct MetadataGetRequest {
+    pub target_id: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct MetadataGetResponse {
+    pub target_id: String,
+    pub metadata: Option<serde_json::Value>,
+}
+

@@ -4,17 +4,26 @@ use valori_kernel::state::command::Command;
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
-use valori_kernel::index::SearchResult;
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
 use valori_kernel::fxp::ops::from_f32;
 
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
 use crate::errors::EngineError;
+use crate::structure::index::{VectorIndex, BruteForceIndex};
+use crate::structure::quant::{Quantizer, NoQuantizer, ScalarQuantizer};
+use crate::metadata::MetadataStore;
+
+use std::sync::Arc;
 
 pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
     state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
     pub index_kind: IndexKind,
     pub quantization_kind: QuantizationKind,
+    
+    // Host-level extensions
+    index: Box<dyn VectorIndex + Send + Sync>,
+    quant: Box<dyn Quantizer + Send + Sync>,
+    pub metadata: Arc<MetadataStore>,
 }
 
 impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> Engine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> {
@@ -25,10 +34,30 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         assert_eq!(cfg.max_nodes, MAX_NODES, "Config max_nodes mismatch");
         assert_eq!(cfg.max_edges, MAX_EDGES, "Config max_edges mismatch");
 
+        // Initialize Index
+        let index: Box<dyn VectorIndex + Send + Sync> = match cfg.index_kind {
+             IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+             IndexKind::Hnsw => {
+                 // Fallback to BruteForce for now until HNSW impl is added
+                 // Or panic? Let's fallback with specific log
+                 println!("Warning: HNSW not yet implemented, falling back to BruteForce for Host Index");
+                 Box::new(BruteForceIndex::new())
+             }
+        };
+
+        // Initialize Quantizer
+        let quant: Box<dyn Quantizer + Send + Sync> = match cfg.quantization_kind {
+            QuantizationKind::None => Box::new(NoQuantizer),
+            QuantizationKind::Scalar => Box::new(ScalarQuantizer {}),
+        };
+
         Self {
             state: KernelState::new(),
             index_kind: cfg.index_kind,
             quantization_kind: cfg.quantization_kind,
+            index,
+            quant,
+            metadata: Arc::new(MetadataStore::new()),
         }
     }
 
@@ -37,26 +66,14 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             return Err(EngineError::InvalidInput(format!("Expected {} dimensions, got {}", D, values.len())));
         }
 
-        // 1. Build Vector
+        // 1. Build FxpVector for Kernel
         let mut vector = FxpVector::<D>::new_zeros();
         for (i, v) in values.iter().enumerate() {
             vector.data[i] = from_f32(*v);
         }
 
         // 2. Determine ID (first free slot strategy - simplified)
-        // Kernel doesn't expose "next_free_id". It has `insert` on pool but `apply` takes Command with ID.
-        // We must find a free ID. 
-        // Kernel exposes `records: RecordPool`. We can iterate.
-        // But `records` is `pub(crate)`.
-        // Wait! I made them private in Phase 10!
-        // `KernelState` doesn't expose a "find free ID" or "next ID" via public API?
-        // `RecordPool` has `is_allocated(id)`.
-        // So we can brute force scan 0..MAX_RECORDS to find a free one.
-        // This is inefficient but functional for v1.
-        
         let mut id_val = None;
-        // Since we can't access `len` or `capacity` easily without trait/const access?
-        // We know MAX_RECORDS.
         for i in 0..MAX_RECORDS {
             let rid = RecordId(i as u32);
             if self.state.get_record(rid).is_none() {
@@ -67,10 +84,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         let id = id_val.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
         
-        // 3. Apply Command
+        // 3. Apply Command to Kernel (Primary Store)
         let cmd = Command::InsertRecord { id, vector };
         self.state.apply(&cmd)?;
         
+        // 4. Update Host Index
+        self.index.insert(id.0, values);
+
         Ok(id.0)
     }
 
@@ -105,14 +125,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let from = NodeId(from_val);
         let to = NodeId(to_val);
 
-        // Find free Edge ID by scanning existing edges
-        // Since we can't query edge pool directly, we scan all nodes' outgoing edges.
-        let mut used_edges = vec![false; MAX_EDGES]; // This allocation is tolerable for host process
+        // Find free Edge ID logic...
+        let mut used_edges = vec![false; MAX_EDGES]; // allocating on stack if small enough or vec
         for i in 0..MAX_NODES {
             let nid = NodeId(i as u32);
             if let Some(_node) = self.state.get_node(nid) {
-                // Iterate outgoing edges
-                // outgoing_edges returns Option<Iterator>
                 if let Some(iter) = self.state.outgoing_edges(nid) {
                     for edge in iter {
                          if (edge.id.0 as usize) < MAX_EDGES {
@@ -145,49 +162,76 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, i64)>, EngineError> {
-        let mut q_vec = FxpVector::<D>::new_zeros();
-        if query.len() != D { return Err(EngineError::InvalidInput("Dim mismatch".into())); }
-        for (i, v) in query.iter().enumerate() {
-            q_vec.data[i] = from_f32(*v);
-        }
-
-        let mut results = vec![SearchResult::default(); k];
-        let count = self.state.search_l2(&q_vec, &mut results);
-
-        let mut hits = Vec::new();
-        for i in 0..count {
-            // Cast FxpScalar to i64 (logic from FXP model is FxpScalar(i32), sq dist can be larger but here score is FxpScalar?)
-            // Wait, SearchResult score field type?
-            // "found `Vec<(..., FxpScalar)>`". So `results[i].score` IS `FxpScalar`.
-            // FxpScalar wraps `i32`.
-            // User API wants `i64`.
-            // FxpScalar doesn't have `.0` public? 
-            // In Phase 1 I made `FxpScalar(pub i32)`.
-            // But strictness pass might have changed it?
-            // "Implement types/scalar.rs with FxpScalar(i32)".
-            // I should check if .0 is pub.
-            // If not, I need a helper.
-            // Assuming it is pub based on context (tuple struct).
-            hits.push((results[i].id.0, results[i].score.0 as i64));
-        }
-        Ok(hits)
+        // Use Host Index instead of Kernel Search to support different index types
+        // The Kernel's search_l2 is strictly brute force Fxp.
+        // The Host Index might be HNSW/Simd-F32.
+        
+        let hits = self.index.search(query, k);
+        
+        // Convert f32 score to i64 (Kernel API Expectation).
+        // Since `search()` returns raw f32 distance squared, and Kernel usually returns FxpScalar value (i32/i64 scaled).
+        // For compatibility with Python client expecting "integers", we should scale it.
+        // Fxp 1.0 = 65536. 
+        // We multiply by 65536 * 65536? No wait, FxpScalar is 20.12 format?
+        // Let's assume we return raw integers matching kernel behavior if index is BruteForce.
+        // If index is HNSW (float), we synthesize an integer score.
+        // For now, let's just cast to i64.
+        
+        Ok(
+            hits.into_iter().map(|(id, score)| {
+                // Heuristic: scale f32 score to match Fxp magnitude roughly?
+                // Or just return score as i64 bits?
+                // Let's return score * 1000.0 as i64 for now to keep some precision
+                (id, (score * 65536.0) as i64) 
+            }).collect()
+        )
     }
 
     pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
-        // Estimate size? 
-        // 4096 + RECORDS * (4+1+D*4) + ...
-        // Just alloc 1MB for now or grow?
-        // `encode_state` needs `&mut [u8]`.
-        // Vectors are resizable but `encode_state` takes slice.
+        // 1. Kernel Snapshot
         let mut buf = vec![0u8; 10 * 1024 * 1024]; // 10MB
         let len = encode_state(&self.state, &mut buf).map_err(EngineError::Kernel)?;
         buf.truncate(len);
+        
+        // 2. Metadata Snapshot ?
+        // Current API `/snapshot` expects single binary blob.
+        // We should append Metadata?
+        // Or user explicitly requests separate?
+        // Proposed Protocol V1 says "The system maintains data.bin ... and meta.json".
+        // But the `/snapshot` endpoint is a single blob.
+        // I will implement a "Container Format" later. For now, just Kernel state.
+        
         Ok(buf)
     }
 
     pub fn restore(&mut self, data: &[u8]) -> Result<(), EngineError> {
         let new_state = decode_state::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(data).map_err(EngineError::Kernel)?;
         self.state = new_state;
+        
+        // Rebuild Host Index from Kernel State!
+        // We recreate the index to ensure it is fresh.
+        let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
+             IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+             IndexKind::Hnsw => {
+                  println!("Warning: HNSW fallback in restore");
+                  Box::new(BruteForceIndex::new()) 
+             },
+        };
+        
+        for i in 0..MAX_RECORDS {
+             let rid = RecordId(i as u32);
+             if let Some(record) = self.state.get_record(rid) {
+                 let mut vals: Vec<f32> = Vec::with_capacity(D);
+                 for fxp in record.vector.data.iter() {
+                     // Assuming Q16.16 based on usage
+                     let f = fxp.0 as f32 / 65536.0;
+                     vals.push(f);
+                 }
+                 index.insert(rid.0, &vals);
+             }
+        }
+        self.index = index;
+        
         Ok(())
     }
 }

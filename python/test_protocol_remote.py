@@ -112,5 +112,33 @@ class TestProtocolRemote(unittest.TestCase):
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
         self.assertEqual(kwargs["data"], data)
 
+    @patch("requests.Session.post")
+    @patch("requests.Session.get")
+    def test_metadata_ops(self, mock_get, mock_post):
+        # Mock Set
+        mock_post_resp = MagicMock()
+        mock_post_resp.raise_for_status.return_value = None
+        mock_post_resp.json.return_value = {"success": True}
+        mock_post.return_value = mock_post_resp
+        
+        # Mock Get
+        mock_get_resp = MagicMock()
+        mock_get_resp.raise_for_status.return_value = None
+        mock_get_resp.json.return_value = {"target_id": "rec:1", "metadata": {"author": "me"}}
+        mock_get.return_value = mock_get_resp
+        
+        # Test Set
+        self.client.set_metadata("rec:1", {"author": "me"})
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "http://mock-node:3000/v1/memory/meta/set")
+        self.assertEqual(kwargs["json"]["target_id"], "rec:1")
+        
+        # Test Get
+        meta = self.client.get_metadata("rec:1")
+        self.assertEqual(meta["author"], "me")
+        args, kwargs = mock_get.call_args
+        self.assertEqual(args[0], "http://mock-node:3000/v1/memory/meta/get")
+        self.assertEqual(kwargs["params"]["target_id"], "rec:1")
+
 if __name__ == "__main__":
     unittest.main()

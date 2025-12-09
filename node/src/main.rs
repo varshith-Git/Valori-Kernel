@@ -17,10 +17,65 @@ async fn main() {
 
     let cfg = NodeConfig::default();
     
-    tracing::info!("Initializing Valori Node with config: max_records={}, dim={}", cfg.max_records, cfg.dim);
+    tracing::info!("Initializing Valori Node with config: {:?}", cfg);
     
-    let engine = ConcreteEngine::new(&cfg);
+    let mut engine = ConcreteEngine::new(&cfg);
+    
+    // Load Snapshot if present
+    if let Some(path) = &cfg.snapshot_path {
+        if path.exists() {
+            tracing::info!("Found snapshot at {:?}. Loading...", path);
+            match tokio::fs::read(path).await {
+                Ok(data) => {
+                    if let Err(e) = engine.restore(&data) {
+                        tracing::error!("Failed to restore snapshot: {:?}", e);
+                        // panic or continue? Continue empty for robustness, or fail?
+                        // Fail is safer for DB.
+                        panic!("Failed to restore snapshot");
+                    } else {
+                         tracing::info!("Snapshot restored successfully.");
+                    }
+                },
+                Err(e) => tracing::error!("Failed to read snapshot file: {:?}", e),
+            }
+        }
+    }
+
     let shared_state: SharedEngine = Arc::new(Mutex::new(engine));
+    
+    // Spawn Persistence Task
+    if let (Some(path), Some(secs)) = (cfg.snapshot_path.clone(), cfg.auto_snapshot_interval_secs) {
+        let state_clone = shared_state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(secs));
+            loop {
+                interval.tick().await; // First tick is immediate? No, typically waits.
+                // We want to skip first immediate potentially? 
+                // interval.tick().await; 
+                
+                tracing::debug!("Auto-snapshotting...");
+                let engine = state_clone.lock().await; // Lock for read/snapshot
+                match engine.snapshot() {
+                     Ok(data) => {
+                         // drop lock before writing to disk
+                         drop(engine); 
+                         // Use tmp file + rename for atomicity
+                         let tmp_path = path.with_extension("tmp");
+                         if let Err(e) = tokio::fs::write(&tmp_path, data).await {
+                             tracing::error!("Failed to write tmp snapshot: {:?}", e);
+                             continue;
+                         }
+                         if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+                             tracing::error!("Failed to rename snapshot: {:?}", e);
+                         } else {
+                             tracing::info!("Snapshot saved to {:?}", path);
+                         }
+                     },
+                     Err(e) => tracing::error!("Failed to create snapshot: {:?}", e)
+                }
+            }
+        });
+    }
     
     let app = build_router(shared_state);
     

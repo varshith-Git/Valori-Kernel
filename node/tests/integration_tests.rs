@@ -11,7 +11,11 @@ type TestEngine = Engine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>;
 
 #[test]
 fn test_engine_workflow() {
-    let cfg = NodeConfig::default();
+    let mut cfg = NodeConfig::default();
+    cfg.max_records = MAX_RECORDS;
+    cfg.dim = D;
+    cfg.max_nodes = MAX_NODES;
+    cfg.max_edges = MAX_EDGES;
     let mut engine = TestEngine::new(&cfg);
 
     // 1. Insert records
