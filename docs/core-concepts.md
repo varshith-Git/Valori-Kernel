@@ -33,10 +33,22 @@ A lightweight graph overlay sitting on top of the vectors.
 *   **Edge**: A directed link between nodes.
     *   Example: `Document (Node A)` -> `ParentOf` -> `Chunk (Node B)`.
 
-### 3. The Index
-The mechanism for finding records.
-*   **Brute Force (Exact)**: Scans every record. Guaranteed 100% recall. Best for datasets < 1M.
-*   **HNSW (Approximate)**: Navigate a graph of vectors. (Coming Soon).
+### 3. The Index (Search Strategy)
+The mechanism for finding records similar to a query.
+
+*   **Brute Force (Exact)**:
+    *   **How it works**: Scans every single record in memory.
+    *   **Pros**: 100% Accuracy (Recall). Zero indexing time.
+    *   **Cons**: Linearly slower as data grows.
+    *   **Best For**: Datasets < 1M vectors.
+
+*   **HNSW (Approximate)** [Coming Soon]:
+    *   **How it works**: Builds a "navigateable small world" graph. Think of it like a highway system for vectors.
+    *   **Pros**: Extremely fast (Logarithmic time). Can search billions of vectors in milliseconds.
+    *   **Cons**: Uses more memory (RAM) to store links. 99% accuracy instead of 100%.
+    *   **Best For**: **Datasets > 1M vectors** (Scale).
+
+*   **Valori's Strategy**: The Kernel uses a `VectorIndex` trait. This means you can start with Brute Force and hot-swap to HNSW when you scale, without changing your application code.
 
 ---
 
