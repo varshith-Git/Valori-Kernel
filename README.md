@@ -1,60 +1,71 @@
 # Valori Kernel
 
-A deterministic, `no_std`, fixed-point vector + knowledge graph engine in Rust.
+**The Deterministic Memory Engine for AI Agents.**
 
-`valori-kernel` is designed to be a tiny, embeddable kernel that provides consistent behavior across different runtimes (Node.js, Cloud, Embedded) by strictly enforcing determinism and avoiding dynamic allocation in its core.
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 
-### 3. Usage (Python)
+**Valori** is a high-performance, strictly deterministic vector database and knowledge graph designed for AI agents, robotics, and mission-critical memory systems. Unlike traditional vector stores, Valori guarantees **bit-identical state across any architecture** (x86, ARM, WASM), making it the only choice for verifiable and reproducible AI behaviors.
 
-Valori supports two modes: **Local (Embedded)** and **Remote (Client-Server)**.
+---
 
-#### Local Mode (No Server Required)
-Runs the logic inside your Python process using FFI. Fastest for single-process apps.
+## 🚀 Why Valori?
+
+*   **🧠 Total Recall**: Combines vector semantic search (RAG) with a structured Knowledge Graph in a single request.
+*   **🛡️ Deterministic by Design**: Uses fixed-point arithmetic (Q16.16) to ensure calculations are identical on a MacBook, a Linux Server, or a Raspberry Pi. No floating-point drift.
+*   **⚡ Local-First, Cloud-Ready**:
+    *   **Embed it directly** in your Python process (via FFI) for microsecond latency.
+    *   **Run it as a Service** (via HTTP) for distributed, scalable deployments.
+*   **📦 Light & Portable**: Written in `no_std` Rust. Tiny binary size.
+
+---
+
+## 🛠️ Quick Start
+
+Valori provides a unified Python SDK that works in both embedded and remote modes.
+
+### 1. Installation
+```bash
+pip install values
+# or build from source if pre-release
+```
+
+### 2. Local Mode (Embedded)
+Ideal for single-agent applications, scripts, and testing. The database lives inside your process RAM.
+
 ```python
 from valori import ProtocolClient
 
-# 1. Define an embedding function (e.g. using OpenAI, SentenceTransformers)
+# Define your embedding logic (e.g. OpenAI, HuggingFace)
 def my_embedder(text):
-    return [0.1, 0.2, ...] # Must return list[float] of dimension D
+    # return model.encode(text) -> list[float]
+    return [0.1] * 16  # Dummy example
 
-# 2. Initialize Client (Local)
+# Initialize (No server needed!)
 client = ProtocolClient(embed=my_embedder)
 
-# 3. Remember & Search
-client.upsert_text("Valori remembers everything.")
-print(client.search_text("What does Valori do?"))
+# Store Memory
+client.upsert_text("Valori ensures my agent's memory is reproducible.")
+
+# Recall
+print(client.search_text("Why use Valori?"))
 ```
 
-#### Remote Mode (Production)
-Connects to a standalone `valori-node` server over HTTP. Use this for web apps, multi-process setups, or cloud deployments.
+### 3. Remote Mode (Production)
+Ideal for cloud backends, multi-agent systems, and web apps. Connects to a dedicated `valori-node` server.
+
+**Step A: Start the Server**
+```bash
+# Production build
+cargo build -p valori-node --release
+./target/release/valori-node
+# Listening on 127.0.0.1:3000...
+```
+
+**Step B: Connect via Client**
 ```python
-# 1. Start the server (in terminal)
-# ./valori-node
-
-# 2. Connect via Python
+# Just add the 'remote' URL!
 client = ProtocolClient(embed=my_embedder, remote="http://127.0.0.1:3000")
-
-# API is identical to Local Mode!
-client.upsert_text("This is stored on the server.")
-```
-
-## Features
-
-- **`no_std` Core**: Built for embedded and constrained environments. No standard library dependencies in the core kernel.
-- **Determinism**: Bit-identical results across platforms. No floating-point arithmetic or randomness.
-- **Fixed-Point Arithmetic**: Uses Q16.16 fixed-point math for all geometric operations (dot product, L2 distance).
-- **Static Memory**: Operates on pre-allocated pools. No heap allocation during runtime execution.
-- **Knowledge Graph**: Integrated graph structure linking vectors, records, and concepts.
-- **Snapshot/Replay**: Full state serialization and deterministic replay via a command log.
-
-## Installation
-
-Add `valori-kernel` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-valori-kernel = { path = "." } # Or git/crates.io dependency
-```
 
 ## Development
 
