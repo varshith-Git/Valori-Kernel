@@ -54,3 +54,4 @@ venv.bak/
 Thumbs.db
 .agent/
 *.log
+*.log
