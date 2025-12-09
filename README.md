@@ -4,6 +4,40 @@ A deterministic, `no_std`, fixed-point vector + knowledge graph engine in Rust.
 
 `valori-kernel` is designed to be a tiny, embeddable kernel that provides consistent behavior across different runtimes (Node.js, Cloud, Embedded) by strictly enforcing determinism and avoiding dynamic allocation in its core.
 
+### 3. Usage (Python)
+
+Valori supports two modes: **Local (Embedded)** and **Remote (Client-Server)**.
+
+#### Local Mode (No Server Required)
+Runs the logic inside your Python process using FFI. Fastest for single-process apps.
+```python
+from valori import ProtocolClient
+
+# 1. Define an embedding function (e.g. using OpenAI, SentenceTransformers)
+def my_embedder(text):
+    return [0.1, 0.2, ...] # Must return list[float] of dimension D
+
+# 2. Initialize Client (Local)
+client = ProtocolClient(embed=my_embedder)
+
+# 3. Remember & Search
+client.upsert_text("Valori remembers everything.")
+print(client.search_text("What does Valori do?"))
+```
+
+#### Remote Mode (Production)
+Connects to a standalone `valori-node` server over HTTP. Use this for web apps, multi-process setups, or cloud deployments.
+```python
+# 1. Start the server (in terminal)
+# ./valori-node
+
+# 2. Connect via Python
+client = ProtocolClient(embed=my_embedder, remote="http://127.0.0.1:3000")
+
+# API is identical to Local Mode!
+client.upsert_text("This is stored on the server.")
+```
+
 ## Features
 
 - **`no_std` Core**: Built for embedded and constrained environments. No standard library dependencies in the core kernel.
