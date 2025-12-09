@@ -38,9 +38,14 @@ graph TD
         Graph[Knowledge Graph]
         Vector[Vector Storage]
         
-        %% Traits
-        Index["VectorIndex<br/>(BruteForce / HNSW)"]
-        Quant["Quantizer<br/>(None / Scalar)"]
+        %% Traits Interface
+        IndexTrait["VectorIndex Trait"]
+        QuantTrait["Quantizer Trait"]
+    end
+
+    subgraph Extensions["Host Extensions (valori-node)"]
+        HNSW["HnswIndex<br/>(Auto-Quantized)"]
+        ScalarQ["ScalarQuantizer"]
     end
 
     %% Relationships
@@ -60,14 +65,20 @@ graph TD
     Kernel --- FXP
     Kernel --- Graph
     Kernel --- Vector
-    Kernel --- Index
-    Kernel --- Quant
+    
+    NodeService -.-> HNSW
+    HNSW -.->|Impl| IndexTrait
+    NodeService -.-> ScalarQ
+    ScalarQ -.->|Impl| QuantTrait
+    
+    Kernel --- IndexTrait
+    Kernel --- QuantTrait
 
     %% Apply Classes
     class User,PyScript external;
     class NodeService,PythonPkg,Protocol,Local,Remote,VMP_API interface;
     class Kernel core;
-    class FXP,Graph,Vector,Index,Quant internal;
+    class FXP,Graph,Vector internal;
 ```
 
 ## Core Components
