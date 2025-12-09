@@ -16,15 +16,18 @@ graph TD
 
     subgraph External["External Usage"]
         User[User / Client]
-        PyScript[Python Scripts / Notebooks]
+        PyScript[Python Scripts]
     end
 
     subgraph Interface["Interface Layer"]
-        NodeService["Values Node (HTTP Server)<br/>(Tokio / Axum)"]
+        NodeService["Values Node (HTTP Server)<br/>(Axum / Tokio)"]
         PythonPkg["Python Package<br/>(valori)"]
         
         %% Protocol Components
-        VMP_Py["ProtocolClient / MemoryClient"]
+        Protocol["ProtocolClient"]
+        Local["LocalClient<br/>(FFI)"]
+        Remote["RemoteClient<br/>(HTTP)"]
+        
         VMP_API["Axum Handlers (/v1/memory)"]
     end
 
@@ -44,13 +47,14 @@ graph TD
     User -->|HTTP / REST| NodeService
     PyScript -->|Import| PythonPkg
     
-    PythonPkg --> VMP_Py
+    PythonPkg --> Protocol
+    Protocol -->|Mode=Local| Local
+    Protocol -->|Mode=Remote| Remote
+
+    Local -->|link| Kernel
+    Remote -->|JSON / HTTP| NodeService
+    
     NodeService --> VMP_API
-    
-    VMP_Py -->|FFI| Kernel
-    VMP_Py -->|HTTP| NodeService
-    
-    NodeService -->|Embeds| Kernel
     VMP_API --> Kernel
 
     Kernel --- FXP
@@ -61,7 +65,7 @@ graph TD
 
     %% Apply Classes
     class User,PyScript external;
-    class NodeService,PythonPkg,VMP_Py,VMP_API interface;
+    class NodeService,PythonPkg,Protocol,Local,Remote,VMP_API interface;
     class Kernel core;
     class FXP,Graph,Vector,Index,Quant internal;
 ```

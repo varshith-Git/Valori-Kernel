@@ -73,17 +73,27 @@ Wraps the Kernel in a `tokio` async runtime. Use `Arc<Mutex<Engine>>` for sharin
 ## 4. Python Client (Valori Memory Protocol)
 **Location**: `python/valori/protocol.py` & `memory.py`
 
-### `ProtocolClient.upsert_text(text, metadata)`
-*   **Purpose**: High-level convenience for "RAG" (Retrieval Augmented Generation).
-*   **Flow**:
-    1. **Chunking**: Splits text into sentences/chunks (deterministic sliding window).
-    2. **Embedding**: Calls user-provided `EmbedFn` to get vectors.
-    3. **Upsert**: Calls `upsert_vector` for each chunk.
-*   **Analysis**: This function orchestrates the "ETL" pipeline on the client side.
+### `ProtocolClient` (Facade)
+*   **Purpose**: The main entry point for developers. Handles the choice between **Local** and **Remote** execution.
+*   **Initialization**: `ProtocolClient(remote="...")`
+    *   If `remote` is None: Instantiates `MemoryClient` (FFI).
+    *   If `remote` is URL: Instantiates `ProtocolRemoteClient` (HTTP).
 
-### `MemoryClient.search_memory(query_vector, k)`
-*   **Purpose**: Type-safe wrapper around the HTTP API or FFI.
-*   **Abstraction**: Hides whether the backend is local (FFI) or remote (HTTP). Returns standardized `MemorySearchHit` objects.
+#### `upsert_text(text, metadata)`
+*   **Logic**:
+    1. **Chunking**: Splits text into chunks locally (client-side).
+    2. **Embedding**: Runs `EmbedFn` locally.
+    3. **Transport**:
+        *   **Local**: Direct memory write via C-ABI.
+        *   **Remote**: Sends `POST /v1/memory/upsert_vector` for each chunk to the server.
+*   **Benefit**: Keeps sensitive text/embedding models on the client side; only vectors leave the machine (privacy).
+
+#### `snapshot() / restore(bytes)`
+*   **Local**: Calls Rust `KernelState::snapshot` directly.
+*   **Remote**:
+    *   `snapshot()`: Downloads the full binary DB from `POST /snapshot`.
+    *   `restore()`: Uploads a binary blob to `POST /restore`.
+*   **Use Case**: Migrating state from a local development environment to a production server, or for backups.
 
 ______________________________________________________________________
 **Note on Performance vs. Correctness**:
