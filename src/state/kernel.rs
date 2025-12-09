@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Kernel State definition.
 
 use crate::types::id::Version;
@@ -15,6 +16,19 @@ use crate::storage::record::Record;
 
 pub struct KernelState<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
     pub(crate) version: Version,
+    pub(crate) records: RecordPool<MAX_RECORDS, D>,
+    pub(crate) nodes: NodePool<MAX_NODES>,
+    pub(crate) edges: EdgePool<MAX_EDGES>,
+    pub(crate) index: BruteForceIndex,
+}
+
+impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> {
+    pub fn new() -> Self {
+        Self {
+            version: Version(0),
+            records: RecordPool::new(),
+            nodes: NodePool::new(),
+            edges: EdgePool::new(),
             index: BruteForceIndex::default(),
         }
     }
