@@ -1,15 +1,16 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IndexKind {
     BruteForce,
     Hnsw,
     // Future: Hnsw, Ivf, etc.
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuantizationKind {
     None,
     Scalar,

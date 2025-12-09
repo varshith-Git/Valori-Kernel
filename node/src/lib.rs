@@ -6,3 +6,4 @@ pub mod engine;
 pub mod server;
 pub mod structure;
 pub mod metadata;
+pub mod persistence;

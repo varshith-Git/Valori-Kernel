@@ -2,9 +2,10 @@ use crate::structure::index::VectorIndex;
 use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::sync::RwLock;
+use serde::{Serialize, Deserialize};
 
 /// Configuration for HNSW
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
     pub m: usize,           // Max edges per node per layer
     pub m_max0: usize,      // Max edges per node at layer 0 (usually 2*M)
@@ -299,5 +300,85 @@ impl VectorIndex for HnswIndex {
         let results = self.search_layer(curr_entry, query, ef, 0, &layers[0], &vectors);
         
         results.into_iter().take(k).map(|c| (c.id, c.dist)).collect()
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        // Deterministic Serialization!
+        // We convert HashMaps to Sorted Vecs to ensure bit-exact output.
+        
+        #[derive(Serialize)]
+        struct HnswDump<'a> {
+            config: &'a HnswConfig,
+            entry_point: Option<u32>,
+            max_level: usize,
+            // Vectors: Sorted by ID
+            vectors: Vec<(u32, &'a Vec<f32>)>, 
+            // Layers: each layer is a Sorted List of (NodeID, Neighbors)
+            layers: Vec<Vec<(u32, &'a Vec<u32>)>>, 
+        }
+
+        let vectors = self.vectors.read().unwrap();
+        let layers = self.layers.read().unwrap();
+        let entry_point = *self.entry_point.read().unwrap();
+        let max_level = *self.max_level.read().unwrap();
+
+        // 1. Sort Vectors
+        let mut sorted_vectors: Vec<_> = vectors.iter().map(|(k, v)| (*k, v)).collect();
+        sorted_vectors.sort_by_key(|(k, _)| *k);
+
+        // 2. Sort Layers
+        let mut sorted_layers = Vec::with_capacity(layers.len());
+        for layer_map in layers.iter() {
+            let mut sorted_nodes: Vec<_> = layer_map.iter().map(|(k, v)| (*k, v)).collect();
+            sorted_nodes.sort_by_key(|(k, _)| *k);
+            sorted_layers.push(sorted_nodes);
+        }
+
+        let dump = HnswDump {
+            config: &self.config,
+            entry_point,
+            max_level,
+            vectors: sorted_vectors,
+            layers: sorted_layers,
+        };
+
+        // Use bincode standard config
+        bincode::serde::encode_to_vec(&dump, bincode::config::standard()).unwrap()
+    }
+
+    fn restore(&mut self, data: &[u8]) {
+        #[derive(Deserialize)]
+        struct HnswLoad {
+            config: HnswConfig,
+            entry_point: Option<u32>,
+            max_level: usize,
+            vectors: Vec<(u32, Vec<f32>)>,
+            layers: Vec<Vec<(u32, Vec<u32>)>>,
+        }
+
+        let (dump, _): (HnswLoad, usize) = bincode::serde::decode_from_slice(data, bincode::config::standard()).expect("Failed to decode HNSW index");
+
+        // Reconstruct
+        self.config = dump.config;
+        *self.entry_point.write().unwrap() = dump.entry_point;
+        *self.max_level.write().unwrap() = dump.max_level;
+
+        // Vectors
+        let mut v_map = HashMap::new();
+        for (id, vec) in dump.vectors {
+            v_map.insert(id, vec);
+        }
+        *self.vectors.write().unwrap() = v_map;
+
+        // Layers
+        let mut l_vec = Vec::new();
+        for layer_list in dump.layers {
+            let mut l_map = HashMap::new();
+            for (node, neighbors) in layer_list {
+                l_map.insert(node, neighbors);
+            }
+            l_vec.push(l_map);
+        }
+        *self.layers.write().unwrap() = l_vec;
     }
 }

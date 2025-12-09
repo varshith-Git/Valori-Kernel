@@ -194,75 +194,120 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         )
     }
 
-    pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
-        // 1. Kernel Snapshot
+    pub fn save_snapshot(&self, path: &std::path::Path) -> Result<(), EngineError> {
+        // 1. Snapshot Components
         let mut k_buf = vec![0u8; 10 * 1024 * 1024]; // 10MB alloc
         let k_len = encode_state(&self.state, &mut k_buf).map_err(EngineError::Kernel)?;
         k_buf.truncate(k_len);
         
-        // 2. Metadata Snapshot
         let meta_buf = self.metadata.snapshot();
+        let index_buf = self.index.snapshot();
+
+        // 2. Prepare Header
+        let mut meta = crate::persistence::SnapshotMeta {
+            version: 2,
+            timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            kernel_len: 0, 
+            metadata_len: 0,
+            index_len: 0,
+            index_kind: self.index_kind,
+            quant_kind: self.quantization_kind,
+        };
+
+        // 3. Delegate to Persistence
+        crate::persistence::SnapshotManager::save(
+            path,
+            &k_buf,
+            &meta_buf,
+            &mut meta,
+            &index_buf
+        ).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+
+        Ok(())
+    }
+
+    // Legacy method for API (in-memory). 
+    // WARN: Allocates entire snapshot!
+    pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
+        let tmp_dir = std::env::temp_dir();
+        let uuid = uuid::Uuid::new_v4(); // Need UUID or random
+        let tmp_path = tmp_dir.join(format!("valori_snap_{}", uuid));
         
-        // 3. Bundle: [k_len: 8B][k_bytes][meta_bytes]
-        let mut final_buf = Vec::with_capacity(8 + k_len + meta_buf.len());
-        final_buf.extend_from_slice(&(k_len as u64).to_le_bytes());
-        final_buf.extend_from_slice(&k_buf);
-        final_buf.extend_from_slice(&meta_buf);
+        self.save_snapshot(&tmp_path)?;
         
-        Ok(final_buf)
+        let bytes = std::fs::read(&tmp_path).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let _ = std::fs::remove_file(tmp_path);
+        
+        Ok(bytes)
     }
 
     pub fn restore(&mut self, data: &[u8]) -> Result<(), EngineError> {
-        // Validation for header
-        if data.len() < 8 {
-             return Err(EngineError::InvalidInput("Snapshot too short".into()));
-        }
-
-        // 1. Read Kernel Len
-        let k_len_bytes: [u8; 8] = data[0..8].try_into().unwrap();
-        let k_len = u64::from_le_bytes(k_len_bytes) as usize;
-        
-        if data.len() < 8 + k_len {
-             return Err(EngineError::InvalidInput("Snapshot corrupted or truncated".into()));
-        }
-        
-        let kernel_data = &data[8..8+k_len];
-        let meta_data = &data[8+k_len..];
-        
-        // 2. Restore Kernel
-        let new_state = decode_state::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(kernel_data).map_err(EngineError::Kernel)?;
-        self.state = new_state;
-
-        // 3. Restore Metadata
-        // Only if there is data left
-        if !meta_data.is_empty() {
-            self.metadata.restore(meta_data);
-        }
-        
-        // Rebuild Host Index from Kernel State!
-        // We recreate the index to ensure it is fresh.
-        let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
-             IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
-             IndexKind::Hnsw => {
-                  use crate::structure::hnsw::HnswIndex;
-                  Box::new(HnswIndex::new()) 
-             },
+        // Use Persistence Parser
+        let (meta, k_data, m_data, i_data) = match crate::persistence::SnapshotManager::parse(data) {
+             Ok(res) => res,
+             Err(e) => {
+                 // Fallback to V1 if parsing fails? 
+                 // V1 logic was simple concatenation. 
+                 // For now, strict V2 or fail, as agreed in plan.
+                 return Err(EngineError::InvalidInput(format!("Restore failed: {}", e)));
+             }
         };
+
+        // Validate Configuration Compatibility
+        if meta.index_kind != self.index_kind || meta.quant_kind != self.quantization_kind {
+             // We can warn or hard fail. 
+             // Logic: If kinds differ, we cannot strictly reuse the index blob.
+             // But we can rebuild from kernel!
+             // So if mismatch, we should ignore `i_data` and rebuild.
+             println!("Snapshot config mismatch. Rebuilding index...");
+             // Proceed to restore kernel, then rebuild.
+             return self.restore_from_components(&k_data, &m_data, None);
+        }
         
-        for i in 0..MAX_RECORDS {
-             let rid = RecordId(i as u32);
-             if let Some(record) = self.state.get_record(rid) {
-                 let mut vals: Vec<f32> = Vec::with_capacity(D);
-                 for fxp in record.vector.data.iter() {
-                     // Assuming Q16.16 based on usage
-                     let f = fxp.0 as f32 / 65536.0;
-                     vals.push(f);
-                 }
-                 index.insert(rid.0, &vals);
+        // Attempt fast restore
+        self.restore_from_components(&k_data, &m_data, Some(&i_data))
+    }
+
+    fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>) -> Result<(), EngineError> {
+        // 1. Kernel
+        self.state = decode_state::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(k_data).map_err(EngineError::Kernel)?;
+
+        // 2. Metadata
+        if !m_data.is_empty() {
+             self.metadata.restore(m_data);
+        }
+
+        // 3. Index
+        if let Some(blob) = i_data {
+             if !blob.is_empty() {
+                 println!("Restoring index from snapshot (fast load)...");
+                 self.index.restore(blob);
+                 return Ok(());
              }
         }
-        self.index = index;
-        
-        Ok(())
+
+        // Fallback: Rebuild
+        println!("Rebuilding index from kernel...");
+        let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
+              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+              IndexKind::Hnsw => {
+                  use crate::structure::hnsw::HnswIndex;
+                  Box::new(HnswIndex::new()) 
+              },
+         };
+         
+         for i in 0..MAX_RECORDS {
+              let rid = RecordId(i as u32);
+              if let Some(record) = self.state.get_record(rid) {
+                  let mut vals: Vec<f32> = Vec::with_capacity(D);
+                  for fxp in record.vector.data.iter() {
+                      let f = fxp.0 as f32 / 65536.0;
+                      vals.push(f);
+                  }
+                  index.insert(rid.0, &vals);
+              }
+         }
+         self.index = index;
+         Ok(())
     }
 }

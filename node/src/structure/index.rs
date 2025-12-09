@@ -18,6 +18,12 @@ pub trait VectorIndex {
 
     /// Insert a single item dynamically.
     fn insert(&mut self, id: u32, vec: &[f32]);
+
+    /// Serializes the index to a binary blob.
+    fn snapshot(&self) -> Vec<u8>;
+
+    /// Restores the index from a binary blob.
+    fn restore(&mut self, data: &[u8]);
 }
 
 /// A simple Brute-Force index (scan all).
@@ -64,6 +70,13 @@ impl VectorIndex for BruteForceIndex {
 
         scores.truncate(k);
         scores
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn restore(&mut self, _data: &[u8]) {
     }
 }
 

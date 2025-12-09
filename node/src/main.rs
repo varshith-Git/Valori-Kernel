@@ -54,25 +54,16 @@ async fn main() {
                 // interval.tick().await; 
                 
                 tracing::debug!("Auto-snapshotting...");
-                let engine = state_clone.lock().await; // Lock for read/snapshot
-                match engine.snapshot() {
-                     Ok(data) => {
-                         // drop lock before writing to disk
-                         drop(engine); 
-                         // Use tmp file + rename for atomicity
-                         let tmp_path = path.with_extension("tmp");
-                         if let Err(e) = tokio::fs::write(&tmp_path, data).await {
-                             tracing::error!("Failed to write tmp snapshot: {:?}", e);
-                             continue;
-                         }
-                         if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
-                             tracing::error!("Failed to rename snapshot: {:?}", e);
-                         } else {
-                             tracing::info!("Snapshot saved to {:?}", path);
-                         }
+                tracing::debug!("Auto-snapshotting...");
+                let engine = state_clone.lock().await; 
+                // Using save_snapshot which handles formatting and atomic rename
+                match engine.save_snapshot(&path) {
+                     Ok(_) => {
+                         tracing::info!("Snapshot saved to {:?}", path);
                      },
-                     Err(e) => tracing::error!("Failed to create snapshot: {:?}", e)
+                     Err(e) => tracing::error!("Snapshot failed: {:?}", e),
                 }
+                // Lock released here
             }
         });
     }
