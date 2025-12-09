@@ -34,16 +34,14 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         assert_eq!(cfg.max_nodes, MAX_NODES, "Config max_nodes mismatch");
         assert_eq!(cfg.max_edges, MAX_EDGES, "Config max_edges mismatch");
 
-        // Initialize Index
-        let index: Box<dyn VectorIndex + Send + Sync> = match cfg.index_kind {
-             IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
-             IndexKind::Hnsw => {
-                 // Fallback to BruteForce for now until HNSW impl is added
-                 // Or panic? Let's fallback with specific log
-                 println!("Warning: HNSW not yet implemented, falling back to BruteForce for Host Index");
-                 Box::new(BruteForceIndex::new())
-             }
-        };
+         // Initialize Index
+         let index: Box<dyn VectorIndex + Send + Sync> = match cfg.index_kind {
+              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+              IndexKind::Hnsw => {
+                  use crate::structure::hnsw::HnswIndex;
+                  Box::new(HnswIndex::new())
+              }
+         };
 
         // Initialize Quantizer
         let quant: Box<dyn Quantizer + Send + Sync> = match cfg.quantization_kind {
@@ -89,7 +87,16 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.state.apply(&cmd)?;
         
         // 4. Update Host Index
-        self.index.insert(id.0, values);
+        // CRITICAL: Round-trip through Fxp to match Restore behavior!
+        // We must insert the EXACT same float values that would be recovered from snapshot.
+        let mut consistent_values = Vec::with_capacity(D);
+        for i in 0..D {
+            let fxp = vector.data[i];
+            let f = fxp.0 as f32 / 65536.0;
+            consistent_values.push(f);
+        }
+        
+        self.index.insert(id.0, &consistent_values);
 
         Ok(id.0)
     }
@@ -237,8 +244,8 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
              IndexKind::Hnsw => {
-                  println!("Warning: HNSW fallback in restore");
-                  Box::new(BruteForceIndex::new()) 
+                  use crate::structure::hnsw::HnswIndex;
+                  Box::new(HnswIndex::new()) 
              },
         };
         
