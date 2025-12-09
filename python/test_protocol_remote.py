@@ -2,7 +2,7 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import unittest
 from unittest.mock import MagicMock, patch
-from valori.protocol import ProtocolClient
+from valori.protocol import ProtocolClient, ProtocolError
 
 class TestProtocolRemote(unittest.TestCase):
     def setUp(self):
@@ -41,6 +41,7 @@ class TestProtocolRemote(unittest.TestCase):
                 {"memory_id": "rec:5", "record_id": 5, "score": 999}
             ]
         }
+        mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
         vec = [0.1] * 16
@@ -78,6 +79,38 @@ class TestProtocolRemote(unittest.TestCase):
         # Verify it called upsert_vector
         args, kwargs = mock_post.call_args
         self.assertEqual(args[0], "http://mock-node:3000/v1/memory/upsert_vector")
+
+    @patch("requests.Session.post")
+    def test_missing_keys_raises_protocol_error(self, mock_post):
+        mock_resp = MagicMock()
+        # Missing 'record_id'
+        mock_resp.json.return_value = {
+            "memory_id": "rec:10",
+            # record_id missing
+            "document_node_id": 100,
+            "chunk_node_id": 200
+        }
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        vec = [0.1] * 16
+        with self.assertRaises(ProtocolError):
+            self.client.upsert_vector(vec)
+
+    @patch("requests.Session.post")
+    def test_restore_content_type(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_post.return_value = mock_resp
+
+        data = b"binarydata"
+        self.client.restore(data)
+        
+        # Verify headers
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "http://mock-node:3000/restore")
+        self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
+        self.assertEqual(kwargs["data"], data)
 
 if __name__ == "__main__":
     unittest.main()

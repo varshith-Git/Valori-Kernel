@@ -6,31 +6,36 @@ The `valori-node` server exposes the kernel over HTTP, allowing it to be used as
 
 ## Endpoints
 
-### 1. Vector Operations
+### 1. Memory Protocol v1 (High Level)
+Use these endpoints for full "Protocol" behavior (Atomic Insert + Graph Linking).
 
-#### `POST /records`
-Insert a new vector record.
+#### `POST /v1/memory/upsert_vector`
+Inserts a vector, creates a chunk node, and optionally links it to a document.
 
 *   **Request Body**:
     ```json
     {
-      "values": [0.1, 0.5, ... 16 floats ...]
+      "vector": [0.1, ...],
+      "attach_to_document_node": 123  // Optional
     }
     ```
 *   **Response**:
     ```json
     {
-      "id": 123
+      "memory_id": "rec:10",
+      "record_id": 10,
+      "document_node_id": 123,
+      "chunk_node_id": 200
     }
     ```
 
-#### `POST /search`
-Search for similar vectors.
+#### `POST /v1/memory/search_vector`
+Search for nearest neighbors.
 
 *   **Request Body**:
     ```json
     {
-      "query": [0.1, 0.5, ...],
+      "query_vector": [0.1, ...],
       "k": 5
     }
     ```
@@ -38,59 +43,31 @@ Search for similar vectors.
     ```json
     {
       "results": [
-        { "id": 123, "score": 4500 }
+        { "memory_id": "rec:5", "record_id": 5, "score": 1000 }
       ]
     }
     ```
 
-### 2. Knowledge Graph Operations
+### 2. Primitive Operations (Low Level)
+Direct access to kernel primitives.
 
-#### `POST /graph/node`
-Create a graph node.
+#### `POST /records`
+Insert a new vector record.
+*   **Body**: `{"values": [...]}`
+*   **Response**: `{"id": 123}`
 
-*   **Request Body**:
-    ```json
-    {
-      "kind": 1,
-      "record_id": 123  // Optional
-    }
-    ```
-*   **Response**:
-    ```json
-    {
-      "node_id": 50
-    }
-    ```
-    *   `kind` is a `u8` integer mapping to your domain entities (e.g., 1=User, 2=Doc).
-
-#### `POST /graph/edge`
-Create a relationship between nodes.
-
-*   **Request Body**:
-    ```json
-    {
-      "from": 50,
-      "to": 51,
-      "kind": 2
-    }
-    ```
-*   **Response**:
-    ```json
-    {
-      "edge_id": 10
-    }
-    ```
+#### `POST /search`
+Primitive search.
+*   **Body**: `{"query": [...], "k": 5}`
+*   **Response**: `{"results": [{"id": 123, "score": 4500}]}`
 
 ### 3. State Management
 
 #### `POST /snapshot`
 Download the full state of the kernel.
-
-*   **Response**: Binary body containing the snapshot data.
-*   **Content-Type**: `application/octet-stream`
+*   **Response**: Binary body (application/octet-stream).
 
 #### `POST /restore`
 Restore state from a snapshot file.
-
-*   **Body**: Binary content of the snapshot.
-*   **Result**: 200 OK on success.
+*   **Body**: Binary content.
+*   **Headers**: `Content-Type: application/octet-stream`

@@ -39,6 +39,16 @@ class MemorySearchResponseHit(TypedDict):
 class MemorySearchResponse(TypedDict):
     results: List[MemorySearchResponseHit]
 
+
+class ProtocolError(RuntimeError):
+    """Raised for protocol-level problems (invalid server response, etc.)"""
+    pass
+
+def _ensure_keys(d: dict, keys):
+    missing = [k for k in keys if k not in d]
+    if missing:
+        raise ProtocolError(f"missing keys in server response: {missing}")
+
 class ProtocolRemoteClient:
     def __init__(self, base_url: str, embed_fn, expected_dim: int):
         self.base_url = base_url.rstrip("/")
@@ -60,8 +70,9 @@ class ProtocolRemoteClient:
 
     def restore(self, data: bytes) -> None:
         url = self.base_url + "/restore"
-        # Binary body
-        resp = self.session.post(url, data=data, timeout=10)
+        # Binary body with explicit Content-Type
+        headers = {"Content-Type": "application/octet-stream"}
+        resp = self.session.post(url, data=data, headers=headers, timeout=10)
         resp.raise_for_status()
 
     def upsert_vector(self, vector: List[float], attach_to_document_node: Optional[int]=None, **kwargs):
@@ -74,13 +85,20 @@ class ProtocolRemoteClient:
         if "tags" in kwargs: payload["tags"] = kwargs["tags"]
         if "metadata" in kwargs: payload["metadata"] = kwargs["metadata"]
         
-        return self._post("/v1/memory/upsert_vector", payload)
+        res = self._post("/v1/memory/upsert_vector", payload)
+        _ensure_keys(res, ("memory_id", "record_id", "document_node_id", "chunk_node_id"))
+        return res
 
     def search_vector(self, vector: List[float], k: int = 5):
         if len(vector) != self.expected_dim:
             raise ValueError(f"Embedding must be {self.expected_dim}-dimensional")
         payload = {"query_vector": vector, "k": k}
-        return self._post("/v1/memory/search_vector", payload)
+        res = self._post("/v1/memory/search_vector", payload)
+        
+        if "results" not in res or not isinstance(res["results"], list):
+            raise ProtocolError("invalid search response shape")
+            
+        return res
 
     def upsert_text(self, text: str, chunk_size: int = 512, **kwargs):
         # chunk locally using existing chunk_text
@@ -105,6 +123,8 @@ class ProtocolRemoteClient:
             # capture it from the first chunk response
             if doc_node_id is None:
                 doc_node_id = res["document_node_id"]
+            elif res["document_node_id"] != doc_node_id:
+                raise ProtocolError(f"server returned inconsistent document_node_id between chunks. Expected {doc_node_id}, got {res['document_node_id']}")
                 
             record_ids.append(res["record_id"])
             chunk_node_ids.append(res["chunk_node_id"])
