@@ -15,6 +15,10 @@ use crate::metadata::MetadataStore;
 
 use std::sync::Arc;
 
+const SCALE: f32 = 65536.0;
+const MAX_SAFE_F: f32 = (i32::MAX as f32) / SCALE; // ~32767.99
+const MIN_SAFE_F: f32 = (i32::MIN as f32) / SCALE; // -32768.0
+
 pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
     state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
     pub index_kind: IndexKind,
@@ -61,9 +65,21 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         }
     }
 
+
+
     pub fn insert_record_from_f32(&mut self, values: &[f32]) -> Result<u32, EngineError> {
         if values.len() != D {
             return Err(EngineError::InvalidInput(format!("Expected {} dimensions, got {}", D, values.len())));
+        }
+
+        // Validate Range for Q16.16 Safety
+        for &v in values {
+            if v > MAX_SAFE_F || v < MIN_SAFE_F {
+                return Err(EngineError::InvalidInput(format!(
+                    "Embedding value {} out of allowed range [{:.1}, {:.1}]",
+                    v, MIN_SAFE_F, MAX_SAFE_F
+                )));
+            }
         }
 
         // 1. Build FxpVector for Kernel
@@ -171,6 +187,21 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, i64)>, EngineError> {
+        // Validate inputs
+        if query.len() != D {
+             return Err(EngineError::InvalidInput(format!("Expected {} dimensions, got {}", D, query.len())));
+        }
+
+        // Validate Range for Q16.16 Safety
+        for &v in query {
+            if v > MAX_SAFE_F || v < MIN_SAFE_F {
+                return Err(EngineError::InvalidInput(format!(
+                    "Query value {} out of allowed range [{:.1}, {:.1}]",
+                    v, MIN_SAFE_F, MAX_SAFE_F
+                )));
+            }
+        }
+
         // Use Host Index instead of Kernel Search to support different index types
         // The Kernel's search_l2 is strictly brute force Fxp.
         // The Host Index might be HNSW/Simd-F32.

@@ -54,3 +54,31 @@ fn test_engine_workflow() {
     let results2 = engine2.search_l2(&query, 2).unwrap();
     assert_eq!(results, results2);
 }
+
+#[test]
+fn test_input_bounds_validation() {
+    let mut cfg = NodeConfig::default();
+    cfg.max_records = MAX_RECORDS;
+    cfg.dim = D;
+    cfg.max_nodes = MAX_NODES;
+    cfg.max_edges = MAX_EDGES;
+    let mut engine = TestEngine::new(&cfg);
+
+    // Safe Vector
+    let safe_vec = [100.0, -100.0, 32000.0, -32000.0];
+    assert!(engine.insert_record_from_f32(&safe_vec).is_ok());
+
+    // Unsafe Positive
+    let unsafe_pos = [1.0, 1.0, 33000.0, 1.0];
+    let err = engine.insert_record_from_f32(&unsafe_pos);
+    assert!(err.is_err());
+    println!("Caught expected error: {:?}", err);
+
+    // Unsafe Negative
+    let unsafe_neg = [1.0, -33000.0, 1.0, 1.0];
+    assert!(engine.insert_record_from_f32(&unsafe_neg).is_err());
+    
+    // Unsafe Search Query
+    let err_search = engine.search_l2(&unsafe_pos, 2);
+    assert!(err_search.is_err());
+}

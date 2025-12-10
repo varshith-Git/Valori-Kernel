@@ -57,7 +57,7 @@ async fn main() {
                 tracing::debug!("Auto-snapshotting...");
                 let engine = state_clone.lock().await; 
                 // Using save_snapshot which handles formatting and atomic rename
-                match engine.save_snapshot(&path) {
+                match engine.save_snapshot(Some(&path)) {
                      Ok(_) => {
                          tracing::info!("Snapshot saved to {:?}", path);
                      },

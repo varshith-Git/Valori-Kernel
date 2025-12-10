@@ -40,6 +40,17 @@ class MemorySearchResponse(TypedDict):
     results: List[MemorySearchResponseHit]
 
 
+# Constants for Q16.16 safety
+MAX_SAFE_FLOAT = 32767.0
+MIN_SAFE_FLOAT = -32768.0
+
+def _validate_vector(vector: List[float]) -> None:
+    for i, v in enumerate(vector):
+        if not (MIN_SAFE_FLOAT <= v <= MAX_SAFE_FLOAT):
+            raise ValueError(
+                f"Embedding value at index {i} ({v}) out of allowed range [{MIN_SAFE_FLOAT}, {MAX_SAFE_FLOAT}] for Q16.16 fixed-point storage."
+            )
+
 class ProtocolError(RuntimeError):
     """Raised for protocol-level problems (invalid server response, etc.)"""
     pass
@@ -59,6 +70,16 @@ class ProtocolRemoteClient:
     def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
         url = self.base_url + path
         resp = self.session.post(url, json=json_data, timeout=10)
+        
+        # Enhanced error handling for 400 Bad Request
+        if resp.status_code == 400:
+            try:
+                err = resp.json()
+                if "error" in err:
+                    raise ValueError(f"Server Error: {err.get('message', err)}")
+            except ValueError:
+                pass # Fallback to raise_for_status
+                
         resp.raise_for_status()
         return resp.json()
 
@@ -78,6 +99,10 @@ class ProtocolRemoteClient:
     def upsert_vector(self, vector: List[float], attach_to_document_node: Optional[int]=None, **kwargs):
         if len(vector) != self.expected_dim:
             raise ValueError(f"Embedding must be {self.expected_dim}-dimensional")
+            
+        # Validate Input Range
+        _validate_vector(vector)
+        
         payload = {"vector": vector}
         if attach_to_document_node is not None:
             payload["attach_to_document_node"] = attach_to_document_node
@@ -92,6 +117,10 @@ class ProtocolRemoteClient:
     def search_vector(self, vector: List[float], k: int = 5):
         if len(vector) != self.expected_dim:
             raise ValueError(f"Embedding must be {self.expected_dim}-dimensional")
+            
+        # Validate Input Range
+        _validate_vector(vector)
+            
         payload = {"query_vector": vector, "k": k}
         res = self._post("/v1/memory/search_vector", payload)
         
@@ -134,6 +163,7 @@ class ProtocolRemoteClient:
             if len(vec) != self.expected_dim:
                 raise ValueError("Embedding mismatch")
             
+            # upsert_vector validation happens inside call
             res = self.upsert_vector(vec, attach_to_document_node=doc_node_id)
             
             # server returns document_node_id for the created/used doc
@@ -205,10 +235,25 @@ class ProtocolClient:
             
     # ... proxies for upsert_vector, search_vector, snapshot, restore ...
     def upsert_vector(self, *args, **kwargs):
+        # Local Mode: MemoryClient doesn't have validation yet.
+        # We can add it here or in MemoryClient.
+        # ProtocolClient is the safest place.
+        if len(args) > 0: vec = args[0]
+        elif "vector" in kwargs: vec = kwargs["vector"]
+        else: vec = None # Should not happen
+        
+        if vec: _validate_vector(vec)
+            
         if self._mode == "remote": return self._impl.upsert_vector(*args, **kwargs)
         else: return self._memory.upsert_vector(*args, **kwargs)
 
     def search_vector(self, *args, **kwargs):
+        if len(args) > 0: vec = args[0]
+        elif "vector" in kwargs: vec = kwargs["vector"]
+        else: vec = None 
+        
+        if vec: _validate_vector(vec)
+
         if self._mode == "remote": return self._impl.search_vector(*args, **kwargs)
         else: return self._memory.semantic_search(*args, **kwargs) # Sig mismatch likely
     
@@ -282,6 +327,7 @@ class ProtocolClient:
         if self._impl:
             self._impl.set_metadata(target_id, metadata)
         else:
+            # Fallback to local if supported, or raise
             raise NotImplementedError("Metadata not yet supported in Local Mode (FFI)")
 
     def get_metadata(self, target_id: str) -> Optional[Dict[str, Any]]:
@@ -354,6 +400,9 @@ class ProtocolClient:
         - Optionally attach to an existing document node.
         - Creates a CHUNK node pointing to the record.
         """
+        # Validation
+        _validate_vector(vector)
+
         if self._impl:
             return self._impl.upsert_vector(
                 vector=vector,
@@ -376,16 +425,18 @@ class ProtocolClient:
         }
 
     def search_text(self, query: str, k: int = 5) -> MemorySearchResponse:
-        # ProtocolRemoteClient doesn't support search_text (server has no embedder).
-        # We must embed locally and call search_vector.
+        # Common path: embed query
         vec = self._embed(query)
         return self.search_vector(vec, k=k)
 
     def search_vector(self, vector: List[float], k: int = 5) -> MemorySearchResponse:
+        # Validation
+        _validate_vector(vector)
+
         if self._impl:
             return self._impl.search_vector(vector, k=k)
 
-        # Validate dimension
+        # Local Mode
         if len(vector) != EXPECTED_DIM:
              raise ValueError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
             
