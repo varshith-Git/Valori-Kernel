@@ -103,6 +103,7 @@ The foundation of the system.
 *   **Fixed-Point Arithmetic (FXP)**: All numeric operations use fixed-point integers (e.g., Q16.16) instead of floating-point numbers (`f32`/`f64`).
     *   **Why?** Floating-point math can vary slightly across different CPU architectures and compiler optimizations (e.g. FMA instructions).
     *   **Benefit**: This guarantees **Bit-Identical Determinism**. The same sequence of inputs will produce the exact same binary state hash on an Intel laptop, an ARM server, or a WASM browser runtime.
+    *   **Input Sanitation**: The API Boundary (`Engine`) strictly validates that all input float values are within the safe Q16.16 range (`[-32768.0, 32767.0]`) to prevent overflow and maintain integrity.
 *   **Abstractions (Traits)**:
     *   **`VectorIndex`**: Pluggable indexing strategy. Default is `BruteForceIndex` (exact). Future support for `HNSW` or `IVF`.
     *   **`Quantizer`**: Pluggable vector compression. Default is `NoQuantizer` (full precision). Future support for `Scalar` or `Product` quantization.

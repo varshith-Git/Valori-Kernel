@@ -123,5 +123,7 @@
 - `MetadataStore::get(id) -> Option<Value>`: Retrieves metadata.
 
 ## node/src/engine.rs
+- `Engine::insert_record_from_f32(values: &[f32]) -> Result<u32>`: Inserts a record. **Validates** input values are within Q16.16 safe range `[-32768.0, 32767.0]`. Returns error on overflow.
+- `Engine::search_l2(query: &[f32], k) -> Result<Vec<(u32, i64)>>`: Searches for k-nearest neighbors. **Validates** query vector range.
 - `Engine::snapshot() -> Result<Vec<u8>>`: orchestrates full system snapshot.
 - `Engine::restore(data)`: Restores Kernel, Metadata, and Index (rebuilding Index if needed).
