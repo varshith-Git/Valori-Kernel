@@ -87,13 +87,13 @@ client.upsert_text("This data lives in the cloud now.")
 
 ```mermaid
 graph LR
-    Kernel[Core Kernel<br/>(no_std Rust)] -->|FFI| Python[Local Python]
-    Kernel -->|Axum| Node[Valori Node]
+    Kernel["Core Kernel<br/>(no_std Rust)"] -->|FFI| Python["Local Python"]
+    Kernel -->|Axum| Node["Valori Node"]
     
     subgraph "Deterministic Core"
-        BF[BruteForce Index]
-        FXP[Q16.16 Math]
-        Graph[Knowledge Graph]
+        BF["BruteForce Index"]
+        FXP["Q16.16 Math"]
+        Graph["Knowledge Graph"]
     end
     
     Kernel --- BF
