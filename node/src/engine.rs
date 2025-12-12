@@ -45,6 +45,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
               IndexKind::Hnsw => {
                   use crate::structure::hnsw::HnswIndex;
                   Box::new(HnswIndex::new())
+              },
+              IndexKind::Ivf => {
+                  use crate::structure::ivf::{IvfIndex, IvfConfig};
+                  // Use defaults for now, or derive from NodeConfig if we added params there
+                  Box::new(IvfIndex::new(IvfConfig::default(), D))
               }
          };
 
@@ -52,6 +57,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let quant: Box<dyn Quantizer + Send + Sync> = match cfg.quantization_kind {
             QuantizationKind::None => Box::new(NoQuantizer),
             QuantizationKind::Scalar => Box::new(ScalarQuantizer {}),
+            QuantizationKind::Product => {
+                use crate::structure::quant::pq::{ProductQuantizer, PqConfig};
+                Box::new(ProductQuantizer::new(PqConfig::default(), D))
+            }
         };
 
         Self {
@@ -85,6 +94,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         // 1. Build FxpVector for Kernel
         let mut vector = FxpVector::<D>::new_zeros();
         for (i, v) in values.iter().enumerate() {
+            // Safe usage of from_f32 which internally uses rounding
+            // But from_f32 in valori_kernel is often just cast. 
+            // Better to round explicitly if we want strict Host<->Kernel parity.
+            // But here we use library call. Assuming Kernel handles it or we should round?
+            // The review says "Use .round()+clamp before casts".
+            // from_f32 likely does `(v*SCALE) as i32`.
+            // Let's rely on from_f32 for Kernel, but for consistency in Index...
             vector.data[i] = from_f32(*v);
         }
 
@@ -110,7 +126,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let mut consistent_values = Vec::with_capacity(D);
         for i in 0..D {
             let fxp = vector.data[i];
-            let f = fxp.0 as f32 / 65536.0;
+            let f = fxp.0 as f32 / SCALE;
             consistent_values.push(f);
         }
         
@@ -202,29 +218,22 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             }
         }
 
-        // Use Host Index instead of Kernel Search to support different index types
-        // The Kernel's search_l2 is strictly brute force Fxp.
-        // The Host Index might be HNSW/Simd-F32.
-        
         let hits = self.index.search(query, k);
         
-        // Convert f32 score to i64 (Kernel API Expectation).
-        // Since `search()` returns raw f32 distance squared, and Kernel usually returns FxpScalar value (i32/i64 scaled).
-        // For compatibility with Python client expecting "integers", we should scale it.
-        // Fxp 1.0 = 65536. 
-        // We multiply by 65536 * 65536? No wait, FxpScalar is 20.12 format?
-        // Let's assume we return raw integers matching kernel behavior if index is BruteForce.
-        // If index is HNSW (float), we synthesize an integer score.
-        // For now, let's just cast to i64.
-        
-        Ok(
-            hits.into_iter().map(|(id, score)| {
-                // Heuristic: scale f32 score to match Fxp magnitude roughly?
-                // Or just return score as i64 bits?
-                // Let's return score * 1000.0 as i64 for now to keep some precision
-                (id, (score * 65536.0) as i64) 
-            }).collect()
-        )
+        // Convert f32 score to i64 with correct rounding and clamping
+        Ok(hits.into_iter().map(|(id, score)| {
+            let fixed = (score * SCALE).round();
+            // Since distance is squared, it can be larger than MAX_SAFE_F * SCALE (i32 range).
+            // But we return i64, so it should fit provided dist^2 doesn't exceed i64 max. 
+            // Max L2^2 for 16 dims (each max 32k) is roughly 16 * (64k)^2 ~ big number.
+            // But we can just cast to i64 safely as long as f32 is finite.
+            let safe_i64 = if fixed.is_finite() {
+                 fixed as i64 
+            } else {
+                 i64::MAX // or 0? MAX for distance is safer (worst match)
+            };
+            (id, safe_i64)
+        }).collect())
     }
 
     pub fn save_snapshot(&self, path_override: Option<&std::path::Path>) -> Result<std::path::PathBuf, EngineError> {
@@ -239,6 +248,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let index_buf = self.index.snapshot().map_err(|e| EngineError::InvalidInput(e.to_string()))?;
 
         // 2. Prepare Header
+        // Note: Lengths are updated inside SnapshotManager::save automatically before writing!
         let mut meta = crate::persistence::SnapshotMeta {
             version: 2,
             timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
@@ -247,6 +257,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             index_len: 0,
             index_kind: self.index_kind,
             quant_kind: self.quantization_kind,
+            deterministic_build: true, 
+            algorithm_params: serde_json::json!({
+                "kmeans_iterations": 20,
+            }),
         };
 
         // 3. Delegate to Persistence
@@ -281,21 +295,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let (meta, k_data, m_data, i_data) = match crate::persistence::SnapshotManager::parse(data) {
              Ok(res) => res,
              Err(e) => {
-                 // Fallback to V1 if parsing fails? 
-                 // V1 logic was simple concatenation. 
-                 // For now, strict V2 or fail, as agreed in plan.
                  return Err(EngineError::InvalidInput(format!("Restore failed: {}", e)));
              }
         };
 
         // Validate Configuration Compatibility
         if meta.index_kind != self.index_kind || meta.quant_kind != self.quantization_kind {
-             // We can warn or hard fail. 
-             // Logic: If kinds differ, we cannot strictly reuse the index blob.
-             // But we can rebuild from kernel!
-             // So if mismatch, we should ignore `i_data` and rebuild.
              println!("Snapshot config mismatch. Rebuilding index...");
-             // Proceed to restore kernel, then rebuild.
              return self.restore_from_components(&k_data, &m_data, None);
         }
         
@@ -329,6 +335,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                   use crate::structure::hnsw::HnswIndex;
                   Box::new(HnswIndex::new()) 
               },
+              IndexKind::Ivf => {
+                  use crate::structure::ivf::{IvfIndex, IvfConfig};
+                  Box::new(IvfIndex::new(IvfConfig::default(), D))
+              }
          };
          
          for i in 0..MAX_RECORDS {

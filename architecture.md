@@ -21,6 +21,7 @@ graph TD
 
     subgraph Interface["Interface Layer"]
         NodeService["Values Node (HTTP Server)<br/>(Axum / Tokio)"]
+        AuthMiddleware["Auth Middleware<br/>(Tower / Headers)"]
         PythonPkg["Python Package<br/>(valori)"]
         
         %% Protocol Components
@@ -30,32 +31,15 @@ graph TD
         
         VMP_API["Axum Handlers (/v1/memory)"]
     end
-
-    subgraph Core["Core Kernel (Rust)"]
-        Kernel["Valori Kernel<br/>(no_std, Deterministic)"]
-        
-        FXP[Fixed-Point Math]
-        Graph[Knowledge Graph]
-        Vector[Vector Storage]
-        
-        %% Traits Interface
-        IndexTrait["VectorIndex Trait"]
-        QuantTrait["Quantizer Trait"]
-    end
-
-    subgraph Extensions["Host Extensions (valori-node)"]
-        HNSW["HnswIndex<br/>(Auto-Quantized)"]
-        ScalarQ["ScalarQuantizer"]
-        MetaStore["MetadataStore<br/>(JSON KV)"]
-    end
-
-    subgraph Persistence["Persistence Layer"]
-        SnapMgr["SnapshotManager<br/>(Atomic Writes)"]
-        Disk[(Disk Storage)]
-    end
+    
+    %% ... Core ...
 
     %% Relationships
     User -->|HTTP / REST| NodeService
+    
+    NodeService --> AuthMiddleware
+    AuthMiddleware --> VMP_API
+    
     PyScript -->|Import| PythonPkg
     
     PythonPkg --> Protocol
@@ -65,7 +49,6 @@ graph TD
     Local -->|link| Kernel
     Remote -->|JSON / HTTP| NodeService
     
-    NodeService --> VMP_API
     VMP_API --> Kernel
 
     Kernel --- FXP
@@ -74,8 +57,12 @@ graph TD
     
     NodeService -.-> HNSW
     HNSW -.->|Impl| IndexTrait
+    NodeService -.-> IVF
+    IVF -.->|Impl| IndexTrait
     NodeService -.-> ScalarQ
     ScalarQ -.->|Impl| QuantTrait
+    NodeService -.-> ProductQ
+    ProductQ -.->|Impl| QuantTrait
     NodeService --> MetaStore
     
     NodeService --> SnapMgr
@@ -105,8 +92,12 @@ The foundation of the system.
     *   **Benefit**: This guarantees **Bit-Identical Determinism**. The same sequence of inputs will produce the exact same binary state hash on an Intel laptop, an ARM server, or a WASM browser runtime.
     *   **Input Sanitation**: The API Boundary (`Engine`) strictly validates that all input float values are within the safe Q16.16 range (`[-32768.0, 32767.0]`) to prevent overflow and maintain integrity.
 *   **Abstractions (Traits)**:
-    *   **`VectorIndex`**: Pluggable indexing strategy. Default is `BruteForceIndex` (exact). Future support for `HNSW` or `IVF`.
-    *   **`Quantizer`**: Pluggable vector compression. Default is `NoQuantizer` (full precision). Future support for `Scalar` or `Product` quantization.
+    *   **`VectorIndex`**: Pluggable indexing strategy. Default is `BruteForceIndex`. Supports `HNSW` (Graph) and `IVF` (Clustered).
+    *   **`Quantizer`**: Pluggable vector compression. Default is `NoQuantizer`. Supports `Scalar` (8-bit) and `Product` (PQ) quantization.
+    *   **Deterministic Algorithms**:
+        *   **K-Means**: Custom Lloyd's implementation using FNV1a hashing for initialization and Fixed-Point accumulation.
+        *   **IVF**: Uses deterministic K-Means for coarse centroids and sorts inverted lists by Record ID.
+        *   **PQ**: Uses deterministic K-Means for sub-vector codebooks.
 *   **State Machine**: The kernel operates as a pure state machine (`State + Command -> New State`).
 
 ### 2. Valori Node (Service Layer)

@@ -106,11 +106,49 @@ graph LR
 - **`valori-node`**: HTTP Service layer with Persistence (Disk/S3) and HNSW Indexing.
 - **`valori` (Python)**: Unified Client implementing the `Memory Protocol`.
 
+## 🔒 Security
+
+Valori Secure Node supports Bearer Token authentication.
+
+- **Enable**: Set `VALORI_AUTH_TOKEN="your-secret-key"` environment variable.
+- **Connect**: Pass `api_key` to client.
+- **Guide**: See [Authentication & Security](docs/authentication.md) for full details.
+
 ## 📦 Performance
 
 - **Latencies**: `<500µs` for raw vector search (Local Mode).
 - **Throughput**: Handles thousands of concurrent readers in Node mode (Tokio async).
 - **Size**: Core kernel compiles to `<1MB`.
+
+---
+
+## 🔌 Integrations
+
+Valori includes built-in adapters for popular AI frameworks.
+
+### LangChain
+
+```python
+from valori.adapters.base import ValoriAdapter
+from valori.adapters.langchain import ValoriRetriever
+
+adapter = ValoriAdapter(base_url="http://localhost:3000", api_key="my-key", embed_fn=my_embed)
+retriever = ValoriRetriever(adapter, my_embed, k=4)
+
+docs = retriever.get_relevant_documents("What is Q16.16?")
+```
+
+### LlamaIndex
+
+```python
+from valori.adapters.base import ValoriAdapter
+from valori.adapters.llamaindex import ValoriVectorStore
+
+adapter = ValoriAdapter(base_url="http://localhost:3000", api_key="my-key")
+store = ValoriVectorStore(adapter)
+
+# Use as VectorStore in StorageContext
+```
 
 ---
 

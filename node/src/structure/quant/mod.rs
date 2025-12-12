@@ -1,3 +1,5 @@
+pub mod pq;
+
 /// Abstract interface for vector quantization.
 pub trait Quantizer {
     /// Compress a high-precision vector into bytes.
@@ -30,8 +32,6 @@ impl Quantizer for NoQuantizer {
     }
 }
 
-/// Scalar Quantizer (8-bit per dimension).
-/// Maps min/max range to u8. Simple implementation.
 /// Scalar Quantizer (8-bit per dimension).
 /// Maps range [-1.0, 1.0] to [0, 255].
 pub struct ScalarQuantizer {}

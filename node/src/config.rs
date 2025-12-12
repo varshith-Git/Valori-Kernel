@@ -7,14 +7,14 @@ use serde::{Serialize, Deserialize};
 pub enum IndexKind {
     BruteForce,
     Hnsw,
-    // Future: Hnsw, Ivf, etc.
+    Ivf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuantizationKind {
     None,
     Scalar,
-    // Future: Scalar, Product, Saq, etc.
+    Product,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,9 @@ pub struct NodeConfig {
     // Persistence
     pub snapshot_path: Option<PathBuf>,
     pub auto_snapshot_interval_secs: Option<u64>,
+    
+    // Security
+    pub auth_token: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -57,11 +60,13 @@ impl Default for NodeConfig {
 
         let index_kind = match std::env::var("VALORI_INDEX").as_deref() {
             Ok("hnsw") => IndexKind::Hnsw,
+            Ok("ivf") => IndexKind::Ivf,
             _ => IndexKind::BruteForce,
         };
 
         let quantization_kind = match std::env::var("VALORI_QUANT").as_deref() {
             Ok("scalar") => QuantizationKind::Scalar,
+            Ok("product") => QuantizationKind::Product,
             _ => QuantizationKind::None,
         };
         
@@ -70,6 +75,8 @@ impl Default for NodeConfig {
             
         let auto_snapshot_interval_secs = std::env::var("VALORI_SNAPSHOT_INTERVAL")
             .ok().and_then(|v| v.parse().ok());
+            
+        let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
 
         Self {
             max_records,
@@ -81,6 +88,7 @@ impl Default for NodeConfig {
             quantization_kind,
             snapshot_path,
             auto_snapshot_interval_secs,
+            auth_token,
         }
     }
 }

@@ -100,6 +100,7 @@ pub struct MemorySearchHit {
     pub memory_id: String,
     pub record_id: u32,
     pub score: i64,
+    pub metadata: Option<serde_json::Value>,
 }
 
 // ... existing content ...

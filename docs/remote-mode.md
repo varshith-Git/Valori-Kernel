@@ -31,7 +31,13 @@ cargo build -p valori-node --release
 ### Configuration
 You can configure the node via environment variables:
 *   `VALORI_MAX_RECORDS`: Max vector capacity (default: 1024).
+*   `VALORI_SNAPSHOT_INTERVAL`: Seconds between auto-saves (default: `None` (Disabled)).
+*   `VALORI_AUTH_TOKEN`: Bearer Token for Security (default: `None` (Public)).
 *   `VALORI_BIND`: Address to listen on (default: `127.0.0.1:3000`).
+
+## Authentication
+
+When `VALORI_AUTH_TOKEN` is set, clients must send `Authorization: Bearer <token>`.
 
 Example:
 ```bash

@@ -35,65 +35,93 @@ class MemorySearchResponseHit(TypedDict):
     memory_id: str
     record_id: int
     score: int
+    metadata: Optional[Dict[str, Any]]
 
 class MemorySearchResponse(TypedDict):
     results: List[MemorySearchResponseHit]
 
 
 # Constants for Q16.16 safety
-MAX_SAFE_FLOAT = 32767.0
-MIN_SAFE_FLOAT = -32768.0
+FXP_MAX = 32767.0
+FXP_MIN = -32767.0
+MAX_SAFE_FLOAT = FXP_MAX # Alias for backward compat/clarity
+MIN_SAFE_FLOAT = FXP_MIN
 
 def _validate_vector(vector: List[float]) -> None:
     for i, v in enumerate(vector):
         if not (MIN_SAFE_FLOAT <= v <= MAX_SAFE_FLOAT):
-            raise ValueError(
+            raise ValidationError(
                 f"Embedding value at index {i} ({v}) out of allowed range [{MIN_SAFE_FLOAT}, {MAX_SAFE_FLOAT}] for Q16.16 fixed-point storage."
             )
 
-class ProtocolError(RuntimeError):
-    """Raised for protocol-level problems (invalid server response, etc.)"""
+class ValoriError(Exception):
+    """Base class for all Valori exceptions."""
     pass
+
+class ProtocolError(ValoriError):
+    """Raised for protocol-level problems (invalid server response, etc.)."""
+    pass
+
+class AuthError(ValoriError):
+    """Raised when authentication fails (401/403)."""
+    pass
+
+class ValidationError(ValoriError, ValueError):
+    """Raised when input validation fails (e.g. FXP bounds)."""
+    pass
+
 
 def _ensure_keys(d: dict, keys):
     missing = [k for k in keys if k not in d]
     if missing:
         raise ProtocolError(f"missing keys in server response: {missing}")
+        
+import json
 
 class ProtocolRemoteClient:
-    def __init__(self, base_url: str, embed_fn, expected_dim: int):
+    def __init__(self, base_url: str, embed_fn, expected_dim: int, api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
+        if api_key:
+            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
         self._embed = embed_fn
         self.expected_dim = expected_dim
 
     def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
-        url = self.base_url + path
+        # Robust URL construction
+        url = f"{self.base_url}/{path.lstrip('/')}"
         resp = self.session.post(url, json=json_data, timeout=10)
         
-        # Enhanced error handling for 400 Bad Request
-        if resp.status_code == 400:
+        if not resp.ok:
+            # Handle Auth Errors specifically
+            if resp.status_code in (401, 403):
+                 raise AuthError(f"Authentication failed ({resp.status_code}): {resp.reason}")
+
+            # Try to parse JSON error message, fallback to text
             try:
                 err = resp.json()
-                if "error" in err:
-                    raise ValueError(f"Server Error: {err.get('message', err)}")
-            except ValueError:
-                pass # Fallback to raise_for_status
-                
-        resp.raise_for_status()
-        return resp.json()
+                msg = err.get("message") or err.get("error") or err
+            except (ValueError, json.JSONDecodeError):
+                msg = resp.text
+            raise ProtocolError(f"{resp.status_code} Server Error: {msg}")
+            
+        try:
+            return resp.json()
+        except (ValueError, json.JSONDecodeError):
+             raise ProtocolError("Server returned non-JSON response")
 
     def snapshot(self) -> bytes:
-        url = self.base_url + "/snapshot"
-        resp = self.session.post(url, timeout=10)
+        url = f"{self.base_url}/v1/snapshot/download"
+        resp = self.session.get(url, timeout=10)
         resp.raise_for_status()
         return resp.content
 
     def restore(self, data: bytes) -> None:
-        url = self.base_url + "/restore"
+        url = f"{self.base_url}/v1/snapshot/upload"
         # Binary body with explicit Content-Type
         headers = {"Content-Type": "application/octet-stream"}
         resp = self.session.post(url, data=data, headers=headers, timeout=10)
+
         resp.raise_for_status()
 
     def upsert_vector(self, vector: List[float], attach_to_document_node: Optional[int]=None, **kwargs):
@@ -128,19 +156,17 @@ class ProtocolRemoteClient:
             raise ProtocolError("invalid search response shape")
             
         return res
-
-    # ... existing methods ...
     
     def set_metadata(self, target_id: str, metadata: Dict[str, Any]):
         """Set metadata for a memory_id, record_id, or node_id."""
-        url = self.base_url + "/v1/memory/meta/set"
+        url = f"{self.base_url}/v1/memory/meta/set"
         payload = {"target_id": target_id, "metadata": metadata}
         resp = self.session.post(url, json=payload, timeout=5)
         resp.raise_for_status()
         
     def get_metadata(self, target_id: str) -> Optional[Dict[str, Any]]:
         """Get metadata for a target_id."""
-        url = self.base_url + "/v1/memory/meta/get"
+        url = f"{self.base_url}/v1/memory/meta/get"
         resp = self.session.get(url, params={"target_id": target_id}, timeout=5)
         resp.raise_for_status()
         data = resp.json()
@@ -193,87 +219,6 @@ class ProtocolRemoteClient:
             "chunk_count": len(chunks),
         }
 
-# Update ProtocolClient facade to expose these
-class ProtocolClient:
-    def __init__(self, embed, remote: Optional[str] = None):
-        if remote and (remote.startswith("http://") or remote.startswith("https://")):
-            # Import expected dim from somewhere or hardcode 16 for now?
-            # Ideally fetch from server config. For now 16.
-            self._impl = ProtocolRemoteClient(remote, embed, 16)
-            self._mode = "remote"
-        else:
-            from .memory import MemoryClient, EXPECTED_DIM
-            self._memory = MemoryClient(remote=remote)
-            self._mode = "local"
-
-    def upsert_text(self, text: str, **kwargs):
-        if self._mode == "remote":
-            return self._impl.upsert_text(text, **kwargs)
-        else:
-            return self._memory.add_document(text, self._memory.embed_fn, **kwargs) # Wait, MemoryClient signature is different?
-            # MemoryClient.add_document(text, embed, ...)
-            # ProtocolClient standardizes this?
-            # In previous steps I just delegated.
-            # Local Mode: self._memory.add_document(text, embed, ...)
-            # Check MemoryClient signature: add_document(text, embed, title...)
-            pass 
-            # I need to fix Local Mode delegation if I want full compatibility.
-            # But the task is focused on Remote.
-            # ... (omitted)
-
-    def set_metadata(self, target_id: str, metadata: Dict[str, Any]):
-        if self._mode == "remote":
-            self._impl.set_metadata(target_id, metadata)
-        else:
-            raise NotImplementedError("Metadata not yet supported in Local Mode (FFI)")
-
-    def get_metadata(self, target_id: str) -> Optional[Dict[str, Any]]:
-        if self._mode == "remote":
-            return self._impl.get_metadata(target_id)
-        else:
-            raise NotImplementedError("Metadata not yet supported in Local Mode (FFI)")
-            
-    # ... proxies for upsert_vector, search_vector, snapshot, restore ...
-    def upsert_vector(self, *args, **kwargs):
-        # Local Mode: MemoryClient doesn't have validation yet.
-        # We can add it here or in MemoryClient.
-        # ProtocolClient is the safest place.
-        if len(args) > 0: vec = args[0]
-        elif "vector" in kwargs: vec = kwargs["vector"]
-        else: vec = None # Should not happen
-        
-        if vec: _validate_vector(vec)
-            
-        if self._mode == "remote": return self._impl.upsert_vector(*args, **kwargs)
-        else: return self._memory.upsert_vector(*args, **kwargs)
-
-    def search_vector(self, *args, **kwargs):
-        if len(args) > 0: vec = args[0]
-        elif "vector" in kwargs: vec = kwargs["vector"]
-        else: vec = None 
-        
-        if vec: _validate_vector(vec)
-
-        if self._mode == "remote": return self._impl.search_vector(*args, **kwargs)
-        else: return self._memory.semantic_search(*args, **kwargs) # Sig mismatch likely
-    
-    def snapshot(self):
-        if self._mode == "remote": return self._impl.snapshot()
-        else: raise NotImplementedError("Local snapshot not exposed yet")
-        
-    def restore(self, data):
-        if self._mode == "remote": return self._impl.restore(data)
-        else: raise NotImplementedError("Local restore not exposed yet")
-
-    def search_text(self, text: str, k: int=5):
-        # ... logic ...
-        pass
-
-
-    def search_text(self, query: str, k:int = 5):
-        vec = self._embed(query)
-        return self.search_vector(vec, k=k)
-
 class ProtocolClient:
     """
     High-level Memory Protocol client.
@@ -287,6 +232,7 @@ class ProtocolClient:
         self,
         embed: EmbedFn,
         remote: Optional[str] = None,
+        api_key: Optional[str] = None,
         index_kind: str = "bruteforce",
         quantization: str = "none",
     ) -> None:
@@ -294,7 +240,7 @@ class ProtocolClient:
         
         if remote and (remote.startswith("http://") or remote.startswith("https://")):
             # Use Remote Protocol Client
-            self._impl = ProtocolRemoteClient(remote, embed, EXPECTED_DIM)
+            self._impl = ProtocolRemoteClient(remote, embed, EXPECTED_DIM, api_key=api_key)
         else:
             # Use Local/FFI Memory Client
             self._impl = None
@@ -458,5 +404,6 @@ class ProtocolClient:
                 "memory_id": self._memory_id_from_record_id(rid),
                 "record_id": rid,
                 "score": score,
+                "metadata": None # Metadata not yet supported in local mode return
             })
         return {"results": normalized}

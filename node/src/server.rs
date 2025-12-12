@@ -35,14 +35,49 @@ use valori_kernel::types::enums::{NodeKind, EdgeKind};
 // ... existing imports ...
 use axum::extract::Query;
 
-pub fn build_router(state: SharedEngine) -> Router {
-    Router::new()
+use axum::middleware::{self, Next};
+use axum::response::Response;
+use axum::http::{Request, StatusCode};
+use axum::extract::Request as AxumRequest;
+use axum::http::header::AUTHORIZATION;
+use axum::Extension;
+
+use axum::middleware::from_fn_with_state;
+
+async fn auth_guard(
+    State(token): State<Arc<Option<String>>>,
+    req: AxumRequest,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(token_str) = &*token {
+        let auth_header = req.headers().get(AUTHORIZATION)
+            .and_then(|val| val.to_str().ok())
+            .filter(|val| val.starts_with("Bearer "));
+            
+        if let Some(val) = auth_header {
+             let provided = val.trim_start_matches("Bearer ");
+             if provided == token_str {
+                 return Ok(next.run(req).await);
+             }
+        }
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    // No token configured implies no auth required? 
+    // Logic in build_router conditionally adds middleware.
+    // So if middleware is present, token is Some.
+    // But passing Option allows flexibility. 
+    // Re-reading build_router logic below.
+    Ok(next.run(req).await)
+}
+
+pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
+    let mut app = Router::new()
         .route("/records", post(insert_record))
         .route("/search", post(search))
         .route("/graph/node", post(create_node))
         .route("/graph/edge", post(create_edge))
-        .route("/snapshot", post(snapshot))
-        .route("/restore", post(restore))
+        .route("/v1/snapshot/download", axum::routing::get(snapshot)) 
+        .route("/v1/snapshot/upload", post(restore))
         // Admin V1
         .route("/v1/snapshot/save", post(snapshot_save))
         .route("/v1/snapshot/restore", post(snapshot_restore))
@@ -52,7 +87,17 @@ pub fn build_router(state: SharedEngine) -> Router {
         // Metadata v1
         .route("/v1/memory/meta/set", post(meta_set))
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(token) = auth_token {
+        tracing::info!("Auth Enabled: Bearer token required");
+        let auth_state = Arc::new(Some(token));
+        app = app.layer(from_fn_with_state(auth_state, auth_guard));
+    } else {
+        tracing::warn!("Auth Disabled: No token configured");
+    }
+    
+    app
 }
 
 // ... existing handlers ...
@@ -194,6 +239,11 @@ async fn memory_upsert_vector(
 
     let memory_id = format!("rec:{}", record_id);
 
+    // 5. Store Metadata if provided
+    if let Some(meta) = payload.metadata {
+        engine.metadata.set(memory_id.clone(), meta);
+    }
+
     Ok(Json(MemoryUpsertResponse {
         memory_id,
         record_id,
@@ -213,10 +263,15 @@ async fn memory_search_vector(
 
     let results = hits
         .into_iter()
-        .map(|(record_id, score)| MemorySearchHit {
-            memory_id: format!("rec:{}", record_id),
-            record_id,
-            score,
+        .map(|(record_id, score)| {
+            let memory_id = format!("rec:{}", record_id);
+            let metadata = engine.metadata.get(&memory_id);
+            MemorySearchHit {
+                memory_id,
+                record_id,
+                score,
+                metadata,
+            }
         })
         .collect();
 

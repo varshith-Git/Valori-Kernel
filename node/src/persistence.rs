@@ -17,6 +17,10 @@ pub struct SnapshotMeta {
     pub index_len: u64,
     pub index_kind: IndexKind,
     pub quant_kind: QuantizationKind,
+    #[serde(default)] // Backwards compatibility for prev version
+    pub deterministic_build: bool,
+    #[serde(default)]
+    pub algorithm_params: serde_json::Value,
 }
 
 pub struct SnapshotManager;

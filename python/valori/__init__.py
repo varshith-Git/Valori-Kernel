@@ -19,5 +19,6 @@ class Valori:
 
 from .memory import MemoryClient
 from .protocol import ProtocolClient
+from . import adapters
 
-__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient", "ProtocolClient"]
+__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient", "ProtocolClient", "adapters"]

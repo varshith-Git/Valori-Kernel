@@ -68,7 +68,7 @@ async fn main() {
         });
     }
     
-    let app = build_router(shared_state);
+    let app = build_router(shared_state, cfg.auth_token.clone());
     
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);

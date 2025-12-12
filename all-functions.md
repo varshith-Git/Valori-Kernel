@@ -114,6 +114,26 @@
 - `HnswIndex::deterministic_level(id) -> usize`: Computes layer level using FNV1a hash (no RNG).
 - `HnswIndex::snapshot() -> Result<Vec<u8>>`: Deterministic serialization (sorted maps).
 
+## node/src/structure/ivf.rs (IVF Index)
+- `IvfIndex::new(config, dim) -> Self`: Creates IVF index.
+- `IvfIndex::build(&mut self, records)`: Trains coarse centroids (Deterministic K-Means) and populates inverted lists.
+- `IvfIndex::insert(&mut self, id, vec)`: Dynamically inserts record into nearest list.
+- `IvfIndex::search(&self, query, k) -> Vec<(id, dist)>`: Probes closest `n_probe` centroids.
+- `IvfIndex::snapshot() -> Result<Vec<u8>>`: deterministically serializes (Sorted by ID).
+
+## node/src/structure/deterministic/kmeans.rs
+- `deterministic_kmeans(records, k, iterations) -> Vec<Vec<f32>>`: 
+    - Initialization: FNV1a Hash(RecordID, VecBytes) for deterministic seeding.
+    - Iteration: Lloyd's algorithm with FXP accumulation to avoid float drift.
+    - Result: Bit-identical centroids guaranteed.
+
+## node/src/structure/quant/pq.rs (Product Quantization)
+- `ProductQuantizer::new(config, dim) -> Self`: Creates PQ quantizer.
+- `ProductQuantizer::build(&mut self, records)`: Trains sub-quantizers via `deterministic_kmeans`.
+- `ProductQuantizer::quantize(&self, vec) -> Vec<u8>`: Encodes vector into codes.
+- `ProductQuantizer::reconstruct(&self, codes) -> Vec<f32>`: Decodes via lookup tables.
+
+
 ## node/src/persistence.rs
 - `SnapshotManager::save(path, kernel, meta, index)`: Atomically saves snapshot (V2 format) with rotation.
 - `SnapshotManager::parse(buffer) -> Result<(Meta, Kernel, MetaStore, Index)>`: Validates and parses snapshot blob.

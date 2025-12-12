@@ -56,3 +56,40 @@ Serializes the entire kernel state (vectors + graph + index) into a byte array.
 Restores the kernel state from a snapshot. This completely overwrites the current state.
 *   **Arguments**:
     *   `data`: Byte array from a previous snapshot.
+
+---
+
+## Package: `valori` (High-Level Client)
+
+The `valori` package provides a pythonic wrapper (`Valori`) that unifies Local and Remote access.
+
+### Class: `Valori`
+
+Factory for creating a client.
+
+```python
+from valori import Valori
+
+# Local Mode
+client = Valori()
+
+# Remote Mode (Secured)
+client = Valori(remote="http://localhost:3000", api_key="secret")
+```
+
+*   **Arguments**:
+    *   `remote`: URL of `valori-node`. If None, uses Embedded FFI kernel.
+    *   `api_key`: (Optional) Bearer token for authentication in Remote Mode.
+
+### Class: `ProtocolClient`
+Advanced client with text embedding pipeline.
+
+```python
+from valori import ProtocolClient
+
+client = ProtocolClient(
+    embed=my_embed_fn,
+    remote="http://localhost:3000",
+    api_key="secret"
+)
+```
