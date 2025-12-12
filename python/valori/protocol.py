@@ -172,10 +172,16 @@ class ProtocolRemoteClient:
         data = resp.json()
         return data.get("metadata")
 
-    def upsert_text(self, text: str, chunk_size: int = 512, **kwargs):
+    def upsert_text(self, text: str, chunk_size: int = 512, vector: Optional[List[float]] = None, **kwargs):
         # chunk locally using existing chunk_text
         from .ingest import chunk_text
-        chunks = chunk_text(text, max_chars=chunk_size)
+        
+        # Implementation Detail: If vector is provided, we assume 1:1 mapping (no chunking)
+        if vector is not None:
+            chunks = [text] # Treat as single chunk
+        else:
+            chunks = chunk_text(text, max_chars=chunk_size)
+            
         record_ids = []
         chunk_node_ids = []
         # create document node first via 1st upsert (server will create doc node id)
@@ -184,8 +190,16 @@ class ProtocolRemoteClient:
         # Extract metadata from kwargs to set on the DOCUMENT node
         doc_metadata = kwargs.get("metadata", None)
         
-        for chunk in chunks:
-            vec = self._embed(chunk)
+        for i, chunk in enumerate(chunks):
+            if vector is not None:
+                # Use provided vector for the first (and only) chunk
+                if i > 0: 
+                     # Should not happen if chunks=[text], but safety check
+                     raise ValueError("Cannot provide single vector for multi-chunk text.")
+                vec = vector
+            else:
+                vec = self._embed(chunk)
+                
             if len(vec) != self.expected_dim:
                 raise ValueError("Embedding mismatch")
             
@@ -203,7 +217,7 @@ class ProtocolRemoteClient:
                      # We need to format it.
                      # Convention: "node:100", "rec:10".
                      self.set_metadata(f"node:{doc_node_id}", doc_metadata)
-
+                     
             elif res["document_node_id"] != doc_node_id:
                 raise ProtocolError(f"server returned inconsistent document_node_id between chunks. Expected {doc_node_id}, got {res['document_node_id']}")
                 
@@ -292,6 +306,7 @@ class ProtocolClient:
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         chunk_size: int = 512,
+        vector: Optional[List[float]] = None,
     ) -> MemoryUpsertResponse:
         if self._impl:
             return self._impl.upsert_text(
@@ -300,7 +315,8 @@ class ProtocolClient:
                 doc_id=doc_id, 
                 actor_id=actor_id,
                 tags=tags,
-                metadata=metadata
+                metadata=metadata,
+                vector=vector
             )
 
         """
