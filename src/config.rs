@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Configuration constants.
 
 /// Number of fractional bits for Fixed-Point representation (Q16.16).

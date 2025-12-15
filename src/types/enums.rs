@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Knowledge Graph Enums.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -1,7 +1,8 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::scalar::FxpScalar;
 use crate::types::vector::FxpVector;
 use crate::math::dot::fxp_dot;
-use crate::math::l2::fxp_l2_sq;
+use crate::math::l2::l2_distance_squared;
 use crate::fxp::ops::from_f32;
 
 #[test]

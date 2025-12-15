@@ -4,6 +4,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 use crate::types::id::{Version, RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::scalar::FxpScalar;
 use crate::storage::record::Record;
 use crate::graph::node::GraphNode;

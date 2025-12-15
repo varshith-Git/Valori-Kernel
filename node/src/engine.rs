@@ -7,6 +7,7 @@ use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
 use valori_kernel::fxp::ops::from_f32;
 
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
 use crate::errors::EngineError;
 use crate::structure::index::{VectorIndex, BruteForceIndex};

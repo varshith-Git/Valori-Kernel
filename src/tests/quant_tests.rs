@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
     use crate::quant::{Quantizer, NoQuantizer};
     use crate::types::vector::FxpVector;
     use crate::types::scalar::FxpScalar;

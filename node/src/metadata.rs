@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use std::collections::HashMap;
 use serde_json::Value;
 use std::sync::RwLock;

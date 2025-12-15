@@ -1,5 +1,6 @@
 //! Static Record Pool.
 
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::storage::record::Record;
 use crate::types::id::RecordId;
 use crate::types::vector::FxpVector;

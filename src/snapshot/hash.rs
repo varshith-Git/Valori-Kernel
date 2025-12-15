@@ -1,5 +1,5 @@
-//! State hashing.
-
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+//! SHA-256 Hashing for checksums.e
 use crate::state::kernel::KernelState;
 
 /// Computes a hash of the current state.

@@ -1,5 +1,6 @@
 //! Fixed-point dot product.
 
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::vector::FxpVector;
 use crate::types::scalar::FxpScalar;
 use crate::fxp::qformat::FRAC_BITS;

@@ -1,5 +1,7 @@
 import sys
 import os
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+import unittest
 import time
 
 # Ensure local package is importable

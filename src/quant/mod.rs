@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::vector::FxpVector;
 
 pub trait Quantizer<const D: usize> {

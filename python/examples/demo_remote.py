@@ -16,6 +16,7 @@ Usage:
    $ python3 python/examples/demo_remote.py
 """
 
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import sys
 import random
 import time

@@ -1,4 +1,5 @@
-//! Command definitions.
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+//! Kernel Command enum.definitions.
 
 use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;

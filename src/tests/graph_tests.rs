@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::graph::pool::{NodePool, EdgePool};
 use crate::graph::node::GraphNode;
 use crate::types::enums::{NodeKind, EdgeKind};

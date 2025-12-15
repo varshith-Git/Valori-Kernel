@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use std::net::SocketAddr;
 use std::path::PathBuf;
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

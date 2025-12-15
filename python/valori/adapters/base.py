@@ -2,6 +2,7 @@
 import time
 import uuid
 import logging
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 

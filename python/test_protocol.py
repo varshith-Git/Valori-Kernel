@@ -1,4 +1,5 @@
-import pytest
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+import unittest
 import os
 from valori.protocol import ProtocolClient
 from valori import ProtocolClient as PublicProtocolClient # Verify export

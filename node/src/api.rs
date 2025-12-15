@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use serde::{Deserialize, Serialize};
 
 // Note: We need to make sure valori-kernel exports NodeKind/EdgeKind publicly or we redefine/wrap them.

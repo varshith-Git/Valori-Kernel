@@ -1,5 +1,6 @@
 //! Graph Edge definition.
 
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::id::{NodeId, EdgeId};
 use crate::types::enums::EdgeKind;
 

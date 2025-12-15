@@ -1,4 +1,5 @@
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use valori_node::engine::Engine;
 use std::sync::Arc;
 use std::time::Duration;

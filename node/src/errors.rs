@@ -1,3 +1,4 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;

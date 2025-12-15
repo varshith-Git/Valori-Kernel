@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import numpy as np
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from typing import List, Union
 
 FXP_MAX = 32767.0

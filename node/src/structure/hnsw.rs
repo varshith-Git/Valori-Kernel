@@ -4,7 +4,8 @@ use std::cmp::Ordering;
 use std::sync::RwLock;
 use serde::{Serialize, Deserialize};
 
-/// Configuration for HNSW
+/// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+//! Hierarchical Navigable Small World (HNSW) Index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
     pub m: usize,           // Max edges per node per layer

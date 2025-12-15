@@ -1,3 +1,6 @@
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+//! N-dimensional vector using Fixed-Point scalars.
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Fixed-Point Vector type.
 
 use crate::types::scalar::FxpScalar;

@@ -1,4 +1,3 @@
-
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import unittest
 from unittest.mock import MagicMock, patch

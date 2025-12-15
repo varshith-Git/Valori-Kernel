@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from .sentence_transformers_adapter import SentenceTransformerAdapter
 
 try:

@@ -10,6 +10,7 @@ except ImportError:
             self.page_content = page_content
             self.metadata = metadata
 
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from .base import ValoriAdapter
 from .utils import validate_float_range
 

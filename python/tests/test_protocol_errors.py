@@ -1,4 +1,5 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import pytest
 import json
 from unittest.mock import MagicMock, patch

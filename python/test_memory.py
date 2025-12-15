@@ -1,3 +1,5 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+import unittest
 import pytest
 import os
 import sys

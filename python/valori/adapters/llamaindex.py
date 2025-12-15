@@ -16,7 +16,8 @@ except ImportError:
     class VectorStoreQueryResult: pass
     class TextNode: pass
 
-from .base import ValoriAdapter, UpsertItem
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+from .base import AdapterBaseiAdapter, UpsertItem
 from .utils import validate_float_range
 
 logger = logging.getLogger(__name__)

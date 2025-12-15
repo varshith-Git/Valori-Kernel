@@ -1,4 +1,5 @@
-use valori_node::structure::deterministic::kmeans::deterministic_kmeans;
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+use valori_kernel::structure::deterministic::kmeans::deterministic_kmeans;
 use valori_node::structure::ivf::{IvfIndex, IvfConfig};
 use valori_node::structure::index::VectorIndex;
 use valori_node::engine::Engine;

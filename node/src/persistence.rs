@@ -2,7 +2,8 @@ use serde::{Serialize, Deserialize};
 use crate::config::{IndexKind, QuantizationKind};
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+use std::path::{Path, PathBuf};
 use crc32fast::Hasher;
 
 const MAGIC: u32 = 0x56414C4F; // VALO

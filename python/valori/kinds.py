@@ -1,3 +1,4 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 # Node kinds matching Rust/Semantic layer
 NODE_RECORD = 0
 NODE_CONCEPT = 1

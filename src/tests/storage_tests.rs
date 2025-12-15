@@ -1,4 +1,5 @@
 use crate::types::vector::FxpVector;
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::storage::pool::RecordPool;
 use crate::types::id::RecordId;
 use crate::error::KernelError;

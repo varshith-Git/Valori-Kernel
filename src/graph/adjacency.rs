@@ -1,4 +1,5 @@
-//! Adjacency helpers.
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+//! Adjacency List for graph traversal.
 
 use crate::graph::pool::{NodePool, EdgePool};
 use crate::graph::edge::GraphEdge;
