@@ -28,6 +28,146 @@ One kernel, two modes of operation:
 
 ---
 
+## Reproducibility Failure in Embeddings (x86 vs ARM)
+
+This repository demonstrates a fundamental problem in modern AI systems:
+
+**The same embedding model, same input, and same code can produce different results on different CPU architectures.**
+
+This is not a bug. This is **IEEE-754 compliant** floating-point behavior.
+
+### Environment
+
+| Machine | Architecture | OS |
+| :--- | :--- | :--- |
+| PC | x86_64 | Windows |
+| Laptop | ARM64 | macOS (Apple Silicon) |
+
+**Python dependencies** (identical on both machines):
+- `python==3.10`
+- `numpy==1.26.4`
+- `sentence-transformers==2.6.1`
+
+### Step 1: Generate embeddings
+
+```python
+# embed.py
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+texts = [
+    "Revenue for April",
+    "What is the profit in April?",
+    "April financial summary",
+    "Total earnings last month",
+    "Completely unrelated sentence"
+]
+
+embeddings = model.encode(texts, normalize_embeddings=False)
+np.save("embeddings.npy", embeddings)
+```
+
+### Step 2: Inspect raw float bits
+
+```python
+# inspect_embeddings.py
+import numpy as np
+
+emb = np.load("embeddings.npy")
+
+for i in range(5):
+    print(hex(emb[0][i].view(np.uint32)))
+```
+
+**Output (x86 / Windows)**
+```text
+0xbd8276f8
+0x3d6bb481
+0x3d1dcdf1
+0xbd601d21
+0x3b761ffb
+```
+
+**Output (ARM / macOS)**
+```text
+0xbd8276fc
+0x3d6bb470
+0x3d1dcdf9
+0xbd601d16
+0x3b762229
+```
+
+### What this means
+
+These values represent the exact bit patterns of the embedding floats. **The values differ before any search or indexing.**
+
+This behavior is:
+- ✅ standards-compliant
+- ✅ expected
+- ⚠️ unavoidable with floats
+
+In other words: **AI memory diverges at the embedding boundary itself.**
+
+### Step 3: Distance computation divergence
+
+```python
+# search_float.py
+import numpy as np
+
+emb = np.load("embeddings.npy")
+query = emb[0]
+
+def l2(a, b):
+    acc = 0.0
+    for i in range(len(a)):
+        d = a[i] - b[i]
+        acc += d * d
+    return acc
+
+scores = [(i, l2(query, emb[i])) for i in range(len(emb))]
+scores.sort(key=lambda x: x[1])
+
+print(scores)
+```
+
+### Result
+
+1.  **Distances differ slightly across machines**
+2.  **Ordering may differ**
+3.  **Downstream retrieval becomes non-replayable**
+
+### Why this matters
+
+If AI memory is stored as floating-point vectors:
+- ❌ Retrieval is not reproducible
+- ❌ Decisions cannot be replayed
+- ❌ Auditing becomes impossible
+- ❌ Edge and defense deployments are unsafe
+
+This is not a vector database issue. **It is a numerical determinism issue.**
+
+### Deterministic Alternative (Fixed-Point)
+
+Valori addresses this by enforcing a deterministic memory boundary:
+
+```python
+SCALE = 65536
+
+def to_fxp(vec):
+    return (vec * SCALE).astype(np.int32)
+```
+
+Fixed-point vectors:
+- ✅ are bit-identical across architectures
+- ✅ produce identical distances
+- ✅ guarantee deterministic retrieval
+
+**Key takeaway**: Floating-point embeddings make AI memory non-deterministic by design. Deterministic AI systems require deterministic memory.
+
+---
+
 ## 🚀 Quick Start
 
 ### Installation
