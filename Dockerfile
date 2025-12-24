@@ -1,15 +1,11 @@
-FROM rust:latest as builder
+FROM rust:1.85-slim as builder
 WORKDIR /app
 
-# Install nightly and set as default
-RUN rustup toolchain install nightly && rustup default nightly
-
-# Copy manifest files first for caching layers is tricky with workspaces without tools like cargo-chef.
-# We will do a simple copy-all build for reliability.
+# Copy source
 COPY . .
 
-# Build the workspace (release mode)
-RUN cargo build --release --workspace --exclude valori-ffi
+# Build deterministically
+RUN cargo build --release --workspace --exclude valori-ffi --locked
 
 # Runtime stage
 FROM debian:bookworm-slim

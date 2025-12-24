@@ -15,6 +15,7 @@
 Unlike standard vector stores using `f32` (which varies by CPU/Compiler), Valori uses a custom **Q16.16 Fixed-Point Arithmetic** engine.
 - **Guarantee**: `State + Command_Log = Hash` is identical on a MacBook `M3`, `Intel` Server, or `WASM` runtime.
 - **Safety**: Inputs are strictly validated to `[-32768.0, 32767.0]` to prevent overflow.
+- **Contract**: See [Build Determinism and Toolchain Contract](docs/build-determinism.md) for why we pin compilers.
 
 ### 2. Hybrid-Native Architecture
 One kernel, two modes of operation:
