@@ -5,7 +5,9 @@ use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
 use crate::types::enums::{NodeKind, EdgeKind};
 
-#[derive(Clone, Debug, PartialEq)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Command<const D: usize> {
     InsertRecord {
         id: RecordId,

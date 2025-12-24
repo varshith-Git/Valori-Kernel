@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Knowledge Graph Enums.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum NodeKind {
     Record = 0,
@@ -34,7 +36,7 @@ impl Default for NodeKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum EdgeKind {
     Relation = 0,

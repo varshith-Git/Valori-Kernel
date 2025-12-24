@@ -6,10 +6,61 @@
 use crate::types::scalar::FxpScalar;
 use core::ops::{Index, IndexMut};
 
+use serde::{Serialize, Deserialize, Serializer, Deserializer};
+use serde::ser::SerializeTuple;
+use serde::de::{self, SeqAccess, Visitor};
+use core::fmt;
+
 /// A fixed-dimension vector definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FxpVector<const D: usize> {
     pub data: [FxpScalar; D],
+}
+
+impl<const D: usize> Serialize for FxpVector<D> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_tuple(D)?;
+        for element in &self.data {
+            seq.serialize_element(element)?;
+        }
+        seq.end()
+    }
+}
+
+// Deserialize manual impl for const generic array
+struct FxpVectorVisitor<const D: usize>;
+
+impl<'de, const D: usize> Visitor<'de> for FxpVectorVisitor<D> {
+    type Value = FxpVector<D>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_fmt(format_args!("a sequence of {} FxpScalars", D))
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        // Must read D elements
+        let mut data = [FxpScalar::default(); D];
+        for i in 0..D {
+            data[i] = seq.next_element()?
+                .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+        }
+        Ok(FxpVector { data })
+    }
+}
+
+impl<'de, const D: usize> Deserialize<'de> for FxpVector<D> {
+    fn deserialize<Desc>(deserializer: Desc) -> Result<Self, Desc::Error>
+    where
+        Desc: Deserializer<'de>,
+    {
+        deserializer.deserialize_tuple(D, FxpVectorVisitor::<D>)
+    }
 }
 
 impl<const D: usize> Default for FxpVector<D> {
