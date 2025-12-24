@@ -1,0 +1,7 @@
+target/
+node/target/
+.git/
+.venv/
+__pycache__/
+.DS_Store
+*.pyc
