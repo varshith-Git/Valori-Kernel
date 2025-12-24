@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use std::collections::HashMap;
+
 
 pub trait VectorIndex {
     fn build(&mut self, records: &[(u32, Vec<f32>)]);

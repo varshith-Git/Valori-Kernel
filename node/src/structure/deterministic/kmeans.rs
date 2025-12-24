@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
 
-/// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-//! Deterministic K-Means clustering.
+
+// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+/// Deterministic K-Means clustering.
 ///
 /// Guarantees bit-identical centroids given the same inputs (sorted by ID).
 ///

@@ -2,7 +2,7 @@
 
 use crate::graph::node::GraphNode;
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use crate::graph::edge::Edge;GraphEdge;
+use crate::graph::edge::GraphEdge;
 use crate::types::id::{NodeId, EdgeId};
 use crate::error::{Result, KernelError};
 

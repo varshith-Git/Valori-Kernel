@@ -2,7 +2,7 @@
 use super::index::VectorIndex;
 use super::deterministic::kmeans::deterministic_kmeans;
 use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IvfConfig {

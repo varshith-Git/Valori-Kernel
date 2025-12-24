@@ -35,12 +35,12 @@ use valori_kernel::types::enums::{NodeKind, EdgeKind};
 // ... existing imports ...
 use axum::extract::Query;
 
-use axum::middleware::{self, Next};
+use axum::middleware::Next;
 use axum::response::Response;
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
-use axum::Extension;
+
 
 use axum::middleware::from_fn_with_state;
 

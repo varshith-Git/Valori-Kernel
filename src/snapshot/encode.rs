@@ -1,7 +1,6 @@
 //! Snapshot encoding.
 
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use crate::types::scalar::FxpScalar;
 use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
