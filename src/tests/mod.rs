@@ -10,3 +10,4 @@ pub mod snapshot_tests;
 pub mod determinism_tests;
 pub mod e2e_tests;
 pub mod quant_tests;
+pub mod proof_tests;

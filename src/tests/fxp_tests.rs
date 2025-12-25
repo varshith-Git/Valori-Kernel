@@ -1,6 +1,6 @@
 use crate::types::scalar::FxpScalar;
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use crate::fxp::ops::{fxp_add, fxp_mul, from_f32, to_f32};
+use crate::fxp::ops::{fxp_add, fxp_sub, fxp_mul, from_f32, to_f32};
 use crate::config::SCALE;
 
 const EPSILON: f32 = 1.0 / (SCALE as f32);

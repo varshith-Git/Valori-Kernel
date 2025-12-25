@@ -2,7 +2,7 @@
 use crate::types::scalar::FxpScalar;
 use crate::types::vector::FxpVector;
 use crate::math::dot::fxp_dot;
-use crate::math::l2::l2_distance_squared;
+use crate::math::l2::fxp_l2_sq;
 use crate::fxp::ops::from_f32;
 
 #[test]
