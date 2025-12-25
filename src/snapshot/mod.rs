@@ -2,3 +2,4 @@
 pub mod encode;
 pub mod decode;
 pub mod hash;
+pub mod blake3;
