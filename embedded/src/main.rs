@@ -99,11 +99,14 @@ fn main() -> ! {
         // Validates `wal.rs` logic.
         
         // Construct WAL Packet:
-        // Opcode (0x00) | ID (0) | Dim (16) | [1.0, 0.0, -1.0, 0.5 ...]
-        // 1 + 4 + 2 + (16 * 4) = 7 + 64 = 71 bytes.
-        let mut wal_data: [u8; 71] = [0; 71];
+        // Version (1) | Opcode (0x00) | ID (0) | Dim (16) | [1.0, 0.0, -1.0, 0.5 ...]
+        // 1 + 1 + 4 + 2 + (16 * 4) = 8 + 64 = 72 bytes.
+        let mut wal_data: [u8; 72] = [0; 72];
         let mut idx = 0;
         
+        // Version (1)
+        wal_data[idx] = 0x01; idx += 1;
+
         // Opcode
         wal_data[idx] = 0x00; idx += 1;
         // ID (0)

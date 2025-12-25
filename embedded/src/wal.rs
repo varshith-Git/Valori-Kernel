@@ -20,6 +20,7 @@ use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 
+const WAL_VERSION: u8 = 1;
 const WAL_OP_INSERT: u8 = 0x00;
 
 fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, ()> {
@@ -55,6 +56,13 @@ pub fn apply_wal_log<const M: usize, const D: usize, const N: usize, const E: us
     wal_bytes: &[u8]
 ) -> Result<(), ()> {
     let mut offset = 0;
+
+    // 1. Check WAL Version
+    // First byte reserved for format version.
+    let version = read_u8(wal_bytes, &mut offset)?;
+    if version != WAL_VERSION {
+        return Err(()); // Unsupported version
+    }
     
     // Process until buffer exhausted
     while offset < wal_bytes.len() {
