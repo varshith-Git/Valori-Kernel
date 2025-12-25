@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::state::command::Command;
+use valori_kernel::event::KernelEvent;  // Phase 23: For event generation
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
@@ -180,14 +181,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         // 1. Build FxpVector for Kernel
         // STRICT DETERMINISM: Explicit Rounding to Nearest
-        // This ensures Host <-> Kernel parity is provably identical.
         let mut vector = FxpVector::<D>::new_zeros();
         for (i, v) in values.iter().enumerate() {
             let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
             vector.data[i] = FxpScalar(fixed);
         }
 
-        // 2. Determine ID (first free slot strategy - simplified)
+        // 2. Determine ID (first free slot strategy)
         let mut id_val = None;
         for i in 0..MAX_RECORDS {
             let rid = RecordId(i as u32);
@@ -196,39 +196,71 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                 break;
             }
         }
-
         let id = id_val.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
-        
-        // 3. Write to WAL FIRST (durability guarantee)
-        let cmd = Command::InsertRecord { id, vector };
-        if let Some(ref mut wal) = self.wal_writer {
-            wal.append_command(&cmd)
-                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
-        }
-        
-        // Update Accumulator
-        {
-             let cmd_bytes = bincode::serde::encode_to_vec(&cmd, bincode::config::standard())
-                 .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             self.wal_accumulator.update(&cmd_bytes);
-        }
-        
-        // 4. Apply Command to Kernel (Primary Store)
-        self.state.apply(&cmd)?;
-        
-        // 5. Update Host Index
-        // CRITICAL: Round-trip through Fxp to match Restore behavior!
-        // We must insert the EXACT same float values that would be recovered from snapshot.
-        let mut consistent_values = Vec::with_capacity(D);
-        for i in 0..D {
-            let fxp = vector.data[i];
-            let f = fxp.0 as f32 / SCALE;
-            consistent_values.push(f);
-        }
-        
-        self.index.insert(id.0, &consistent_values);
 
-        Ok(id.0)
+        // Phase 23: Event-sourced path (preferred)
+        if let Some(ref mut committer) = self.event_committer {
+            // Generate event (no state change yet)
+            let event = KernelEvent::InsertRecord { id, vector };
+            
+            // Commit via event pipeline (shadow → persist → commit → live)
+            match committer.commit_event(event) {
+                Ok(CommitResult::Committed) => {
+                    // Event committed successfully
+                    tracing::trace!("Record {} committed via event log", id.0);
+                }
+                Ok(CommitResult::RolledBack) => {
+                    // Shadow apply failed - validation error
+                    return Err(EngineError::InvalidInput(
+                        "Event validation failed in shadow execution".to_string()
+                    ));
+                }
+                Err(e) => {
+                    return Err(EngineError::InvalidInput(format!("Event commit failed: {:?}", e)));
+                }
+            }
+            
+            // Update host index (using state from committer, not Engine.state)
+            let mut consistent_values = Vec::with_capacity(D);
+            for i in 0..D {
+                let fxp = vector.data[i];
+                let f = fxp.0 as f32 / SCALE;
+                consistent_values.push(f);
+            }
+            self.index.insert(id.0, &consistent_values);
+            
+            Ok(id.0)
+        } else {
+            // Fallback: Legacy WAL path
+            let cmd = Command::InsertRecord { id, vector };
+            
+            // Write to WAL FIRST
+            if let Some(ref mut wal) = self.wal_writer {
+                wal.append_command(&cmd)
+                    .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+            }
+            
+            // Update Accumulator
+            {
+                let cmd_bytes = bincode::serde::encode_to_vec(&cmd, bincode::config::standard())
+                    .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+                self.wal_accumulator.update(&cmd_bytes);
+            }
+            
+            // Apply Command to Kernel
+            self.state.apply(&cmd)?;
+            
+            // Update Host Index
+            let mut consistent_values = Vec::with_capacity(D);
+            for i in 0..D {
+                let fxp = vector.data[i];
+                let f = fxp.0 as f32 / SCALE;
+                consistent_values.push(f);
+            }
+            self.index.insert(id.0, &consistent_values);
+            
+            Ok(id.0)
+        }
     }
 
     pub fn create_node_for_record(&mut self, record_id_val: Option<u32>, kind_val: u8) -> Result<u32, EngineError> {
