@@ -49,20 +49,28 @@ impl<'a, const M: usize, const D: usize, const N: usize, const E: usize> ShadowK
         loop {
             // 1. Header Check (Once)
             if !self.header_processed {
-                if self.buffer.is_empty() { return Ok(()); } // Need more data
+                if self.buffer.len() < wal::WalHeader::SIZE { 
+                    // Need more data (Wait for next chunk)
+                    return Ok(()); 
+                } 
                 
-                let version = self.buffer[0];
-                if version != 1 {
-                    return Err(()); // Bad Version
+                let header = match wal::WalHeader::from_bytes(&self.buffer) {
+                    Some(h) => h,
+                    None => return Err(()), // Should not happen given len check
+                };
+
+                // Validate Header
+                if header.dim != D as u32 {
+                     return Err(()); // Dimension Mismatch -> Invalid
                 }
                 
-                // Accumulate Header Byte?
-                // User: "Running Hash Accumulator... incrementall per applied command"
-                // Usually Header is part of the "WAL Log Hash".
-                // I will include it.
-                self.wal_accumulator.update(&[version]);
+                // Accumulate Header Bytes (16 bytes)
+                // This ensures the Proof commits to the exact WAL properties.
+                let header_bytes = &self.buffer[0..wal::WalHeader::SIZE];
+                self.wal_accumulator.update(header_bytes);
                 
-                self.buffer.remove(0); // Inefficient for Vec, but low freq (once).
+                // Consume
+                let _ = self.buffer.drain(0..wal::WalHeader::SIZE); 
                 self.header_processed = true;
             }
 
@@ -76,9 +84,7 @@ impl<'a, const M: usize, const D: usize, const N: usize, const E: usize> ShadowK
                      let cmd_bytes = &self.buffer[0..bytes_consumed];
                      self.wal_accumulator.update(cmd_bytes);
                      
-                     // Remove from buffer (inefficient drain from front, use VecDeque if std available, or circular buf if optimization needed. For Phase 4, Vec::drain is acceptable for correctness proof).
-                     // self.buffer.drain(0..bytes_consumed); // drain returns iterator, drop it.
-                     // drain is available in alloc::vec::Vec.
+                     // Remove from buffer
                      let _ = self.buffer.drain(0..bytes_consumed);
                 },
                 wal::ApplyResult::Incomplete => {

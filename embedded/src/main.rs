@@ -140,8 +140,11 @@ fn main() -> ! {
 
         // Packet Header: [VER:1][FLAGS:1][SEQ:8][LEN:4]
         // Header Size = 14.
-        let pkt_payload_len = len as u32; // Actual bincode length
-        let mut packet: [u8; 14 + 128] = [0; 14 + 128];
+        // Payload = WalHeader(16) + Bincode(len)
+        let total_payload_len = 16 + len;
+        
+        let pkt_payload_len = total_payload_len as u32; 
+        let mut packet: [u8; 14 + 144] = [0; 14 + 144]; // Increased size
         let mut p_idx = 0;
         
         // Packet Header Construction
@@ -150,10 +153,19 @@ fn main() -> ! {
         packet[p_idx..p_idx+8].copy_from_slice(&last_seq.to_le_bytes()); p_idx+=8; // Seq
         packet[p_idx..p_idx+4].copy_from_slice(&pkt_payload_len.to_le_bytes()); p_idx+=4; // Len
         
-        // Copy Bincode Payload
-        packet[p_idx..p_idx+len].copy_from_slice(&wal_payload[0..len]);
+        // 1. Copy WalHeader (Manual LE) - 16 Bytes
+        // [Ver:4][Enc:4][Dim:4][Crc:4]
+        packet[p_idx..p_idx+4].copy_from_slice(&1u32.to_le_bytes()); 
+        packet[p_idx+4..p_idx+8].copy_from_slice(&0u32.to_le_bytes()); 
+        packet[p_idx+8..p_idx+12].copy_from_slice(&(D as u32).to_le_bytes()); 
+        packet[p_idx+12..p_idx+16].copy_from_slice(&0u32.to_le_bytes());
+        p_idx += 16;
         
-        let packet_size = 14 + len;
+        // 2. Copy Bincode Command
+        packet[p_idx..p_idx+len].copy_from_slice(&wal_payload[0..len]);
+        p_idx += len;
+        
+        let packet_size = p_idx;
         
         // 4. Ingest Logic
         shadow.start_segment();
