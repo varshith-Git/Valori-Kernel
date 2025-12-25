@@ -59,6 +59,65 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.index.search(&self.records, query, results)
     }
 
+    // --- Event-Sourced Write Logic ---
+    
+    /// Apply a KernelEvent to the state
+    ///
+    /// This is the ONLY valid mutation entrypoint for event-sourced operations.
+    /// All state changes must flow through events for:
+    /// - Deterministic replay
+    /// - Audit trails
+    /// - Cross-architecture reproducibility
+    ///
+    /// # Invariants
+    /// - Same event sequence => Same final state
+    /// - No side effects or implicit state
+    /// - Crash-symmetric: replay(committed_events) = recovered_state
+    pub fn apply_event(&mut self, evt: &crate::event::KernelEvent<D>) -> Result<()> {
+        use crate::event::KernelEvent;
+
+        match evt {
+            KernelEvent::InsertRecord { id, vector } => {
+                let cmd = Command::InsertRecord { 
+                    id: *id, 
+                    vector: vector.clone() 
+                };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::DeleteRecord { id } => {
+                let cmd = Command::DeleteRecord { id: *id };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::CreateNode { id, kind, record } => {
+                let cmd = Command::CreateNode {
+                    node_id: *id,
+                    kind: *kind,
+                    record: *record,
+                };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::CreateEdge { id, from, to, kind } => {
+                let cmd = Command::CreateEdge {
+                    edge_id: *id,
+                    from: *from,
+                    to: *to,
+                    kind: *kind,
+                };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::DeleteEdge { id } => {
+                let cmd = Command::DeleteEdge { edge_id: *id };
+                self.apply(&cmd)?;
+            }
+        }
+
+        Ok(())
+    }
+
     // --- Write Logic ---
 
     pub fn apply(&mut self, cmd: &Command<D>) -> Result<()> {

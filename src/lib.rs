@@ -3,6 +3,8 @@
 
 //! valori-kernel: A deterministic, no_std, fixed-point vector + knowledge graph engine.
 
+extern crate alloc;
+
 #[cfg(test)]
 #[macro_use]
 extern crate std;
@@ -21,6 +23,8 @@ pub mod snapshot;
 pub mod verify;
 pub mod proof;
 pub mod replay;
+pub mod event;
+pub mod replay_events;
 
 #[cfg(test)]
 pub mod tests;
