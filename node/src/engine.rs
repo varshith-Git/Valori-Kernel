@@ -280,7 +280,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         // Phase 23: Event-sourced path (preferred)
         if let Some(ref mut committer) = self.event_committer {
-            let event = KernelEvent::CreateNode { node_id, kind, record: record_id };
+            let event = KernelEvent::CreateNode { id: node_id, kind, record: record_id };
             
             match committer.commit_event(event) {
                 Ok(CommitResult::Committed) => {
@@ -327,7 +327,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         // Phase 23: Event-sourced path (preferred)
         if let Some(ref mut committer) = self.event_committer {
-            let event = KernelEvent::CreateEdge { edge_id, kind, from, to };
+            let event = KernelEvent::CreateEdge { id: edge_id, kind, from, to };
             
             match committer.commit_event(event) {
                 Ok(CommitResult::Committed) => {
