@@ -17,7 +17,7 @@ except ImportError:
     class TextNode: pass
 
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-from .base import AdapterBaseiAdapter, UpsertItem
+from .base import ValoriAdapter, UpsertItem
 from .utils import validate_float_range
 
 logger = logging.getLogger(__name__)
@@ -64,11 +64,11 @@ class ValoriVectorStore(VectorStore):
             # Using client directly for now, but really Adapter should handle retries.
             # I will assume adapter has upsert_vector or access client.
             
-            # Upsert
+            # Upsert using adapter (handles retries)
             try:
-                self.adapter.client.upsert_vector(
-                     vector=vec,
-                     metadata=meta 
+                memory_id = self.adapter.upsert_vector(
+                    vector=vec,
+                    metadata=meta
                 )
                 ids.append(node.node_id)
             except Exception as e:

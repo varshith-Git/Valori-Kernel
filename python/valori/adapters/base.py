@@ -44,6 +44,54 @@ class ValoriAdapter:
         
         return self._retry(lambda: self.client.search_vector(qs, k=top_k))
 
+    def upsert_vector(
+        self,
+        vector: List[float],
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Upsert a vector with metadata.
+        
+        Args:
+            vector: Embedding vector
+            metadata: Optional metadata dict
+            
+        Returns:
+            memory_id assigned by Valori
+        """
+        validated = validate_float_range(vector)
+        return self._retry(lambda: self.client.upsert_vector(
+            vector=validated,
+            metadata=metadata or {}
+        ))
+
+    def upsert_document(
+        self,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding: Optional[List[float]] = None
+    ) -> str:
+        """
+        Upsert a text document with automatic embedding.
+        
+        Args:
+            text: Document text
+            metadata: Optional metadata
+            embedding: Optional pre-computed embedding (uses embed_fn if not provided)
+            
+        Returns:
+            memory_id assigned by Valori
+        """
+        if not embedding:
+            if not self.client.embed_fn:
+                raise ValueError("No embedding function configured and no embedding provided")
+            embedding = self.client.embed_fn(text)
+        
+        full_metadata = metadata.copy() if metadata else {}
+        full_metadata["text"] = text
+        
+        return self.upsert_vector(embedding, full_metadata)
+
     def _retry(self, func):
         attempts = 0
         while attempts < self.max_retries:
