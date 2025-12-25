@@ -162,118 +162,147 @@ results = client.search([0.15, 0.25, ...], k=5)
 
 Valori uses a **strict layered architecture** ensuring the deterministic kernel remains pure while enabling production durability and multiple deployment modes.
 
-```
-╔═══════════════════════════════════════════════════════════════════════════════════╗
-║                           CLIENT APPLICATIONS                                      ║
-║  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   ║
-║  │   Python     │    │   Rust App   │    │   HTTP       │    │   Embedded   │   ║
-║  │   Scripts    │    │   Binary     │    │   Clients    │    │   Devices    │   ║
-║  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    └──────┬───────┘   ║
-╚═════════╪══════════════════╪══════════════════════╪══════════════════╪═══════════╝
-          │                  │                      │                  │
-          ▼                  ▼                      ▼                  ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                          INTERFACE LAYER (std)                                   │
-│  ┌──────────────────────┐              ┌────────────────────────────┐           │
-│  │   Python FFI (pyo3)  │              │   HTTP Server (axum)       │           │
-│  │  ┌────────────────┐  │              │  ┌──────────────────────┐  │           │
-│  │  │ EmbeddedKernel │  │              │  │  REST API Handlers   │  │           │
-│  │  │ (in-process)   │  │              │  │  /v1/memory/*        │  │           │
-│  │  └────────┬───────┘  │              │  └──────────┬───────────┘  │           │
-│  └───────────┼──────────┘              └─────────────┼──────────────┘           │
-│              │                                        │                          │
-│              └────────────────┬───────────────────────┘                          │
-└───────────────────────────────┼──────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                         DURABILITY LAYER (std)                                   │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                          Engine Coordinator                               │   │
-│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────────────────┐  │   │
-│  │  │  WAL Writer    │  │  WAL Reader    │  │  Snapshot Manager         │  │   │
-│  │  │                │  │                │  │                            │  │   │
-│  │  │ • Serialize    │  │ • Deserialize  │  │ • encode_state()          │  │   │
-│  │  │ • fsync()      │  │ • Iterator     │  │ • decode_state()          │  │   │
-│  │  │ • Length Frame │  │ • replay_wal() │  │ • BLAKE3 hash             │  │   │
-│  │  └───────┬────────┘  └────────┬───────┘  └────────┬───────────────────┘  │   │
-│  └──────────┼──────────────────────┼──────────────────┼──────────────────────┘   │
-│             │                      │                  │                          │
-│             ▼                      ▼                  ▼                          │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                          Persistence                                      │   │
-│  │  ┌──────────────┐           ┌──────────────┐           ┌──────────────┐  │   │
-│  │  │ commands.wal │           │state.snapshot│           │  Metadata    │  │   │
-│  │  │              │           │              │           │              │  │   │
-│  │  │ [v:u8][l:u32]│──┐        │ [Header]     │           │  Indexes,    │  │   │
-│  │  │ [cmd_bytes]  │  │        │ [Kernel]     │           │  Configs     │  │   │
-│  │  │ ...          │  │        │ [Meta]       │           │              │  │   │
-│  │  └──────────────┘  │        │ [Index]      │           └──────────────┘  │   │
-│  │                    │        └──────────────┘                             │   │
-│  │                    │                ▲                                     │   │
-│  │                    │                │                                     │   │
-│  │                    └────Replay──────┘                                     │   │
-│  │                      (Crash Recovery)                                     │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└────────────────────────────────────┬────────────────────────────────────────────┘
-                                     │
-                                     ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                      VALORI KERNEL (no_std, pure Rust)                           │
-│  ┌──────────────────────────────────────────────────────────────────────────┐   │
-│  │                        KernelState<R,D,N,E>                               │   │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │                    Deterministic State Machine                      │  │   │
-│  │  │                                                                      │  │   │
-│  │  │  • apply(Command) → Result<(), Error>                              │  │   │
-│  │  │  • All operations use Fixed-Point arithmetic (Q16.16)              │  │   │
-│  │  │  • No floating point, no randomness, no timestamps                 │  │   │
-│  │  │  • Bit-identical across x86, ARM, WASM, RISC-V                     │  │   │
-│  │  └────────────────────────────────────────────────────────────────────┘  │   │
-│  │                                                                            │   │
-│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────────────────┐  │   │
-│  │  │ Vector Storage │  │ Knowledge Graph│  │   Fixed-Point Math         │  │   │
-│  │  │                │  │                │  │                            │  │   │
-│  │  │ RecordPool[R]  │  │ NodePool[N]    │  │  FxpScalar (i32)          │  │   │
-│  │  │ FxpVector<D>   │  │ EdgePool[E]    │  │  FxpVector<D>             │  │   │
-│  │  │                │  │ AdjacencyList  │  │                            │  │   │
-│  │  │ • insert()     │  │                │  │  • add, sub, mul, div     │  │   │
-│  │  │ • delete()     │  │ • create_node()│  │  • l2_distance()          │  │   │
-│  │  │ • get()        │  │ • create_edge()│  │  • normalize()            │  │   │
-│  │  └────────────────┘  └────────────────┘  └────────────────────────────┘  │   │
-│  │                                                                            │   │
-│  │  ┌────────────────────────────────────────────────────────────────────┐  │   │
-│  │  │                     Cryptographic Verification                      │  │   │
-│  │  │  • kernel_state_hash() → [u8; 32] (BLAKE3)                         │  │   │
-│  │  │  • Deterministic snapshot encoding                                 │  │   │
-│  │  └────────────────────────────────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph Clients["🖥️ CLIENT APPLICATIONS"]
+        PythonApp["Python Scripts"]
+        RustApp["Rust Applications"]
+        HTTPClient["HTTP Clients"]
+        Embedded["Embedded Devices<br/>(ARM Cortex-M)"]
+    end
 
-                          DATA FLOW: CRASH RECOVERY
-                          
-    ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-    │  Snapshot    │────────▶│  WAL Reader  │────────▶│   Kernel     │
-    │  (State S₀)  │  Load   │  (Commands)  │ Replay  │ (State Sₙ)   │
-    └──────────────┘         └──────────────┘         └──────────────┘
-           │                         │                        │
-           │                         │                        │
-           └─────────────────────────┴────────────────────────┘
-                                     │
-                              verify_hash()
-                                     │
-                                     ▼
-                            ✅ Bit-Identical State
-                            (Guaranteed Determinism)
+    subgraph Interface["💻 INTERFACE LAYER (std)"]
+        direction LR
+        FFI["Python FFI (pyo3)<br/>EmbeddedKernel<br/>• Direct in-process<br/>• Microsecond latency"]
+        HTTP["HTTP Server (axum)<br/>REST API<br/>• /v1/memory/*<br/>• Multi-client"]
+    end
+
+    subgraph Durability["💾 DURABILITY LAYER (std)"]
+        direction TB
+        Engine["Engine Coordinator"]
+        
+        subgraph Persistence["Persistence Components"]
+            WALWriter["WAL Writer<br/>• bincode serialize<br/>• fsync() durability<br/>• Length-prefixed framing"]
+            WALReader["WAL Reader<br/>• Deserialize commands<br/>• Iterator API<br/>• replay_wal()"]
+            SnapshotMgr["Snapshot Manager<br/>• encode_state()<br/>• decode_state()<br/>• BLAKE3 hashing"]
+        end
+        
+        subgraph Storage["📁 Persistent Storage"]
+            WALFile["commands.wal<br/>[version:u8]<br/>[length:u32]<br/>[command:bytes]"]
+            SnapshotFile["state.snapshot<br/>[Header]<br/>[Kernel]<br/>[Metadata]<br/>[Index]"]
+        end
+    end
+
+    subgraph Kernel["⚙️ VALORI KERNEL (no_std, pure Rust)"]
+        direction TB
+        KernelState["KernelState&lt;R,D,N,E&gt;<br/>Deterministic State Machine"]
+        
+        subgraph CoreComponents["Core Components"]
+            direction LR
+            VectorStorage["📊 Vector Storage<br/>RecordPool[R]<br/>FxpVector&lt;D&gt;<br/>• insert()<br/>• delete()<br/>• get()"]
+            Graph["🕸️ Knowledge Graph<br/>NodePool[N]<br/>EdgePool[E]<br/>AdjacencyList<br/>• create_node()<br/>• create_edge()"]
+            FXP["🔢 Fixed-Point Math<br/>Q16.16 (i32)<br/>• add, sub, mul, div<br/>• l2_distance()<br/>• normalize()"]
+        end
+        
+        Verify["🔐 Cryptographic Verification<br/>kernel_state_hash() → [u8;32]<br/>BLAKE3 deterministic hashing"]
+    end
+
+    %% Client connections
+    PythonApp --> FFI
+    RustApp --> FFI
+    HTTPClient --> HTTP
+    Embedded -.->|Direct Link| KernelState
+
+    %% Interface to Durability
+    FFI --> Engine
+    HTTP --> Engine
+
+    %% Durability components
+    Engine --> WALWriter
+    Engine --> WALReader
+    Engine --> SnapshotMgr
+    
+    WALWriter -->|Write| WALFile
+    WALReader -->|Read| WALFile
+    SnapshotMgr -->|Save/Load| SnapshotFile
+
+    %% Recovery flow
+    WALReader -.->|Replay| KernelState
+    SnapshotMgr -.->|Restore| KernelState
+
+    %% Durability to Kernel
+    Engine --> KernelState
+
+    %% Kernel internals
+    KernelState --> VectorStorage
+    KernelState --> Graph
+    KernelState --> FXP
+    KernelState --> Verify
+
+    %% Styling
+    classDef clientStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#000
+    classDef interfaceStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef durabilityStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#000
+    classDef kernelStyle fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#000
+    classDef storageStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000
+
+    class PythonApp,RustApp,HTTPClient,Embedded clientStyle
+    class FFI,HTTP interfaceStyle
+    class Engine,WALWriter,WALReader,SnapshotMgr durabilityStyle
+    class KernelState,VectorStorage,Graph,FXP,Verify kernelStyle
+    class WALFile,SnapshotFile storageStyle
 ```
 
-**Key Properties**:
+### 🔄 Crash Recovery Flow
 
-- **Separation of Concerns**: Core kernel stays pure (no I/O), durability wrapped outside
-- **Deterministic Core**: Fixed-point math ensures bit-identical results across architectures
-- **Crash Recovery**: Snapshot + WAL replay = mathematically proven state restoration
-- **Multi-Deployment**: Same kernel runs embedded (no_std) or as HTTP service (std)
-- **Verifiable**: Cryptographic hashes prove state integrity
+```mermaid
+sequenceDiagram
+    participant S as Snapshot File
+    participant W as WAL File
+    participant R as WAL Reader
+    participant K as Kernel
+    participant V as Verifier
+
+    Note over S,V: System Restart After Crash
+
+    S->>K: 1. Load snapshot (State S₀)
+    activate K
+    Note over K: Kernel at snapshot state
+
+    W->>R: 2. Read WAL commands
+    activate R
+    
+    loop For each command
+        R->>K: 3. Replay command
+        Note over K: Apply deterministically
+    end
+    deactivate R
+
+    K->>K: 4. Compute state hash
+    K->>V: 5. Verify hash
+    activate V
+    
+    alt Hash matches expected
+        V-->>K: ✅ Recovery successful
+        Note over K: State Sₙ (bit-identical)
+    else Hash mismatch
+        V-->>K: ❌ Recovery failed
+        Note over K: Corruption detected
+    end
+    deactivate V
+    deactivate K
+```
+
+### 🎯 Key Properties
+
+| Layer | Characteristics | Guarantees |
+|-------|----------------|------------|
+| **Kernel** | `no_std`, pure functions, Q16.16 fixed-point | Bit-identical across x86/ARM/WASM |
+| **Durability** | WAL + Snapshots, bincode serialization | Crash recovery, deterministic replay |
+| **Interface** | HTTP (axum) or FFI (pyo3) | Flexible deployment, same kernel |
+| **Storage** | Length-prefixed WAL, structured snapshots | Durability, atomicity |
+
+**Separation of Concerns**: Core kernel stays pure (no I/O) → Durability wrapped outside → Flexible interfaces
 
 See [Architecture Details](architecture.md) for deep dive.
 
