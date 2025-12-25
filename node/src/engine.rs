@@ -349,7 +349,17 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     // Legacy method for API (in-memory). 
     // WARN: Allocates entire snapshot!
+    // UPDATED: Prefers serving the last saved snapshot (on disk) if available and matches validation.
     pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
+        // 1. Try to serve from disk if we have a valid checkpoint
+        if let Some(ref path) = self.snapshot_path {
+            if path.exists() && self.current_snapshot_hash.is_some() {
+                // Return the file derived from save_snapshot
+                return std::fs::read(path).map_err(|e| EngineError::InvalidInput(e.to_string()));
+            }
+        }
+        
+        // 2. Fallback: Ephemeral Generation (Timestamp 0)
         let tmp_dir = std::env::temp_dir();
         // Deterministic filename to avoid randomness/UUIDs
         let tmp_path = tmp_dir.join("valori_snapshot_ephemeral.bin");
