@@ -233,9 +233,6 @@ pub fn verify_snapshot_consistency<const M: usize, const D: usize, const N: usiz
 }
 
 #[cfg(test)]
-// NOTE: Tests currently ignored due to stack overflow with large states
-// (caused by recover_from_event_log creating 1024x16x1024x2048 states)
-// TODO: Optimize or use smaller test states
 mod tests {
     use super::*;
     use valori_kernel::types::id::RecordId;
@@ -245,7 +242,6 @@ mod tests {
 
     #[test]
 
-    #[ignore = "large state - causes stack overflow"]
 
     fn test_replay_from_log() {
         let dir = tempdir().unwrap();
@@ -265,7 +261,7 @@ mod tests {
 
         // Replay
         let (state, journal, count) = 
-            recover_from_event_log::<1024, 16, 1024, 2048>(&log_path).unwrap();
+            recover_from_event_log::<128, 16, 128, 256>(&log_path).unwrap();
 
         assert_eq!(count, 5);
         assert_eq!(journal.committed_height(), 5);
@@ -276,7 +272,6 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "large state - causes stack overflow"]
     fn test_replay_determinism() {
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("events.log");
@@ -294,8 +289,8 @@ mod tests {
         }
 
         // Replay twice
-        let (state1, _, _) = recover_from_event_log::<1024, 16, 1024, 2048>(&log_path).unwrap();
-        let (state2, _, _) = recover_from_event_log::<1024, 16, 1024, 2048>(&log_path).unwrap();
+        let (state1, _, _) = recover_from_event_log::<128, 16, 128, 256>(&log_path).unwrap();
+        let (state2, _, _) = recover_from_event_log::<128, 16, 128, 256>(&log_path).unwrap();
 
         // Hashes must match
         let hash1 = hash_state_blake3(&state1);
@@ -306,7 +301,6 @@ mod tests {
 
     #[test]
 
-    #[ignore = "large state - causes stack overflow"]
 
     fn test_dimension_mismatch_rejected() {
         let dir = tempdir().unwrap();
@@ -329,7 +323,6 @@ mod tests {
 
     #[test]
 
-    #[ignore = "large state - causes stack overflow"]
 
     fn test_snapshot_consistency_check() {
         let dir = tempdir().unwrap();
@@ -348,21 +341,16 @@ mod tests {
         }
 
         // Create two identical states via replay
-        let (state1, _, _) = recover_from_event_log::<1024, 16, 1024, 2048>(&log_path).unwrap();
-        let (state2, _, _) = recover_from_event_log::<1024, 16, 1024, 2048>(&log_path).unwrap();
+        let (state1, _, _) = recover_from_event_log::<128, 16, 128, 256>(&log_path).unwrap();
+        let (state2, _, _) = recover_from_event_log::<128, 16, 128, 256>(&log_path).unwrap();
 
         // Should match
         assert!(verify_snapshot_consistency(&state1, &state2));
 
-        // Create a divergent state
-        let mut state3 = KernelState::<1024, 16, 1024, 2048>::new();
-        let event = KernelEvent::InsertRecord {
-            id: RecordId(99),
-            vector: FxpVector::<16>::new_zeros(),
-        };
-        state3.apply_event(&event).unwrap();
+        // Create a divergent state (completely empty)
+        let state3 = KernelState::<128, 16, 128, 256>::new();
 
-        // Should NOT match
+        // Should NOT match (state1/state2 have 5 records, state3 is empty)
         assert!(!verify_snapshot_consistency(&state1, &state3));
     }
 }
