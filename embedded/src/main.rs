@@ -20,6 +20,7 @@ mod flash;
 mod snapshot;
 mod proof;
 mod transport;
+mod wal;
 
 use cortex_m_rt::entry;
 use embedded_alloc::Heap;
@@ -54,6 +55,15 @@ const D: usize = 16;
 const MAX_NODES: usize = 1000;
 const MAX_EDGES: usize = 2048;
 
+#[derive(PartialEq)]
+enum BootMode {
+    SelfTest,
+    WalReplay,
+}
+
+// Set Firmware Mode here
+const MODE: BootMode = BootMode::WalReplay; 
+
 // --- 2. Entry Point ---
 #[entry]
 fn main() -> ! {
@@ -66,24 +76,60 @@ fn main() -> ! {
     // B. Initialize Kernel
     let mut state = KernelState::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>::new();
 
-    // C. Deterministic Test Vector
-    // Q16.16 values:
-    // 1.0  -> 65536
-    // 0.5  -> 32768
-    // -1.0 -> -65536
-    let mut vector = FxpVector::<D>::new_zeros();
-    vector.data[0] = FxpScalar(65536);       // 1.0
-    vector.data[1] = FxpScalar(0);           // 0.0
-    vector.data[2] = FxpScalar(-65536);      // -1.0
-    vector.data[3] = FxpScalar(32768);       // 0.5
-    
-    // D. Apply Command (Insert)
-    let id = RecordId(0);
-    let cmd = Command::InsertRecord { id, vector };
-    
-    match state.apply(&cmd) {
-        Ok(_) => {}
-        Err(_) => cortex_m::asm::bkpt(),
+    if MODE == BootMode::SelfTest {
+        // C. Deterministic Test Vector (Manual)
+        // Q16.16 values: 1.0 -> 65536, 0.5 -> 32768, -1.0 -> -65536
+        let mut vector = FxpVector::<D>::new_zeros();
+        vector.data[0] = FxpScalar(65536);       // 1.0
+        vector.data[1] = FxpScalar(0);           // 0.0
+        vector.data[2] = FxpScalar(-65536);      // -1.0
+        vector.data[3] = FxpScalar(32768);       // 0.5
+        
+        let id = RecordId(0);
+        let cmd = Command::InsertRecord { id, vector };
+        
+        match state.apply(&cmd) {
+            Ok(_) => {}
+            Err(_) => cortex_m::asm::bkpt(),
+        }
+    } else {
+        // Mode B: WAL Replay
+        // In production: Read from UART buffer.
+        // In simulation: Use a hardcoded buffer representing the same command.
+        // Validates `wal.rs` logic.
+        
+        // Construct WAL Packet:
+        // Opcode (0x00) | ID (0) | Dim (16) | [1.0, 0.0, -1.0, 0.5 ...]
+        // 1 + 4 + 2 + (16 * 4) = 7 + 64 = 71 bytes.
+        let mut wal_data: [u8; 71] = [0; 71];
+        let mut idx = 0;
+        
+        // Opcode
+        wal_data[idx] = 0x00; idx += 1;
+        // ID (0)
+        wal_data[idx..idx+4].copy_from_slice(&0u32.to_le_bytes()); idx += 4;
+        // Dim (16)
+        wal_data[idx..idx+2].copy_from_slice(&(D as u16).to_le_bytes()); idx += 2;
+        
+        // Data
+        // 0: 65536
+        wal_data[idx..idx+4].copy_from_slice(&65536i32.to_le_bytes()); idx += 4;
+        // 1: 0
+        wal_data[idx..idx+4].copy_from_slice(&0i32.to_le_bytes()); idx += 4;
+        // 2: -65536
+        wal_data[idx..idx+4].copy_from_slice(&(-65536i32).to_le_bytes()); idx += 4;
+        // 3: 32768
+        wal_data[idx..idx+4].copy_from_slice(&32768i32.to_le_bytes()); idx += 4;
+        
+        // Remaining 12 are 0 (already 0 init)
+        
+        match wal::apply_wal_log(&mut state, &wal_data) {
+            Ok(_) => {},
+            Err(_) => {
+                transport::export_error(b"WAL_FAIL");
+                cortex_m::asm::bkpt();
+            },
+        }
     }
     
     // -----------------------------------------------------------------------
