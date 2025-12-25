@@ -35,6 +35,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     // --- Read APIs ---
 
+    pub fn version(&self) -> u64 {
+        self.version.0
+    }
+
     pub fn get_record(&self, id: RecordId) -> Option<&Record<D>> {
         self.records.get(id)
     }

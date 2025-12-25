@@ -13,7 +13,14 @@
 // This proves Valori is not a "database" —
 // it is a deterministic memory computer.
 
-// use core::alloc::GlobalAlloc; // Unused
+extern crate alloc; // Required for Heap
+
+// Modules
+mod flash;
+mod snapshot;
+mod proof;
+mod transport;
+
 use cortex_m_rt::entry;
 use embedded_alloc::Heap;
 use panic_halt as _; // Deterministic panic handler (infinite loop)
@@ -24,17 +31,20 @@ use valori_kernel::state::command::Command;
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::RecordId;
-// use valori_kernel::fxp::ops::from_f32; // Forbidden in no_std embedded
 
 // --- 1. Global Allocator ---
 // We must manage memory manually since there is no OS.
-// 8KB Heap (Small test harness)
+// 8KB Heap -> Process Heap + Flash Buffer requires more?
+// Default 8KB is small for 64KB snapshot buffer allocation in snapshot.rs
+// I will increase HEAP to 96KB to support 64KB snapshot buffer + proof strings.
+// Cortex-M4 usually has 128KB+ RAM.
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 
 // Static buffer for heap memory. 
 // Placed in .bss/static RAM.
-static mut HEAP_MEM: [u32; 2048] = [0; 2048]; // 2048 * 4 bytes = 8KB
+// 24576 * 4 = 98304 bytes = 96KB
+static mut HEAP_MEM: [u32; 24576] = [0; 24576]; 
 
 // -----------------------------------------------------------------------
 // Configuration (Match Node Config for Determinism)
@@ -48,58 +58,79 @@ const MAX_EDGES: usize = 2048;
 #[entry]
 fn main() -> ! {
     // A. Initialize Heap
-    // Unsafe required because we are manipulating static mut memory.
-    // In a single-core embedded context with interrupts disabled (start), this is safe.
     unsafe { 
         let ptr = core::ptr::addr_of_mut!(HEAP_MEM);
-        HEAP.init(ptr as usize, 8192); 
+        HEAP.init(ptr as usize, 98304); 
     }
 
     // B. Initialize Kernel
-    // This runs completely in RAM.
     let mut state = KernelState::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>::new();
 
     // C. Deterministic Test Vector
-    // Deterministic fixed-point vector.
-    // These values are chosen so we can:
-    // 1) read them in memory via debugger
-    // 2) compute hash consistency across devices
-    //
     // Q16.16 values:
     // 1.0  -> 65536
     // 0.5  -> 32768
     // -1.0 -> -65536
-    // Vector: [1.0, 0.0, -1.0, 0.5, ...]
     let mut vector = FxpVector::<D>::new_zeros();
-    
-    // Explicit fixed-point construction
     vector.data[0] = FxpScalar(65536);       // 1.0
     vector.data[1] = FxpScalar(0);           // 0.0
     vector.data[2] = FxpScalar(-65536);      // -1.0
     vector.data[3] = FxpScalar(32768);       // 0.5
     
-    // Remaining are 0.
-    
     // D. Apply Command (Insert)
     let id = RecordId(0);
     let cmd = Command::InsertRecord { id, vector };
     
-    // The result should be valid.
     match state.apply(&cmd) {
         Ok(_) => {}
-        Err(_) => cortex_m::asm::bkpt(), // trap if kernel rejects state
+        Err(_) => cortex_m::asm::bkpt(),
     }
     
-    // E. Verify State (Optional Check)
-    // In real debugger, we would inspect `state.records`.
-    
-    // F. Breakpoint
-    // Hand over control to debugger/probe for verification.
-    cortex_m::asm::bkpt();
+    // -----------------------------------------------------------------------
+    // PHASE 2: Snapshot & Proof
+    // -----------------------------------------------------------------------
 
-    // G. Infinite Loop
-    // Firmware never returns.
+    // E. Snapshot to Flash (Simulated)
+    // This serializes state and writes to "Flash".
+    // On failure, we trap.
+    let snap_len = match snapshot::snapshot_to_flash(&state) {
+        Ok(l) => l,
+        Err(_) => {
+            cortex_m::asm::bkpt(); // Trap on write failure
+            0 // Unreachable
+        }
+    };
+
+    // F. Read back for Proof Generation
+    // We confirm that what is in Flash is the Truth.
+    let snapshot_data = &flash::FlashStorage::read_snapshot()[0..snap_len];
+
+    // G. Generate Proof
+    // Hashes State and Snapshot.
+    let proof = proof::generate_proof(&state, snapshot_data);
+    
+    // Serialize Proof to JSON (Bytes)
+    // serde-json-core to slice.
+    let mut proof_buf = [0u8; 1024];
+    let proof_len = match serde_json_core::to_slice(&proof, &mut proof_buf) {
+        Ok(l) => l,
+        Err(_) => {
+            cortex_m::asm::bkpt();
+            0
+        }
+    };
+    let proof_bytes = &proof_buf[0..proof_len];
+
+    // H. Export Loop (UART)
+    // "The device does one thing: Here is the truth of my memory."
     loop {
-        cortex_m::asm::wfi(); // Wait for interrupt (power save)
+        // 1. Export Proof JSON
+        transport::export_proof(proof_bytes);
+        
+        // 2. Export Raw Snapshot
+        transport::export_snapshot(snapshot_data);
+        
+        // Wait / Blink
+        for _ in 0..100_000 { cortex_m::asm::nop(); }
     }
 }
