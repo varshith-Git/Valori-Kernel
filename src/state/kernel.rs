@@ -47,6 +47,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
 
+    pub fn is_edge_active(&self, id: EdgeId) -> bool {
+        self.edges.get(id).is_some()
+    }
+
     pub fn search_l2(&self, query: &FxpVector<D>, results: &mut [SearchResult]) -> usize {
         self.index.search(&self.records, query, results)
     }
