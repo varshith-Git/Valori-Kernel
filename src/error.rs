@@ -11,6 +11,8 @@ pub enum KernelError {
     NotFound,
     /// Invalid operation.
     InvalidOperation,
+    /// Invalid input.
+    InvalidInput,
 }
 
 pub type KernelResult<T> = core::result::Result<T, KernelError>;

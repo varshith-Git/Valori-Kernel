@@ -5,6 +5,9 @@ edition = "2021"
 license = "AGPL-3.0-only"
 
 [dependencies]
+blake3 = { version = "1.5", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde"] }
 
 [features]
 std = []
@@ -12,5 +15,6 @@ std = []
 [workspace]
 members = [
     "node",
-    "ffi"
+    "ffi",
+    "verify"
 ]

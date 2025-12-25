@@ -18,6 +18,9 @@ pub mod quant;
 pub mod graph;
 pub mod state;
 pub mod snapshot;
+pub mod verify;
+pub mod proof;
+pub mod replay;
 
 #[cfg(test)]
 pub mod tests;
