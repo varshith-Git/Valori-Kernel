@@ -117,6 +117,33 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             wal_accumulator.update(&crc_len.to_le_bytes());
         }
 
+        // Phase 23: Initialize Event Committer (event-sourced persistence)
+        // Temporarily keep Engine.state for WAL compatibility during migration
+        // Event log path derived from WAL directory
+        let event_committer = if let Some(ref wal_path) = cfg.wal_path {
+            if let Some(parent) = wal_path.parent() {
+                let event_log_path = parent.join("events.log");
+                match EventLogWriter::open(&event_log_path) {
+                    Ok(event_log) => {
+                        tracing::info!("Event log initialized at {:?}", event_log_path);
+                        let journal = EventJournal::new();
+                        // Create separate state for event committer
+                        // TODO: Eventually Engine.state will be removed and only committer.state exists
+                        let committer_state = KernelState::new();
+                        Some(EventCommitter::new(event_log, journal, committer_state))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Event log not initialized: {}. Falling back to WAL-only mode.", e);
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Self {
             state: KernelState::new(),
             index_kind: cfg.index_kind,
@@ -129,7 +156,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             current_snapshot_hash: None,
             wal_writer,
             wal_accumulator,
-            event_committer: None,  // Phase 23: Will be initialized properly later
+            event_committer,  // Properly initialized
             edge_bitmap: vec![false; MAX_EDGES],
         }
     }
