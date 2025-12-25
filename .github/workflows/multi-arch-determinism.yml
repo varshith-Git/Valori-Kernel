@@ -31,8 +31,7 @@ jobs:
           
       - name: Run determinism test
         run: |
-          cd node
-          cargo test --release determinism_x86 -- --nocapture --test-threads=1 > ../x86_output.txt 2>&1 || true
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_x86 -- --nocapture --test-threads=1 > x86_output.txt 2>&1 || true
           
       - name: Extract hash
         run: |
@@ -68,8 +67,7 @@ jobs:
           
       - name: Run determinism test
         run: |
-          cd node
-          cargo test --release determinism_arm -- --nocapture --test-threads=1 > ../arm_output.txt 2>&1 || true
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_arm -- --nocapture --test-threads=1 > arm_output.txt 2>&1 || true
           
       - name: Extract hash
         run: |
@@ -116,8 +114,7 @@ jobs:
           
       - name: Run WASM determinism test
         run: |
-          cd node
-          cargo test --release determinism_wasm -- --nocapture --test-threads=1 > ../wasm_output.txt 2>&1 || true
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_wasm -- --nocapture --test-threads=1 > wasm_output.txt 2>&1 || true
           
       - name: Extract hash
         run: |
