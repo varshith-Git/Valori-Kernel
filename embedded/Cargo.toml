@@ -14,6 +14,7 @@ panic-halt = "0.2"
 # Crucial: default-features = false ensures no_std
 valori-kernel = { path = "../", default-features = false }
 blake3 = { version = "1.5", default-features = false }
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde"] }
 serde-json-core = "0.5" # No-std JSON serialization for proof
 hex = { version = "0.4", default-features = false, features = ["alloc"] } # For hex encoding hashes
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }

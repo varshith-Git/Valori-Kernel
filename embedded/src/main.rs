@@ -115,38 +115,50 @@ fn main() -> ! {
         let mut shadow = shadow::ShadowKernel::new(&mut state);
         
         // 3. Receive Packet (Simulated UART Stream)
-        // Construct a Phase 4 Packet containing the Phase 3 WAL data
+        // Construct a Phase 4 Packet containing the Bincode-encoded WAL data
         
-        // Inner WAL Data (Opcode..Data)
-        // Version(1) + 71 bytes = 72 bytes.
-        let mut wal_payload: [u8; 72] = [0; 72];
+        // Inner WAL Data (Bincode Command)
+        let mut wal_payload: [u8; 128] = [0; 128];
         let mut idx = 0;
-        wal_payload[idx] = 0x01; idx+=1; // WAL Version
-        wal_payload[idx] = 0x00; idx+=1; // Opcode (Insert)
-        wal_payload[idx..idx+4].copy_from_slice(&0u32.to_le_bytes()); idx+=4; // ID
-        wal_payload[idx..idx+2].copy_from_slice(&(D as u16).to_le_bytes()); idx+=2; // Dim
-        wal_payload[idx..idx+4].copy_from_slice(&65536i32.to_le_bytes()); idx+=4; // 1.0
-        wal_payload[idx..idx+4].copy_from_slice(&0i32.to_le_bytes()); idx+=4; // 0.0
-        wal_payload[idx..idx+4].copy_from_slice(&(-65536i32).to_le_bytes()); idx+=4; // -1.0
-        wal_payload[idx..idx+4].copy_from_slice(&32768i32.to_le_bytes()); idx+=4; // 0.5
-        // Remaining 0s.
+        
+        // Create Command
+        let mut vector = FxpVector::<D>::new_zeros();
+        vector.data[0] = FxpScalar(65536);       // 1.0
+        vector.data[1] = FxpScalar(0);           // 0.0
+        vector.data[2] = FxpScalar(-65536);      // -1.0
+        vector.data[3] = FxpScalar(32768);       // 0.5
+        
+        let id = RecordId(0);
+        let cmd = Command::InsertRecord { id, vector };
+        
+        // Encode using Bincode
+        let config = bincode::config::standard();
+        let len = match bincode::serde::encode_into_slice(&cmd, &mut wal_payload, config) {
+            Ok(l) => l,
+            Err(_) => { cortex_m::asm::bkpt(); 0 }
+        };
 
         // Packet Header: [VER:1][FLAGS:1][SEQ:8][LEN:4]
         // Header Size = 14.
-        let pkt_len: u32 = 72;
-        let mut packet: [u8; 14 + 72] = [0; 14 + 72];
+        let pkt_payload_len = len as u32; // Actual bincode length
+        let mut packet: [u8; 14 + 128] = [0; 14 + 128];
         let mut p_idx = 0;
         
+        // Packet Header Construction
         packet[p_idx] = 1; p_idx+=1; // Packet Version
         packet[p_idx] = wal_stream::FLAG_EOS; p_idx+=1; // Flags (EOS -> Commit Segment)
         packet[p_idx..p_idx+8].copy_from_slice(&last_seq.to_le_bytes()); p_idx+=8; // Seq
-        packet[p_idx..p_idx+4].copy_from_slice(&pkt_len.to_le_bytes()); p_idx+=4; // Len
-        packet[p_idx..p_idx+72].copy_from_slice(&wal_payload);
-
+        packet[p_idx..p_idx+4].copy_from_slice(&pkt_payload_len.to_le_bytes()); p_idx+=4; // Len
+        
+        // Copy Bincode Payload
+        packet[p_idx..p_idx+len].copy_from_slice(&wal_payload[0..len]);
+        
+        let packet_size = 14 + len;
+        
         // 4. Ingest Logic
         shadow.start_segment();
         
-        match stream_track.ingest_packet(&packet) {
+        match stream_track.ingest_packet(&packet[0..packet_size]) {
             Ok((chunk, is_eos)) => {
                 // Apply to Shadow
                 if shadow.apply_chunk(chunk).is_err() {
