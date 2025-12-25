@@ -1,13 +1,21 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-//! Crash Recovery via WAL Replay
+//! Crash Recovery
 //!
-//! Provides deterministic recovery by replaying WAL on top of snapshot.
+//! Provides deterministic recovery via:
+//! - Event log replay (Phase 23+: canonical truth)
+//! - WAL replay (legacy fallback)
 
 use valori_kernel::state::command::Command;
 use valori_kernel::state::kernel::KernelState;
+use valori_kernel::snapshot::blake3::hash_state_blake3;
+use valori_kernel::snapshot::decode::decode_state;
+
 use crate::wal_reader::{WalReader, WalReaderError};
 use crate::wal_writer::WalWriter; // Added for tests
 use crate::errors::EngineError;
+use crate::events::event_replay::{recover_from_event_log, verify_snapshot_consistency};
+use crate::events::EventJournal;
+
 use std::path::Path;
 
 /// Replay WAL commands on top of existing kernel state
@@ -64,10 +72,73 @@ pub fn replay_wal<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     Ok((commands_applied, hasher))
 }
 
+
 /// Check if WAL file exists and is non-empty (VALID HEADER required)
 pub fn has_wal(wal_path: &Path) -> bool {
     wal_path.exists() && std::fs::metadata(wal_path)
         .map(|m| m.len() >= 16) // Must have full header
+        .unwrap_or(false)
+}
+
+// ============================================================================
+// Phase 24: Event-First Recovery
+// ============================================================================
+
+/// Recover from event log (canonical truth)
+///
+/// This is the preferred recovery path. Event log is the source of truth,
+/// snapshots are just optimizations that are validated against it.
+///
+/// Returns (KernelState, EventJournal, event_count)
+pub fn recover_from_events<const M: usize, const D: usize, const N: usize, const E: usize>(
+    event_log_path: &Path
+) -> Result<(KernelState<M, D, N, E>, EventJournal<D>, u64), EngineError> {
+    tracing::info!("Recovering from event log: {:?}", event_log_path);
+    
+    recover_from_event_log(event_log_path)
+        .map_err(|e| EngineError::InvalidInput(format!("Event replay failed: {:?}", e)))
+}
+
+/// Validate snapshot against replayed state
+///
+/// Compares snapshot hash with replayed state hash.
+/// If they diverge, logs warning but doesn't fail (event log wins).
+pub fn validate_snapshot<const M: usize, const D: usize, const N: usize, const E: usize>(
+    snapshot_path: &Path,
+    replayed_state: &KernelState<M, D, N, E>
+) -> Result<bool, EngineError> {
+    if !snapshot_path.exists() {
+        tracing::debug!("No snapshot to validate");
+        return Ok(true); // No snapshot = nothing to validate
+    }
+    
+    tracing::info!("Validating snapshot: {:?}", snapshot_path);
+    
+    let snapshot_data = std::fs::read(snapshot_path)
+        .map_err(|e| EngineError::InvalidInput(format!("Failed to read snapshot: {}", e)))?;
+    
+    let snapshot_state: KernelState<M, D, N, E> = decode_state(&snapshot_data)
+        .map_err(|e| EngineError::InvalidInput(format!("Failed to decode snapshot: {:?}", e)))?;
+    
+    // Use existing verify_snapshot_consistency from event_replay
+    let is_consistent = verify_snapshot_consistency(&snapshot_state, replayed_state);
+    
+    if !is_consistent {
+        tracing::warn!(
+            "Snapshot hash mismatch detected! Snapshot will be discarded. \
+             Event log state is canonical truth."
+        );
+    } else {
+        tracing::info!("Snapshot validated successfully");
+    }
+    
+    Ok(is_consistent)
+}
+
+/// Check if event log exists and is valid
+pub fn has_event_log(event_log_path: &Path) -> bool {
+    event_log_path.exists() && std::fs::metadata(event_log_path)
+        .map(|m| m.len() >= 16) // Must have at least header
         .unwrap_or(false)
 }
 
