@@ -3,9 +3,27 @@ name: Multi-Architecture Determinism Validation
 on:
   push:
     branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'node/**'
+      - 'embedded/**'
+      - 'ffi/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/**'
+      # Ignore documentation changes
+      - '!**.md'
+      - '!docs/**'
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
+    paths:
+      - 'src/**'
+      - 'node/**'
+      - 'embedded/**'
+      - 'ffi/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:  # Allow manual triggering
 
 jobs:
   # Test on x86_64 Linux
