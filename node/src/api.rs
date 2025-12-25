@@ -155,3 +155,14 @@ pub struct SnapshotRestoreRequest {
 pub struct SnapshotRestoreResponse {
     pub success: bool,
 }
+
+// Phase 26: Event log proof API
+#[derive(Serialize, Debug)]
+pub struct EventProofResponse {
+    pub kernel_version: u32,
+    pub event_log_hash: String,       // hex-encoded BLAKE3
+    pub final_state_hash: String,     // hex-encoded BLAKE3  
+    pub snapshot_hash: Option<String>, // hex-encoded BLAKE3 (if snapshot exists)
+    pub event_count: u64,
+    pub committed_height: u64,
+}

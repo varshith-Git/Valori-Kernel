@@ -48,7 +48,7 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     
     // Event-sourced persistence (Phase 23 - NEW)
     // Optional during migration, will become mandatory after WAL deprecation
-    event_committer: Option<EventCommitter<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>>,
+    pub event_committer: Option<EventCommitter<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>>,
     
     // Allocator State
     edge_bitmap: Vec<bool>,

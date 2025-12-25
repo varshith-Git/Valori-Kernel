@@ -91,6 +91,7 @@ pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
         // Proofs v1
         .route("/v1/proof/state", axum::routing::get(get_proof))
+        .route("/v1/proof/event-log", axum::routing::get(get_event_proof)) // Phase 26
         // Replication v1
         .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
         .with_state(state);
@@ -290,6 +291,43 @@ async fn get_proof(
     let engine = state.lock().await;
     let proof = engine.get_proof();
     Ok(Json(proof))
+}
+
+// Phase 26: Event log proof endpoint
+async fn get_event_proof(
+    State(state): State<SharedEngine>,
+) -> Result<Json<EventProofResponse>, EngineError> {
+    let engine = state.lock().await;
+    
+    // Check if event committer is available
+    if let Some(ref committer) = engine.event_committer {
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        
+        // Get current state and journal info
+        let state_hash = hash_state_blake3(committer.live_state());
+        let committed_height = committer.journal().committed_height();
+        let event_count = committed_height; // Committed height == event count
+        
+        // TODO: Compute actual event log hash by reading the log file
+        // For now, use a placeholder zeroed hash
+        let event_log_hash = [0u8; 32];
+        
+        // Build response
+        let response = EventProofResponse {
+            kernel_version: 1,
+            event_log_hash: format!("{:x}", u128::from_le_bytes(event_log_hash[..16].try_into().unwrap())),
+            final_state_hash: format!("{:x}", u128::from_le_bytes(state_hash[..16].try_into().unwrap())),
+            snapshot_hash: None, // TODO: Add snapshot hash if available
+            event_count,
+            committed_height,
+        };
+        
+        Ok(Json(response))
+    } else {
+        Err(EngineError::InvalidInput(
+            "Event log not enabled. Engine is running in WAL-only mode.".to_string()
+        ))
+    }
 }
 
 async fn get_wal_stream(
