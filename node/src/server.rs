@@ -87,6 +87,8 @@ pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
         // Metadata v1
         .route("/v1/memory/meta/set", post(meta_set))
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
+        // Proofs v1
+        .route("/v1/proof/state", axum::routing::get(get_proof))
         .with_state(state);
 
     if let Some(token) = auth_token {
@@ -106,7 +108,7 @@ async fn snapshot_save(
     State(state): State<SharedEngine>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    let engine = state.lock().await;
+    let mut engine = state.lock().await;
     let path = req.path.map(std::path::PathBuf::from);
     // Use engine default if path None
     let used_path = engine.save_snapshot(path.as_deref())?;
@@ -276,4 +278,12 @@ async fn memory_search_vector(
         .collect();
 
     Ok(Json(MemorySearchResponse { results }))
+}
+
+async fn get_proof(
+    State(state): State<SharedEngine>,
+) -> Result<Json<valori_kernel::proof::DeterministicProof>, EngineError> {
+    let engine = state.lock().await;
+    let proof = engine.get_proof();
+    Ok(Json(proof))
 }
