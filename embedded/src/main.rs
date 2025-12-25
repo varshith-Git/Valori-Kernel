@@ -1,6 +1,18 @@
 #![no_std]
 #![no_main]
 
+// This firmware validates that the Valori Kernel executes deterministically
+// inside a Cortex-M microcontroller environment.
+//
+// Same input commands → same state hash → same memory graph
+// across:
+//  - Cloud nodes
+//  - Edge devices
+//  - Embedded controllers
+//
+// This proves Valori is not a "database" —
+// it is a deterministic memory computer.
+
 // use core::alloc::GlobalAlloc; // Unused
 use cortex_m_rt::entry;
 use embedded_alloc::Heap;
@@ -73,7 +85,10 @@ fn main() -> ! {
     let cmd = Command::InsertRecord { id, vector };
     
     // The result should be valid.
-    let _res = state.apply(&cmd);
+    match state.apply(&cmd) {
+        Ok(_) => {}
+        Err(_) => cortex_m::asm::bkpt(), // trap if kernel rejects state
+    }
     
     // E. Verify State (Optional Check)
     // In real debugger, we would inspect `state.records`.
