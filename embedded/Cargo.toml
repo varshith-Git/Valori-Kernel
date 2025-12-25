@@ -1,0 +1,21 @@
+[package]
+name = "valori-embedded"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embedded-alloc = "0.5"
+panic-halt = "0.2"
+
+# Local Kernel Dependency (Core)
+# Using 'valori-kernel' as name to match workspace, path to root where lib.rs lives
+# Crucial: default-features = false ensures no_std
+valori-kernel = { path = "../", default-features = false }
+
+[[bin]]
+name = "valori-embedded"
+path = "src/main.rs"
+test = false
+bench = false

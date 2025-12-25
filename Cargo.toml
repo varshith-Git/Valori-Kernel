@@ -16,5 +16,14 @@ std = []
 members = [
     "node",
     "ffi",
-    "verify"
+    "verify",
+    "embedded"
 ]
+
+# Firmware requires abort on panic (no unwinding support in no_std)
+# This also guarantees fail-closed behavior for the Node.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
