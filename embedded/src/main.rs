@@ -48,8 +48,15 @@ fn main() -> ! {
     let mut state = KernelState::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>::new();
 
     // C. Deterministic Test Vector
-    // We construct a test pattern manually. NO Floats.
-    // Q16.16: 1.0 = 65536. 
+    // Deterministic fixed-point vector.
+    // These values are chosen so we can:
+    // 1) read them in memory via debugger
+    // 2) compute hash consistency across devices
+    //
+    // Q16.16 values:
+    // 1.0  -> 65536
+    // 0.5  -> 32768
+    // -1.0 -> -65536
     // Vector: [1.0, 0.0, -1.0, 0.5, ...]
     let mut vector = FxpVector::<D>::new_zeros();
     
