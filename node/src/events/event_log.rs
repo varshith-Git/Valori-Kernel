@@ -209,7 +209,7 @@ mod tests {
 
         let event = KernelEvent::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::new_zeros(),
+            vector: FxpVector::<16>::new_zeros(),
         };
 
         writer.append(&event).unwrap();
@@ -228,7 +228,7 @@ mod tests {
             for i in 0..5 {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
-                    vector: FxpVector::new_zeros(),
+                    vector: FxpVector::<16>::new_zeros(),
                 };
                 writer.append(&event).unwrap();
             }

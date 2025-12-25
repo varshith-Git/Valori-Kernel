@@ -102,7 +102,7 @@ mod tests {
 
         // Replay on fresh state
         let mut state = KernelState::<MAX_REC, DIM, MAX_NODES, MAX_EDGES>::new();
-        let count = replay_wal(&mut state, &wal_path).unwrap();
+        let (count, _hasher) = replay_wal(&mut state, &wal_path).unwrap();
 
         assert_eq!(count, 100);
 
