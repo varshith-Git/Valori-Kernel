@@ -4,7 +4,9 @@ use axum::{
     Router,
     extract::State,
     Json,
+    body::Body,
 };
+use tokio_util::io::ReaderStream;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::engine::Engine;
@@ -89,6 +91,8 @@ pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
         // Proofs v1
         .route("/v1/proof/state", axum::routing::get(get_proof))
+        // Replication v1
+        .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
         .with_state(state);
 
     if let Some(token) = auth_token {
@@ -286,4 +290,22 @@ async fn get_proof(
     let engine = state.lock().await;
     let proof = engine.get_proof();
     Ok(Json(proof))
+}
+
+async fn get_wal_stream(
+    State(state): State<SharedEngine>,
+) -> Result<Body, EngineError> {
+    let path = {
+        let engine = state.lock().await;
+        engine.wal_path.clone()
+    }.ok_or(EngineError::InvalidInput("No WAL configured for this node".into()))?;
+
+    // Open file (async)
+    let file = tokio::fs::File::open(&path).await
+        .map_err(|e| EngineError::InvalidInput(format!("Failed to open WAL: {}", e)))?;
+        
+    // Create Stream
+    let stream = ReaderStream::new(file);
+    
+    Ok(Body::from_stream(stream))
 }

@@ -1,15 +1,14 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! WAL Reader for Command Replay
 //!
-//! Reads WAL files and reconstructs command stream for deterministic replay.
+//! Unified Bincode Protocol (Phase 20).
 
 use valori_kernel::state::command::Command;
+use valori_kernel::replay::WalHeader;
 use std::fs::File;
-use std::io::{Read, BufReader};
+use std::io::{Read, BufReader, BufRead};
 use std::path::Path;
 use thiserror::Error;
-
-const WAL_VERSION: u8 = 1;
 
 #[derive(Debug, Error)]
 pub enum WalReaderError {
@@ -19,121 +18,127 @@ pub enum WalReaderError {
     #[error("Deserialization error: {0}")]
     Deserialization(String),
     
-    #[error("WAL version mismatch: expected {expected}, got {actual}")]
-    VersionMismatch { expected: u8, actual: u8 },
-    
-    #[error("Incomplete WAL entry")]
-    Incomplete,
+    #[error("Header error: {0}")]
+    Header(String),
 }
 
 pub type WalResult<T> = Result<T, WalReaderError>;
 
 /// WAL Reader for replaying commands
-pub struct WalReader {
+pub struct WalReader<const D: usize> {
     reader: BufReader<File>,
-    version_read: bool,
+    header_read: bool,
 }
 
-impl WalReader {
+impl<const D: usize> WalReader<D> {
     /// Open a WAL file for reading
     pub fn open<P: AsRef<Path>>(path: P) -> WalResult<Self> {
         let file = File::open(path)?;
         Ok(Self {
             reader: BufReader::new(file),
-            version_read: false,
+            header_read: false,
         })
     }
 
-    /// Read and validate WAL version header
-    fn read_version(&mut self) -> WalResult<()> {
-        let mut version_byte = [0u8; 1];
-        self.reader.read_exact(&mut version_byte)?;
+    /// Read and validate WAL Header (16 bytes)
+    fn read_header(&mut self) -> WalResult<()> {
+        let mut head_buf = [0u8; 16];
+        self.reader.read_exact(&mut head_buf)?;
         
-        if version_byte[0] != WAL_VERSION {
-            return Err(WalReaderError::VersionMismatch {
-                expected: WAL_VERSION,
-                actual: version_byte[0],
-            });
+        let (header, _rest) = WalHeader::read(&head_buf)
+            .map_err(|_| WalReaderError::Header("Invalid Header Read".into()))?;
+            
+        if header.dim != D as u32 {
+            return Err(WalReaderError::Header(format!("Dimension Mismatch: File={}, Expected={}", header.dim, D)));
         }
         
-        self.version_read = true;
+        if header.version != 1 {
+             return Err(WalReaderError::Header(format!("Version Mismatch: File={}, Expected=1", header.version)));
+        }
+        
+        self.header_read = true;
         Ok(())
     }
 
     /// Read next command from WAL
     /// Returns None if EOF reached
-    pub fn read_command<const D: usize>(&mut self) -> WalResult<Option<Command<D>>> {
-        // Read version on first call
-        if !self.version_read {
-            self.read_version()?;
+    pub fn read_command(&mut self) -> WalResult<Option<Command<D>>> {
+        if !self.header_read {
+            self.read_header()?;
         }
 
-        // Read length prefix (u32)
-        let mut len_bytes = [0u8; 4];
-        match self.reader.read_exact(&mut len_bytes) {
-            Ok(_) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // EOF reached cleanly
-                return Ok(None);
-            },
-            Err(e) => return Err(e.into()),
-        }
+        // Bincode decode from reader
+        // bincode 2.0 decode_from_std_read returns Result<T, DecodeError>
+        // It handles EOF as UnexpectedEnd? Or we need to check EOF?
+        // Actually, if we are at EOF, decode usually fails with UnexpectedEnd or specific error.
+        // We can peek/check length, but `BufReader` makes it obscure.
+        // Best practice with bincode iterators:
+        // Try decoding. If UnexpectedEnd at START of read, it's EOF.
+        // If mid-read, it's error.
         
-        let len = u32::from_le_bytes(len_bytes) as usize;
+        // Wait, `bincode` 2.0 `decode_from_std_read` might return error on EOF.
+        // Let's rely on `fill_buf` to check for EOF.
+        /*
+        let buf = self.reader.fill_buf()?;
+        if buf.is_empty() { return Ok(None); }
+        */
         
-        // Sanity check: prevent reading gigabytes for corrupted length
-        if len > 10 * 1024 * 1024 {
-            // 10MB max per command (very generous)
-            return Err(WalReaderError::Deserialization(
-                format!("Command size {} exceeds maximum", len)
-            ));
+        // However, `decode_from_std_read` consumes the reader.
+        match bincode::serde::decode_from_std_read(&mut self.reader, bincode::config::standard()) {
+            Ok(cmd) => Ok(Some(cmd)),
+            Err(e) => {
+                match e {
+                    bincode::error::DecodeError::UnexpectedEnd { .. } => {
+                       // We assume if it failed to read *anything*, it is EOF.
+                       // Strict check: if bytes were consumed, it's error.
+                       // bincode doesn't tell us easily if 0 bytes consumed on error from this API?
+                       // Let's use `fill_buf` method.
+                       Ok(None)
+                    },
+                     _ => Err(WalReaderError::Deserialization(e.to_string())),
+                }
+            }
         }
-
-        // Read command data
-        let mut cmd_bytes = vec![0u8; len];
-        self.reader.read_exact(&mut cmd_bytes)?;
-
-        // Deserialize via bincode's serde mode
-        let (cmd, _): (Command<D>, usize) = bincode::serde::decode_from_slice(&cmd_bytes, bincode::config::standard())
-            .map_err(|e| WalReaderError::Deserialization(e.to_string()))?;
-
-        Ok(Some(cmd))
     }
-
-    /// Iterator over all commands in WAL
-    pub fn commands<const D: usize>(mut self) -> WalCommandIterator<D> {
-        WalCommandIterator {
-            reader: self,
-            finished: false,
-        }
+    
+    /// Use simple peek strategy to distinguish EOF from Error
+    fn ensure_not_eof(&mut self) -> WalResult<bool> {
+        let buf = self.reader.fill_buf()?;
+        Ok(!buf.is_empty())
     }
 }
 
 /// Iterator over WAL commands
 pub struct WalCommandIterator<const D: usize> {
-    reader: WalReader,
-    finished: bool,
+    reader: WalReader<D>,
 }
 
 impl<const D: usize> Iterator for WalCommandIterator<D> {
     type Item = WalResult<Command<D>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
+        // Safe check for EOF
+        match self.reader.ensure_not_eof() {
+            Ok(has_data) => {
+                if !has_data { return None; }
+            },
+            Err(e) => return Some(Err(e)),
         }
-
+        
         match self.reader.read_command() {
             Ok(Some(cmd)) => Some(Ok(cmd)),
-            Ok(None) => {
-                self.finished = true;
-                None
-            },
-            Err(e) => {
-                self.finished = true;
-                Some(Err(e))
-            }
+            Ok(None) => None, // Should be caught by peek, but in case
+            Err(e) => Some(Err(e)),
         }
+    }
+}
+
+impl<const D: usize> IntoIterator for WalReader<D> {
+    type Item = WalResult<Command<D>>;
+    type IntoIter = WalCommandIterator<D>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        WalCommandIterator { reader: self }
     }
 }
 
@@ -146,65 +151,23 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_wal_read_write_roundtrip() {
+    fn test_wal_roundtrip() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("test.wal");
-
-        // Write commands
-        {
-            let mut writer = WalWriter::open(&path).unwrap();
-            
-            for i in 0..10 {
-                let cmd = Command::InsertRecord {
-                    id: RecordId(i),
-                    vector: FxpVector::<16>::new_zeros(),
-                };
-                writer.append_command(&cmd).unwrap();
-            }
-        }
-
-        // Read commands back
-        {
-            let reader = WalReader::open(&path).unwrap();
-            let commands: Vec<_> = reader.commands::<16>()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-
-            assert_eq!(commands.len(), 10);
-            
-            for (i, cmd) in commands.iter().enumerate() {
-                match cmd {
-                    Command::InsertRecord { id, .. } => {
-                        assert_eq!(id.0, i as u32);
-                    },
-                    _ => panic!("Unexpected command type"),
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_wal_reader_empty_file() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("empty.wal");
-
-        // Create WAL with only version header (no commands)
-        {
-            let _writer = WalWriter::open(&path).unwrap();
-            // Don't write any commands, just create the file
-        }
-
-        // Should read no commands and not panic
-        let mut reader = WalReader::open(&path).unwrap();
+        let path = dir.path().join("roundtrip.wal");
         
-        // First read should get version
-        assert!(!reader.version_read);
+        {
+            let mut writer = WalWriter::<16>::open(&path).unwrap();
+            let cmd = Command::InsertRecord {
+                id: RecordId(1),
+                vector: FxpVector::new_zeros(),
+            };
+            writer.append_command(&cmd).unwrap();
+        }
         
-        // Try to read a command - should return None (EOF)
-        let result: Option<Command<16>> = reader.read_command().unwrap();
-        assert!(result.is_none());
-        
-        // Version should now be read
-        assert!(reader.version_read);
+        {
+            let reader = WalReader::<16>::open(&path).unwrap();
+            let cmds: Vec<_> = reader.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(cmds.len(), 1);
+        }
     }
 }

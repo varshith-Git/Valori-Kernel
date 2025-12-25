@@ -7,7 +7,7 @@ use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
 // use valori_kernel::fxp::ops::from_f32; // Explicit rounding now preferred
-use valori_kernel::verify::{kernel_state_hash, snapshot_hash, wal_hash};
+use valori_kernel::verify::{kernel_state_hash, snapshot_hash};
 use valori_kernel::proof::DeterministicProof;
 
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
@@ -33,12 +33,14 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     quant: Box<dyn Quantizer + Send + Sync>,
     pub metadata: Arc<MetadataStore>,
     pub snapshot_path: Option<std::path::PathBuf>,
+    pub wal_path: Option<std::path::PathBuf>,
 
     // Verification
     pub current_snapshot_hash: Option<[u8; 32]>,
     
     // WAL for durability
-    wal_writer: Option<WalWriter>,
+    wal_writer: Option<WalWriter<D>>,
+    wal_accumulator: blake3::Hasher,
     
     // Allocator State
     edge_bitmap: Vec<bool>,
@@ -91,6 +93,22 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         } else {
             None
         };
+        
+        // Initialize Wal Accumulator (Default to Header only)
+        // If WAL is replayed later, this will be overwritten.
+        let mut wal_accumulator = blake3::Hasher::new();
+        // Hash Header (16 bytes) match
+         {
+            let header_ver = 1u32;
+            let enc_ver = 0u32;
+            let dim = D as u32;
+            let crc_len = 0u32;
+            
+            wal_accumulator.update(&header_ver.to_le_bytes());
+            wal_accumulator.update(&enc_ver.to_le_bytes());
+            wal_accumulator.update(&dim.to_le_bytes());
+            wal_accumulator.update(&crc_len.to_le_bytes());
+        }
 
         Self {
             state: KernelState::new(),
@@ -100,8 +118,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             quant,
             metadata: Arc::new(MetadataStore::new()),
             snapshot_path: cfg.snapshot_path.clone(),
+            wal_path: cfg.wal_path.clone(),
             current_snapshot_hash: None,
             wal_writer,
+            wal_accumulator,
             edge_bitmap: vec![false; MAX_EDGES],
         }
     }
@@ -151,6 +171,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                 .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
         }
         
+        // Update Accumulator
+        {
+             let cmd_bytes = bincode::serde::encode_to_vec(&cmd, bincode::config::standard())
+                 .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             self.wal_accumulator.update(&cmd_bytes);
+        }
+        
         // 4. Apply Command to Kernel (Primary Store)
         self.state.apply(&cmd)?;
         
@@ -190,6 +217,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             kind,
             record: record_id,
         };
+        
+        // WAL
+        if let Some(ref mut wal) = self.wal_writer {
+            wal.append_command(&cmd)
+                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+        }
+        
         self.state.apply(&cmd)?;
 
         Ok(node_id.0)
@@ -219,6 +253,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             from,
             to,
         };
+        
+        // WAL
+        if let Some(ref mut wal) = self.wal_writer {
+            wal.append_command(&cmd)
+                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+        }
+        
         self.state.apply(&cmd).map_err(EngineError::Kernel)?;
 
         // Update Bitmap on Success
@@ -386,10 +427,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         
         // 3. Replay WAL commands
         tracing::info!("Replaying WAL from {:?}", wal_path);
-        let commands_applied = crate::recovery::replay_wal(
+        let (commands_applied, recovered_hasher) = crate::recovery::replay_wal(
             &mut self.state,
             wal_path
         )?;
+        
+        // Update Accumulator with recovered state
+        self.wal_accumulator = recovered_hasher;
         
         tracing::info!("Replayed {} commands from WAL", commands_applied);
         
@@ -490,7 +534,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         
         // Derive/Fetch other components
         let snapshot_hash = self.current_snapshot_hash.unwrap_or([0u8; 32]);
-        let wal_hash = wal_hash(&[]); // Empty WAL for now
+        let wal_hash = *self.wal_accumulator.finalize().as_bytes();
 
         DeterministicProof {
             kernel_version: 1,
