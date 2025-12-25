@@ -7,3 +7,6 @@ pub mod server;
 pub mod structure;
 pub mod metadata;
 pub mod persistence;
+pub mod wal_writer;
+pub mod wal_reader;
+pub mod recovery;

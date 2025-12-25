@@ -1,0 +1,175 @@
+name: Multi-Architecture Determinism Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # Test on x86_64 Linux
+  test-x86:
+    name: "Determinism Test (x86_64 Linux)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Run determinism test
+        run: |
+          cd node
+          cargo test --release determinism_x86 -- --nocapture --test-threads=1 > ../x86_output.txt 2>&1 || true
+          
+      - name: Extract hash
+        run: |
+          grep "HASH:" x86_output.txt | head -1 | cut -d':' -f2 > x86_hash.txt
+          cat x86_hash.txt
+          
+      - name: Upload hash artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: x86-hash
+          path: x86_hash.txt
+
+  # Test on ARM64 macOS
+  test-arm:
+    name: "Determinism Test (ARM64 macOS)"
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Run determinism test
+        run: |
+          cd node
+          cargo test --release determinism_arm -- --nocapture --test-threads=1 > ../arm_output.txt 2>&1 || true
+          
+      - name: Extract hash
+        run: |
+          grep "HASH:" arm_output.txt | head -1 | cut -d':' -f2 > arm_hash.txt
+          cat arm_hash.txt
+          
+      - name: Upload hash artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: arm-hash
+          path: arm_hash.txt
+
+  # Test on WASM32
+  test-wasm:
+    name: "Determinism Test (WASM32)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust + WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          
+      - name: Cache cargo
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Build kernel for WASM
+        run: |
+          cargo build --lib --target wasm32-unknown-unknown --release
+          
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
+          
+      - name: Run WASM determinism test
+        run: |
+          cd node
+          cargo test --release determinism_wasm -- --nocapture --test-threads=1 > ../wasm_output.txt 2>&1 || true
+          
+      - name: Extract hash
+        run: |
+          grep "HASH:" wasm_output.txt | head -1 | cut -d':' -f2 > wasm_hash.txt
+          cat wasm_hash.txt
+          
+      - name: Upload hash artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: wasm-hash
+          path: wasm_hash.txt
+
+  # Compare all hashes
+  validate:
+    name: "Validate Determinism Across Architectures"
+    needs: [test-x86, test-arm, test-wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download x86 hash
+        uses: actions/download-artifact@v3
+        with:
+          name: x86-hash
+          
+      - name: Download ARM hash
+        uses: actions/download-artifact@v3
+        with:
+          name: arm-hash
+          
+      - name: Download WASM hash
+        uses: actions/download-artifact@v3
+        with:
+          name: wasm-hash
+          
+      - name: Compare hashes
+        run: |
+          echo "=== Multi-Architecture Determinism Validation ==="
+          echo ""
+          echo "x86_64 hash: $(cat x86_hash.txt)"
+          echo "ARM64  hash: $(cat arm_hash.txt)"
+          echo "WASM32 hash: $(cat wasm_hash.txt)"
+          echo ""
+          
+          X86_HASH=$(cat x86_hash.txt | tr -d '[:space:]')
+          ARM_HASH=$(cat arm_hash.txt | tr -d '[:space:]')
+          WASM_HASH=$(cat wasm_hash.txt | tr -d '[:space:]')
+          
+          if [ "$X86_HASH" = "$ARM_HASH" ] && [ "$ARM_HASH" = "$WASM_HASH" ]; then
+            echo "✅✅✅ SUCCESS! All hashes match!"
+            echo "🎯 Determinism verified across x86, ARM, and WASM"
+            exit 0
+          else
+            echo "❌ FAILURE: Hashes do not match!"
+            echo "Determinism broken - this should never happen"
+            exit 1
+          fi

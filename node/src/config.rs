@@ -30,6 +30,7 @@ pub struct NodeConfig {
 
     // Persistence
     pub snapshot_path: Option<PathBuf>,
+    pub wal_path: Option<PathBuf>,
     pub auto_snapshot_interval_secs: Option<u64>,
     
     // Security
@@ -74,6 +75,9 @@ impl Default for NodeConfig {
         let snapshot_path = std::env::var("VALORI_SNAPSHOT_PATH")
             .ok().map(PathBuf::from);
             
+        let wal_path = std::env::var("VALORI_WAL_PATH")
+            .ok().map(PathBuf::from);
+            
         let auto_snapshot_interval_secs = std::env::var("VALORI_SNAPSHOT_INTERVAL")
             .ok().and_then(|v| v.parse().ok());
             
@@ -88,6 +92,7 @@ impl Default for NodeConfig {
             index_kind,
             quantization_kind,
             snapshot_path,
+            wal_path,
             auto_snapshot_interval_secs,
             auth_token,
         }

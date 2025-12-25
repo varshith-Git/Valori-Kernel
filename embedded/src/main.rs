@@ -21,6 +21,10 @@ mod snapshot;
 mod proof;
 mod transport;
 mod wal;
+mod checkpoint;
+mod wal_stream;
+mod shadow;
+mod recovery;
 
 use cortex_m_rt::entry;
 use embedded_alloc::Heap;
@@ -93,45 +97,101 @@ fn main() -> ! {
             Err(_) => cortex_m::asm::bkpt(),
         }
     } else {
-        // Mode B: WAL Replay
-        // In production: Read from UART buffer.
-        // In simulation: Use a hardcoded buffer representing the same command.
-        // Validates `wal.rs` logic.
+        // Mode B: WAL Streaming & Recovery (Phase 4)
         
-        // Construct WAL Packet:
-        // Version (1) | Opcode (0x00) | ID (0) | Dim (16) | [1.0, 0.0, -1.0, 0.5 ...]
-        // 1 + 1 + 4 + 2 + (16 * 4) = 8 + 64 = 72 bytes.
-        let mut wal_data: [u8; 72] = [0; 72];
-        let mut idx = 0;
-        
-        // Version (1)
-        wal_data[idx] = 0x01; idx += 1;
-
-        // Opcode
-        wal_data[idx] = 0x00; idx += 1;
-        // ID (0)
-        wal_data[idx..idx+4].copy_from_slice(&0u32.to_le_bytes()); idx += 4;
-        // Dim (16)
-        wal_data[idx..idx+2].copy_from_slice(&(D as u16).to_le_bytes()); idx += 2;
-        
-        // Data
-        // 0: 65536
-        wal_data[idx..idx+4].copy_from_slice(&65536i32.to_le_bytes()); idx += 4;
-        // 1: 0
-        wal_data[idx..idx+4].copy_from_slice(&0i32.to_le_bytes()); idx += 4;
-        // 2: -65536
-        wal_data[idx..idx+4].copy_from_slice(&(-65536i32).to_le_bytes()); idx += 4;
-        // 3: 32768
-        wal_data[idx..idx+4].copy_from_slice(&32768i32.to_le_bytes()); idx += 4;
-        
-        // Remaining 12 are 0 (already 0 init)
-        
-        match wal::apply_wal_log(&mut state, &wal_data) {
-            Ok(_) => {},
+        // 1. Recovery
+        // Boot -> Checkpoint -> Snapshot -> State
+        // If first boot, starts clean.
+        let last_seq = match recovery::recover(&mut state) {
+            Ok(seq) => seq,
             Err(_) => {
-                transport::export_error(b"WAL_FAIL");
-                cortex_m::asm::bkpt();
+                cortex_m::asm::bkpt(); // Panic on Recovery Failure
+                0
+            }
+        };
+
+        // 2. Initialize Components
+        let mut stream_track = wal_stream::WalStream::new(last_seq);     
+        let mut shadow = shadow::ShadowKernel::new(&mut state);
+        
+        // 3. Receive Packet (Simulated UART Stream)
+        // Construct a Phase 4 Packet containing the Phase 3 WAL data
+        
+        // Inner WAL Data (Opcode..Data)
+        // Version(1) + 71 bytes = 72 bytes.
+        let mut wal_payload: [u8; 72] = [0; 72];
+        let mut idx = 0;
+        wal_payload[idx] = 0x01; idx+=1; // WAL Version
+        wal_payload[idx] = 0x00; idx+=1; // Opcode (Insert)
+        wal_payload[idx..idx+4].copy_from_slice(&0u32.to_le_bytes()); idx+=4; // ID
+        wal_payload[idx..idx+2].copy_from_slice(&(D as u16).to_le_bytes()); idx+=2; // Dim
+        wal_payload[idx..idx+4].copy_from_slice(&65536i32.to_le_bytes()); idx+=4; // 1.0
+        wal_payload[idx..idx+4].copy_from_slice(&0i32.to_le_bytes()); idx+=4; // 0.0
+        wal_payload[idx..idx+4].copy_from_slice(&(-65536i32).to_le_bytes()); idx+=4; // -1.0
+        wal_payload[idx..idx+4].copy_from_slice(&32768i32.to_le_bytes()); idx+=4; // 0.5
+        // Remaining 0s.
+
+        // Packet Header: [VER:1][FLAGS:1][SEQ:8][LEN:4]
+        // Header Size = 14.
+        let pkt_len: u32 = 72;
+        let mut packet: [u8; 14 + 72] = [0; 14 + 72];
+        let mut p_idx = 0;
+        
+        packet[p_idx] = 1; p_idx+=1; // Packet Version
+        packet[p_idx] = wal_stream::FLAG_EOS; p_idx+=1; // Flags (EOS -> Commit Segment)
+        packet[p_idx..p_idx+8].copy_from_slice(&last_seq.to_le_bytes()); p_idx+=8; // Seq
+        packet[p_idx..p_idx+4].copy_from_slice(&pkt_len.to_le_bytes()); p_idx+=4; // Len
+        packet[p_idx..p_idx+72].copy_from_slice(&wal_payload);
+
+        // 4. Ingest Logic
+        shadow.start_segment();
+        
+        match stream_track.ingest_packet(&packet) {
+            Ok((chunk, is_eos)) => {
+                // Apply to Shadow
+                if shadow.apply_chunk(chunk).is_err() {
+                     transport::export_error(b"SHADOW_FAIL");
+                     cortex_m::asm::bkpt();
+                }
+                
+                if is_eos {
+                    // 5. Atomic Commit Boundary
+                    
+                    // A. Snapshot to Flash (Primary State updated by Shadow)
+                    let snap_len = match snapshot::snapshot_to_flash(shadow.state) {
+                        Ok(l) => l,
+                        Err(_) => { cortex_m::asm::bkpt(); 0 }
+                    };
+                    
+                    // B. Verify written snapshot (Readback)
+                    let snap_data = &flash::FlashStorage::read_snapshot()[0..snap_len];
+                     // In real flow, verify hash matches what we expect from shadow state here?
+                    // Proof generation does hashing.
+                    
+                    // C. Update Checkpoint (ATOMIC)
+                    let mut cp = checkpoint::WalCheckpoint::new();
+                    cp.last_committed_wal_index = stream_track.next_expected_seq;
+                    cp.snapshot_hash = valori_kernel::verify::snapshot_hash(snap_data);
+                    // proof::generate_proof returns Hex strings.
+                    // I need raw bytes for Checkpoint.
+                    // I will expose helpers in proof logic or just hash here.
+                    // Re-hashing is safe deterministic cost.
+                    cp.snapshot_hash = valori_kernel::verify::snapshot_hash(snap_data);
+                    
+                    cp.save(); // Commit.
+                    
+                    // D. Export Proof
+                    let proof = proof::generate_proof(shadow.state, snap_data);
+                    
+                     let mut proof_buf = [0u8; 1024];
+                     let proof_len = serde_json_core::to_slice(&proof, &mut proof_buf).unwrap_or(0);
+                     transport::export_proof(&proof_buf[0..proof_len]);
+                }
             },
+            Err(_) => {
+                transport::export_error(b"PACKET_FAIL");
+                cortex_m::asm::bkpt();
+            }
         }
     }
     

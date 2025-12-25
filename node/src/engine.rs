@@ -15,6 +15,7 @@ use crate::errors::EngineError;
 use crate::structure::index::{VectorIndex, BruteForceIndex};
 use crate::structure::quant::{Quantizer, NoQuantizer, ScalarQuantizer};
 use crate::metadata::MetadataStore;
+use crate::wal_writer::WalWriter;
 
 use std::sync::Arc;
 
@@ -35,6 +36,9 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
 
     // Verification
     pub current_snapshot_hash: Option<[u8; 32]>,
+    
+    // WAL for durability
+    wal_writer: Option<WalWriter>,
     
     // Allocator State
     edge_bitmap: Vec<bool>,
@@ -72,6 +76,22 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             }
         };
 
+        // Initialize WAL if path configured
+        let wal_writer = if let Some(ref path) = cfg.wal_path {
+            match WalWriter::open(path) {
+                Ok(writer) => {
+                    tracing::info!("WAL initialized at {:?}", path);
+                    Some(writer)
+                },
+                Err(e) => {
+                    tracing::error!("Failed to open WAL: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             state: KernelState::new(),
             index_kind: cfg.index_kind,
@@ -81,6 +101,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             metadata: Arc::new(MetadataStore::new()),
             snapshot_path: cfg.snapshot_path.clone(),
             current_snapshot_hash: None,
+            wal_writer,
             edge_bitmap: vec![false; MAX_EDGES],
         }
     }
@@ -123,11 +144,17 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         let id = id_val.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
         
-        // 3. Apply Command to Kernel (Primary Store)
+        // 3. Write to WAL FIRST (durability guarantee)
         let cmd = Command::InsertRecord { id, vector };
+        if let Some(ref mut wal) = self.wal_writer {
+            wal.append_command(&cmd)
+                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+        }
+        
+        // 4. Apply Command to Kernel (Primary Store)
         self.state.apply(&cmd)?;
         
-        // 4. Update Host Index
+        // 5. Update Host Index
         // CRITICAL: Round-trip through Fxp to match Restore behavior!
         // We must insert the EXACT same float values that would be recovered from snapshot.
         let mut consistent_values = Vec::with_capacity(D);
@@ -342,6 +369,66 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         
         // Attempt fast restore
         self.restore_from_components(&k_data, &m_data, Some(&i_data))
+    }
+
+    /// Restore from snapshot then replay WAL for crash recovery
+    /// 
+    /// This is the primary recovery method: snapshot + WAL replay = deterministic state
+    pub fn restore_with_wal_replay(&mut self, snapshot_data: &[u8], wal_path: &std::path::Path) -> Result<usize, EngineError> {
+        // 1. Restore from snapshot
+        self.restore(snapshot_data)?;
+        
+        // 2. Check if WAL exists and has commands
+        if !crate::recovery::has_wal(wal_path) {
+            tracing::info!("No WAL to replay");
+            return Ok(0);
+        }
+        
+        // 3. Replay WAL commands
+        tracing::info!("Replaying WAL from {:?}", wal_path);
+        let commands_applied = crate::recovery::replay_wal(
+            &mut self.state,
+            wal_path
+        )?;
+        
+        tracing::info!("Replayed {} commands from WAL", commands_applied);
+        
+        // 4. Rebuild index from updated state (TODO: optimize by applying commands to index directly)
+        if commands_applied > 0 {
+            tracing::info!("Rebuilding index after WAL replay");
+            self.rebuild_index();
+        }
+        
+        Ok(commands_applied)
+    }
+    
+    /// Rebuild index from kernel state
+    fn rebuild_index(&mut self) {
+        let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
+              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+              IndexKind::Hnsw => {
+                  use crate::structure::hnsw::HnswIndex;
+                  Box::new(HnswIndex::new()) 
+              },
+              IndexKind::Ivf => {
+                  use crate::structure::ivf::{IvfIndex, IvfConfig};
+                  Box::new(IvfIndex::new(IvfConfig::default(), D))
+              }
+         };
+         
+         for i in 0..MAX_RECORDS {
+              let rid = RecordId(i as u32);
+              if let Some(record) = self.state.get_record(rid) {
+                  let mut vals: Vec<f32> = Vec::with_capacity(D);
+                  for fxp in record.vector.data.iter() {
+                      let f = fxp.0 as f32 / SCALE;
+                      vals.push(f);
+                  }
+                  index.insert(rid.0, &vals);
+              }
+         }
+         
+         self.index = index;
     }
 
     fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>) -> Result<(), EngineError> {

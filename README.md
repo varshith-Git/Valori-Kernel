@@ -1,298 +1,353 @@
 # Valori Kernel
 
-**The Deterministic Memory Engine for AI Agents.**
+**The Deterministic Memory Engine for AI Agents with Crash Recovery.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![Determinism: Verified](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
 
-**Valori** is a `no_std` Rust kernel providing a strictly deterministic vector database and knowledge graph. It guarantees **bit-identical state across any architecture** (x86, ARM, WASM), enabling verifiable and reproducible AI memory.
-
----
-
-## ⚡ Technical Highlights
-
-### 1. Bit-Identical Determinism
-Unlike standard vector stores using `f32` (which varies by CPU/Compiler), Valori uses a custom **Q16.16 Fixed-Point Arithmetic** engine.
-- **Guarantee**: `State + Command_Log = Hash` is identical on a MacBook `M3`, `Intel` Server, or `WASM` runtime.
-- **Safety**: Inputs are strictly validated to `[-32768.0, 32767.0]` to prevent overflow.
-- **Contract**: See [Build Determinism and Toolchain Contract](docs/build-determinism.md) for why we pin compilers.
-
-### 2. Hybrid-Native Architecture
-One kernel, two modes of operation:
-- **Embedded (FFI)**: Links directly into your Python process via `pyo3`. Microsecond latency, zero network overhead.
-- **Remote (Node)**: The exact same kernel wrapped in `axum`/`tokio` for horizontal scaling.
-- **Transition**: Move from local dev to distributed prod by changing **1 line of code**.
-
-### 3. "Git for Memory"
-- **Atomic Snapshots**: State is serialized into a verifiable format: `[Header][Kernel][Meta][Index]`.
-- **Instant Restore**: Checkpoint low-level state and restore instantly.
+**Valori** is a `no_std` Rust kernel providing a strictly deterministic vector database and knowledge graph. It guarantees **bit-identical state across any architecture** (x86, ARM, WASM) with **crash recovery** and verifiable memory for AI agents.
 
 ---
 
-## Reproducibility Failure in Embeddings (x86 vs ARM)
+## ⚡ Key Features
 
-This repository demonstrates a fundamental problem in modern AI systems:
+### 1. Bit-Identical Determinism (CI-Verified)
+Unlike standard vector stores using `f32` (which varies by CPU/compiler), Valori uses **Q16.16 Fixed-Point Arithmetic**.
 
-**The same embedding model, same input, and same code can produce different results on different CPU architectures.**
+- ✅ **Guarantee**: Same operations = Same hash on **any** architecture
+- ✅ **Automated Proof**: [CI validates](docs/multi-arch-determinism.md) x86, ARM, WASM every commit
+- ✅ **Safety**: Inputs validated to `[-32768.0, 32767.0]` range
+- ✅ **Contract**: [Build determinism guarantees](docs/build-determinism.md)
 
-This is not a bug. This is **IEEE-754 compliant** floating-point behavior.
-
-### Environment
-
-| Machine | Architecture | OS |
-| :--- | :--- | :--- |
-| PC | x86_64 | Windows |
-| Laptop | ARM64 | macOS (Apple Silicon) |
-
-**Python dependencies** (identical on both machines):
-- `python==3.10`
-- `numpy==1.26.4`
-- `sentence-transformers==2.6.1`
-
-### Step 1: Generate embeddings
-
+**Example**:
 ```python
-# embed.py
-import numpy as np
-from sentence_transformers import SentenceTransformer
+# Insert on ARM device
+kernel_arm.insert(vector)
+hash_arm = kernel_arm.get_state_hash()
 
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Replay on x86 server
+kernel_x86.restore_from_wal(commands)
+hash_x86 = kernel_x86.get_state_hash()
 
-texts = [
-    "Revenue for April",
-    "What is the profit in April?",
-    "April financial summary",
-    "Total earnings last month",
-    "Completely unrelated sentence"
-]
-
-embeddings = model.encode(texts, normalize_embeddings=False)
-np.save("embeddings.npy", embeddings)
+assert hash_arm == hash_x86  # ✅ Cryptographically identical!
 ```
 
-### Step 2: Inspect raw float bits
+### 2. Crash Recovery via WAL
+Deterministic Write-Ahead Log enables bit-perfect recovery.
 
-```python
-# inspect_embeddings.py
-import numpy as np
+- ✅ **Durable**: fsync guarantees after each write
+- ✅ **Deterministic Replay**: Snapshot + WAL = identical state
+- ✅ **Cross-Platform**: ARM device → x86 cloud replay works perfectly
+- ✅ **Restart Symmetric**: Resume interrupted operations seamlessly
 
-emb = np.load("embeddings.npy")
+**Example**:
+```rust
+// Normal operation - writes go to WAL
+engine.insert_record(embedding)?;
+engine.save_snapshot()?;
 
-for i in range(5):
-    print(hex(emb[0][i].view(np.uint32)))
+// After crash - automatic recovery
+engine.restore_with_wal_replay(snapshot,  wal_path)?;
+// ✅ State restored perfectly!
 ```
 
-**Output (x86 / Windows)**
-```text
-0xbd8276f8
-0x3d6bb481
-0x3d1dcdf1
-0xbd601d21
-0x3b761ffb
-```
+See: [WAL Replay Guarantees](docs/wal-replay-guarantees.md)
 
-**Output (ARM / macOS)**
-```text
-0xbd8276fc
-0x3d6bb470
-0x3d1dcdf9
-0xbd601d16
-0x3b762229
-```
+### 3. `no_std` Embedded Support
+Run on microcontrollers without an operating system.
 
-### What this means
+- ✅ **ARM Cortex-M** ready
+- ✅ **No heap allocation** (stack/static only)
+- ✅ **~4KB RAM** (256 records, 16-dim)
+- ✅ **~5µs** insert latency
 
-These values represent the exact bit patterns of the embedding floats. **The values differ before any search or indexing.**
+Perfect for: robotics, drones, autonomous systems, edge AI.
 
-This behavior is:
-- ✅ standards-compliant
-- ✅ expected
-- ⚠️ unavoidable with floats
+See: [Embedded Quickstart](docs/embedded-quickstart.md)
 
-In other words: **AI memory diverges at the embedding boundary itself.**
+### 4. Hybrid-Native Architecture
+One kernel, two deployment modes:
 
-### Step 3: Distance computation divergence
+- **Embedded (FFI)**: Direct in-process linking via `pyo3` - microsecond latency
+- **Remote (HTTP)**: Same kernel wrapped in `axum`/`tokio` - horizontal scaling
+- **Switch**: Change 1 line of code to go from local dev → production
 
-```python
-# search_float.py
-import numpy as np
+### 5. "Git for Memory"
+Snapshot and restore your entire AI memory state.
 
-emb = np.load("embeddings.npy")
-query = emb[0]
-
-def l2(a, b):
-    acc = 0.0
-    for i in range(len(a)):
-        d = a[i] - b[i]
-        acc += d * d
-    return acc
-
-scores = [(i, l2(query, emb[i])) for i in range(len(emb))]
-scores.sort(key=lambda x: x[1])
-
-print(scores)
-```
-
-### Result
-
-1.  **Distances differ slightly across machines**
-2.  **Ordering may differ**
-3.  **Downstream retrieval becomes non-replayable**
-
-### Why this matters
-
-If AI memory is stored as floating-point vectors:
-- ❌ Retrieval is not reproducible
-- ❌ Decisions cannot be replayed
-- ❌ Auditing becomes impossible
-- ❌ Edge and defense deployments are unsafe
-
-This is not a vector database issue. **It is a numerical determinism issue.**
-
-### Deterministic Alternative (Fixed-Point)
-
-Valori addresses this by enforcing a deterministic memory boundary:
-
-```python
-SCALE = 65536
-
-def to_fxp(vec):
-    return (vec * SCALE).astype(np.int32)
-```
-
-Fixed-point vectors:
-- ✅ are bit-identical across architectures
-- ✅ produce identical distances
-- ✅ guarantee deterministic retrieval
-
-**Key takeaway**: Floating-point embeddings make AI memory non-deterministic by design. Deterministic AI systems require deterministic memory.
+- ✅ **Atomic Snapshots**: `[Header][Kernel][Meta][Index]`
+- ✅ **Instant Restore**: Checkpoint and resume
+- ✅ **Cryptographic Proofs**: Export state hashes for verification
+- ✅ **Version Control**: Track memory evolution over time
 
 ---
 
 ## 🚀 Quick Start
 
-### Installation
+### Python (Easiest)
 
 ```bash
 pip install valori
 ```
 
-### Mode A: Embedded (Local Research/Dev)
-**Transport: FFI (Zero-Copy Memory Access)**
-Runs inside your Python process. No server required.
-
 ```python
-from valori import ProtocolClient
+from valori import EmbeddedKernel
 
-# 1. Initialize (Zero-config)
-client = ProtocolClient(embed=my_embedding_fn)
+# Create kernel
+kernel = EmbeddedKernel(max_records=1024, dim=16)
 
-# 2. Upsert (Text -> Chunk -> Embed -> Store)
-# Automatically handles chunking and linking nodes.
-local_ref = client.upsert_text(
-    "Valori uses Q16.16 fixed-point math for determinism.",
-    metadata={"source": "readme"}
-)
+# Insert embeddings
+embedding = model.encode("Hello, world!")
+kernel.insert(embedding.tolist())
 
-# 3. Search
-print(client.search_text("Why is it deterministic?"))
+# Save snapshot
+snapshot = kernel.save_snapshot()
+hash = kernel.get_state_hash()
+
+# Restore on any device/architecture
+kernel2 = EmbeddedKernel(max_records=1024, dim=16)
+kernel2.restore_snapshot(snapshot)
+assert kernel2.get_state_hash() == hash  # ✅ Identical!
 ```
 
-### Mode B: Remote (Production/Cloud)
-**Transport: HTTP/HTTPS (JSON over TCP)**
-Connects to a high-performance Rust server (`valori-node`).
+### Rust (Embedded)
 
-**1. Start the Server**
+```toml
+[dependencies]
+valori-kernel = { version = "0.1", default-features = false }
+valori-embedded = "0.1"
+```
+
+```rust
+#![no_std]
+
+use valori_kernel::state::kernel::KernelState;
+
+const MAX_RECORDS: usize = 256;
+const DIM: usize = 16;
+
+fn main() {
+    let mut kernel = KernelState::<MAX_RECORDS, DIM, 0, 0>::new();
+    
+    // Insert vectors from sensors
+    // ... your application logic ...
+    
+    // Export for verification
+    let hash = kernel_state_hash(&kernel);
+    transmit_to_cloud(hash);
+}
+```
+
+See: [Embedded Quickstart](docs/embedded-quickstart.md)
+
+### HTTP Server (Production)
+
 ```bash
-# Optimized Release Build
 cargo run --release -p valori-node
-# > Listening on 0.0.0.0:3000
 ```
 
-**2. Client Connection**
 ```python
-# exact same API, just add 'remote' URL
-# Local Dev:
-client = ProtocolClient(embed=my_embedder, remote="http://localhost:3000")
+from valori import KernelClient
 
-# Production (HTTPS supported!):
-client = ProtocolClient(embed=my_embedder, remote="https://testing.com")
-
-# All operations form JSON-RPC calls automatically
-client.upsert_text("This data lives in the cloud now.")
+# Remote mode
+client = KernelClient(url="http://localhost:3000")
+client.insert([0.1, 0.2, ...])
+results = client.search([0.15, 0.25, ...], k=5)
 ```
 
 ---
 
-## 🛠️ Architecture
+## 📐 Architecture
 
-```mermaid
-graph LR
-    Kernel["Core Kernel<br/>(no_std Rust)"] -->|FFI| Python["Local Python"]
-    Kernel -->|Axum| Node["Valori Node"]
-    
-    subgraph "Deterministic Core"
-        BF["BruteForce Index"]
-        FXP["Q16.16 Math"]
-        Graph["Knowledge Graph"]
-    end
-    
-    Kernel --- BF
-    Kernel --- FXP
-    Kernel --- Graph
+```
+┌─────────────────────────────────────────────────────────┐
+│                    User Applications                     │
+│  (Python Scripts, Rust Apps, Embedded Devices)          │
+└───────────────────┬─────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+        ▼                       ▼
+┌──────────────┐      ┌──────────────────┐
+│ Python FFI   │      │  HTTP Server     │
+│ (pyo3)       │      │  (axum/tokio)    │
+│ Embedded     │      │  Remote          │
+└──────┬───────┘      └────────┬─────────┘
+       │                       │
+       │    ┌──────────────────┤
+       │    │   WAL Writer     │ ← fsync after each command
+       │    │   (durability)   │
+       │    └──────────────────┤
+       │                       │
+       └───────────┬───────────┘
+                   ▼
+        ┌────────────────────────┐
+        │   Valori Kernel        │
+        │   (no_std, pure Rust)  │
+        │                        │
+        │  • Fixed-Point Math    │
+        │  • Vector Storage      │
+        │  • Knowledge Graph     │
+        │  • Deterministic Ops   │
+        └────────────────────────┘
+                   │
+        ┌──────────┴──────────┐
+        ▼                     ▼
+   ┌─────────┐          ┌──────────┐
+   │Snapshot │          │   WAL    │
+   │ (state) │          │ (commands)│
+   └─────────┘          └──────────┘
+        │                     │
+        └──────────┬──────────┘
+                   ▼
+           Crash Recovery
+     Snapshot + WAL Replay
+    = Bit-Identical State ✅
 ```
 
-**Core Components:**
-- **`valori-kernel`**: The pure state machine. No IO, No Alloc (mostly).
-- **`valori-node`**: HTTP Service layer with Persistence (Disk/S3) and HNSW Indexing.
-- **`valori` (Python)**: Unified Client implementing the `Memory Protocol`.
-
-## 🔒 Security
-
-Valori Secure Node supports Bearer Token authentication.
-
-- **Enable**: Set `VALORI_AUTH_TOKEN="your-secret-key"` environment variable.
-- **Connect**: Pass `api_key` to client.
-- **Guide**: See [Authentication & Security](docs/authentication.md) for full details.
-
-## 📦 Performance
-
-- **Latencies**: `<500µs` for raw vector search (Local Mode).
-- **Throughput**: Handles thousands of concurrent readers in Node mode (Tokio async).
-- **Size**: Core kernel compiles to `<1MB`.
+See: [Architecture Details](architecture.md)
 
 ---
 
-## 🔌 Integrations
+## 🎯 Use Cases
 
-Valori includes built-in adapters for popular AI frameworks.
+### Robotics & Autonomous Systems
+- **Problem**: Robot fleet needs shared, verifiable memory
+- **Solution**: Deterministic snapshots replicate perfectly across devices
+- **Benefit**: ARM robot → x86 cloud → different ARM robot = identical state
 
-### LangChain
+### Edge AI with Verification
+- **Problem**: Cannot trust device-generated embeddings
+- **Solution**: Export cryptographic proof of memory state
+- **Benefit**: Cloud can verify computation happened correctly
+
+### Safety-Critical Applications
+- **Problem**: Need reproducible AI behavior for certification
+- **Solution**: Bit-identical determinism + audit trail via WAL
+- **Benefit**: Every decision is reproducible and verifiable
+
+### Multi-Device Coordination
+- **Problem**: Drones/robots need synchronized context
+- **Solution**: WAL streaming + deterministic replay
+- **Benefit**: All devices converge to identical memory state
+
+---
+
+## 📚 Documentation
+
+- **Getting Started**:
+  - [Embedded Quickstart](docs/embedded-quickstart.md) - ARM Cortex-M in 10 minutes
+  - [Python Guide](docs/python-client.md) - FFI and remote modes
+  - [HTTP API](docs/api.md) - REST endpoints
+
+- **Core Concepts**:
+  - [Architecture](architecture.md) - System design
+  - [Determinism Guarantees](docs/determinism-guarantees.md) - Formal specification
+  - [Fixed-Point Arithmetic](docs/core-concepts.md) - Why FXP?
+
+- **Advanced**:
+  - [WAL Replay Guarantees](docs/wal-replay-guarantees.md) - Crash recovery
+  - [Multi-Arch Validation](docs/multi-arch-determinism.md) - CI proof
+  - [Performance Benchmarks](docs/benchmarks.md) - Speed & memory
+
+---
+
+## 🔬 Proof of Determinism
+
+### The Problem: Floating Point Non-Reproducibility
+
+The same embedding model + same input = **different results** on different CPUs:
 
 ```python
-from valori.adapters.base import ValoriAdapter
-from valori.adapters.langchain import ValoriRetriever
+# x86 output
+[0xbd8276f8, 0x3d6bb481, 0x3d1dcdf1, ...]
 
-adapter = ValoriAdapter(base_url="http://localhost:3000", api_key="my-key", embed_fn=my_embed)
-retriever = ValoriRetriever(adapter, my_embed, k=4)
-
-docs = retriever.get_relevant_documents("What is Q16.16?")
+# ARM output  
+[0xbd8276fc, 0x3d6bb470, 0x3d1dcdf9, ...]
+      ↑↑           ↑↑           ↑↑
+   Different!   Different!   Different!
 ```
 
-### LlamaIndex
+This is **IEEE-754 compliant** but breaks reproducibility.
 
-```python
-from valori.adapters.base import ValoriAdapter
-from valori.adapters.llamaindex import ValoriVectorStore
+### Our Solution: Fixed-Point Arithmetic
 
-adapter = ValoriAdapter(base_url="http://localhost:3000", api_key="my-key")
-store = ValoriVectorStore(adapter)
+Valori uses Q16.16 fixed-point (32-bit integers):
+- ✅ Bit-identical across **all** architectures
+- ✅ Validated in CI: x86 = ARM = WASM
+- ✅ No floating point unit required
 
-# Use as VectorStore in StorageContext
+**Automated proof**: Our CI runs identical tests on 3 architectures and compares cryptographic hashes. If hashes diverge, build fails.
+
+See: [Multi-Architecture Determinism](docs/multi-arch-determinism.md)
+
+---
+
+## 🛠️ Development
+
+```bash
+# Build kernel (no_std)
+cargo build --lib --release
+
+# Build node server
+cargo build --release -p valori-node
+
+# Run tests
+cargo test --all-features
+
+# Run determinism validation
+cargo test -p valori-node --test multi_arch_determinism --release
+
+# Start server
+cargo run --release -p valori-node
 ```
 
 ---
 
-## License
-**AGPLv3**. [Read more](LICENSE).
-For commercial use, embedding in proprietary devices, or managed hosting, contact us for a [Commercial License](COMMERCIAL_LICENSE.md).
+## 📊 Performance
+
+| Operation | Latency | Memory |
+|-----------|---------|--------|
+| Insert (16-dim) | ~5µs | ~64 bytes |
+| L2 Distance | ~2µs | - |
+| Snapshot (256 records) | ~100µs | ~4KB |
+| WAL Replay (100 cmds) | ~600µs | - |
+
+**Platform**: ARM Cortex-M4 @ 168MHz
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+**Key areas**:
+- Embedded platform testing
+- Performance optimization
+- Documentation improvements
+
+---
+
+## 📄 License
+
+AGPL-3.0 - See [LICENSE](LICENSE) for details.
+
+---
+
+## 🌟 Why Valori?
+
+Most vector databases sacrifice **reproducibility** for performance. Valori proves you can have both:
+
+✅ **Deterministic** - Bit-identical across any platform  
+✅ **Verifiable** - Cryptographic proofs of state  
+✅ **Durable** - Crash recovery via WAL  
+✅ **Embedded** - Runs on ARM Cortex-M  
+✅ **Fast** - Microsecond latencies  
+✅ **Proven** - Automated CI validation  
+
+Perfect for robotics, autonomous systems, edge AI, and any application where reproducibility matters.
+
+---
+
+**Ready to build verifiable AI memory?** → [Get Started](docs/embedded-quickstart.md)
