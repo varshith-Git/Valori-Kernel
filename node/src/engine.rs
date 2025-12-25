@@ -265,7 +265,6 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     pub fn create_node_for_record(&mut self, record_id_val: Option<u32>, kind_val: u8) -> Result<u32, EngineError> {
         let kind = NodeKind::from_u8(kind_val).ok_or(EngineError::InvalidInput("Invalid NodeKind".to_string()))?;
-        
         let record_id = record_id_val.map(RecordId);
 
         // Find free Node ID
@@ -279,21 +278,36 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         }
         let node_id = id_val.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
 
-        let cmd = Command::CreateNode {
-            node_id,
-            kind,
-            record: record_id,
-        };
-        
-        // WAL
-        if let Some(ref mut wal) = self.wal_writer {
-            wal.append_command(&cmd)
-                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+        // Phase 23: Event-sourced path (preferred)
+        if let Some(ref mut committer) = self.event_committer {
+            let event = KernelEvent::CreateNode { node_id, kind, record: record_id };
+            
+            match committer.commit_event(event) {
+                Ok(CommitResult::Committed) => {
+                    tracing::trace!("Node {} created via event log", node_id.0);
+                    Ok(node_id.0)
+                }
+                Ok(CommitResult::RolledBack) => {
+                    Err(EngineError::InvalidInput(
+                        "Node creation failed in shadow execution".to_string()
+                    ))
+                }
+                Err(e) => {
+                    Err(EngineError::InvalidInput(format!("Event commit failed: {:?}", e)))
+                }
+            }
+        } else {
+            // Fallback: Legacy WAL path
+            let cmd = Command::CreateNode { node_id, kind, record: record_id };
+            
+            if let Some(ref mut wal) = self.wal_writer {
+                wal.append_command(&cmd)
+                    .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+            }
+            
+            self.state.apply(&cmd)?;
+            Ok(node_id.0)
         }
-        
-        self.state.apply(&cmd)?;
-
-        Ok(node_id.0)
     }
 
     pub fn create_edge(&mut self, from_val: u32, to_val: u32, kind_val: u8) -> Result<u32, EngineError> {
@@ -301,38 +315,51 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let from = NodeId(from_val);
         let to = NodeId(to_val);
 
-        // Optimized allocation via bitmap Scan
+        // Find free Edge ID via bitmap scan
         let mut id_val = None;
-        // Simple O(N) scan of bitset - much faster than O(N*Deg) graph traversal
-        // and NO allocation.
         for i in 0..MAX_EDGES {
             if !self.edge_bitmap[i] {
                 id_val = Some(EdgeId(i as u32));
                 break;
             }
         }
-        
         let edge_id = id_val.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
 
-        let cmd = Command::CreateEdge {
-            edge_id,
-            kind,
-            from,
-            to,
-        };
-        
-        // WAL
-        if let Some(ref mut wal) = self.wal_writer {
-            wal.append_command(&cmd)
-                .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+        // Phase 23: Event-sourced path (preferred)
+        if let Some(ref mut committer) = self.event_committer {
+            let event = KernelEvent::CreateEdge { edge_id, kind, from, to };
+            
+            match committer.commit_event(event) {
+                Ok(CommitResult::Committed) => {
+                    tracing::trace!("Edge {} created via event log", edge_id.0);
+                    // Update bitmap on success
+                    self.edge_bitmap[edge_id.0 as usize] = true;
+                    Ok(edge_id.0)
+                }
+                Ok(CommitResult::RolledBack) => {
+                    Err(EngineError::InvalidInput(
+                        "Edge creation failed in shadow execution".to_string()
+                    ))
+                }
+                Err(e) => {
+                    Err(EngineError::InvalidInput(format!("Event commit failed: {:?}", e)))
+                }
+            }
+        } else {
+            // Fallback: Legacy WAL path
+            let cmd = Command::CreateEdge { edge_id, kind, from, to };
+            
+            if let Some(ref mut wal) = self.wal_writer {
+                wal.append_command(&cmd)
+                    .map_err(|e| EngineError::InvalidInput(format!("WAL write failed: {}", e)))?;
+            }
+            
+            self.state.apply(&cmd).map_err(EngineError::Kernel)?;
+            
+            // Update bitmap on success
+            self.edge_bitmap[edge_id.0 as usize] = true;
+            Ok(edge_id.0)
         }
-        
-        self.state.apply(&cmd).map_err(EngineError::Kernel)?;
-
-        // Update Bitmap on Success
-        self.edge_bitmap[edge_id.0 as usize] = true;
-
-        Ok(edge_id.0)
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, i64)>, EngineError> {
