@@ -17,6 +17,9 @@ use crate::structure::quant::{Quantizer, NoQuantizer, ScalarQuantizer};
 use crate::metadata::MetadataStore;
 use crate::wal_writer::WalWriter;
 
+// Event-sourced persistence (Phase 23)
+use crate::events::{EventCommitter, EventJournal, EventLogWriter, CommitResult};
+
 use std::sync::Arc;
 
 const SCALE: f32 = 65536.0;
@@ -38,9 +41,13 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     // Verification
     pub current_snapshot_hash: Option<[u8; 32]>,
     
-    // WAL for durability
+    // WAL for durability (legacy - will be replaced by event_committer)
     wal_writer: Option<WalWriter<D>>,
     wal_accumulator: blake3::Hasher,
+    
+    // Event-sourced persistence (Phase 23 - NEW)
+    // Optional during migration, will become mandatory after WAL deprecation
+    event_committer: Option<EventCommitter<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>>,
     
     // Allocator State
     edge_bitmap: Vec<bool>,
@@ -122,6 +129,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             current_snapshot_hash: None,
             wal_writer,
             wal_accumulator,
+            event_committer: None,  // Phase 23: Will be initialized properly later
             edge_bitmap: vec![false; MAX_EDGES],
         }
     }
