@@ -51,50 +51,98 @@ fn read_i32(buf: &[u8], offset: &mut usize) -> Result<i32, ()> {
     Ok(i32::from_le_bytes(bytes))
 }
 
-pub fn apply_wal_log<const M: usize, const D: usize, const N: usize, const E: usize>(
+pub enum ApplyResult {
+    Applied(usize),
+    Incomplete,
+    Error,
+}
+
+/// Try to apply a single command from the buffer.
+/// Returns byte count consumed, or status.
+pub fn try_apply_command<const M: usize, const D: usize, const N: usize, const E: usize>(
     state: &mut KernelState<M, D, N, E>,
-    wal_bytes: &[u8]
-) -> Result<(), ()> {
+    buf: &[u8]
+) -> ApplyResult {
     let mut offset = 0;
 
-    // 1. Check WAL Version
-    // First byte reserved for format version.
-    let version = read_u8(wal_bytes, &mut offset)?;
-    if version != WAL_VERSION {
-        return Err(()); // Unsupported version
-    }
+    // 1. Check WAL Version (Only if at start of buffer? No, Version is Stream Header?
+    // Wait, users previous prompt "Each packet includes WAL_VERSION... chunk data".
+    // Is the "WAL Stream" versioned, or the "Command Log" versioned?
+    // In Phase 3, I put `WAL_VERSION` byte at start of `apply_wal_log`.
+    // In Phase 4, the *Stream* has a version in Packet Header.
+    // Does the *Payload* (the concatenated command log) have a version?
+    // Phase 3 `main.rs` constructed payload with `0x01` at index 0.
+    // If we buffer chunks, the first byte of the *assembled stream* is Sequence 0?
+    // Or is every command versioned?
+    // Phase 3 `wal.rs` checks version *once* at start of `apply_wal_log`.
+    // If we are streaming, we only see the start once (at the beginning of time/segment).
+    // The `ShadowKernel` should handle the "Stream Header" or "Log Header" byte.
+    // BUT `try_apply_command` implies applying *commands*.
+    // The Version Byte is NOT a command.
+    // I should treat the Version Byte as a "Header" that must be consumed 
+    // before processing commands.
+    // I will add `consume_header` or just handle it in Shadow logic?
+    // Simpler: `try_apply_command` handles Opcode.
+    // The `Version` check in `wal.rs` was for the whole buffer.
+    // I should refactor `wal.rs` to NOT expect Version byte in `try_apply_command`?
+    // Or `WAL_OP_VERSION`?
+    // Current `wal.rs` expects Byte 0 = Version.
+    // If I split this, `try_apply_command` should probably just look for Opcodes.
+    // And `ShadowKernel` handles the initial Version Byte consumption.
+    // "Reserve byte 0 = WAL format version".
+    // I will stick to "First byte of entire log is version".
+    // ShadowKernel needs to know if it has processed header.
     
-    // Process until buffer exhausted
-    while offset < wal_bytes.len() {
-        let opcode = read_u8(wal_bytes, &mut offset)?;
-        
-        match opcode {
-            WAL_OP_INSERT => {
-                // Format: RecordID(u32) | Dim(u16) | Values...
-                let rid = read_u32(wal_bytes, &mut offset)?;
-                let dim = read_u16(wal_bytes, &mut offset)?;
-                
-                if dim as usize != D {
-                    return Err(()); // Dimension mismatch
-                }
-                
-                let mut vector = FxpVector::<D>::new_zeros();
-                for i in 0..D {
-                    let val = read_i32(wal_bytes, &mut offset)?;
-                    vector.data[i] = FxpScalar(val);
-                }
-                
-                // Apply to Kernel
-                let id = RecordId(rid);
-                let cmd = Command::InsertRecord { id, vector };
-                
-                state.apply(&cmd).map_err(|_| ())?;
+    // Command Parsing
+    if buf.is_empty() { return ApplyResult::Incomplete; }
+    
+    // Peek Opcode
+    let opcode = buf[0];
+    offset += 1; // Consume opcode check placeholder (will re-read or just assume)
+    
+    match opcode {
+        WAL_OP_INSERT => {
+            // Opcode(1) + ID(4) + Dim(2)
+            if buf.len() < 7 { return ApplyResult::Incomplete; }
+            
+            // Read headers to get dim (to know size)
+            // But I don't want to advance `offset` destructively if incomplete?
+            // `read_u*` checks bounds.
+            
+            // Re-read carefully
+            let mut probe = 0;
+            let _op = read_u8(buf, &mut probe).unwrap(); // 1
+            let rid_res = read_u32(buf, &mut probe); // +4 = 5
+            let dim_res = read_u16(buf, &mut probe); // +2 = 7
+            
+            if rid_res.is_err() || dim_res.is_err() { return ApplyResult::Incomplete; }
+            
+            let _rid = rid_res.unwrap();
+            let dim = dim_res.unwrap();
+            
+            if dim as usize != D { return ApplyResult::Error; }
+            
+            let payload_size = (D * 4) as usize;
+            if buf.len() < 7 + payload_size { return ApplyResult::Incomplete; }
+            
+            // Full command available. Execute.
+            offset = 0;
+            let _ = read_u8(buf, &mut offset); // Op
+            let rid = read_u32(buf, &mut offset).unwrap();
+            let _ = read_u16(buf, &mut offset).unwrap(); // Dim
+            
+            let mut vector = FxpVector::<D>::new_zeros();
+            for i in 0..D {
+                vector.data[i] = FxpScalar(read_i32(buf, &mut offset).unwrap());
             }
-            _ => {
-                return Err(()); // Invalid Opcode
-            }
+            
+            // Apply
+             let id = RecordId(rid);
+             let cmd = Command::InsertRecord { id, vector };
+             if state.apply(&cmd).is_err() { return ApplyResult::Error; }
+             
+             return ApplyResult::Applied(offset);
         }
+        _ => return ApplyResult::Error,
     }
-    
-    Ok(())
 }
