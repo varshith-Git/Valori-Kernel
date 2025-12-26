@@ -268,6 +268,105 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         }
     }
 
+    /// Insert a batch of records in a single atomic transaction.
+    /// Returns the list of assigned IDs.
+    pub fn insert_batch(&mut self, batch_values: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
+        if batch_values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Validate all inputs first
+        for values in batch_values {
+            if values.len() != D {
+                return Err(EngineError::InvalidInput(format!("Expected {} dimensions, got {}", D, values.len())));
+            }
+            for &v in values {
+                if v > MAX_SAFE_F || v < MIN_SAFE_F {
+                    return Err(EngineError::InvalidInput(format!(
+                        "Embedding value {} out of allowed range [{:.1}, {:.1}]",
+                        v, MIN_SAFE_F, MAX_SAFE_F
+                    )));
+                }
+            }
+        }
+
+        // Prepare events
+        // Phase 23: Event-sourced path ONLY (Batching not supported in legacy WAL)
+        if let Some(ref mut committer) = self.event_committer {
+            let mut events = Vec::with_capacity(batch_values.len());
+            let mut assigned_ids = Vec::with_capacity(batch_values.len());
+            
+            // Track used IDs to avoid collisions within the batch
+            let mut temp_used_ids = std::collections::HashSet::new();
+
+            // ID Generation Logic (Provisioning)
+            let mut next_candidate = 0;
+
+            for values in batch_values {
+                // Find next free slot
+                let mut found_id = None;
+                for i in next_candidate..MAX_RECORDS {
+                    let rid = RecordId(i as u32);
+                    // Check if occupied in Kernel OR already assigned in this batch
+                    if self.state.get_record(rid).is_none() && !temp_used_ids.contains(&i) {
+                        found_id = Some(rid);
+                        next_candidate = i + 1; // Optimization: start next search here
+                        break;
+                    }
+                }
+                
+                let id = found_id.ok_or(valori_kernel::error::KernelError::CapacityExceeded)?;
+                temp_used_ids.insert(id.0 as usize);
+                assigned_ids.push(id.0);
+
+                // Create FxpVector
+                let mut vector = FxpVector::<D>::new_zeros();
+                for (i, v) in values.iter().enumerate() {
+                    let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+                    vector.data[i] = FxpScalar(fixed);
+                }
+
+                events.push(KernelEvent::InsertRecord { id, vector });
+            }
+
+            let start = std::time::Instant::now();
+            
+            // Atomic Batch Commit
+            match committer.commit_batch(events.clone()) {
+                Ok(CommitResult::Committed) => {
+                     tracing::info!("Batch committed: {} records", events.len());
+                     metrics::counter!("valori_events_committed_total", events.len() as u64);
+                     metrics::histogram!("valori_batch_commit_duration_seconds", start.elapsed().as_secs_f64());
+
+                     // Sync State & Index
+                     for event in &events {
+                         self.state.apply_event(event).map_err(EngineError::Kernel)?;
+                         
+                         if let KernelEvent::InsertRecord { id, vector } = event {
+                             let mut consistent_values = Vec::with_capacity(D);
+                             for i in 0..D {
+                                 let fxp = vector.data[i];
+                                 let f = fxp.0 as f32 / SCALE;
+                                 consistent_values.push(f);
+                             }
+                             self.index.insert(id.0, &consistent_values);
+                         }
+                     }
+                     
+                     Ok(assigned_ids)
+                },
+                Ok(CommitResult::RolledBack) => {
+                    Err(EngineError::InvalidInput("Batch validation failed (Rolled Back)".to_string()))
+                },
+                Err(e) => {
+                    Err(EngineError::InvalidInput(format!("Batch commit failed: {:?}", e)))
+                }
+            }
+        } else {
+            Err(EngineError::InvalidInput("Batch insert requires Event Log (legacy WAL not supported)".to_string()))
+        }
+    }
+
     /// Apply an event that has already been committed (e.g. from replication stream or local commit).
     /// Updates BOTH kernel state AND auxiliary structures (Index, Bitmap).
     pub fn apply_committed_event(&mut self, event: &KernelEvent<D>) -> Result<(), EngineError> {

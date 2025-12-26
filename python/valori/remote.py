@@ -19,6 +19,12 @@ class RemoteClient:
         resp = self._post("/records", data)
         return resp["id"]
 
+    def insert_batch(self, batch: List[List[float]]) -> List[int]:
+        """Insert a batch of vectors. Returns list of new Record IDs."""
+        data = {"batch": batch}
+        resp = self._post("/v1/vectors/batch_insert", data)
+        return resp["ids"]
+
     def search(self, query: List[float], k: int) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}]."""
         data = {"query": query, "k": k}

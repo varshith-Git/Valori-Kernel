@@ -166,3 +166,14 @@ pub struct EventProofResponse {
     pub event_count: u64,
     pub committed_height: u64,
 }
+
+// Phase 34: Batch Ingestion
+#[derive(Deserialize, Serialize, Debug)]
+pub struct BatchInsertRequest {
+    pub batch: Vec<Vec<f32>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BatchInsertResponse {
+    pub ids: Vec<u32>,
+}

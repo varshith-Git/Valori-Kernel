@@ -81,6 +81,7 @@ pub fn build_router<const M: usize, const D: usize, const N: usize, const E: usi
 ) -> Router {
     let mut app = Router::new()
         .route("/records", post(insert_record))
+        .route("/v1/vectors/batch_insert", post(batch_insert)) // Phase 34
         .route("/search", post(search))
         .route("/graph/node", post(create_node))
         .route("/graph/edge", post(create_edge))
@@ -182,6 +183,15 @@ async fn insert_record<const M: usize, const D: usize, const N: usize, const E: 
     let mut engine = state.lock().await;
     let id = engine.insert_record_from_f32(&payload.values)?;
     Ok(Json(InsertRecordResponse { id }))
+}
+
+async fn batch_insert<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
+    Json(payload): Json<BatchInsertRequest>,
+) -> Result<Json<BatchInsertResponse>, EngineError> {
+    let mut engine = state.lock().await;
+    let ids = engine.insert_batch(&payload.batch)?;
+    Ok(Json(BatchInsertResponse { ids }))
 }
 
 async fn search<const M: usize, const D: usize, const N: usize, const E: usize>(

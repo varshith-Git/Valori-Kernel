@@ -15,10 +15,10 @@ except ImportError:
         _ffi = None
 
 class LocalClient:
-    def __init__(self):
+    def __init__(self, path: str = "./valori_db"):
         if _ffi is None:
              raise ImportError("Could not load 'valori_ffi' module. Ensure it is compiled and in PYTHONPATH.")
-        self.kernel = _ffi.PyKernel()
+        self.kernel = _ffi.ValoriEngine(path)
 
     def insert(self, vector: List[float]) -> int:
         return self.kernel.insert(vector)

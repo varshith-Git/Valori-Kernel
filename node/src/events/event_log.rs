@@ -206,6 +206,40 @@ impl<const D: usize> EventLogWriter<D> {
         Ok(())
     }
 
+    /// Append multiple entries to the log with a SINGLE fsync
+    ///
+    /// This provides atomicity for batches: either all specific bytes are physically on disk
+    /// (after fsync return) or we crash before fsync returns (and they might not be).
+    ///
+    /// Note: If a partial write happens (less than full batch), the log recovery
+    /// logic must handle truncation of incomplete tail writes.
+    pub fn append_batch(&mut self, entries: &[LogEntry<D>]) -> Result<()> {
+        if entries.is_empty() {
+             return Ok(());
+        }
+
+        for entry in entries {
+            let bytes = bincode::serde::encode_to_vec(entry, bincode::config::standard())
+                .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+            self.file.write_all(&bytes)?;
+        }
+        
+        // Flush buffer once
+        self.file.flush()?;
+        
+        // Force fsync once
+        self.file.get_ref().sync_all()?;
+
+        // Update counts
+        for entry in entries {
+            if let LogEntry::Event(_) = entry {
+                self.event_count += 1;
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Get the number of events written
     pub fn event_count(&self) -> u64 {
         self.event_count

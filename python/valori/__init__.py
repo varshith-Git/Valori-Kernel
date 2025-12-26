@@ -4,16 +4,17 @@ from .local import LocalClient
 from .remote import RemoteClient
 
 class Valori:
-    def __new__(cls, remote: Optional[str] = None):
+    def __new__(cls, remote: Optional[str] = None, path: str = "./valori_db"):
         """
         Factory yielding either a LocalClient (FFI) or RemoteClient (HTTP).
         
         Args:
             remote: If None (default), uses LocalClient (ffi). 
                     If a URL string, uses RemoteClient.
+            path: Path to database directory (only used for LocalClient).
         """
         if remote is None:
-            return LocalClient()
+            return LocalClient(path=path)
         else:
             return RemoteClient(base_url=remote)
 

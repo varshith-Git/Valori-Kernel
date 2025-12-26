@@ -233,11 +233,12 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
             return Ok(CommitResult::Committed);
         }
 
-        // Step 1: Persist ALL events to disk first
-        for event in &events {
-            let entry = crate::events::event_log::LogEntry::Event(event.clone());
-            self.event_log.append(&entry)?;
-        }
+        // Step 1: Persist ALL events to disk first (Single Fsync)
+        let log_entries: Vec<_> = events.iter()
+            .map(|e| crate::events::event_log::LogEntry::Event(e.clone()))
+            .collect();
+            
+        self.event_log.append_batch(&log_entries)?;
 
         // Step 2: Add all to buffer
         for event in &events {
