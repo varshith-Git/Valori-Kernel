@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import numpy as np
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from typing import List, Union
+from ..protocol import ValidationError
 
 FXP_MAX = 32767.0
 FXP_MIN = -32767.0
@@ -15,10 +15,6 @@ def validate_float_range(vec: Union[List[float], np.ndarray]) -> List[float]:
     """
     if isinstance(vec, list):
         vec = np.array(vec, dtype=np.float64)
-
-from ..protocol import ValidationError
-
-# ...
 
     if not np.isfinite(vec).all():
         raise ValidationError("Embedding contains non-finite values (NaN/Inf)")
