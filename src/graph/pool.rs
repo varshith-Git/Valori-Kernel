@@ -6,6 +6,7 @@ use crate::graph::edge::GraphEdge;
 use crate::types::id::{NodeId, EdgeId};
 use crate::error::{Result, KernelError};
 
+#[derive(Clone)]
 pub struct NodePool<const CAP: usize> {
     pub(crate) nodes: [Option<GraphNode>; CAP],
 }
@@ -65,6 +66,7 @@ impl<const CAP: usize> NodePool<CAP> {
     }
 }
 
+#[derive(Clone)]
 pub struct EdgePool<const CAP: usize> {
     pub(crate) edges: [Option<GraphEdge>; CAP],
 }

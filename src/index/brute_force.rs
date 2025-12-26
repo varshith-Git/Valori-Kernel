@@ -9,7 +9,7 @@ use crate::types::scalar::FxpScalar;
 use crate::math::l2::fxp_l2_sq;
 
 /// A stateless brute-force index that scans the RecordPool.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct BruteForceIndex;
 
 impl BruteForceIndex {

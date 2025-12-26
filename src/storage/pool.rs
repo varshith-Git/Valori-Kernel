@@ -6,6 +6,7 @@ use crate::types::id::RecordId;
 use crate::types::vector::FxpVector;
 use crate::error::{Result, KernelError};
 
+#[derive(Clone)]
 pub struct RecordPool<const CAP: usize, const D: usize> {
     pub(crate) records: [Option<Record<D>>; CAP],
 }

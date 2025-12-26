@@ -14,6 +14,7 @@ use crate::types::id::{RecordId, NodeId, EdgeId, EdgeId as GraphEdgeId};
 use crate::types::vector::FxpVector;
 use crate::storage::record::Record;
 
+#[derive(Clone)]
 pub struct KernelState<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
     pub(crate) version: Version,
     pub(crate) records: RecordPool<MAX_RECORDS, D>,
@@ -37,6 +38,10 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     pub fn version(&self) -> u64 {
         self.version.0
+    }
+
+    pub fn record_count(&self) -> usize {
+        self.records.len()
     }
 
     pub fn get_record(&self, id: RecordId) -> Option<&Record<D>> {
