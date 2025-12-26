@@ -12,7 +12,7 @@ panic-halt = "0.2"
 # Local Kernel Dependency (Core)
 # Using 'valori-kernel' as name to match workspace, path to root where lib.rs lives
 # Crucial: default-features = false ensures no_std
-valori-kernel = { path = "../", default-features = false }
+valori-kernel = { path = "../crates/kernel", default-features = false }
 blake3 = { version = "1.5", default-features = false }
 bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde"] }
 serde-json-core = "0.5" # No-std JSON serialization for proof
