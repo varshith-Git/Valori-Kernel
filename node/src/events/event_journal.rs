@@ -32,26 +32,49 @@ pub struct EventJournal<const D: usize> {
     
     /// Committed event count (for proof generation)
     committed_height: u64,
+
+    /// Live event broadcast channel
+    /// Capacity should be large enough to handle bursts
+    tx: tokio::sync::broadcast::Sender<crate::events::event_log::LogEntry<D>>,
 }
 
 impl<const D: usize> EventJournal<D> {
     /// Create a new empty journal
     pub fn new() -> Self {
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
             committed: Vec::new(),
             buffer: Vec::new(),
             committed_height: 0,
+            tx,
+        }
+    }
+
+    /// Create a new empty journal starting at a specific height (e.g. after snapshot)
+    pub fn new_at_height(height: u64) -> Self {
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
+        Self {
+            committed: Vec::new(),
+            buffer: Vec::new(),
+            committed_height: height,
+            tx,
         }
     }
 
     /// Create a journal from committed events (recovery scenario)
     pub fn from_committed(events: Vec<KernelEvent<D>>) -> Self {
         let committed_height = events.len() as u64;
+        let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
             committed: events,
             buffer: Vec::new(),
             committed_height,
+            tx,
         }
+    }
+    
+    pub fn set_height(&mut self, height: u64) {
+        self.committed_height = height;
     }
 
     /// Append an event to the buffer (not yet committed)
@@ -69,6 +92,14 @@ impl<const D: usize> EventJournal<D> {
     /// - Events are durably written to disk
     /// - Shadow state validation passes
     pub fn commit_buffer(&mut self) {
+        use crate::events::event_log::LogEntry;
+        
+        for event in &self.buffer {
+            // Broadcast to live subscribers
+            // Ignore send errors (no subscribers)
+            let _ = self.tx.send(LogEntry::Event(event.clone()));
+        }
+
         self.committed.append(&mut self.buffer);
         self.committed_height = self.committed.len() as u64;
         self.buffer.clear();
@@ -108,6 +139,11 @@ impl<const D: usize> EventJournal<D> {
     /// Check if buffer is empty
     pub fn has_pending_buffer(&self) -> bool {
         !self.buffer.is_empty()
+    }
+
+    /// Subscribe to live event stream
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry<D>> {
+        self.tx.subscribe()
     }
 }
 

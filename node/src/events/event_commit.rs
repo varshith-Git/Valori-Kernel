@@ -167,7 +167,8 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
     pub fn commit_event(&mut self, event: KernelEvent<D>) -> Result<CommitResult> {
         // Step 1: Persist to disk FIRST (crash safety)
         // CRITICAL: This must succeed before ANY in-memory changes
-        self.event_log.append(&event)?;
+        let entry = crate::events::event_log::LogEntry::Event(event.clone());
+        self.event_log.append(&entry)?;
 
         // Step 2: Add to journal buffer (shadow execution space)
         self.journal.append_buffered(event.clone());
@@ -234,7 +235,8 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
 
         // Step 1: Persist ALL events to disk first
         for event in &events {
-            self.event_log.append(event)?;
+            let entry = crate::events::event_log::LogEntry::Event(event.clone());
+            self.event_log.append(&entry)?;
         }
 
         // Step 2: Add all to buffer
@@ -297,6 +299,37 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
     /// Decompose into components (for reconstruction)
     pub fn into_parts(self) -> (EventLogWriter<D>, EventJournal<D>, KernelState<M, D, N, E>) {
         (self.event_log, self.journal, self.live_state)
+    }
+
+    /// Rotate the event log (Compaction/Checkpointing)
+    pub fn rotate_log(
+        &mut self,
+        archive_path: impl AsRef<std::path::Path>,
+        checkpoint_entry: Option<crate::events::event_log::LogEntry<D>>
+    ) -> crate::events::event_commit::Result<()> {
+        self.event_log.rotate(archive_path, checkpoint_entry)
+            .map_err(crate::events::event_commit::CommitError::EventLog)
+    }
+
+    /// Subscribe to live event stream
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry<D>> {
+        self.journal.subscribe()
+    }
+
+    /// Write a checkpoint entry and align journal height
+    pub fn write_checkpoint(
+        &mut self, 
+        entry: crate::events::event_log::LogEntry<D>
+    ) -> Result<CommitResult> {
+        // Persist
+        self.event_log.append(&entry)?;
+        
+        // Update Journal Height if it matches
+        if let crate::events::event_log::LogEntry::Checkpoint { event_count, .. } = entry {
+            self.journal.set_height(event_count);
+        }
+        
+        Ok(CommitResult::Committed)
     }
 }
 

@@ -105,13 +105,23 @@ pub fn read_event_log<const D: usize>(path: impl AsRef<Path>) -> Result<Vec<Kern
     // Deserialize events
     let mut offset = 0;
     while offset < buffer.len() {
-        match bincode::serde::decode_from_slice::<KernelEvent<D>, _>(
+        match bincode::serde::decode_from_slice::<crate::events::event_log::LogEntry<D>, _>(
             &buffer[offset..],
             bincode::config::standard()
         ) {
-            Ok((event, bytes_read)) => {
-                events.push(event);
+            Ok((entry, bytes_read)) => {
                 offset += bytes_read;
+                
+                match entry {
+                    crate::events::event_log::LogEntry::Event(event) => {
+                        events.push(event);
+                    },
+                    crate::events::event_log::LogEntry::Checkpoint { event_count: chk_count, snapshot_hash, timestamp: _ } => {
+                        tracing::info!("Found checkpoint marker: count={}, hash={:?}", chk_count, snapshot_hash);
+                        // Validation logic: verify state matches checkpoint if we were loading it?
+                        // For now just log it.
+                    }
+                }
             }
             Err(e) => {
                 // Check if we're at the tail (incomplete event from crash)
@@ -255,7 +265,7 @@ mod tests {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
                 };
-                writer.append(&event).unwrap();
+                writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }
         }
 
@@ -284,7 +294,7 @@ mod tests {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
                 };
-                writer.append(&event).unwrap();
+                writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }
         }
 
@@ -336,7 +346,7 @@ mod tests {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
                 };
-                writer.append(&event).unwrap();
+                writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }
         }
 

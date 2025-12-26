@@ -35,6 +35,21 @@ pub enum EventLogError {
     InvalidHeader,
 }
 
+// use valori_kernel::event::KernelEvent; // Removed duplicate
+use serde::{Serialize, Deserialize};
+
+/// Wrapper for persisted events to include metadata/checkpoints
+/// without polluting the pure kernel event definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LogEntry<const D: usize> {
+    Event(KernelEvent<D>),
+    Checkpoint {
+        event_count: u64,
+        snapshot_hash: [u8; 32],
+        timestamp: u64,
+    }
+}
+
 pub type Result<T> = std::result::Result<T, EventLogError>;
 
 /// Event Log File Header (16 bytes)
@@ -94,6 +109,9 @@ pub struct EventLogWriter<const D: usize> {
 }
 
 impl<const D: usize> EventLogWriter<D> {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
     /// Open or create an event log file
     ///
     /// If file exists, validates header and appends
@@ -127,12 +145,15 @@ impl<const D: usize> EventLogWriter<D> {
                 // Count events by attempting deserialization
                 let mut offset = 0;
                 while offset < event_buf.len() {
-                    match bincode::serde::decode_from_slice::<KernelEvent<D>, _>(
+                    match bincode::serde::decode_from_slice::<LogEntry<D>, _>(
                         &event_buf[offset..],
                         bincode::config::standard()
                     ) {
-                        Ok((_, bytes_read)) => {
-                            event_count += 1;
+                        Ok((entry, bytes_read)) => {
+                            match entry {
+                                LogEntry::Event(_) => event_count += 1,
+                                LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
+                            }
                             offset += bytes_read;
                         }
                         Err(_) => break,
@@ -154,22 +175,22 @@ impl<const D: usize> EventLogWriter<D> {
         })
     }
 
-    /// Append an event to the log
+    /// Append an entry to the log
     ///
     /// # Safety
-    /// - Serializes event with bincode
+    /// - Serializes entry with bincode
     /// - Writes to buffer
     /// - Flushes buffer
     /// - fsync's file handle
     ///
     /// Only returns Ok() after durable write
-    pub fn append(&mut self, event: &KernelEvent<D>) -> Result<()> {
-        // Serialize event
-        let event_bytes = bincode::serde::encode_to_vec(event, bincode::config::standard())
+    pub fn append(&mut self, entry: &LogEntry<D>) -> Result<()> {
+        // Serialize entry
+        let bytes = bincode::serde::encode_to_vec(entry, bincode::config::standard())
             .map_err(|e| EventLogError::Serialization(e.to_string()))?;
 
         // Write to buffer
-        self.file.write_all(&event_bytes)?;
+        self.file.write_all(&bytes)?;
         
         // Flush buffer to OS
         self.file.flush()?;
@@ -177,7 +198,10 @@ impl<const D: usize> EventLogWriter<D> {
         // Force fsync (critical for crash safety)
         self.file.get_ref().sync_all()?;
 
-        self.event_count += 1;
+        // Increment count only for actual events (not checkpoints)
+        if let LogEntry::Event(_) = entry {
+            self.event_count += 1;
+        }
 
         Ok(())
     }
@@ -188,8 +212,61 @@ impl<const D: usize> EventLogWriter<D> {
     }
 
     /// Get the log file path
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Rotate the event log
+    ///
+    /// 1. Rename current file to `archive_path`
+    /// 2. Create new file at `self.path`
+    /// 3. Write checkpoint header to new file
+    pub fn rotate(
+        &mut self, 
+        archive_path: impl AsRef<Path>, 
+        checkpoint_entry: Option<LogEntry<D>>
+    ) -> Result<()> {
+        // 1. Sync current file
+        self.file.flush()?;
+        self.file.get_ref().sync_all()?;
+        
+        // 2. Rename (Atomic on POSIX)
+        // We need to close the file handle first? 
+        // On Unix, we can rename while open, but best to drop writer first or just rename.
+        // But self.file owns the FD.
+        // We can just rename the path. The struct holds a bufwriter to File.
+        
+        // Actually, renaming the path while we hold a File handle points to the OLD file (which is good).
+        std::fs::rename(&self.path, archive_path)?;
+        
+        // 3. Open NEW file at original path
+        let mut new_file = OpenOptions::new()
+            .create(true)
+            .write(true) // Truncate if exists? Should not exist if we just renamed it.
+            .create_new(true) // Ensure we don't overwrite if race condition
+            .open(&self.path)?;
+            
+        // 4. Write Header to NEW file
+        let header = EventLogHeader::new(D);
+        new_file.write_all(&header.to_bytes())?;
+        
+        // 5. Write Checkpoint if provided
+        if let Some(entry) = checkpoint_entry {
+             let bytes = bincode::serde::encode_to_vec(&entry, bincode::config::standard())
+                .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+             new_file.write_all(&bytes)?;
+        }
+        
+        new_file.sync_all()?;
+        
+        // 6. Replace handle
+        self.file = BufWriter::new(new_file);
+        
+        // Keep event_count monotonically increasing?
+        // Or does rotation reset specific file count?
+        // The event_count field in this struct tracks TOTAL events if we want total history.
+        // But if we archived the old events, should this reset?
+        // The Checkpoint entry records the total count so far.
+        // If we keep appending to `self.event_count`, it tracks global height.
+        // That seems correct.
+        
+        Ok(())
     }
 }
 
@@ -212,7 +289,7 @@ mod tests {
             vector: FxpVector::<16>::new_zeros(),
         };
 
-        writer.append(&event).unwrap();
+        writer.append(&LogEntry::Event(event)).unwrap();
 
         assert_eq!(writer.event_count(), 1);
     }
@@ -230,7 +307,7 @@ mod tests {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
                 };
-                writer.append(&event).unwrap();
+                writer.append(&LogEntry::Event(event)).unwrap();
             }
         }
 
