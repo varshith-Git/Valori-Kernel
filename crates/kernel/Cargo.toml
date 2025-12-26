@@ -1,0 +1,11 @@
+[package]
+name = "valori-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crc64fast = "1.0"
+thiserror = "1.0"
+byteorder = "1.5"
+blake3 = "1.5"
+
