@@ -28,7 +28,7 @@ const MAX_SAFE_F: f32 = (i32::MAX as f32) / SCALE; // ~32767.99
 const MIN_SAFE_F: f32 = (i32::MIN as f32) / SCALE; // -32768.0
 
 pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
-    state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
+    pub state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
     pub index_kind: IndexKind,
     pub quantization_kind: QuantizationKind,
     
@@ -119,27 +119,24 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         }
 
         // Phase 23: Initialize Event Committer (event-sourced persistence)
-        // Temporarily keep Engine.state for WAL compatibility during migration
-        // Event log path derived from WAL directory
-        let event_committer = if let Some(ref wal_path) = cfg.wal_path {
-            if let Some(parent) = wal_path.parent() {
-                let event_log_path = parent.join("events.log");
-                match EventLogWriter::open(&event_log_path) {
-                    Ok(event_log) => {
-                        tracing::info!("Event log initialized at {:?}", event_log_path);
-                        let journal = EventJournal::new();
-                        // Create separate state for event committer
-                        // TODO: Eventually Engine.state will be removed and only committer.state exists
-                        let committer_state = KernelState::new();
-                        Some(EventCommitter::new(event_log, journal, committer_state))
-                    }
-                    Err(e) => {
-                        tracing::warn!("Event log not initialized: {}. Falling back to WAL-only mode.", e);
-                        None
-                    }
+        // Prefer explicit config, fallback to WAL directory
+        let event_log_path_resolved = cfg.event_log_path.clone().or_else(|| {
+             cfg.wal_path.as_ref().and_then(|p| p.parent().map(|d| d.join("events.log")))
+        });
+
+        let event_committer = if let Some(path) = event_log_path_resolved {
+            match EventLogWriter::open(&path) {
+                Ok(event_log) => {
+                    tracing::info!("Event log initialized at {:?}", path);
+                    let journal = EventJournal::new();
+                    // Create separate state for event committer
+                    let committer_state = KernelState::new();
+                    Some(EventCommitter::new(event_log, journal, committer_state))
                 }
-            } else {
-                None
+                Err(e) => {
+                    tracing::warn!("Event log not initialized: {}. Falling back to WAL-only mode.", e);
+                    None
+                }
             }
         } else {
             None
@@ -200,14 +197,22 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
         // Phase 23: Event-sourced path (preferred)
         if let Some(ref mut committer) = self.event_committer {
+            let start = std::time::Instant::now();
             // Generate event (no state change yet)
             let event = KernelEvent::InsertRecord { id, vector };
             
             // Commit via event pipeline (shadow → persist → commit → live)
-            match committer.commit_event(event) {
+            // Clone event for local apply if needed
+            match committer.commit_event(event.clone()) {
                 Ok(CommitResult::Committed) => {
                     // Event committed successfully
                     tracing::trace!("Record {} committed via event log", id.0);
+                    metrics::increment_counter!("valori_events_committed_total");
+                    metrics::histogram!("valori_event_commit_duration_seconds", start.elapsed().as_secs_f64());
+                    
+                    // SYNC self.state with committer state
+                    // This is required because Engine reads next_record_id from self.state
+                    self.state.apply_event(&event).map_err(EngineError::Kernel)?;
                 }
                 Ok(CommitResult::RolledBack) => {
                     // Shadow apply failed - validation error
@@ -263,6 +268,38 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         }
     }
 
+    /// Apply an event that has already been committed (e.g. from replication stream or local commit).
+    /// Updates BOTH kernel state AND auxiliary structures (Index, Bitmap).
+    pub fn apply_committed_event(&mut self, event: &KernelEvent<D>) -> Result<(), EngineError> {
+         // 1. Update Kernel State
+         self.state.apply_event(event).map_err(EngineError::Kernel)?;
+
+         // 2. Update Auxiliary Structures (Side Effects)
+         match event {
+             KernelEvent::InsertRecord { id, vector } => {
+                 // Update Host Index
+                 let mut consistent_values = Vec::with_capacity(D);
+                 for i in 0..D {
+                     let fxp = vector.data[i];
+                     let f = fxp.0 as f32 / SCALE;
+                     consistent_values.push(f);
+                 }
+                 self.index.insert(id.0, &consistent_values);
+             }
+             KernelEvent::CreateEdge { id, .. } => {
+                 // Update Edge Bitmap
+                 if (id.0 as usize) < self.edge_bitmap.len() {
+                     self.edge_bitmap[id.0 as usize] = true;
+                 }
+             }
+             KernelEvent::CreateNode { .. } => {
+                 // No auxiliary structure for nodes currently
+             }
+             _ => {}
+         }
+         Ok(())
+    }
+
     pub fn create_node_for_record(&mut self, record_id_val: Option<u32>, kind_val: u8) -> Result<u32, EngineError> {
         let kind = NodeKind::from_u8(kind_val).ok_or(EngineError::InvalidInput("Invalid NodeKind".to_string()))?;
         let record_id = record_id_val.map(RecordId);
@@ -282,9 +319,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         if let Some(ref mut committer) = self.event_committer {
             let event = KernelEvent::CreateNode { id: node_id, kind, record: record_id };
             
-            match committer.commit_event(event) {
+            match committer.commit_event(event.clone()) {
                 Ok(CommitResult::Committed) => {
                     tracing::trace!("Node {} created via event log", node_id.0);
+                    // Sync self.state
+                    self.state.apply_event(&event).map_err(EngineError::Kernel)?;
                     Ok(node_id.0)
                 }
                 Ok(CommitResult::RolledBack) => {
@@ -329,11 +368,13 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         if let Some(ref mut committer) = self.event_committer {
             let event = KernelEvent::CreateEdge { id: edge_id, kind, from, to };
             
-            match committer.commit_event(event) {
+            match committer.commit_event(event.clone()) {
                 Ok(CommitResult::Committed) => {
                     tracing::trace!("Edge {} created via event log", edge_id.0);
                     // Update bitmap on success
                     self.edge_bitmap[edge_id.0 as usize] = true;
+                    // Sync self.state
+                    self.state.apply_event(&event).map_err(EngineError::Kernel)?;
                     Ok(edge_id.0)
                 }
                 Ok(CommitResult::RolledBack) => {
@@ -432,6 +473,9 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             &index_buf
         ).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         
+        let total_size = k_buf.len() + meta_buf.len() + index_buf.len(); // Approximate
+        metrics::gauge!("valori_snapshot_size_bytes", total_size as f64);
+        
         // 4. Update Cached Hash (Read-back for perfect consistency)
         // Performance: For V1, reading back is fine to ensure correctness of proof.
         // In future, SnapshotManager should return the computed hash.
@@ -486,6 +530,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         ).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         
         let bytes = std::fs::read(&tmp_path).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        metrics::gauge!("valori_snapshot_size_bytes", bytes.len() as f64);
         let _ = std::fs::remove_file(tmp_path);
         
         // Note: We do NOT update current_snapshot_hash here because this is ephemeral download, 
@@ -640,11 +685,18 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         let snapshot_hash = self.current_snapshot_hash.unwrap_or([0u8; 32]);
         let wal_hash = *self.wal_accumulator.finalize().as_bytes();
 
+        metrics::increment_counter!("valori_proofs_generated_total");
+
         DeterministicProof {
             kernel_version: 1,
             snapshot_hash,
             wal_hash,
             final_state_hash,
         }
+    }
+
+    // NEW: Expose root hash for replication checks
+    pub fn root_hash(&self) -> [u8; 32] {
+        kernel_state_hash(&self.state)
     }
 }

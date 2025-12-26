@@ -14,6 +14,10 @@ pub enum EngineError {
     InvalidInput(String),
     #[error("Internal server error")]
     Internal,
+    #[error("Network error: {0}")]
+    Network(String),
+    #[error("Unknown error: {0}")]
+    Unknown(String),
 }
 
 impl IntoResponse for EngineError {
@@ -28,6 +32,8 @@ impl IntoResponse for EngineError {
             },
             EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             EngineError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
+            EngineError::Network(msg) => (StatusCode::BAD_GATEWAY, format!("Upstream error: {}", msg)),
+            EngineError::Unknown(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Unknown error: {}", msg)),
         };
 
         let body = Json(json!({
