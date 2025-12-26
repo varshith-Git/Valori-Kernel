@@ -16,10 +16,16 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bincode = { version = "2.0.1", features = ["serde"] }
 crc32fast = "1.5.0"
 blake3 = "1.5"
+reqwest = { version = "0.12.28", features = ["json", "stream"] }
 
 axum-extra = { version = "0.9", features = ["typed-header"] }
 headers = "0.4"
 tower-http = { version = "0.5", features = ["cors", "validate-request"] }
+metrics = "0.21"
+metrics-exporter-prometheus = "0.12"
+futures = "0.3.31"
+tokio-stream = "0.1.17"
 
 [dev-dependencies] 
 tempfile = "3.23.0"
+tower = { version = "0.5.2", features = ["util"] }

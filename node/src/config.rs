@@ -18,6 +18,18 @@ pub enum QuantizationKind {
     Product,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeMode {
+    Leader,
+    Follower { leader_url: String },
+}
+
+impl Default for NodeMode {
+    fn default() -> Self {
+        Self::Leader
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeConfig {
     pub max_records: usize,
@@ -31,10 +43,14 @@ pub struct NodeConfig {
     // Persistence
     pub snapshot_path: Option<PathBuf>,
     pub wal_path: Option<PathBuf>,
+    pub event_log_path: Option<PathBuf>, // Added explicit config
     pub auto_snapshot_interval_secs: Option<u64>,
     
     // Security
     pub auth_token: Option<String>,
+    
+    // Clustering
+    pub mode: NodeMode,
 }
 
 impl Default for NodeConfig {
@@ -82,6 +98,16 @@ impl Default for NodeConfig {
             .ok().and_then(|v| v.parse().ok());
             
         let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
+        
+        // Mode
+        let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
+            NodeMode::Follower { leader_url: url }
+        } else {
+            NodeMode::Leader
+        };
+        
+        let event_log_path = std::env::var("VALORI_EVENT_LOG_PATH")
+            .ok().map(PathBuf::from);
 
         Self {
             max_records,
@@ -93,8 +119,10 @@ impl Default for NodeConfig {
             quantization_kind,
             snapshot_path,
             wal_path,
+            event_log_path,
             auto_snapshot_interval_secs,
             auth_token,
+            mode,
         }
     }
 }
