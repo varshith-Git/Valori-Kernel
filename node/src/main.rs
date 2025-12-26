@@ -8,12 +8,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "valori_node=debug,tower_http=debug".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Initialize Telemetry (Logs + Metrics)
+    valori_node::telemetry::init_telemetry();
 
     let cfg = NodeConfig::default();
     
@@ -41,7 +37,14 @@ async fn main() {
         }
     }
 
-    let shared_state: SharedEngine = Arc::new(Mutex::new(engine));
+    // Use consts from server or duplicates? 
+    // Since ConcreteEngine is imported from server, it uses defaults.
+    // We should match usage.
+    // ConcreteEngine is basically Engine<1024, 16, 1024, 2048>.
+    
+    // Explicit type to match generic server signature
+    use valori_node::server::{MAX_RECORDS, D, MAX_NODES, MAX_EDGES};
+    let shared_state: SharedEngine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> = Arc::new(Mutex::new(engine));
     
     // Spawn Persistence Task
     if let (Some(path), Some(secs)) = (cfg.snapshot_path.clone(), cfg.auto_snapshot_interval_secs) {
@@ -68,10 +71,22 @@ async fn main() {
         });
     }
     
-    let app = build_router(shared_state, cfg.auth_token.clone());
+    let app = build_router(shared_state.clone(), cfg.auth_token.clone());
     
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);
+    
+    // Check Mode
+    if let valori_node::config::NodeMode::Follower { leader_url } = cfg.mode {
+        tracing::info!("Node starting in FOLLOWER mode. Leader: {}", leader_url);
+        let state_clone = shared_state.clone();
+        tokio::spawn(async move {
+            valori_node::replication::run_follower_loop(state_clone, leader_url).await;
+        });
+    } else {
+        tracing::info!("Node starting in LEADER mode.");
+    }
+
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

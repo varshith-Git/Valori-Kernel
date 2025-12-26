@@ -10,4 +10,7 @@ pub mod persistence;
 pub mod wal_writer;
 pub mod wal_reader;
 pub mod recovery;
+pub mod telemetry;
 pub mod events;
+pub mod replication;
+pub mod network;

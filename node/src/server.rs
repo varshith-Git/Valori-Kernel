@@ -12,6 +12,7 @@ use tokio::sync::Mutex;
 use crate::engine::Engine;
 use crate::api::*;
 use crate::errors::EngineError;
+use serde::Deserialize;
 
 // Hardcoded consts matching Engine def in main.rs
 // const MAX_RECORDS: usize = 1024;
@@ -30,7 +31,9 @@ pub const MAX_NODES: usize = 1024;
 pub const MAX_EDGES: usize = 2048;
 
 pub type ConcreteEngine = Engine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>;
-pub type SharedEngine = Arc<Mutex<ConcreteEngine>>;
+// Generic SharedEngine type alias
+pub type SharedEngine<const M: usize, const D: usize, const N: usize, const E: usize> = 
+    Arc<Mutex<Engine<M, D, N, E>>>;
 
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 
@@ -46,7 +49,7 @@ use axum::http::header::AUTHORIZATION;
 
 use axum::middleware::from_fn_with_state;
 
-async fn auth_guard(
+async fn auth_guard<const M: usize, const D: usize, const N: usize, const E: usize>(
     State(token): State<Arc<Option<String>>>,
     req: AxumRequest,
     next: Next,
@@ -72,7 +75,10 @@ async fn auth_guard(
     Ok(next.run(req).await)
 }
 
-pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
+pub fn build_router<const M: usize, const D: usize, const N: usize, const E: usize>(
+    state: SharedEngine<M, D, N, E>, 
+    auth_token: Option<String>
+) -> Router {
     let mut app = Router::new()
         .route("/records", post(insert_record))
         .route("/search", post(search))
@@ -94,12 +100,16 @@ pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
         .route("/v1/proof/event-log", axum::routing::get(get_event_proof)) // Phase 26
         // Replication v1
         .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
+        .route("/v1/replication/events", axum::routing::get(get_replication_events))
+        .route("/v1/replication/state", axum::routing::get(get_replication_state))
+        // Observability
+        .route("/metrics", axum::routing::get(metrics_handler))
         .with_state(state);
 
     if let Some(token) = auth_token {
         tracing::info!("Auth Enabled: Bearer token required");
         let auth_state = Arc::new(Some(token));
-        app = app.layer(from_fn_with_state(auth_state, auth_guard));
+        app = app.layer(from_fn_with_state(auth_state, auth_guard::<M, D, N, E>));
     } else {
         tracing::warn!("Auth Disabled: No token configured");
     }
@@ -109,8 +119,8 @@ pub fn build_router(state: SharedEngine, auth_token: Option<String>) -> Router {
 
 // ... existing handlers ...
 
-async fn snapshot_save(
-    State(state): State<SharedEngine>,
+async fn snapshot_save<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -124,8 +134,8 @@ async fn snapshot_save(
     }))
 }
 
-async fn snapshot_restore(
-    State(state): State<SharedEngine>,
+async fn snapshot_restore<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(req): Json<SnapshotRestoreRequest>,
 ) -> Result<Json<SnapshotRestoreResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -143,8 +153,8 @@ async fn snapshot_restore(
     Ok(Json(SnapshotRestoreResponse { success: true }))
 }
 
-async fn meta_set(
-    State(state): State<SharedEngine>,
+async fn meta_set<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<MetadataSetRequest>,
 ) -> Result<Json<MetadataSetResponse>, EngineError> {
     let engine = state.lock().await;
@@ -152,8 +162,8 @@ async fn meta_set(
     Ok(Json(MetadataSetResponse { success: true }))
 }
 
-async fn meta_get(
-    State(state): State<SharedEngine>,
+async fn meta_get<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Query(payload): Query<MetadataGetRequest>,
 ) -> Result<Json<MetadataGetResponse>, EngineError> {
     let engine = state.lock().await;
@@ -165,8 +175,8 @@ async fn meta_get(
 }
 
 
-async fn insert_record(
-    State(state): State<SharedEngine>,
+async fn insert_record<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<InsertRecordRequest>,
 ) -> Result<Json<InsertRecordResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -174,8 +184,8 @@ async fn insert_record(
     Ok(Json(InsertRecordResponse { id }))
 }
 
-async fn search(
-    State(state): State<SharedEngine>,
+async fn search<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, EngineError> {
     let engine = state.lock().await;
@@ -185,8 +195,8 @@ async fn search(
     Ok(Json(SearchResponse { results }))
 }
 
-async fn create_node(
-    State(state): State<SharedEngine>,
+async fn create_node<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<CreateNodeRequest>,
 ) -> Result<Json<CreateNodeResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -194,8 +204,8 @@ async fn create_node(
     Ok(Json(CreateNodeResponse { node_id }))
 }
 
-async fn create_edge(
-    State(state): State<SharedEngine>,
+async fn create_edge<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<CreateEdgeRequest>,
 ) -> Result<Json<CreateEdgeResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -203,15 +213,15 @@ async fn create_edge(
     Ok(Json(CreateEdgeResponse { edge_id }))
 }
 
-async fn snapshot(
-    State(state): State<SharedEngine>,
+async fn snapshot<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
 ) -> Result<Vec<u8>, EngineError> {
     let engine = state.lock().await;
     engine.snapshot()
 }
 
-async fn restore(
-    State(state): State<SharedEngine>,
+async fn restore<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     body: axum::body::Bytes,
 ) -> Result<(), EngineError> {
     let mut engine = state.lock().await;
@@ -219,8 +229,8 @@ async fn restore(
     Ok(())
 }
 
-async fn memory_upsert_vector(
-    State(state): State<SharedEngine>,
+async fn memory_upsert_vector<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<MemoryUpsertVectorRequest>,
 ) -> Result<Json<MemoryUpsertResponse>, EngineError> {
     let mut engine = state.lock().await;
@@ -259,8 +269,8 @@ async fn memory_upsert_vector(
     }))
 }
 
-async fn memory_search_vector(
-    State(state): State<SharedEngine>,
+async fn memory_search_vector<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
     Json(payload): Json<MemorySearchVectorRequest>,
 ) -> Result<Json<MemorySearchResponse>, EngineError> {
     let engine = state.lock().await;
@@ -285,8 +295,8 @@ async fn memory_search_vector(
     Ok(Json(MemorySearchResponse { results }))
 }
 
-async fn get_proof(
-    State(state): State<SharedEngine>,
+async fn get_proof<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
 ) -> Result<Json<valori_kernel::proof::DeterministicProof>, EngineError> {
     let engine = state.lock().await;
     let proof = engine.get_proof();
@@ -294,8 +304,8 @@ async fn get_proof(
 }
 
 // Phase 26: Event log proof endpoint
-async fn get_event_proof(
-    State(state): State<SharedEngine>,
+async fn get_event_proof<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
 ) -> Result<Json<EventProofResponse>, EngineError> {
     let engine = state.lock().await;
     
@@ -330,8 +340,8 @@ async fn get_event_proof(
     }
 }
 
-async fn get_wal_stream(
-    State(state): State<SharedEngine>,
+async fn get_wal_stream<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
 ) -> Result<Body, EngineError> {
     let path = {
         let engine = state.lock().await;
@@ -346,4 +356,79 @@ async fn get_wal_stream(
     let stream = ReaderStream::new(file);
     
     Ok(Body::from_stream(stream))
+}
+
+#[derive(Deserialize)]
+struct ReplicationParams {
+    start_offset: Option<u64>,
+}
+
+async fn get_replication_events<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
+    Query(params): Query<ReplicationParams>,
+) -> Result<Body, EngineError> {
+    let start_offset = params.start_offset.unwrap_or(0);
+
+    // 1. Lock engine to get path and subscribe
+    let (log_path, rx) = {
+        let engine = state.lock().await;
+        if let Some(ref committer) = engine.event_committer {
+            (
+                committer.event_log().path().to_path_buf(),
+                committer.subscribe()
+            )
+        } else {
+             return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
+        }
+    };
+    
+    // 2. Spawn streaming task
+    // Note: D is generic in helper, but Engine is typed with const D.
+    // In server.rs, we use `ConcreteEngine` which has D=16 (hardcoded const).
+    let rx_stream = crate::replication::spawn_replication_stream::<D>(
+        log_path, 
+        rx, 
+        start_offset
+    ).await?;
+    
+    // 3. Convert mpsc Receiver to Body Stream
+    use tokio_util::io::ReaderStream;
+    use futures::StreamExt;
+    
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx_stream);
+    
+    // ReceiverStream yields Result<String, Error>.
+    // Axum Body expects Result<Bytes, Error> or similar.
+    let body_stream = stream.map(|res| {
+        match res {
+            Ok(json_line) => Ok(json_line),
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        }
+    });
+
+    Ok(Body::from_stream(body_stream))
+}
+
+async fn get_replication_state() -> Json<serde_json::Value> {
+    use crate::replication::{REPLICATION_STATUS, ReplicationState};
+    use std::sync::atomic::Ordering;
+    
+    let status_u8 = REPLICATION_STATUS.load(Ordering::Relaxed);
+    // 0=Synced, 1=Healing, 2=Diverged, 3=Unknown
+    let status_str = match status_u8 {
+        0 => "Synced",
+        1 => "Healing",
+        2 => "Diverged",
+        _ => "Unknown",
+    };
+    
+    Json(serde_json::json!({
+        "status": status_str,
+        "code": status_u8
+    }))
+}
+
+
+async fn metrics_handler() -> String {
+    crate::telemetry::get_metrics()
 }

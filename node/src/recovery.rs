@@ -29,7 +29,8 @@ pub fn replay_wal<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     // Explicit generic D to guide inference
     let reader = WalReader::<D>::open(wal_path)
         .map_err(|e| EngineError::InvalidInput(format!("Failed to open WAL: {}", e)))?;
-
+    
+    let start = std::time::Instant::now();
     let mut commands_applied = 0;
     
     // Maintain Hash Accumulator for Proof
@@ -69,6 +70,7 @@ pub fn replay_wal<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
         commands_applied += 1;
     }
 
+    metrics::histogram!("valori_replay_duration_seconds", start.elapsed().as_secs_f64());
     Ok((commands_applied, hasher))
 }
 
