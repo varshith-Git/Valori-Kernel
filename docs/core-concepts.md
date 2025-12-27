@@ -25,6 +25,7 @@ The fundamental atomic unit of memory.
 *   **What it is**: A dense fixed-point vector (e.g., 16-dim or 768-dim) representing meaning.
 *   **Storage**: Stored in a contiguous memory pool for O(1) access.
 *   **Addressing**: Identified by a `RecordId` (integer).
+*   **Metadata**: Optional binary blob (up to 64KB). Deterministically hashed and snapshotted.
 
 ### 2. The Knowlege Graph
 A lightweight graph overlay sitting on top of the vectors.

@@ -18,7 +18,12 @@ Valori eschews standard `f32` (which varies by CPU) for **Q16.16 Fixed-Point Ari
 - **Event-Sourced**: State is derived purely from an immutable log of events.
 - **Verifiable**: Cryptographic hash of the state proves memory integrity.
 
-### 2. Crash Recovery & Durability
+### 2. Deterministic Metadata
+- **Attach Data**: Optional binary metadata (up to 64KB) per record.
+- **Stateful**: Metadata is part of the canonical state hash.
+- **Durable**: Fully persisted in snapshots and WAL.
+
+### 3. Crash Recovery & Durability
 - **WAL & Event Log**: Every operation is synced to disk via length-prefixed logs.
 - **Batch Ingestion**: Atomic commits for high-throughput bulk inserts.
 - **Snapshots**: Instant checkpointing and restoration.
@@ -50,8 +55,9 @@ from valori import Valori
 client = Valori(path="./valori_db")
 
 # 1. Insert Single Vector (returns ID)
+# 1. Insert Single Vector (returns ID)
 vec = [0.1] * 16  # Must match configured dimension
-uid = client.insert(vec)
+uid = client.insert(vec, metadata=b"meta") # Optional metadata bytes
 print(f"Inserted record: {uid}")
 
 # 2. Search
