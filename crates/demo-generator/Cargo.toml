@@ -1,0 +1,11 @@
+[package]
+name = "demo-generator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+valori-kernel = { path = "../kernel" }
+valori-persistence = { path = "../persistence" }
+byteorder = "1.5"
+crc64fast = "1.0"
+anyhow = "1.0"

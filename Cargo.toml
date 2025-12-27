@@ -21,6 +21,7 @@ members = [
     "crates/persistence",
     "crates/cli",
     "crates/kernel",
+    "crates/demo-generator",
 ]
 
 # Firmware requires abort on panic (no unwinding support in no_std)
