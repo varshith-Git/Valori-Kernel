@@ -15,107 +15,62 @@ Root Directory
 High-level project configuration and documentation.
 
 - ``.`` (**Root**)
-    - ``Cargo.toml``: **[FILE]** Workspace definition. Manages shared dependencies and members (kernel, node, ffi, etc.).
-    - ``README.md``: **[FILE]** Primary entry point. Contains architecture overview, quickstart guides, and project status.
-    - ``architecture.md``: **[FILE]** Detailed architectural blueprint (Layered design, Determinism specs).
-    - ``all-functions.md``: **[FILE]** Auto-generated reference of all kernel functions.
-    - ``build.log``: **[FILE]** Log file capturing build outputs (useful for debugging CI/Build failures).
-    - ``Dockerfile``: **[FILE]** Docker container definition for packaging the Valori Node server.
-    - ``LICENSE``: **[FILE]** AGPLv3 License text.
-    - ``COMMERCIAL_LICENSE.md``: **[FILE]** Commercial licensing terms.
-    - ``test_replication_e2e.py``: **[TEST]** Top-level end-to-end Python script verifying Leader-Follower replication.
-    - ``valori_ffi.pyd``: **[FILE]** Compiled Python extension module (shared object) for direct FFI usage.
+    - ``Cargo.toml``: **[FILE]** Workspace definition. Defines the root ``valori-workspace`` crate and members.
+    - ``src/``: **[DIR]** **CORE KERNEL**. The pure, ``no_std``, deterministic core logic of Valori.
+        - ``lib.rs``: Kernel entry point.
+        - ``config.rs``: Kernel-level configuration.
+        - ``error.rs``: ``KernelError`` definitions.
+        - ``event.rs``: ``KernelEvent`` enum definitions (Event Sourcing).
+        - ``proof.rs``: Cryptographic state hashing and proof generation.
+        - ``verify.rs``: Logic to verify proofs and signatures.
+        - ``replay.rs``: Command replay logic (Legacy).
+        - ``replay_events.rs``: Event Log replay logic (Current).
+        - ``fxp/``: **[DIR]** Fixed-Point Arithmetic (Q16.16).
+            - ``mod.rs``, ``qformat.rs``, ``ops.rs``: Deterministic math primitives.
+        - ``graph/``: **[DIR]** Knowledge Graph.
+            - ``node.rs``, ``edge.rs``: Graph primitives.
+            - ``adjacency.rs``: Graph traversal logic.
+        - ``index/``: **[DIR]** Vector Indexing.
+            - ``brute_force.rs``: Deterministic baseline search.
+        - ``math/``: **[DIR]** Vector Math.
+            - ``l2.rs``, ``dot.rs``: Distance calculations.
+        - ``quant/``: **[DIR]** Quantization (Placeholder).
+        - ``snapshot/``: **[DIR]** Snapshot Serialization.
+            - ``encode.rs``, ``decode.rs``, ``hash.rs``: Deterministic save/load.
+        - ``state/``: **[DIR]** State Management.
+            - ``kernel.rs``: ``KernelState`` struct (The Truth).
+        - ``storage/``: **[DIR]** Vector Storage.
+            - ``record.rs``: Data storage.
+        - ``types/``: **[DIR]** Core Types.
+            - ``vector.rs``, ``id.rs``: Basic data structures.
+        - ``tests/``: **[DIR]** Kernel Unit Tests.
+            - ``determinism_tests.rs``, ``multi_arch_determinism.rs``: Critical safety checks.
+    - ``README.md``: **[FILE]** Project overview.
+    - ``architecture.md``: **[FILE]** Architecture specs.
+    - ``all-functions.md``: **[FILE]** Function reference.
+    - ``build.log``: **[FILE]** Build output log.
+    - ``Dockerfile``: **[FILE]** Node container definition.
+    - ``LICENSE``, ``COMMERCIAL_LICENSE.md``: Licensing.
+    - ``test_replication_e2e.py``: **[TEST]** Top-level system test.
+    - ``valori_ffi.pyd``: **[FILE]** Compiled extension.
 
-crates/ (Core Libraries)
-------------------------
-The workspace holding the fundamental Rust libraries.
+crates/ (Workspace Members)
+---------------------------
+Auxiliary libraries and legacy wrappers.
 
 - ``crates/`` (**Workspace**)
-    - ``kernel/``: **[DIR]** **THE HEART**. The pure, `no_std`, deterministic core.
-        - ``Cargo.toml``: Dependencies for the kernel (minimal).
+    - ``kernel/``: **[DIR]** **LEGACY / WRAPPER**. Thin wrapper around the root kernel or legacy location.
         - ``src/``:
-            - ``lib.rs``: Kernel library entry point. Re-exports core modules.
-            - ``error.rs``: Defines ``KernelError`` types (CapacityExceeded, etc.).
-            - ``event.rs``: Defines ``KernelEvent`` enum for Event Sourcing (InsertRecord, CreateNode, etc.).
-            - ``proof.rs``: Cryptographic proof generation logic (State Hashing).
-            - ``verify.rs``: logic to verify proof signatures/hashes.
-            - ``replay.rs``: Traits/Logic for replaying commands from logs.
-            - ``replay_events.rs``: Logic for replaying *Events* (Phase 23+).
-            - ``config.rs``: Kernel-level configuration constants/structs.
-            - ``fxp/``: **[DIR]** Fixed-Point Arithmetic (Q16.16)
-                - ``mod.rs``: Module definition.
-                - ``qformat.rs``: The ``FxpScalar`` type definition (i32 wrapper).
-                - ``ops.rs``: Deterministic implementation of Add, Sub, Mul, Div, Sqrt.
-            - ``graph/``: **[DIR]** Knowledge Graph Components
-                - ``mod.rs``:  Module exposure.
-                - ``node.rs``: ``Node`` struct definition (ID, Kind, pointers).
-                - ``edge.rs``: ``Edge`` struct definition (From, To, Kind).
-                - ``pool.rs``: Static memory pool implementation for Nodes/Edges.
-                - ``adjacency.rs``: Adjacency list logic for graph traversal.
-            - ``index/``: **[DIR]** Vector Indexing
-                - ``mod.rs``: Indexing traits.
-                - ``brute_force.rs``: Baseline sequential scan search (Deterministic reference).
-            - ``math/``: **[DIR]** Vector Math
-                - ``mod.rs``: Math traits.
-                - ``l2.rs``: Euclidean distance calculation (using FXP).
-                - ``dot.rs``: Dot product calculation.
-            - ``quant/``: **[DIR]** Quantization (Future)
-                - ``mod.rs``: Traits for vector quantization.
-            - ``snapshot/``: **[DIR]** State Serialization
-                - ``mod.rs``: Snapshot traits.
-                - ``encode.rs``: Deterministic serialization of KernelState.
-                - ``decode.rs``: Deserialization logic.
-                - ``hash.rs``: Computing the cryptographic hash of the state.
-                - ``blake3.rs``: Wrapper around BLAKE3 hasher.
-            - ``state/``: **[DIR]** State Machine
-                - ``mod.rs``: State module.
-                - ``kernel.rs``: **MAIN STRUCT** ``KernelState``. Holds storage, graph, and index.
-                - ``command.rs``: ``Command`` enum for Legacy WAL operations.
-            - ``storage/``: **[DIR]** Vector Storage
-                - ``mod.rs``: Storage traits.
-                - ``record.rs``: ``Record`` struct (ID + Vector data).
-                - ``pool.rs``: Static memory pool for Records.
-            - ``types/``: **[DIR]** Core Types
-                - ``mod.rs``: Type exports.
-                - ``vector.rs``: Generic ``FxpVector`` struct.
-                - ``scalar.rs``: Scalar type aliases.
-                - ``id.rs``: Strongly typed IDs (RecordId, NodeId, EdgeId).
-                - ``enums.rs``: Enumerations (NodeKind, EdgeKind).
-            - ``tests/``: **[DIR]** **[TEST]** Kernel Unit Tests
-                - ``mod.rs``: Test module setup.
-                - ``determinism_tests.rs``: Tests verifying cross-arch output stability.
-                - ``fxp_tests.rs``: Tests for fixed-point math precision/overflow.
-                - ``graph_tests.rs``: Tests for graph operations (add node/edge).
-                - ``index_tests.rs``: Tests for search correctness.
-                - ``math_tests.rs``: Tests for distance functions.
-                - ``proof_tests.rs``: Tests for state hashing.
-                - ``quant_tests.rs``: Tests for quantization.
-                - ``snapshot_tests.rs``: Tests for save/restore roundtrips.
-                - ``state_tests.rs``: Tests for basic kernel state operations.
-                - ``storage_tests.rs``: Tests for record pool management.
-                - ``e2e_tests.rs``: Internal end-to-end flows.
-
-    - ``persistence/``: **[DIR]** Persistence Abstractions
-        - ``Cargo.toml``: Dependencies.
+            - ``lib.rs``: Re-exports.
+            - ``kernel.rs``: Wrapper struct.
+            - ``hnsw.rs``: HNSW implementation (moved from core).
+    - ``persistence/``: **[DIR]** Persistence Layer
         - ``src/``:
-            - ``lib.rs``: Library entry.
-            - ``error.rs``: Persistence-specific errors.
-            - ``fixtures.rs``: Helpers for creating test data (WALs, Snapshots).
-            - ``idx.rs``: Logic for handling index files.
-            - ``snapshot.rs``: Traits for reading/writing snapshots.
-            - ``wal.rs``: Traits for Write-Ahead Log interaction.
-
+            - ``wal.rs``, ``snapshot.rs``: Disk I/O traits and implementations.
     - ``cli/``: **[DIR]** Command Line Interface
-        - ``Cargo.toml``: Dependencies (Clap, etc.).
-        - ``tests/``: Integration tests for CLI arguments.
-        - ``src/``:
-            - ``main.rs``: CLI entry point.
-            - ``commands/``: (If present) Subcommand implementations.
-
-    - ``demo-generator/``: **[DIR]** Data Generator
-        - ``Cargo.toml``: Dependencies.
-        - ``src/``:
-            - ``main.rs``: Executable to generate synthetic vector/graph data for demos.
+        - ``src/main.rs``: CLI entry point.
+    - ``demo-generator/``: **[DIR]** Demo Data Generator
+        - ``src/main.rs``: Synthetic data tool.
 
 node/ (Server Implementation)
 -----------------------------
@@ -278,20 +233,7 @@ Standalone verification utilities.
     - ``src/``
         - ``main.rs``: CLI tool to verify database integrity offline.
 
-src/ (Root Source?)
--------------------
-*Note: This appears to be a separate crate source directory at the root level, likely for the `src` member defined in root `Cargo.toml` if applicable. It mirrors `crates/kernel/src` structure. It serves as the primary compiled source for the `valori` crate if defined in root.*
 
-- ``src/``
-    - ``lib.rs``: Entry point.
-    - ``config.rs``: Configuration.
-    - ``error.rs``: Error definitions.
-    - ``event.rs``: Event definitions.
-    - ``proof.rs``: Proof logic.
-    - ``verify.rs``: Verify logic.
-    - ``replay.rs``, ``replay_events.rs``: Replay logic.
-    - ``fxp/``, ``graph/``, ``index/``, ``math/``, ``quant/``, ``snapshot/``, ``state/``, ``storage/``, ``types/``: **[DIR]** Mirrors of Kernel modules.
-    - ``tests/``: **[DIR]** Unit tests.
 
 demo_db/
 --------
