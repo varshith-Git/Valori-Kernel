@@ -33,7 +33,7 @@ fn test_deterministic_replay() {
     let mut vector = FxpVector::<D>::default();
     vector.data[0] = FxpScalar::ONE;
     
-    let cmd1: Command<D> = Command::InsertRecord { id, vector };
+    let cmd1: Command<D> = Command::InsertRecord { id, vector, metadata: None };
     state.apply(&cmd1).unwrap();
     
     let hash_t1 = kernel_state_hash(&state);
@@ -58,12 +58,12 @@ fn test_deterministic_replay() {
     let mut vector2 = FxpVector::<D>::default();
     vector2.data[1] = FxpScalar::ONE;
     
-    let cmd2: Command<D> = Command::InsertRecord { id: id2, vector: vector2 };
+    let cmd2: Command<D> = Command::InsertRecord { id: id2, vector: vector2, metadata: None };
     
     // Apply to live
     state.apply(&cmd2).unwrap();
     let hash_t2 = kernel_state_hash(&state);
-    
+
     assert_ne!(hash_t1, hash_t2, "State hash should change after mutation");
 
     // Serialize WAL
@@ -108,6 +108,7 @@ fn test_multiple_commands_wal() {
         let cmd: Command<D> = Command::InsertRecord {
             id: RecordId(i),
             vector: FxpVector::default(),
+            metadata: None,
         };
         // Append encoded command
         let len = bincode::serde::encode_into_slice(&cmd, &mut buf, config).unwrap();
@@ -181,13 +182,15 @@ fn test_structural_hashing() {
     state_a.records.records[0] = Some(crate::storage::record::Record { 
         id: RecordId(0), 
         vector: base_vec, 
-        flags: 0 
+        flags: 0 ,
+        metadata: None,
     });
     // Insert 2 (Manual injection to simulate hole at 1 since Insert strictly follows first-free)
     state_a.records.records[2] = Some(crate::storage::record::Record { 
         id: RecordId(2), 
         vector: base_vec, // Identical content
-        flags: 0 
+        flags: 0 ,
+        metadata: None,
     });
     
     // State B
@@ -196,13 +199,15 @@ fn test_structural_hashing() {
     state_b.records.records[0] = Some(crate::storage::record::Record { 
         id: RecordId(0), 
         vector: base_vec, 
-        flags: 0 
+        flags: 0 ,
+        metadata: None,
     });
     // Insert 1
     state_b.records.records[1] = Some(crate::storage::record::Record { 
         id: RecordId(1), 
         vector: base_vec, // Identical content
-        flags: 0 
+        flags: 0 ,
+        metadata: None,
     });
     
     let hash_a = kernel_state_hash(&state_a);

@@ -64,6 +64,16 @@ pub fn hash_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
         for scalar in record.vector.data.iter() {
             hasher.write_i32(scalar.0);
         }
+        // Metadata hash
+        match &record.metadata {
+            Some(m) => {
+                hasher.write_u32(m.len() as u32);
+                hasher.write(m);
+            }
+            None => {
+                hasher.write_u32(0);
+            }
+        }
     }
 
     // Nodes

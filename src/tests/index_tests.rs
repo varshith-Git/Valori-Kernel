@@ -15,13 +15,13 @@ fn test_brute_force_search() {
     let index = BruteForceIndex::default();
 
     let v0 = FxpVector::new_zeros();
-    pool.insert(v0).unwrap();
+    pool.insert(v0, None).unwrap();
 
     let v1 = FxpVector { data: [from_f32(10.0), FxpScalar::ZERO] };
-    pool.insert(v1).unwrap();
+    pool.insert(v1, None).unwrap();
 
     let v2 = FxpVector { data: [from_f32(2.0), FxpScalar::ZERO] };
-    pool.insert(v2).unwrap();
+    pool.insert(v2, None).unwrap();
 
     let query = FxpVector { data: [from_f32(1.0), FxpScalar::ZERO] };
     
@@ -47,8 +47,8 @@ fn test_tie_breaking_order() {
     let mut pool = RecordPool::<CAP, D>::new();
     let index = BruteForceIndex::default();
 
-    pool.insert(FxpVector::new_zeros()).unwrap();
-    pool.insert(FxpVector::new_zeros()).unwrap();
+    pool.insert(FxpVector::new_zeros(), None).unwrap();
+    pool.insert(FxpVector::new_zeros(), None).unwrap();
 
     let query = FxpVector::new_zeros();
     let mut results = [SearchResult::default(); 1];

@@ -19,7 +19,7 @@ fn test_snapshot_restore() {
     let mut kernel = KernelState::<R, D, N, E>::new();
 
     // Apply some commands
-    kernel.apply(&Command::InsertRecord { id: RecordId(0), vector: FxpVector::new_zeros() }).unwrap();
+    kernel.apply(&Command::InsertRecord { id: RecordId(0), vector: FxpVector::new_zeros(), metadata: None }).unwrap();
     kernel.apply(&Command::CreateNode { node_id: NodeId(0), kind: NodeKind::Record, record: Some(RecordId(0)) }).unwrap();
     
     // Checksum original

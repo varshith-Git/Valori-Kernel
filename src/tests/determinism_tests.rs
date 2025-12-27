@@ -37,7 +37,7 @@ fn generate_random_command<const D: usize>(rng: &mut Pcg32, i: u32) -> Command<D
             for k in 0..D {
                 vec.data[k] = from_f32((rng.next_u32() % 100) as f32);
             }
-            Command::InsertRecord { id: RecordId(i), vector: vec } 
+            Command::InsertRecord { id: RecordId(i), vector: vec, metadata: None } 
         },
         1 => Command::DeleteRecord { id: RecordId(rng.next_u32() % 10) },
         2 => Command::CreateNode { 

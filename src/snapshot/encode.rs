@@ -5,7 +5,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2; // Bumped for Metadata support
 
 /// writes a u32 to the buffer at offset
 fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
@@ -15,6 +15,19 @@ fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
     let bytes = val.to_le_bytes();
     buf[*offset..*offset + 4].copy_from_slice(&bytes);
     *offset += 4;
+    Ok(())
+}
+
+fn write_i32(buf: &mut [u8], offset: &mut usize, val: i32) -> Result<()> {
+    write_u32(buf, offset, val as u32)
+}
+
+fn write_u8(buf: &mut [u8], offset: &mut usize, val: u8) -> Result<()> {
+    if *offset + 1 > buf.len() {
+        return Err(KernelError::CapacityExceeded);
+    }
+    buf[*offset] = val;
+    *offset += 1;
     Ok(())
 }
 
@@ -28,22 +41,12 @@ fn write_u64(buf: &mut [u8], offset: &mut usize, val: u64) -> Result<()> {
     Ok(())
 }
 
-fn write_u8(buf: &mut [u8], offset: &mut usize, val: u8) -> Result<()> {
-    if *offset + 1 > buf.len() {
+fn write_bytes(buf: &mut [u8], offset: &mut usize, data: &[u8]) -> Result<()> {
+    if *offset + data.len() > buf.len() {
         return Err(KernelError::CapacityExceeded);
     }
-    buf[*offset] = val;
-    *offset += 1;
-    Ok(())
-}
-
-fn write_i32(buf: &mut [u8], offset: &mut usize, val: i32) -> Result<()> {
-    if *offset + 4 > buf.len() {
-        return Err(KernelError::CapacityExceeded);
-    }
-    let bytes = val.to_le_bytes();
-    buf[*offset..*offset + 4].copy_from_slice(&bytes);
-    *offset += 4;
+    buf[*offset..*offset + data.len()].copy_from_slice(data);
+    *offset += data.len();
     Ok(())
 }
 
@@ -52,21 +55,17 @@ pub fn encode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
     buf: &mut [u8],
 ) -> Result<usize> {
     let mut offset = 0;
-
-    // Header
-    if offset + 4 > buf.len() { return Err(KernelError::CapacityExceeded); }
-    buf[offset..offset+4].copy_from_slice(MAGIC);
-    offset += 4;
-
-    write_u32(buf, &mut offset, SCHEMA_VERSION)?;
-    write_u64(buf, &mut offset, state.version.0)?;
     
-    // Capacities (to check compatibility on restore)
+    // Header
+    write_bytes(buf, &mut offset, MAGIC)?;
+    write_u32(buf, &mut offset, SCHEMA_VERSION)?; // Version
+    write_u64(buf, &mut offset, state.version.0)?; // State Version
+
+    // Capacities
     write_u32(buf, &mut offset, MAX_RECORDS as u32)?;
     write_u32(buf, &mut offset, D as u32)?;
     write_u32(buf, &mut offset, MAX_NODES as u32)?;
     write_u32(buf, &mut offset, MAX_EDGES as u32)?;
-
     // Records
     let record_count = state.records.len() as u32;
     write_u32(buf, &mut offset, record_count)?;
@@ -77,7 +76,18 @@ pub fn encode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         for scalar in record.vector.data.iter() {
             write_i32(buf, &mut offset, scalar.0)?;
         }
+        // V2 Metadata
+        match &record.metadata {
+            Some(m) => {
+                write_u32(buf, &mut offset, m.len() as u32)?;
+                write_bytes(buf, &mut offset, m)?;
+            }
+            None => {
+                write_u32(buf, &mut offset, 0)?;
+            }
+        }
     }
+// ...
 
     // Nodes
     let mut node_count = 0;

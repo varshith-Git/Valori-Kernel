@@ -36,10 +36,12 @@ fn build_commands() -> Vec<Command<D>> {
         Command::InsertRecord {
             id: RecordId(0),
             vector: make_vec([1.0, 0.0, 0.0, 0.0]),
+            metadata: None,
         },
         Command::InsertRecord {
             id: RecordId(1),
             vector: make_vec([0.0, 1.0, 0.0, 0.0]),
+            metadata: None,
         },
 
         // Nodes attached to records

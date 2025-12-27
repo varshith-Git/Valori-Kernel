@@ -16,7 +16,7 @@ fn test_kernel_ops() {
 
     // 1. Insert Record
     let vec0 = FxpVector::new_zeros();
-    let cmd1 = Command::InsertRecord { id: RecordId(0), vector: vec0 };
+    let cmd1 = Command::InsertRecord { id: RecordId(0), vector: vec0, metadata: None };
     kernel.apply(&cmd1).unwrap();
     
     assert!(kernel.get_record(RecordId(0)).is_some());

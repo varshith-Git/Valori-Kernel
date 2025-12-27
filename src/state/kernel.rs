@@ -82,10 +82,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         use crate::event::KernelEvent;
 
         match evt {
-            KernelEvent::InsertRecord { id, vector } => {
+            KernelEvent::InsertRecord { id, vector, metadata } => {
                 let cmd = Command::InsertRecord { 
                     id: *id, 
-                    vector: vector.clone() 
+                    vector: vector.clone(),
+                    metadata: metadata.clone(),
                 };
                 self.apply(&cmd)?;
             }
@@ -127,8 +128,15 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     pub fn apply(&mut self, cmd: &Command<D>) -> Result<()> {
         match cmd {
-            Command::InsertRecord { id, vector } => {
-                let allocated_id = self.records.insert(*vector)?;
+            Command::InsertRecord { id, vector, metadata } => {
+                use crate::config::MAX_METADATA_SIZE;
+                if let Some(m) = metadata {
+                    if m.len() > MAX_METADATA_SIZE {
+                        return Err(KernelError::MetadataTooLarge);
+                    }
+                }
+
+                let allocated_id = self.records.insert(*vector, metadata.clone())?;
                 if allocated_id != *id {
                      return Err(KernelError::InvalidOperation);
                 }

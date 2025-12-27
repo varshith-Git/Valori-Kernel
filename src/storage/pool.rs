@@ -18,18 +18,18 @@ impl<const CAP: usize, const D: usize> RecordPool<CAP, D> {
 
     pub fn new() -> Self {
         Self {
-            records: [None; CAP],
+            records: [const { None }; CAP],
         }
     }
 
     /// Inserts a vector into the first available slot.
     /// Returns the RecordId (which corresponds to the index).
-    pub fn insert(&mut self, vector: FxpVector<D>) -> Result<RecordId> {
+    pub fn insert(&mut self, vector: FxpVector<D>, metadata: Option<alloc::vec::Vec<u8>>) -> Result<RecordId> {
         // Deterministic scan for first empty slot
         for (i, slot) in self.records.iter_mut().enumerate() {
             if slot.is_none() {
                 let id = RecordId(i as u32);
-                *slot = Some(Record::new(id, vector));
+                *slot = Some(Record::new(id, vector, metadata));
                 return Ok(id);
             }
         }

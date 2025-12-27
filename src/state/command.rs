@@ -12,6 +12,7 @@ pub enum Command<const D: usize> {
     InsertRecord {
         id: RecordId,
         vector: FxpVector<D>,
+        metadata: Option<alloc::vec::Vec<u8>>,
     },
     DeleteRecord {
         id: RecordId,

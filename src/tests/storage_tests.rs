@@ -13,11 +13,11 @@ fn test_pool_insert_delete() {
 
     // Insert 0
     let v0 = FxpVector::new_zeros();
-    let id0 = pool.insert(v0).unwrap();
+    let id0 = pool.insert(v0, None).unwrap();
     assert_eq!(id0, RecordId(0));
 
     // Insert 1
-    let id1 = pool.insert(v0).unwrap();
+    let id1 = pool.insert(v0, None).unwrap();
     assert_eq!(id1, RecordId(1));
 
     // Delete 0
@@ -25,7 +25,7 @@ fn test_pool_insert_delete() {
     assert!(pool.get(id0).is_none());
 
     // Insert should reuse slot 0 (deterministic first-fit)
-    let id2 = pool.insert(v0).unwrap();
+    let id2 = pool.insert(v0, None).unwrap();
     assert_eq!(id2, RecordId(0));
 }
 
@@ -36,11 +36,11 @@ fn test_pool_capacity() {
     let mut pool = RecordPool::<CAP, D>::new();
     let v = FxpVector::new_zeros();
 
-    pool.insert(v).unwrap();
-    pool.insert(v).unwrap();
+    pool.insert(v, None).unwrap();
+    pool.insert(v, None).unwrap();
     
     // Should fail
-    let res = pool.insert(v);
+    let res = pool.insert(v, None);
     match res {
         Err(KernelError::CapacityExceeded) => (),
         _ => panic!("Expected CapacityExceeded"),
@@ -54,9 +54,9 @@ fn test_pool_iter() {
     let mut pool = RecordPool::<CAP, D>::new();
     let v = FxpVector::new_zeros();
 
-    pool.insert(v).unwrap(); // 0
-    pool.insert(v).unwrap(); // 1
-    pool.insert(v).unwrap(); // 2
+    pool.insert(v, None).unwrap(); // 0
+    pool.insert(v, None).unwrap(); // 1
+    pool.insert(v, None).unwrap(); // 2
 
     pool.delete(RecordId(1)).unwrap();
 

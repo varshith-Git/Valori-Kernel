@@ -52,7 +52,8 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    if schema_ver != crate::snapshot::encode::SCHEMA_VERSION {
+    // We support V1 and V2
+    if schema_ver != 1 && schema_ver != 2 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
@@ -81,9 +82,26 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         for i in 0..D {
             vector.data[i] = FxpScalar(read_i32(buf, &mut offset)?);
         }
+
+        // Metadata V2 logic
+        let metadata = if schema_ver >= 2 {
+            let meta_len = read_u32(buf, &mut offset)?;
+            if meta_len > 0 {
+                let len = meta_len as usize;
+                if offset + len > buf.len() {
+                    return Err(KernelError::InvalidOperation); // Truncated
+                }
+                let mut bytes = alloc::vec![0u8; len];
+                bytes.copy_from_slice(&buf[offset..offset+len]);
+                offset += len;
+                Some(bytes)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         
-        // Validation of ID bounds is implicit via array access check or capacity check above?
-        // But id_val could be > MAX_RECORDS inside the byte stream even if cap matches.
         let idx = id_val as usize;
         if idx >= MAX_RECORDS {
             return Err(KernelError::CapacityExceeded);
@@ -91,6 +109,7 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         state.records.records[idx] = Some(Record {
             id: RecordId(id_val),
             vector,
+            metadata,
             flags,
         });
     }

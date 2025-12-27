@@ -152,6 +152,7 @@ mod tests {
         journal.append(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::new_zeros(),
+            metadata: None,
         });
 
         assert_eq!(journal.buffer_len(), 1);
@@ -171,6 +172,7 @@ mod tests {
         journal.append(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::new_zeros(),
+            metadata: None,
         });
 
         journal.discard_buffer();

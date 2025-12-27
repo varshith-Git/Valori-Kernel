@@ -13,6 +13,8 @@ pub enum KernelError {
     InvalidOperation,
     /// Invalid input.
     InvalidInput,
+    /// Metadata too large.
+    MetadataTooLarge,
 }
 
 pub type KernelResult<T> = core::result::Result<T, KernelError>;
