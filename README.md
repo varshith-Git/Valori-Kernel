@@ -3,6 +3,7 @@
 **The Deterministic Memory Engine for AI Agents with Crash Recovery.**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b.svg)](https://arxiv.org/abs/2512.22280)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Determinism: Verified](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
 
