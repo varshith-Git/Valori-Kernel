@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 COPY . .
 
 # Build deterministically
-RUN cargo build --release --workspace --exclude valori-ffi --locked
+RUN cargo build --release --workspace --exclude valori-ffi --exclude valori-embedded --locked
 
 # Runtime stage
 FROM debian:bookworm-slim
