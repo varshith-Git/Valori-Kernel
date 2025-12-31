@@ -1,5 +1,5 @@
 use anyhow::Result;
-use valori_kernel::{ValoriKernel, types::FixedPointVector};
+use valori_kernel::ValoriKernel;
 
 fn main() -> Result<()> {
     println!("🚀 Starting Metadata Filter Benchmark...");

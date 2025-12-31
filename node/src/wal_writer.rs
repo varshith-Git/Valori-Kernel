@@ -7,8 +7,8 @@
 
 use valori_kernel::state::command::Command;
 use valori_kernel::replay::WalHeader;
-use std::fs::{File, OpenOptions, Metadata};
-use std::io::{Write, BufWriter, Seek, SeekFrom};
+use std::fs::{File, OpenOptions};
+use std::io::{Write, BufWriter};
 use std::path::Path;
 use thiserror::Error;
 

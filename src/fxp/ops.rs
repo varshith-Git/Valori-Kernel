@@ -2,7 +2,9 @@
 
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use crate::types::scalar::FxpScalar;
-use crate::fxp::qformat::{FRAC_BITS, SCALE};
+use crate::fxp::qformat::FRAC_BITS;
+#[cfg(any(test, feature = "std"))]
+use crate::fxp::qformat::SCALE;
 
 /// Basic fixed-point addition with saturation.
 pub fn fxp_add(a: FxpScalar, b: FxpScalar) -> FxpScalar {

@@ -123,7 +123,7 @@ pub fn read_event_log<const D: usize>(path: impl AsRef<Path>) -> Result<Vec<Kern
                     }
                 }
             }
-            Err(e) => {
+            Err(_e) => {
                 // Check if we're at the tail (incomplete event from crash)
                 if offset + 100 > buffer.len() {
                     // Likely tail corruption from crash mid-write

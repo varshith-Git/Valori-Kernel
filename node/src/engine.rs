@@ -34,6 +34,7 @@ pub struct Engine<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usi
     
     // Host-level extensions
     index: Box<dyn VectorIndex + Send + Sync>,
+    #[allow(dead_code)]
     quant: Box<dyn Quantizer + Send + Sync>,
     pub metadata: Arc<MetadataStore>,
     pub snapshot_path: Option<std::path::PathBuf>,

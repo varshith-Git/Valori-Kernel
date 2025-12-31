@@ -31,7 +31,7 @@ fn main() -> Result<()> {
     // Payload: [CMD(1)] + [ID(8)] + [DIM(2)] + [VALUES(128*4)]
     // Based on `crates/kernel/src/types.rs`
     let packet_size = 1 + 8 + 2 + (DIM * 4);
-    let mut packet_buffer = vec![0u8; packet_size];
+    let _packet_buffer = vec![0u8; packet_size];
     
     // Constant Header Fields
     // Offset 0: CMD_INSERT = 1

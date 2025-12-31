@@ -351,7 +351,7 @@ mod tests {
 
         // Reopen and append more
         {
-            let mut writer = EventLogWriter::<16>::open(&path).unwrap();
+            let writer = EventLogWriter::<16>::open(&path).unwrap();
             assert_eq!(writer.event_count(), 5);
         }
     }

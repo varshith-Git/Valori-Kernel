@@ -106,6 +106,7 @@ impl HnswIndex {
         f_level.floor() as usize
     }
 
+    #[allow(dead_code)]
     fn safe_dist(&self, v1: Option<&Vec<f32>>, v2: Option<&Vec<f32>>) -> f32 {
         if let (Some(a), Some(b)) = (v1, v2) {
             self.dist(a, b)

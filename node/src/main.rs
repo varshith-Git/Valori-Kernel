@@ -4,7 +4,6 @@ use valori_node::server::{build_router, ConcreteEngine, SharedEngine};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::net::TcpListener;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {

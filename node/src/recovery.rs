@@ -5,13 +5,11 @@
 //! - Event log replay (Phase 23+: canonical truth)
 //! - WAL replay (legacy fallback)
 
-use valori_kernel::state::command::Command;
 use valori_kernel::state::kernel::KernelState;
-use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
 
-use crate::wal_reader::{WalReader, WalReaderError};
-use crate::wal_writer::WalWriter; // Added for tests
+use crate::wal_reader::WalReader;
+ // Added for tests
 use crate::errors::EngineError;
 use crate::events::event_replay::{recover_from_event_log, verify_snapshot_consistency};
 use crate::events::EventJournal;
@@ -149,6 +147,8 @@ mod tests {
     use super::*;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
+    use valori_kernel::state::command::Command;
+    use crate::wal_writer::WalWriter;
     use tempfile::tempdir;
 
     #[test]

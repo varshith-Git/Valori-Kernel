@@ -165,7 +165,7 @@ mod tests {
     fn test_sift_loader_basic() {
         let dim = 4;
         let count = 10;
-        let (file, expected_data) = create_mock_fvecs(dim, count, 0);
+        let (file, _expected_data) = create_mock_fvecs(dim, count, 0);
         
         // Mmap
         let mmap = unsafe { Mmap::map(file.as_file()).unwrap() };
@@ -179,13 +179,13 @@ mod tests {
         assert_eq!(c, 3);
         assert_eq!(slice.len(), 3 * (4 + dim * 4));
 
-        let (slice, c) = loader.next_batch(3).unwrap();
+        let (_slice, c) = loader.next_batch(3).unwrap();
         assert_eq!(c, 3);
 
-        let (slice, c) = loader.next_batch(3).unwrap();
+        let (_slice, c) = loader.next_batch(3).unwrap();
         assert_eq!(c, 3);
 
-        let (slice, c) = loader.next_batch(3).unwrap();
+        let (_slice, c) = loader.next_batch(3).unwrap();
         assert_eq!(c, 1); // Leftover
 
         assert!(loader.next_batch(3).is_none());

@@ -186,7 +186,7 @@ fn main() -> Result<()> {
     
     // Pass/Fail Logic
     if total_queries > 0 {
-        let r1 = (hits_at_1 as f64 / total_queries as f64);
+        let r1 = hits_at_1 as f64 / total_queries as f64;
         if r1 > 0.90 {
             println!("🚀 SUCCESS: Recall@1 > 90%");
         } else {

@@ -402,7 +402,7 @@ async fn get_replication_events<const M: usize, const D: usize, const N: usize, 
     ).await?;
     
     // 3. Convert mpsc Receiver to Body Stream
-    use tokio_util::io::ReaderStream;
+    
     use futures::StreamExt;
     
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx_stream);
@@ -420,7 +420,7 @@ async fn get_replication_events<const M: usize, const D: usize, const N: usize, 
 }
 
 async fn get_replication_state() -> Json<serde_json::Value> {
-    use crate::replication::{REPLICATION_STATUS, ReplicationState};
+    use crate::replication::REPLICATION_STATUS;
     use std::sync::atomic::Ordering;
     
     let status_u8 = REPLICATION_STATUS.load(Ordering::Relaxed);
