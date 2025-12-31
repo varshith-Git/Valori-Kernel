@@ -42,7 +42,7 @@ pub fn run(snapshot_path: &str, wal_path: &str, target_index: u64, query_arg: Op
             .map_err(|_| anyhow::anyhow!("Invalid JSON query. Expected [x, y, z]"))?;
         
         // Hardcoded K=5 for now
-        let results = engine.state.search(&query_vec, 5)?;
+        let results = engine.state.search(&query_vec, 5, None)?;
         
         let mut table_results = Table::new();
         table_results

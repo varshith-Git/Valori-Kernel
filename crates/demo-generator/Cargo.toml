@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-valori-kernel = { path = "../kernel" }
+valori-kernel = { path = "../.." }
 valori-persistence = { path = "../persistence" }
 byteorder = "1.5"
 crc64fast = "1.0"

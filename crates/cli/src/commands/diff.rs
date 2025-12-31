@@ -76,8 +76,8 @@ pub fn run(snapshot_path: &str, wal_path: &str, from_index: u64, to_index: u64, 
             .map_err(|_| anyhow::anyhow!("Invalid JSON query. Expected [x, y, z]"))?;
 
         let k = 5;
-        let results_a = engine_a.state.search(&query_vec, k)?;
-        let results_b = engine_b.state.search(&query_vec, k)?;
+        let results_a = engine_a.state.search(&query_vec, k, None)?;
+        let results_b = engine_b.state.search(&query_vec, k, None)?;
 
         let ranks_a = compute_rank_map(&results_a);
         let ranks_b = compute_rank_map(&results_b);

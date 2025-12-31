@@ -62,7 +62,7 @@ pub fn generate_test_scenario(dir: &Path) -> Result<TestPaths> {
     })
 }
 
-use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, WriteBytesExt};
 use valori_kernel::ValoriKernel;
 
 /// Creates a strictly formatted InsertPayload: [CMD(1), ID(8), DIM(2), VALUES(dim*4)]
