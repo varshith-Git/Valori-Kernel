@@ -6,6 +6,7 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b.svg)](https://arxiv.org/abs/2512.22280)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Determinism: Verified](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
+[![Verification Report](https://img.shields.io/badge/docs-Verification_Report_v0.1.0-blue)](docs/verification_report.md)
 
 **Valori** is a `no_std` Rust kernel providing a strictly deterministic vector database and knowledge graph. It guarantees **bit-identical state across any architecture** (x86, ARM, WASM) with **crash recovery** and verifiable memory for AI agents.
 
