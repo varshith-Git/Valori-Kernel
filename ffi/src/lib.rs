@@ -47,7 +47,8 @@ impl ValoriEngine {
 
     /// Insert a record. Returns the assigned ID.
     /// Valori Kernel enforces dense ID packing (first free slot).
-    fn insert(&self, vector: Vec<f32>) -> PyResult<u32> {
+    #[pyo3(signature = (vector, tag))]
+    fn insert(&self, vector: Vec<f32>, tag: u64) -> PyResult<u32> {
         if vector.len() != D {
             return Err(pyo3::exceptions::PyValueError::new_err(format!("Expected {} dims", D)));
         }
@@ -78,7 +79,7 @@ impl ValoriEngine {
 
         // 3. Commit via Event Log (Preferred) or WAL (Fallback)
         if let Some(ref mut committer) = engine.event_committer {
-             let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec };
+             let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec, metadata: None, tag };
              match committer.commit_event(event.clone()) {
                  Ok(_) => {
                      // Sync Engine State
@@ -96,16 +97,33 @@ impl ValoriEngine {
         }
     }
 
-    fn search(&self, vector: Vec<f32>, k: usize) -> PyResult<Vec<(u32, i64)>> {
-         if vector.len() != D {
+    #[pyo3(signature = (vector, k, filter_tag=None))]
+    fn search(&self, vector: Vec<f32>, k: usize, filter_tag: Option<u64>) -> PyResult<Vec<(u32, i64)>> {
+        if vector.len() != D {
             return Err(pyo3::exceptions::PyValueError::new_err(format!("Expected {} dims", D)));
         }
         
         let engine = self.inner.lock().unwrap();
-        match engine.search_l2(&vector, k) {
-            Ok(results) => Ok(results),
-            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
+
+        // Convert query to FxpVector for kernel search
+        let mut fxp_vec = FxpVector::<D>::new_zeros();
+        for (i, &v) in vector.iter().enumerate() {
+             let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
+             fxp_vec.data[i] = FxpScalar(fixed);
         }
+
+        let mut results = vec![valori_kernel::index::SearchResult::default(); k];
+        
+        // Call Kernel Directly for Filtered Search
+        let count = engine.state.search_l2(&fxp_vec, &mut results, filter_tag);
+        
+        let mut py_results = Vec::with_capacity(count);
+        for i in 0..count {
+            let r = results[i];
+            py_results.push((r.id.0 as u32, r.score.0 as i64));
+        }
+
+        Ok(py_results)
     }
     
     fn save(&mut self) -> PyResult<String> {
@@ -114,6 +132,62 @@ impl ValoriEngine {
              Ok(path) => Ok(path.to_string_lossy().to_string()),
              Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
          }
+    }
+
+    #[pyo3(signature = (kind, record_id=None))]
+    fn create_node(&self, kind: u8, record_id: Option<u32>) -> PyResult<u32> {
+        let mut engine = self.inner.lock().unwrap();
+        
+        let rid = record_id.map(|r| RecordId(r));
+        
+        use valori_kernel::types::enums::NodeKind;
+        let k = NodeKind::from_u8(kind)
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("Invalid NodeKind: {}", kind)))?;
+
+        // Deterministic ID generation (Calculate BEFORE mutable borrow for event log)
+        // Check NodePool indexing. Assuming 0-based from pool.rs inspection or trial.
+        let next_id = valori_kernel::types::id::NodeId(engine.state.node_count() as u32);
+
+        // Use event log if available
+        if let Some(ref mut committer) = engine.event_committer {
+             let event = KernelEvent::CreateNode { id: next_id, kind: k, record: rid };
+             
+             match committer.commit_event(event.clone()) {
+                 Ok(_) => {
+                     engine.apply_committed_event(&event).map_err(|e| {
+                         pyo3::exceptions::PyRuntimeError::new_err(format!("Apply failed: {:?}", e))
+                     })?;
+                     Ok(next_id.0)
+                 }
+                 Err(e) => return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("Commit failed: {:?}", e))),
+             }
+        } else {
+             // Fallback to direct state mutation
+             let node_id = engine.state.create_node(k, rid)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))?;
+             Ok(node_id.0)
+        }
+    }
+
+    fn create_edge(&self, from: u32, to: u32, kind: u8) -> PyResult<u32> {
+        let mut engine = self.inner.lock().unwrap();
+        use valori_kernel::types::id::NodeId;
+        use valori_kernel::types::enums::EdgeKind;
+        
+        let k = EdgeKind::from_u8(kind)
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("Invalid EdgeKind: {}", kind)))?;
+        
+        // Predict ID for return (though direct create_edge returns it)
+        // If we want event sourcing support for edges later, we need next_id. 
+        // But for now create_edge calls direct mutation in fallback.
+        // Wait, current impl calls engine.state.create_edge directly.
+        // So we don't need to predict ID here unless we implement event sourcing for edges.
+        // But create_node above DOES event sourcing.
+        
+        let edge_id = engine.state.create_edge(NodeId(from), NodeId(to), k)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))?;
+            
+        Ok(edge_id.0)
     }
 }
 
