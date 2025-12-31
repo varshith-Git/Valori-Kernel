@@ -20,12 +20,12 @@ class LocalClient:
              raise ImportError("Could not load 'valori_ffi' module. Ensure it is compiled and in PYTHONPATH.")
         self.kernel = _ffi.ValoriEngine(path)
 
-    def insert(self, vector: List[float]) -> int:
-        return self.kernel.insert(vector)
+    def insert(self, vector: List[float], tag: int = 0) -> int:
+        return self.kernel.insert(vector, tag)
 
-    def search(self, query: List[float], k: int) -> List[Dict[str, Any]]:
+    def search(self, query: List[float], k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
         # FFI returns [(id, score), ...]
-        hits = self.kernel.search(query, k)
+        hits = self.kernel.search(query, k, filter_tag)
         return [{"id": h[0], "score": h[1]} for h in hits]
 
     def create_node(self, kind: int, record_id: Optional[int] = None) -> int:

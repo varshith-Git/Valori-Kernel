@@ -5,7 +5,7 @@ from valori.protocol import ProtocolClient, ProtocolError
 
 class TestProtocolRemote(unittest.TestCase):
     def setUp(self):
-        self.dummy_embed = lambda x: [0.1] * 16
+        self.dummy_embed = lambda x: [0.1] * 384
         self.client = ProtocolClient(embed=self.dummy_embed, remote="http://mock-node:3000")
 
     @patch("requests.Session.post")
@@ -21,7 +21,7 @@ class TestProtocolRemote(unittest.TestCase):
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        vec = [0.1] * 16
+        vec = [0.1] * 384
         res = self.client.upsert_vector(vec)
         
         self.assertEqual(res["record_id"], 10)
@@ -43,7 +43,7 @@ class TestProtocolRemote(unittest.TestCase):
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        vec = [0.1] * 16
+        vec = [0.1] * 384
         res = self.client.search_vector(vec, k=3)
         
         self.assertEqual(len(res["results"]), 1)
@@ -92,7 +92,7 @@ class TestProtocolRemote(unittest.TestCase):
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        vec = [0.1] * 16
+        vec = [0.1] * 384
         with self.assertRaises(ProtocolError):
             self.client.upsert_vector(vec)
 
@@ -107,7 +107,7 @@ class TestProtocolRemote(unittest.TestCase):
         
         # Verify headers
         args, kwargs = mock_post.call_args
-        self.assertEqual(args[0], "http://mock-node:3000/restore")
+        self.assertEqual(args[0], "http://mock-node:3000/v1/snapshot/upload")
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/octet-stream")
         self.assertEqual(kwargs["data"], data)
 

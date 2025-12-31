@@ -9,7 +9,7 @@ from .ingest import chunk_text
 
 EmbedFn = Callable[[str], List[float]]
 
-EXPECTED_DIM = 16  # must match kernel D
+EXPECTED_DIM = 384  # must match kernel D
 
 class MemoryClient:
     def __init__(

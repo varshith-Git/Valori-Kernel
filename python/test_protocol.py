@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 import unittest
 import os
+import pytest
 from valori.protocol import ProtocolClient
 from valori import ProtocolClient as PublicProtocolClient # Verify export
 
@@ -11,10 +12,18 @@ def dummy_embed(text: str) -> list[float]:
     """
     import hashlib
     hash_val = hashlib.sha256(text.encode()).hexdigest()
+    # Expand 32 byte hash to 384 floats (cycle)
     res = []
-    for i in range(16):
-        byte_val = int(hash_val[i*2:(i+1)*2], 16)
-        res.append((byte_val / 255.0) * 2 - 1)
+    
+    # We need 384 floats. 
+    # Use hash bytes to seed generation or just cycle
+    vals = [int(hash_val[i*2:(i+1)*2], 16) for i in range(32)]
+    
+    for i in range(384):
+        byte_val = vals[i % 32]
+        # Mix with index to avoid strict repetition pattern being too obvious
+        v = (byte_val ^ (i & 0xFF)) / 255.0
+        res.append(v * 2 - 1)
     return res
 
 @pytest.fixture
@@ -41,7 +50,7 @@ def test_upsert_text_basic(protocol_client):
     assert hits["results"][0]["memory_id"] in res["memory_ids"]
 
 def test_upsert_vector_explicit(protocol_client):
-    vec = [0.5] * 16 # D=16
+    vec = [0.5] * 384 # D=384
     
     res = protocol_client.upsert_vector(vec)
     

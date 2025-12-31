@@ -37,8 +37,8 @@ def run_test_suite(db, name):
     ts = time.time()
     # Normalize manually roughly to avoid overflow if needed, but [ts, 0...] is fine strictly speaking if scaled
     # But let's keep it simple: [0.99, 0.01...] distinct from [1.0, 0.0]
-    vec1 = [0.99, 0.0] + [0.0]*14
-    vec2 = [0.0, 0.99] + [0.0]*14
+    vec1 = [0.99, 0.0] + [0.0]*382
+    vec2 = [0.0, 0.99] + [0.0]*382
     
     id1 = db.insert(vec1)
     id2 = db.insert(vec2)

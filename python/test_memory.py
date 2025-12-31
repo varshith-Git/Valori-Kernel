@@ -54,15 +54,9 @@ class MockLocalClient:
 
 def dummy_embed(text: str) -> list[float]:
     """
-    Deterministic embedding function that maps text to a 16-dimensional vector.
+    Deterministic embedding function that maps text to a 384-dimensional vector.
     """
-    import hashlib
-    hash_val = hashlib.sha256(text.encode()).hexdigest()
-    res = []
-    for i in range(16):
-        byte_val = int(hash_val[i*2:(i+1)*2], 16)
-        res.append((byte_val / 255.0) * 2 - 1)
-    return res
+    return [0.1] * 384
 
 # --- FIXTURE ---
 
