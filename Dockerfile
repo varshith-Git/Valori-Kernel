@@ -1,6 +1,10 @@
 FROM rust:1.85-slim as builder
 WORKDIR /app
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+
+
 # Copy source
 COPY . .
 
