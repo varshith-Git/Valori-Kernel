@@ -56,3 +56,10 @@ Thumbs.db
 *.log
 *.log
 demo_db/
+
+# Ignore Data
+data/
+*.fvecs
+*.ivecs
+*.tar.gz
+*.db
