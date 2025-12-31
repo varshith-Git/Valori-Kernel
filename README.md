@@ -135,6 +135,47 @@ hits = client.search([0.1] * 16, k=1)
 
 ---
 
+## 🛠️ Setup
+
+### Prerequisites
+- Rust 1.70+ (`rustup` recommended)
+- Python 3.8+ (for Python bindings, optional)
+
+### Quick Start
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/varshith-Git/Valori-Kernel.git
+   cd Valori-Kernel
+   ```
+
+2. **Download benchmark dataset (optional, for running benchmarks):**
+   ```bash
+   chmod +x scripts/download_data.sh
+   ./scripts/download_data.sh
+   ```
+   This downloads the SIFT1M dataset (~150MB) used for recall and performance benchmarks.
+
+3. **Build and test:**
+   ```bash
+   cargo build --release
+   cargo test --workspace --exclude valori-embedded
+   ```
+
+4. **Run benchmarks:**
+   ```bash
+   # Recall benchmark (requires SIFT dataset)
+   cargo run --release --bin bench_recall
+   
+   # Ingestion throughput
+   cargo run --release --bin bench_ingest
+   
+   # Filtering performance
+   cargo run --release --bin bench_filter
+   ```
+
+---
+
 ## 📡 Replication & Clustering
 
 Valori supports **Leader-Follower Replication**.
