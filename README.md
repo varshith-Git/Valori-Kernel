@@ -25,6 +25,8 @@ Valori eschews standard `f32` (which varies by CPU) for **Q16.16 Fixed-Point Ari
 - **Deterministic**: Metadata tags are hashed into the state, preventing false equivalence.
 - **Metadata**: Attach optional binary metadata (up to 64KB) per record.
 
+![Filter Performance](assets/bench_filter.png)
+
 ### 3. Crash Recovery & Durability
 - **WAL & Event Log**: Every operation is synced to disk via length-prefixed logs.
 - **Batch Ingestion**: Atomic commits for high-throughput bulk inserts.
@@ -40,6 +42,8 @@ Valori eschews standard `f32` (which varies by CPU) for **Q16.16 Fixed-Point Ari
 ## ⚡ Performance: The Cost of Determinism?
 Critics argued that software-based fixed-point math (Q16.16) would be too slow compared to hardware floats.
 We benchmarked the full **SIFT1M dataset (1,000,000 vectors, 128-dim)** on a MacBook Air (M2).
+
+![1M Vector Benchmark](assets/bench_1m.png)
 
 | Metric | Result | Note |
 | :--- | :--- | :--- |
