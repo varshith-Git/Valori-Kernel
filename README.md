@@ -57,6 +57,7 @@ We benchmarked the full **SIFT1M dataset (1,000,000 vectors, 128-dim)** on a Mac
 *Verdict: The overhead of determinism is negligible for ingestion.*
 
 ![Ingestion Speed](assets/bench_ingest.png)
+## Persistence
 ![Persistence Speed](assets/bench_persistence.png)
 
 ---
