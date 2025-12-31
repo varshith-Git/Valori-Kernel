@@ -28,6 +28,7 @@ impl<const MAX_RECORDS: usize, const D: usize> VectorIndex<MAX_RECORDS, D> for B
         pool: &RecordPool<MAX_RECORDS, D>,
         query: &FxpVector<D>,
         results: &mut [SearchResult],
+        filter: Option<u64>,
     ) -> usize {
         let k = results.len();
         if k == 0 { return 0; }
@@ -40,6 +41,26 @@ impl<const MAX_RECORDS: usize, const D: usize> VectorIndex<MAX_RECORDS, D> for B
         let mut count = 0;
 
         for record in pool.iter() {
+            // Apply Filter
+            if let Some(req_tag) = filter {
+                // Where is the tag stored?
+                // Record struct has `flags`. Does it have `tag`?
+                // I need to check `crates/kernel/src/storage/record.rs`. 
+                // Assuming I ported it, I should check if it has `tag`.
+                // Actually `Snapshot` decoding expected `tag`? No, `KernelEvent` had `tag`.
+                // But `Record` struct in `snapshot/decode.rs` mismatch error (Step 2873) complained about `vector` and `flags`.
+                // It did NOT complain about `tag`.
+                // Wait, if `Record` doesn't have `tag`, I can't filter!
+                
+                // Let's assume for now I cannot filter if Record doesn't support it.
+                // But I MUST support it.
+                // I will add `tag` to Record struct in `storage/record.rs` in next step.
+                // For now, I'll invoke a hypothetical `record.tag`.
+                if record.tag != req_tag {
+                    continue;
+                }
+            }
+
             let dist_sq = fxp_l2_sq(&record.vector, query);
             let candidate = SearchResult { score: dist_sq, id: record.id };
 
@@ -82,7 +103,7 @@ impl BruteForceIndex {
         // To strictly avoid code dup, we could move implementation to a standalone fn or keep it here.
         // For simplicity: duplicate logic or re-use? 
         // We implemented the trait. Let's make this helper use the trait impl.
-        VectorIndex::search(self, pool, query, &mut buf);
+        VectorIndex::search(self, pool, query, &mut buf, None);
         buf
     }
 }

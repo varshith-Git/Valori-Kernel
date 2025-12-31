@@ -38,5 +38,6 @@ pub trait VectorIndex<const MAX_RECORDS: usize, const D: usize> {
         pool: &RecordPool<MAX_RECORDS, D>,
         query: &FxpVector<D>,
         results: &mut [SearchResult],
+        filter: Option<u64>,
     ) -> usize;
 }

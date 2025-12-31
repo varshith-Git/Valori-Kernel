@@ -20,8 +20,8 @@ use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
 use crate::types::enums::{NodeKind, EdgeKind};
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
-use serde::ser::{SerializeStruct, SerializeStructVariant};
-use serde::de::{self, Visitor, MapAccess, SeqAccess, EnumAccess, VariantAccess};
+use serde::ser::SerializeStructVariant;
+use serde::de::{self, Visitor, SeqAccess};
 use core::fmt;
 
 /// KernelEvent represents the canonical event language for Valori.
@@ -35,6 +35,7 @@ pub enum KernelEvent<const D: usize> {
         id: RecordId,
         vector: FxpVector<D>,
         metadata: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
     },
 
     /// Delete an existing vector record from the kernel
@@ -83,19 +84,16 @@ impl<const D: usize> Serialize for KernelEvent<D> {
         S: Serializer,
     {
         match self {
-            KernelEvent::InsertRecord { id, vector, metadata } => {
-                // We serialize as a struct variant with 3 fields for Serialize
-                // But specifically for metadata, we manually encode the length + bytes
-                // To achieve "No version flag", we just write the fields.
-                // Bincode enum serialization: [VariantIdx][Field1][Field2][...]
-                let mut state = serializer.serialize_struct_variant("KernelEvent", 0, "InsertRecord", 3)?;
+            KernelEvent::InsertRecord { id, vector, metadata, tag } => {
+                // serialized as struct variant with *4* fields now
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 0, "InsertRecord", 4)?;
                 state.serialize_field("id", id)?;
                 state.serialize_field("vector", vector)?;
                 
-                // Custom Metadata Serialization: u32 Len + Bytes
-                // We wrap this in a helper or just serialize a "RawMetadata" struct
                 let meta_wrapper = RawMetadata(metadata.as_ref());
                 state.serialize_field("metadata", &meta_wrapper)?;
+
+                state.serialize_field("tag", tag)?;
                 
                 state.end()
             }
@@ -165,6 +163,7 @@ impl<'de, const D: usize> Deserialize<'de> for KernelEvent<D> {
                  vector: FxpVector<D>,
                  #[serde(with = "raw_metadata_serde")]
                  metadata: Option<alloc::vec::Vec<u8>>,
+                 tag: u64,
              },
              DeleteRecord {
                  id: RecordId,
@@ -189,7 +188,7 @@ impl<'de, const D: usize> Deserialize<'de> for KernelEvent<D> {
         let helper = KernelEventHelper::<D>::deserialize(deserializer)?;
         
         Ok(match helper {
-            KernelEventHelper::InsertRecord { id, vector, metadata } => KernelEvent::InsertRecord { id, vector, metadata },
+            KernelEventHelper::InsertRecord { id, vector, metadata, tag } => KernelEvent::InsertRecord { id, vector, metadata, tag },
             KernelEventHelper::DeleteRecord { id } => KernelEvent::DeleteRecord { id },
             KernelEventHelper::CreateNode { id, kind, record } => KernelEvent::CreateNode { id, kind, record },
             KernelEventHelper::CreateEdge { id, from, to, kind } => KernelEvent::CreateEdge { id, from, to, kind },
@@ -253,6 +252,7 @@ mod tests {
             id: RecordId(42),
             vector: FxpVector::new_zeros(),
             metadata: Some(alloc::vec![0xAA, 0xBB]),
+            tag: 123,
         };
 
         let bytes1 = bincode::serde::encode_to_vec(&event, bincode::config::standard()).unwrap();

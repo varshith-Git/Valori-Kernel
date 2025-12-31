@@ -1,22 +1,42 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-//! Error types.
+use thiserror::Error;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum KernelError {
-    /// Generic overflow error for arithmetic operations.
-    Overflow,
-    /// Storage is full.
+    #[error("Invalid command: {0}")]
+    InvalidCommand(u8),
+
+    #[error("Dimension mismatch: expected {expected}, found {found}")]
+    DimensionMismatch { expected: usize, found: usize },
+
+    #[error("Invalid payload length: expected {expected}, found {found}")]
+    InvalidPayloadLength { expected: usize, found: usize },
+
+    #[error("IO Error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("Distance calculation overflow")]
+    DistanceOverflow,
+
+    #[error("Query value out of Q16.16 range: {0}")]
+    QueryOutOfRange(i32),
+
+    #[error("Kernel Capacity Exceeded")]
     CapacityExceeded,
-    /// Item not found.
+
+    #[error("Not Found")]
     NotFound,
-    /// Invalid operation.
-    InvalidOperation,
-    /// Invalid input.
+
+    #[error("Numeric Overflow")]
+    Overflow,
+
+    #[error("Invalid Input")]
     InvalidInput,
-    /// Metadata too large.
+
+    #[error("Invalid Operation")]
+    InvalidOperation,
+
+    #[error("Metadata Too Large")]
     MetadataTooLarge,
 }
 
-pub type KernelResult<T> = core::result::Result<T, KernelError>;
-pub type Result<T> = KernelResult<T>; // Keep Result for backward compat within crate, or deprecate? User asked for KernelResult.
-
+pub type Result<T> = std::result::Result<T, KernelError>;

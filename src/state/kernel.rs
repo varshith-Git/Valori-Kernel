@@ -60,8 +60,44 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.edges.get(id).is_some()
     }
 
-    pub fn search_l2(&self, query: &FxpVector<D>, results: &mut [SearchResult]) -> usize {
-        self.index.search(&self.records, query, results)
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
+
+    pub fn search_l2(&self, query: &FxpVector<D>, results: &mut [SearchResult], filter: Option<u64>) -> usize {
+        self.index.search(&self.records, query, results, filter)
+    }
+
+    pub fn create_node(&mut self, kind: crate::types::enums::NodeKind, record: Option<RecordId>) -> Result<NodeId> {
+        let id = NodeId(self.nodes.len() as u32); // 0-based
+        // But Command::CreateNode requires ID.
+        // We need next ID.
+        // NodePool doesn't expose next_id easily? 
+        // It has `len()`.
+        
+        let cmd = Command::CreateNode {
+            node_id: id,
+            kind,
+            record,
+        };
+        self.apply(&cmd)?;
+        Ok(id)
+    }
+
+    pub fn create_edge(&mut self, from: NodeId, to: NodeId, kind: crate::types::enums::EdgeKind) -> Result<EdgeId> {
+        let id = EdgeId(self.edges.len() as u32);
+        let cmd = Command::CreateEdge {
+            edge_id: id,
+            from,
+            to,
+            kind,
+        };
+        self.apply(&cmd)?;
+        Ok(id)
     }
 
     // --- Event-Sourced Write Logic ---
@@ -82,11 +118,12 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         use crate::event::KernelEvent;
 
         match evt {
-            KernelEvent::InsertRecord { id, vector, metadata } => {
+            KernelEvent::InsertRecord { id, vector, metadata, tag } => {
                 let cmd = Command::InsertRecord { 
                     id: *id, 
                     vector: vector.clone(),
                     metadata: metadata.clone(),
+                    tag: *tag,
                 };
                 self.apply(&cmd)?;
             }
@@ -128,7 +165,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     pub fn apply(&mut self, cmd: &Command<D>) -> Result<()> {
         match cmd {
-            Command::InsertRecord { id, vector, metadata } => {
+            Command::InsertRecord { id, vector, metadata, tag } => {
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
                     if m.len() > MAX_METADATA_SIZE {
@@ -136,7 +173,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                     }
                 }
 
-                let allocated_id = self.records.insert(*vector, metadata.clone())?;
+                let allocated_id = self.records.insert(*vector, metadata.clone(), *tag)?;
                 if allocated_id != *id {
                      return Err(KernelError::InvalidOperation);
                 }

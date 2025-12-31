@@ -13,6 +13,7 @@ pub enum Command<const D: usize> {
         id: RecordId,
         vector: FxpVector<D>,
         metadata: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
     },
     DeleteRecord {
         id: RecordId,
