@@ -167,6 +167,8 @@ mod tests {
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         });
 
         assert_eq!(journal.buffer_size(), 1);
@@ -188,6 +190,8 @@ mod tests {
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         });
 
         assert_eq!(journal.buffer_size(), 1);
@@ -205,10 +209,14 @@ mod tests {
             KernelEvent::InsertRecord {
                 id: RecordId(1),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             },
             KernelEvent::InsertRecord {
                 id: RecordId(2),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             },
         ];
 
@@ -226,6 +234,8 @@ mod tests {
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         });
 
         // Simulate: crash before commit (rollback)

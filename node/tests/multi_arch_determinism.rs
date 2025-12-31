@@ -27,6 +27,8 @@ mod determinism_tests {
             wal_path: None,
             auto_snapshot_interval_secs: None,
             auth_token: None,
+            event_log_path: None,
+            mode: Default::default(),
         }
     }
 

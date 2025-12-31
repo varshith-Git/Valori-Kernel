@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
-use valori_kernel::engine::Engine;
+use valori_node::engine::Engine;
 use std::sync::Arc;
 use tempfile::tempdir;
 

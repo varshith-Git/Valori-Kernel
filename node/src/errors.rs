@@ -29,6 +29,7 @@ impl IntoResponse for EngineError {
                 KernelError::InvalidOperation => (StatusCode::BAD_REQUEST, "Invalid operation".to_string()),
                 KernelError::Overflow => (StatusCode::INTERNAL_SERVER_ERROR, "Numeric overflow".to_string()),
                 KernelError::InvalidInput => (StatusCode::BAD_REQUEST, "Invalid input".to_string()),
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Kernel error".to_string()),
             },
             EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             EngineError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),

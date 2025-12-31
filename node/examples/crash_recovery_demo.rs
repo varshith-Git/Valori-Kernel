@@ -33,6 +33,8 @@ fn main() {
         wal_path: Some(wal_path.clone()),
         auto_snapshot_interval_secs: None,
         auth_token: None,
+        event_log_path: None,
+        mode: valori_node::config::NodeMode::Leader,
     };
 
     // Phase 1: Insert & Snapshot

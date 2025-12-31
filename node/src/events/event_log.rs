@@ -321,6 +321,8 @@ mod tests {
         let event = KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         };
 
         writer.append(&LogEntry::Event(event)).unwrap();
@@ -340,6 +342,8 @@ mod tests {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
+                    metadata: None,
+                    tag: 0,
                 };
                 writer.append(&LogEntry::Event(event)).unwrap();
             }

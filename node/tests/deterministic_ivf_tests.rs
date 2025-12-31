@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use valori_kernel::structure::ivf::{IvfIndex, IvfConfig};
+use valori_node::structure::ivf::{IvfIndex, IvfConfig};
 use valori_node::structure::index::VectorIndex;
 
 #[test]

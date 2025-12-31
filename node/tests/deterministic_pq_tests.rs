@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 use valori_node::structure::quant::Quantizer;
-use valori_kernel::structure::quant::pq::{ProductQuantizer, PqConfig};
+use valori_node::structure::quant::pq::{ProductQuantizer, PqConfig};
 
 #[test]
 fn test_pq_roundtrip() {

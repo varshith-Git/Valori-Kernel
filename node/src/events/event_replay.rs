@@ -264,6 +264,8 @@ mod tests {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
+                    metadata: None,
+                    tag: 0,
                 };
                 writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }
@@ -293,6 +295,8 @@ mod tests {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
+                    metadata: None,
+                    tag: 0,
                 };
                 writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }
@@ -345,6 +349,8 @@ mod tests {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::<16>::new_zeros(),
+                    metadata: None,
+                    tag: 0,
                 };
                 writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
             }

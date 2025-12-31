@@ -19,6 +19,8 @@ fn test_recover_truncated_tail() {
             let event = KernelEvent::InsertRecord {
                 id: RecordId(i),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             };
             writer.append(&LogEntry::Event(event)).unwrap();
         }
@@ -62,6 +64,8 @@ fn test_fail_on_corrupted_middle() {
             let event = KernelEvent::InsertRecord {
                 id: RecordId(i),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             };
             writer.append(&LogEntry::Event(event)).unwrap();
         }
@@ -99,6 +103,8 @@ fn test_fuzz_every_truncation_point() {
             let event = KernelEvent::InsertRecord {
                 id: RecordId(i),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             };
             writer.append(&LogEntry::Event(event)).unwrap();
         }

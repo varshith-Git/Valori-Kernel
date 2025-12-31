@@ -359,6 +359,8 @@ mod tests {
         let event = KernelEvent::InsertRecord {
             id: RecordId(0),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         };
 
         let result = committer.commit_event(event).unwrap();
@@ -386,6 +388,8 @@ mod tests {
         let event1 = KernelEvent::InsertRecord {
             id: RecordId(0),
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         };
         committer.commit_event(event1).unwrap();
 
@@ -393,6 +397,8 @@ mod tests {
         let event2 = KernelEvent::InsertRecord {
             id: RecordId(0), // Same ID
             vector: FxpVector::<16>::new_zeros(),
+            metadata: None,
+            tag: 0,
         };
         
         let result = committer.commit_event(event2).unwrap();
@@ -417,14 +423,20 @@ mod tests {
             KernelEvent::InsertRecord {
                 id: RecordId(0),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             },
             KernelEvent::InsertRecord {
                 id: RecordId(1),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             },
             KernelEvent::InsertRecord {
                 id: RecordId(2),
                 vector: FxpVector::<16>::new_zeros(),
+                metadata: None,
+                tag: 0,
             },
         ];
 

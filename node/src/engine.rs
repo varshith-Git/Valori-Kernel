@@ -199,7 +199,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         if let Some(ref mut committer) = self.event_committer {
             let start = std::time::Instant::now();
             // Generate event (no state change yet)
-            let event = KernelEvent::InsertRecord { id, vector };
+            let event = KernelEvent::InsertRecord { id, vector, metadata: None, tag: 0 };
             
             // Commit via event pipeline (shadow → persist → commit → live)
             // Clone event for local apply if needed
@@ -237,7 +237,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             Ok(id.0)
         } else {
             // Fallback: Legacy WAL path
-            let cmd = Command::InsertRecord { id, vector };
+            let cmd = Command::InsertRecord { id, vector, metadata: None, tag: 0 };
             
             // Write to WAL FIRST
             if let Some(ref mut wal) = self.wal_writer {
@@ -326,7 +326,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                     vector.data[i] = FxpScalar(fixed);
                 }
 
-                events.push(KernelEvent::InsertRecord { id, vector });
+                events.push(KernelEvent::InsertRecord { id, vector, metadata: None, tag: 0 });
             }
 
             let start = std::time::Instant::now();
@@ -342,7 +342,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                      for event in &events {
                          self.state.apply_event(event).map_err(EngineError::Kernel)?;
                          
-                         if let KernelEvent::InsertRecord { id, vector } = event {
+                         if let KernelEvent::InsertRecord { id, vector, .. } = event {
                              let mut consistent_values = Vec::with_capacity(D);
                              for i in 0..D {
                                  let fxp = vector.data[i];
@@ -375,7 +375,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
          // 2. Update Auxiliary Structures (Side Effects)
          match event {
-             KernelEvent::InsertRecord { id, vector } => {
+             KernelEvent::InsertRecord { id, vector, .. } => {
                  // Update Host Index
                  let mut consistent_values = Vec::with_capacity(D);
                  for i in 0..D {

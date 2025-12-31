@@ -168,6 +168,8 @@ mod tests {
                 let cmd = Command::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::<DIM>::new_zeros(),
+                    metadata: None,
+                    tag: 0,
                 };
                 writer.append_command(&cmd).unwrap();
             }
