@@ -16,6 +16,9 @@ High-level project configuration and documentation.
 
 - ``.`` (**Root**)
     - ``Cargo.toml``: **[FILE]** Workspace definition. Defines the root ``valori-workspace`` crate and members.
+    - ``embedded/``: **[DIR]** Embedded firmware experiments.
+    - ``scripts/``: **[DIR]** Utility scripts.
+        - ``download_data.sh``: **[SCRIPT]** Downloads SIFT1M benchmark dataset.
     - ``src/``: **[DIR]** **CORE KERNEL**. The pure, ``no_std``, deterministic core logic of Valori.
         - ``lib.rs``: Kernel entry point.
         - ``config.rs``: Kernel-level configuration.
@@ -53,6 +56,8 @@ High-level project configuration and documentation.
     - ``LICENSE``, ``COMMERCIAL_LICENSE.md``: Licensing.
     - ``test_replication_e2e.py``: **[TEST]** Top-level system test.
     - ``valori_ffi.pyd``: **[FILE]** Compiled extension.
+    - ``assets/``: **[DIR]** Benchmark assets (PNG charts for README).
+        - ``bench_ingest.png``, ``bench_persistence.png``, etc.
 
 crates/ (Workspace Members)
 ---------------------------
@@ -210,6 +215,7 @@ Project documentation and specifications.
     - ``publishing-pypi.md``: Guide for releasing the Python package.
     - ``functions.md``: Likely function reference.
     - ``python-reference.md``: Python API reference.
+    - ``verification_report.md``: **[FILE]** Formal Engineering Verification Report (v0.1.0).
 
 demo/ & examples/
 -----------------
