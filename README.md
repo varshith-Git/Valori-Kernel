@@ -51,6 +51,9 @@ We benchmarked the full **SIFT1M dataset (1,000,000 vectors, 128-dim)** on a Mac
 
 *Verdict: The overhead of determinism is negligible for ingestion.*
 
+![Ingestion Speed](assets/bench_ingest.png)
+![Persistence Speed](assets/bench_persistence.png)
+
 ---
 
 ## 🎯 Accuracy Benchmark: The "Fixed-Point" Myth
@@ -66,6 +69,8 @@ We benchmarked Valori's **Q16.16 Fixed-Point Kernel** against the **SIFT1M Groun
 | **Latency** | **0.47 ms** | <1.0ms | ⚡ **Real-Time** |
 
 *Methodology: Ingested SIFT1M subset, built HNSW graph using integer-only arithmetic, queried against pre-computed ground truth integers.*
+
+![Recall Benchmark](assets/bench_recall.png)
 
 ---
 
