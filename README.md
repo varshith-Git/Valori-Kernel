@@ -279,5 +279,30 @@ python test_valori_integrated.py
 
 ---
 
+
+## 🔬 Research & Citations
+
+Valori is based on peer-reviewed research into deterministic substrates.
+
+**Paper**: [Deterministic Memory: A Substrate for Verifiable AI Agents](https://arxiv.org/abs/2512.22280)
+
+```bibtex
+@article{valori2025deterministic,
+  title={Deterministic Memory: A Substrate for Verifiable AI Agents},
+  author={Valori Research Team},
+  journal={arXiv preprint arXiv:2512.22280},
+  year={2025}
+}
+```
+
+## 🏢 Enterprise Extensions
+
+While the **Valori Kernel** is open-source (AGPLv3), we provide commercial extensions for enterprise needs:
+
+- **Deterministic Evaluator**: A forensics harness for replaying and auditing production incidents bit-for-bit.
+- **Compliance Packs**: Pre-configured validators for SOC2 and financial audit trails.
+
+Contact `varshith.gudur17@gmail.com` for licensing.
+
 ## 📄 License
 AGPL-3.0 - See [LICENSE](LICENSE).
