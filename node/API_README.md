@@ -35,6 +35,7 @@ These are the high-level endpoints for AI Agents (Orchestrators).
 | `/v1/memory/meta/get` | `GET` | Retrieve metadata by ID. | Query Param: `?target_id=rec:0` |
 | `/v1/memory/meta/set` | `POST` | Update metadata for existing ID. | `{"target_id": "rec:0", "metadata": {...}}` |
 
+
 **Examples:**
 ```bash
 # Insert (Upsert)
@@ -46,7 +47,16 @@ curl -X POST http://localhost:3000/v1/memory/upsert_vector \
 curl -X POST http://localhost:3000/v1/memory/search_vector \
   -H "Content-Type: application/json" \
   -d '{"query_vector": [0.1, 0.2, ...], "k": 1}'
+
+# Get Metadata
+curl "http://localhost:3000/v1/memory/meta/get?target_id=rec:0"
+
+# Update Metadata (without re-inserting vector)
+curl -X POST http://localhost:3000/v1/memory/meta/set \
+  -H "Content-Type: application/json" \
+  -d '{"target_id": "rec:0", "metadata": {"status": "updated"}}'
 ```
+
 
 ---
 
