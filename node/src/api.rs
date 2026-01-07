@@ -16,6 +16,16 @@ pub struct InsertRecordResponse {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteRecordRequest {
+    pub id: u32,
+}
+
+#[derive(Serialize)]
+pub struct DeleteRecordResponse {
+    pub success: bool,
+}
+
+#[derive(Deserialize)]
 pub struct SearchRequest {
     pub query: Vec<f32>,
     pub k: usize,

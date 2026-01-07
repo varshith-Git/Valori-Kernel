@@ -1,4 +1,4 @@
-[package]
+        [package]
 name = "valori-node"
 version = "0.1.0"
 edition = "2021"
@@ -25,6 +25,7 @@ metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
 futures = "0.3.31"
 tokio-stream = "0.1.17"
+opendal = { version = "0.55.0", features = ["services-s3"] }
 
 [dev-dependencies] 
 tempfile = "3.23.0"

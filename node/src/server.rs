@@ -80,7 +80,10 @@ pub fn build_router<const M: usize, const D: usize, const N: usize, const E: usi
     auth_token: Option<String>
 ) -> Router {
     let mut app = Router::new()
+        .route("/health", axum::routing::get(health_check)) // Added health check
+        .route("/version", axum::routing::get(version_handler)) // Added version check
         .route("/records", post(insert_record))
+        .route("/v1/delete", post(delete_record)) // NEW: Delete Endpoint
         .route("/v1/vectors/batch_insert", post(batch_insert)) // Phase 34
         .route("/search", post(search))
         .route("/graph/node", post(create_node))
@@ -118,7 +121,45 @@ pub fn build_router<const M: usize, const D: usize, const N: usize, const E: usi
     app
 }
 
+async fn health_check() -> &'static str {
+    "OK"
+}
+
+async fn version_handler() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 // ... existing handlers ...
+
+async fn delete_record<const M: usize, const D: usize, const N: usize, const E: usize>(
+    State(state): State<SharedEngine<M, D, N, E>>,
+    Json(payload): Json<DeleteRecordRequest>,
+) -> Result<Json<DeleteRecordResponse>, EngineError> {
+    let mut engine = state.lock().await; // Acquire lock
+    use valori_kernel::types::id::RecordId;
+    
+    // Check if event sourced
+    if let Some(ref mut committer) = engine.event_committer {
+         use valori_kernel::event::KernelEvent;
+         let rid = RecordId(payload.id);
+         let event = KernelEvent::DeleteRecord { id: rid };
+         
+         match committer.commit_event(event.clone()) {
+             Ok(_) => {
+                 engine.apply_committed_event(&event).map_err(|e| {
+                     EngineError::InvalidInput(format!("Apply failed during delete: {:?}", e))
+                 })?;
+             }
+             Err(e) => return Err(EngineError::InvalidInput(format!("Commit failed: {:?}", e))),
+         }
+    } else {
+         // Fallback direct delete
+         engine.state.apply(&valori_kernel::state::command::Command::DeleteRecord { id: RecordId(payload.id) })
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+    }
+
+    Ok(Json(DeleteRecordResponse { success: true }))
+}
 
 async fn snapshot_save<const M: usize, const D: usize, const N: usize, const E: usize>(
     State(state): State<SharedEngine<M, D, N, E>>,
