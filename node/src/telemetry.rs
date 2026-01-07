@@ -32,6 +32,9 @@ pub fn init_telemetry() {
     metrics::describe_gauge!("valori_snapshot_size_bytes", "Size of the last saved snapshot in bytes");
     metrics::describe_counter!("valori_proofs_generated_total", "Total number of cryptographic proofs generated");
     metrics::describe_histogram!("valori_replay_duration_seconds", "Time taken to replay WAL/Event Log");
+
+    // Ensure at least one metric exists on startup
+    metrics::gauge!("valori_node_up", 1.0);
 }
 
 /// Get the Prometheus handle to render metrics
