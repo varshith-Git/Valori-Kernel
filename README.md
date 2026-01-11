@@ -12,6 +12,14 @@
 
 ---
 
+## 📚 Documentation
+- **[Node API Reference](node/API_README.md)**: HTTP Endpoints (`/health`, `/v1/memory/...`).
+- **[Python SDK](python/README.md)**: `Valori` & `ProtocolClient` usage guide.
+- **[FFI Bridge](ffi/README.md)**: Rust <-> Python internals.
+- **[Kernel Internals](src/README.md)**: Architecture, Fxp Math, and State Machine.
+
+---
+
 ## ⚡ Key Features
 
 ### 1. Event-Sourced Determinism vs. Floating Point Chaos
