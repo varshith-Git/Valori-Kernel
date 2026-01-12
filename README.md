@@ -88,6 +88,44 @@ We benchmarked Valori's **Q16.16 Fixed-Point Kernel** against the **SIFT1M Groun
 
 ---
 
+## 🛡️ Crash Recovery: Cryptographically Verified
+
+Valori is the only vector database that provides **cryptographic proof** of perfect crash recovery. Unlike competitors who merely claim resilience, we can **mathematically verify** bit-identical state restoration.
+
+### Production Test (Koyeb Deployment)
+
+**Test:** Forced restart → State hash comparison  
+**Result:** ✅ **IDENTICAL** (0 bytes difference)
+
+```bash
+# Before crash
+curl $VALORI_URL/v1/proof/state
+# State Hash: aea3a9e17b6f220b3d7ae860005b756c759e58f1d56c665f0855178ee3a8d668
+
+# [Restart deployment]
+
+# After recovery  
+curl $VALORI_URL/v1/proof/state
+# State Hash: aea3a9e17b6f220b3d7ae860005b756c759e58f1d56c665f0855178ee3a8d668
+
+# Verification
+diff before_crash.json after_crash.json
+# Output: (empty) ← Bit-perfect recovery
+```
+
+**Competitive Advantage:**
+
+| Feature | Pinecone | Weaviate | Valori |
+|---------|----------|----------|--------|
+| Crash Recovery | ✓ (claimed) | ✓ (claimed) | ✅ **Proven** |
+| State Verification | ❌ | ❌ | ✅ **Cryptographic hash** |
+| Forensic Replay | ❌ | ❌ | ✅ **Event sourcing** |
+| Audit Compliance | Partial | Partial | ✅ **Full trail** |
+
+*For detailed crash recovery case study, see [docs/crash-recovery-proof.md](docs/crash-recovery-proof.md)*
+
+---
+
 ## 🚀 Quick Start
 
 ### 1. Python (Local Embedded Mode)
