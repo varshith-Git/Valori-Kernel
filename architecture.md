@@ -15,6 +15,7 @@ graph TD
     classDef interface fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#2e7d32
     classDef core fill:#fff3e0,stroke:#e65100,stroke-width:4px,color:#e65100
     classDef durability fill:#fce4ec,stroke:#c2185b,stroke-width:3px,color:#c2185b
+    classDef new fill:#e3f2fd,stroke:#1565c0,stroke-width:3px,color:#1565c0,stroke-dasharray: 5 5
 
     subgraph External["External Applications"]
         User[User / Client]
@@ -28,10 +29,15 @@ graph TD
         
         VMP_API["HTTP Handlers<br/>/v1/memory"]
         AuthMiddleware["Auth Middleware<br/>Tower / Headers"]
+        ProofAPI["State Verification<br/>/v1/proof/state"]
     end
     
     subgraph Durability["Durability Layer (std)"]
-        WALWriter["WAL Writer<br/>bincode + fsync"]
+        EventCommitter["EventCommitter<br/>Shadow Execute Pipeline"]
+        EventJournal["EventJournal<br/>In-Memory Buffer"]
+        EventLogWriter["Event Log Writer<br/>events.log (fsync)"]
+        
+        WALWriter["WAL Writer (Legacy)<br/>bincode + fsync"]
         Recovery["Recovery Logic<br/>replay_wal()"]
         Snapshot["Snapshot Manager<br/>encode/decode"]
     end
@@ -51,6 +57,7 @@ graph TD
     subgraph Storage["Persistent Storage"]
         SnapshotFile[("Snapshot File<br/>.snapshot")]
         WALFile[("WAL File<br/>.wal")]
+        EventLogFile[("Event Log<br/>events.log")]
     end
 
     %% Relationships - User Flow
@@ -58,20 +65,31 @@ graph TD
     PyScript -->|Import| PythonPkg
     Embedded -->|Link| Kernel
 
-    %% Node Service Flow
+    %% Node Service Flow (NEW - Event Log Path)
     NodeService --> AuthMiddleware
     AuthMiddleware --> VMP_API
-    VMP_API --> WALWriter
-    WALWriter --> Kernel
+    VMP_API -->|Generate Event| EventCommitter
+    EventCommitter -->|Shadow Execute| Kernel
+    EventCommitter -->|Persist| EventLogWriter
+    EventLogWriter -->|fsync| EventLogFile
+    EventCommitter -->|Commit| Kernel
+    
+    %% Legacy WAL Flow (Fallback)
+    VMP_API -.->|Fallback| WALWriter
+    WALWriter -.->|Serialize| WALFile
     
     %% Python FFI Flow
     PythonPkg -->|Direct Call| Kernel
     
+    %% State Verification
+    ProofAPI -->|Query| Verify
+    Verify -->|Compute Hash| Kernel
+    
     %% Durability Flow
     Kernel --> Command
-    WALWriter -->|Serialize| WALFile
     Snapshot -->|Save/Load| SnapshotFile
     Recovery -->|Read| WALFile
+    Recovery -->|Read| EventLogFile
     Recovery -->|Replay| Kernel
     
     %% Core Components
@@ -83,11 +101,13 @@ graph TD
     %% Crash Recovery Flow
     SnapshotFile -.->|Restore| Recovery
     WALFile -.->|Replay| Recovery
+    EventLogFile -.->|Replay Primary| Recovery
 
     %% Apply styles
     class User,PyScript,Embedded external
-    class NodeService,PythonPkg,VMP_API,AuthMiddleware interface
+    class NodeService,PythonPkg,VMP_API,AuthMiddleware,ProofAPI interface
     class WALWriter,Recovery,Snapshot durability
+    class EventCommitter,EventJournal,EventLogWriter new
     class Kernel,Command,FXP,Vector,Graph,Verify core
 ```
 
@@ -160,6 +180,54 @@ graph TD
 **Critical Properties**:
 - `Snapshot + WAL = Bit-Identical State`
 - Cross-platform replay (ARM WAL → x86 kernel)
+
+#### Event Log (Phase 23 - Event-Sourced Evolution)
+
+**Evolution:** Valori has evolved from legacy WAL to a full **Event-Sourced** architecture.
+
+**Components:**
+- **EventCommitter**: Manages event pipeline (shadow → persist → commit → live)
+- **EventJournal**: In-memory committed event buffer
+- **EventLogWriter**: Append-only event log (`.log` file)
+- **Shadow Execution**: Validates events before commit (rollback on failure)
+
+**Event Flow:**
+```
+1. Generate Event (InsertRecord, CreateNode, etc.)
+   ↓
+2. Shadow Execute (validation on separate state copy)
+   ↓ (if valid)
+3. Append to Event Log (fsync)
+   ↓
+4. Update In-Memory Kernel
+   ↓
+5. Update Auxiliary Structures (Index, Bitmap)
+```
+
+**Key Differences from WAL:**
+
+| Feature | Legacy WAL | Event Log |
+|---------|------------|-----------|
+| **Atomicity** | Command-by-command | Batch commits |
+| **Validation** | After write | Before write (shadow) |
+| **Rollback** | ❌ | ✅ On validation failure |
+| **Batch Support** | ❌ | ✅ Atomic multi-insert |
+| **State Proof** | WAL hash | Event log hash + State hash |
+
+**Configuration:**
+```rust
+// Enabled via environment variable or config
+event_log_path: Some("/app/data/events.log")
+
+// Fallback to legacy WAL if event log unavailable
+event_committer: Option<EventCommitter>
+```
+
+**Benefits:**
+- **Atomic Batches**: Insert 1000 vectors atomically (all-or-nothing)
+- **Safety**: Shadow execution prevents corrupt states
+- **Forensics**: Full event history for audit/replay
+- **Proofs**: Cryptographic verification of event log integrity
 
 ---
 
@@ -246,6 +314,95 @@ For all A, B ∈ {x86, ARM, WASM, RISC-V, ...}
 - **Automated CI**: Tests on x86, ARM, WASM
 - **Hash Comparison**: Cryptographic (BLAKE3)
 - **Failure = Build Break**: Any divergence fails CI
+
+---
+
+## Cryptographic State Verification
+
+### The Crash Recovery Proof
+
+Valori provides **cryptographic proof** of perfect crash recovery, not just claims.
+
+**Production Test (Koyeb - 2026-01-12):**
+```bash
+# Before crash
+curl $VALORI_URL/v1/proof/state
+# State Hash: aea3a9e17b6f220b3d7ae860005b756c759e58f1d56c665f0855178ee3a8d668
+
+# [Forced restart]
+
+# After recovery
+curl $VALORI_URL/v1/proof/state  
+# State Hash: aea3a9e17b6f220b3d7ae860005b756c759e58f1d56c665f0855178ee3a8d668
+
+# Verified
+diff before_crash.json after_crash.json
+# (empty) ← Bit-perfect recovery
+```
+
+### How It Works
+
+**State Hash Computation:**
+```rust
+pub fn kernel_state_hash(state: &KernelState) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    
+    // Hash all records
+    for record in state.records {
+        hasher.update(&record.vector.data);
+        hasher.update(&record.metadata);
+        hasher.update(&record.tag.to_le_bytes());
+    }
+    
+    // Hash graph topology
+    for node in state.nodes {
+        hasher.update(&node.kind.to_le_bytes());
+    }
+    
+    for edge in state.edges {
+        hasher.update(&edge.from.to_le_bytes());
+        hasher.update(&edge.to.to_le_bytes());
+    }
+    
+    hasher.finalize().into()
+}
+```
+
+**Proof Endpoint (`/v1/proof/state`):**
+```json
+{
+  "kernel_version": 1,
+  "snapshot_hash": "...",
+  "wal_hash": "...",
+  "final_state_hash": "aea3a9e17b6f220b3d7ae860005b756c759e58f1d56c665f0855178ee3a8d668"
+}
+```
+
+### Why This Matters
+
+**Pinecone & Weaviate:** *"We have crash recovery"* (trust us)  
+**Valori:** *"Here's the cryptographic proof"* (verify yourself)
+
+**Use Cases:**
+- **HIPAA Compliance:** Prove no patient data lost
+- **Financial Audits:** Verify transaction integrity
+- **Forensic Analysis:** Confirm exact state at incident time
+- **Multi-Region:** Verify replicas are identical
+
+### Verification Guarantees
+
+```
+If hash(state_before) == hash(state_after)
+Then:
+  - Every vector identical
+  - Every metadata identical  
+  - Every graph edge identical
+  - Bit-perfect recovery (probability of collision: 2^-256)
+```
+
+**Collision Resistance:** BLAKE3-256 provides cryptographic security. Finding two different states with the same hash is computationally infeasible.
+
+**See:** [Crash Recovery Case Study](docs/crash-recovery-proof.md) for production test details.
 
 ---
 
