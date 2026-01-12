@@ -72,7 +72,10 @@ diff before_crash.json after_crash.json
 
 ### Install
 ```bash
-pip install valori
+# Clone the repository
+git clone https://github.com/varshith-Git/Valori-Kernel.git
+cd Valori-Kernel/python
+pip install .
 ```
 
 ### Use
@@ -84,7 +87,7 @@ client.insert([0.1] * 16)                 # Insert vector
 results = client.search([0.1] * 16, k=5)  # Search (returns exact match)
 ```
 
-**That's it.** 3 lines. No configuration. No Docker. No Kubernetes.
+**That's it.** Simple embedded mode. No Docker. No Kubernetes.
 
 [**Full documentation →**](python/README.md)
 
