@@ -108,9 +108,8 @@ from valori import Valori
 client = Valori(path="./valori_db")
 
 # 1. Insert Single Vector (returns ID)
-# 1. Insert Single Vector (returns ID)
 vec = [0.1] * 16  # Must match configured dimension
-uid = client.insert(vec, metadata=b"meta") # Optional metadata bytes
+uid = client.insert(vec, tag=0)  # Optional tag (u64) for filtering
 print(f"Inserted record: {uid}")
 
 # 2. Search
