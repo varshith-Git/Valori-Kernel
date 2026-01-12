@@ -7,6 +7,7 @@
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Determinism: Verified](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
 [![Verification Report](https://img.shields.io/badge/docs-Verification_Report_v0.1.0-blue)](docs/verification_report.md)
+[![GitHub stars](https://img.shields.io/github/stars/varshith-Git/Valori-Kernel?style=social)](https://github.com/varshith-Git/Valori-Kernel/stargazers)
 
 Valori is a vector database built for **regulated industries** (healthcare, finance, legal) that need verifiable AI memory. Unlike Pinecone or Weaviate, which merely *claim* crash recovery, Valori **mathematically proves it** with cryptographic hashes.
 
@@ -351,6 +352,14 @@ cd python
 pip install -e .
 python test_valori_integrated.py
 ```
+
+---
+
+## ⭐ Star History
+
+If you find Valori useful, please star the repository! It helps others discover the project.
+
+[![Star History Chart](https://api.star-history.com/svg?repos=varshith-Git/Valori-Kernel&type=Date)](https://star-history.com/#varshith-Git/Valori-Kernel&Date)
 
 ---
 
