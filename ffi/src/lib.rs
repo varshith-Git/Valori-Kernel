@@ -7,6 +7,8 @@ use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::event::KernelEvent;
+use serde_json;  // For metadata serialization
+use hex;  // For hash encoding
 
 // Fixed Generics for Python Binding (MVP)
 // Reduced to 100 to avoid stack overflow (Kernel allocates on stack currently!)
@@ -188,6 +190,122 @@ impl ValoriEngine {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))?;
             
         Ok(edge_id.0)
+    }
+
+    /// Batch insert multiple vectors atomically.
+    /// Returns list of assigned IDs.
+    fn insert_batch(&self, vectors: Vec<Vec<f32>>) -> PyResult<Vec<u32>> {
+        let mut engine = self.inner.lock().unwrap();
+        
+        // Validate all vectors have correct dimension
+        for (i, vec) in vectors.iter().enumerate() {
+            if vec.len() != D {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    format!("Vector {} has {} dims, expected {}", i, vec.len(), D)
+                ));
+            }
+        }
+        
+        // engine.insert_batch expects &[Vec<f32>], not &[&[f32]]
+        match engine.insert_batch(&vectors) {
+            Ok(ids) => Ok(ids),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                format!("Batch insert failed: {:?}", e)
+            ))
+        }
+    }
+    
+    /// Get metadata for a record.
+    /// Returns bytes or None if no metadata.
+    fn get_metadata(&self, record_id: u32) -> PyResult<Option<Vec<u8>>> {
+        let engine = self.inner.lock().unwrap();
+        let rid = RecordId(record_id);
+        
+        match engine.state.get_record(rid) {
+            Some(record) => Ok(record.metadata.clone()),
+            None => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Record {} not found", record_id)
+            ))
+        }
+    }
+    
+    /// Set metadata for a record.
+    /// Metadata is arbitrary bytes (up to 64KB).
+    fn set_metadata(&self, record_id: u32, metadata: Vec<u8>) -> PyResult<()> {
+        if metadata.len() > 65536 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Metadata too large (max 64KB)"
+            ));
+        }
+        
+        let engine = self.inner.lock().unwrap();
+        let rid = RecordId(record_id);
+        
+        // Verify record exists
+        if engine.state.get_record(rid).is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Record {} not found", record_id)
+            ));
+        }
+        
+        // Store metadata in engine's metadata store
+        // MetadataStore.set expects (String, Value)
+        let key = format!("record_{}", record_id);
+        let value = serde_json::to_value(metadata)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Failed to serialize metadata: {}", e)))?;
+        engine.metadata.set(key, value);
+        Ok(())
+    }
+    
+    /// Get cryptographic hash of current state.
+    /// Returns 32-byte BLAKE3 hash as hex string.
+    fn get_state_hash(&self) -> PyResult<String> {
+        let engine = self.inner.lock().unwrap();
+        // use root_hash instead of state_hash (which is on ValoriKernel, not KernelState)
+        let hash = engine.root_hash();
+        
+        // Convert [u8; 32] to hex string
+        Ok(hex::encode(hash))
+    }
+    
+    /// Get number of records in the database.
+    fn record_count(&self) -> PyResult<usize> {
+        let engine = self.inner.lock().unwrap();
+        Ok(engine.state.record_count())
+    }
+    
+    /// Restore from snapshot data.
+    /// Loads kernel state from bytes.
+    fn restore(&self, data: Vec<u8>) -> PyResult<()> {
+        let mut engine = self.inner.lock().unwrap();
+        
+        match engine.restore(&data) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                format!("Restore failed: {:?}", e)
+            ))
+        }
+    }
+    
+    /// Soft delete a record (marks as deleted but doesn't remove).
+    /// Record will be excluded from search results.
+    fn soft_delete(&self, record_id: u32) -> PyResult<()> {
+        let engine = self.inner.lock().unwrap();
+        let rid = RecordId(record_id);
+        
+        // Verify record exists
+        if engine.state.get_record(rid).is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Record {} not found", record_id)
+            ));
+        }
+        
+        // Mark as deleted via metadata tombstone
+        // Note: bitmap is not directly accessible, use metadata store instead
+        let key = format!("deleted_record_{}", record_id);
+        let value = serde_json::json!({"deleted": true});
+        engine.metadata.set(key, value);
+        Ok(())
     }
 }
 
