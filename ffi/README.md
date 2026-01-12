@@ -61,3 +61,26 @@ Creates a relationship between two nodes.
 ### `save() -> str`
 Saves a snapshot of the current in-memory state to disk.
 *   **Returns**: Path to the saved snapshot file.
+
+### `insert_batch(vectors: list[list[float]]) -> list[int]`
+Atomically insert multiple vectors.
+*   **vectors**: List of float lists.
+*   **Returns**: List of assigned Record IDs.
+
+### `get_metadata(record_id: int) -> bytes | None`
+Get metadata for a record.
+
+### `set_metadata(record_id: int, metadata: bytes)`
+Set metadata for a record.
+
+### `get_state_hash() -> str`
+Get the cryptographic state hash (BLAKE3) of the kernel. Used for verifiable crash recovery.
+
+### `record_count() -> int`
+Get the total number of records.
+
+### `restore(data: bytes)`
+Restore kernel state from snapshot bytes.
+
+### `soft_delete(record_id: int)`
+Mark a record as deleted (tombstone). Excludes it from search results.

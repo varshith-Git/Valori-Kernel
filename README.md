@@ -84,8 +84,10 @@ pip install .
 from valori import Valori
 
 client = Valori()
-client.insert([0.1] * 16)                 # Insert vector
-results = client.search([0.1] * 16, k=5)  # Search (returns exact match)
+# Atomic Batch Insert
+client.insert_batch([[0.1]*16, [0.2]*16]) 
+# Search
+results = client.search([0.1] * 16, k=5)
 ```
 
 **That's it.** Simple embedded mode. No Docker. No Kubernetes.

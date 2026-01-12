@@ -81,23 +81,56 @@ client = Valori(remote="https://your-node.koyeb.app")
 
 ### Methods
 
-#### `insert(vector)`
-Raw insert. Returns integer Record ID.
+#### `insert(vector)` / `insert_batch(vectors)`
+Insert single or multiple vectors atomically.
 ```python
-rid = client.insert([0.1, 0.2, ...])
+# Single
+rid = client.insert([0.1, ...])
+
+# Batch (Atomic)
+vectors = [[0.1]*16, [0.2]*16, [0.3]*16]
+ids = client.insert_batch(vectors) # [0, 1, 2]
 ```
 
 #### `search(query, k)`
 Raw search. Returns IDs and scores.
 ```python
-hits = client.search([0.1, 0.2, ...], k=5)
+hits = client.search([0.1, ...], k=5)
 # [{'id': 10, 'score': 12345}, ...]
+```
+
+#### `get_metadata(id)` / `set_metadata(id, data)`
+Read/Write metadata (for both HTTP and Local modes).
+```python
+client.set_metadata(10, b"user:123")
+meta = client.get_metadata(10)
+```
+
+#### `get_state_hash()`
+**Verifiable AI**: Get cryptographic proof of current database state.
+```python
+hash1 = client.get_state_hash()
+# 1a2b3c... (BLAKE3 hash)
+```
+
+#### `record_count()`
+Get total number of records.
+```python
+count = client.record_count()
+```
+
+#### `soft_delete(id)`
+Mark record as deleted (excluded from search).
+```python
+client.soft_delete(10)
 ```
 
 #### `snapshot()` / `restore(data)`
 Backup and recovery.
 ```python
+# Save to bytes
 data = client.snapshot()
-with open("backup.snap", "wb") as f:
-    f.write(data)
+
+# Restore (Local mode only)
+client.restore(data)
 ```
