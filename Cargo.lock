@@ -3024,6 +3024,7 @@ dependencies = [
 name = "valori-ffi"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "pyo3",
  "serde_json",
  "valori-kernel",

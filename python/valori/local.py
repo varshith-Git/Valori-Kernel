@@ -7,7 +7,7 @@ import os
 # In a real package, this would be installed.
 # For local dev, we assume it's in the path or we hint the user.
 try:
-    import valori_ffi as _ffi 
+    from . import valori_ffi as _ffi
 except ImportError:
     try:
         import valori_ffi as _ffi
