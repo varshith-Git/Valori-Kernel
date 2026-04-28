@@ -22,4 +22,15 @@ from .memory import MemoryClient
 from .protocol import ProtocolClient
 from . import adapters
 
-__all__ = ["Valori", "RemoteClient", "LocalClient", "MemoryClient", "ProtocolClient", "adapters"]
+# Bridge functions — deterministic proof generation (all logic in Rust)
+from .valori_ffi import (
+    ingest_embedding,    # Vec<f32> → Vec<i32> (Q16.16)
+    generate_proof,      # Vec<i32> → str (BLAKE3 Merkle root hex)
+    verify_embedding,    # Vec<f32> + str → bool
+)
+from .adapter import ValoriAdapter
+
+__all__ = [
+    "Valori", "RemoteClient", "LocalClient", "MemoryClient", "ProtocolClient", "adapters",
+    "ingest_embedding", "generate_proof", "verify_embedding", "ValoriAdapter",
+]

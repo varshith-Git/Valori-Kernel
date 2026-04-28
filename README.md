@@ -191,6 +191,86 @@ Valori uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
 - **Bare Metal:** `no_std` compatible for ARM Cortex-M embedded systems
 - **Replication:** Leader-follower for read scaling
 
+### 7. Deterministic Proof Bridge
+- **Per-record proofs** — BLAKE3 Merkle tree over Q16.16 integers
+- **Atomic insertion** — proof baked into `Record.metadata` at birth
+- **Event-sourced** — proofs go through `KernelEvent`, survive restarts
+- **Drop-in adapter** — wrap any existing vector DB (Pinecone, Qdrant, etc.)
+- **Hardware-independent** — same embedding → same proof on any machine
+
+---
+
+## 🔐 Deterministic Proof Bridge
+
+Valori can generate per-record cryptographic proofs over AI embeddings. Proofs are deterministic — identical on any hardware — and stored inside the kernel's event-sourced state.
+
+### Direct Usage (Rust FFI)
+
+```python
+from valori import ingest_embedding, generate_proof, verify_embedding
+
+# Any AI model → float embedding
+embedding = model.encode("patient diagnosis report")
+
+# Convert to Q16.16 integers (deterministic, hardware-independent)
+fixed = ingest_embedding(embedding.tolist())
+
+# Generate BLAKE3 Merkle proof
+proof_hash = generate_proof(fixed)
+
+# Verify on any machine, any time — no server needed
+assert verify_embedding(embedding.tolist(), proof_hash)  # True
+```
+
+### Atomic Insert with Proof (Kernel-Backed)
+
+```python
+from valori import Valori
+
+client = Valori()
+
+# Single FFI call — proof is baked into Record.metadata
+record_id, proof_hash = client.kernel.insert_with_proof(
+    embedding.tolist(), tag=0
+)
+
+# Proof is now:
+# ✅ Stored as Record.metadata
+# ✅ Event-sourced (in the event log)
+# ✅ Included in kernel_state_hash()
+# ✅ Persisted in snapshots
+# ✅ Survives crashes and restarts
+```
+
+### Drop-in Adapter for Existing Systems
+
+```python
+from valori import ValoriAdapter
+
+# Wrap your existing vector DB — zero changes to existing code
+db = ValoriAdapter(your_pinecone_client)
+
+# Insert goes to both: external DB + Valori kernel (for proofs)
+proof = db.insert("doc_001", embedding)
+
+# Verify anytime
+db.verify("doc_001", embedding)  # True — proof from kernel metadata
+
+# Search results include verification status
+results = db.search(query_embedding, k=10)
+# Each result has: {"id": ..., "verified": True, "proof_hash": "abc..."}
+```
+
+### What Makes This Different
+
+| Feature | Other VectorDBs | Valori |
+|---------|----------------|--------|
+| **Per-record proof** | ❌ Not possible | ✅ BLAKE3 Merkle root per embedding |
+| **Offline verification** | ❌ Need running server | ✅ `verify_embedding()` runs anywhere |
+| **Tamper detection** | ❌ Only global checksums | ✅ Detects exactly which record changed |
+| **Hardware-independent** | ❌ Float rounding varies | ✅ Q16.16 integers — bit-identical everywhere |
+| **Zero trust** | ❌ Must trust vendor | ✅ Proof is math, not policy |
+
 ---
 
 ## 📚 Documentation

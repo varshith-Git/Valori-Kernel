@@ -1,0 +1,118 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+"""
+ValoriAdapter — Drop-in wrapper for any existing vector DB.
+
+Adds deterministic proof generation without changing existing
+insert/search behavior. All crypto runs in Rust via the FFI.
+
+Proofs are stored in Valori's KernelState as Record.metadata —
+event-sourced, snapshot-persisted, included in global state hash.
+"""
+
+import numpy as np
+from typing import Optional
+
+# Import bridge functions from Rust FFI
+from .valori_ffi import verify_embedding
+from .local import LocalClient
+
+
+class ValoriAdapter:
+    """
+    Wraps any existing vector DB + a Valori kernel for proof storage.
+
+    - External DB handles storage and search (unchanged)
+    - Valori kernel handles proofs (persisted, deterministic)
+
+    Usage:
+        from valori import ValoriAdapter
+        from valori.local import LocalClient
+
+        valori = LocalClient(path="./proof_store")
+        db = ValoriAdapter(your_pinecone_client, valori=valori)
+        proof = db.insert("doc_001", embedding)
+    """
+
+    def __init__(self, existing_db, valori: Optional[LocalClient] = None, proof_db_path: str = "./valori_proofs"):
+        self.db = existing_db
+        # Kernel-backed proof store
+        self._valori = valori or LocalClient(path=proof_db_path)
+        # Map external IDs → kernel record IDs (for retrieval)
+        self._id_map: dict[str, int] = {}
+
+    def insert(
+        self,
+        id: str,
+        embedding: np.ndarray,
+        metadata: dict = None
+    ) -> str:
+        """
+        Insert into existing DB and generate a kernel-backed proof.
+
+        Returns:
+            Proof hash (hex string) — BLAKE3 Merkle root, persisted in kernel.
+        """
+        # 1. Store in existing DB — untouched
+        self.db.insert(id, embedding, metadata or {})
+
+        # 2. Single atomic Rust call — proof baked into Record.metadata
+        record_id, proof_hash = self._valori.kernel.insert_with_proof(
+            embedding.flatten().tolist(),
+            tag=0
+        )
+
+        # 3. Track the mapping
+        self._id_map[id] = record_id
+        return proof_hash
+
+    def search(
+        self,
+        query_embedding: np.ndarray,
+        k: int = 10
+    ) -> list[dict]:
+        """
+        Search existing DB and attach verification status to results.
+        """
+        results = self.db.search(query_embedding, k)
+
+        for result in results:
+            record_id = self._id_map.get(result["id"])
+            if record_id is not None and "embedding" in result:
+                # Get proof from kernel metadata
+                meta = self._valori.kernel.get_metadata(record_id)
+                if meta is not None:
+                    stored_hash = bytes(meta).hex()
+                    result["verified"] = verify_embedding(
+                        result["embedding"].flatten().tolist()
+                        if isinstance(result["embedding"], np.ndarray)
+                        else result["embedding"],
+                        stored_hash
+                    )
+                    result["proof_hash"] = stored_hash
+                else:
+                    result["verified"] = None
+            else:
+                result["verified"] = None
+
+        return results
+
+    def get_proof(self, id: str) -> Optional[str]:
+        """Get the stored proof hash for a given external ID."""
+        record_id = self._id_map.get(id)
+        if record_id is None:
+            return None
+        meta = self._valori.kernel.get_metadata(record_id)
+        if meta is None:
+            return None
+        return bytes(meta).hex()
+
+    def verify(self, id: str, embedding: np.ndarray) -> bool:
+        """
+        Verify an embedding against its kernel-stored proof.
+
+        Returns False if no proof exists for the given ID.
+        """
+        proof_hash = self.get_proof(id)
+        if proof_hash is None:
+            return False
+        return verify_embedding(embedding.flatten().tolist(), proof_hash)

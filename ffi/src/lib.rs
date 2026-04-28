@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_kernel::types::vector::FxpVector;
-use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::RecordId;
+use valori_kernel::fxp::ops::from_f32;
 use valori_kernel::event::KernelEvent;
 use serde_json;  // For metadata serialization
 use hex;  // For hash encoding
@@ -17,7 +17,7 @@ const D: usize = 384;
 const MAX_NODES: usize = 100; 
 const MAX_EDGES: usize = 100;
 
-const SCALE: f32 = 65536.0;
+// f32→Q16.16 conversion is handled by valori_kernel::fxp::ops::from_f32 (single source of truth)
 
 #[pyclass]
 struct ValoriEngine {
@@ -62,8 +62,7 @@ impl ValoriEngine {
         // 1. Convert to Fixed Point
         let mut fxp_vec = FxpVector::<D>::new_zeros();
         for (i, v) in vector.iter().enumerate() {
-            let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
-            fxp_vec.data[i] = FxpScalar(fixed);
+            fxp_vec.data[i] = from_f32(*v);
         }
         
         // 2. Determine ID (first free slot) - Must match Kernel's deterministic logic
@@ -112,8 +111,7 @@ impl ValoriEngine {
         // Convert query to FxpVector for kernel search
         let mut fxp_vec = FxpVector::<D>::new_zeros();
         for (i, &v) in vector.iter().enumerate() {
-             let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
-             fxp_vec.data[i] = FxpScalar(fixed);
+             fxp_vec.data[i] = from_f32(v);
         }
 
         let mut results = vec![valori_kernel::index::SearchResult::default(); k];
@@ -309,10 +307,175 @@ impl ValoriEngine {
         engine.metadata.set(key, value);
         Ok(())
     }
+
+    /// Atomic insert with proof — single FFI call.
+    ///
+    /// 1. Validates + converts f32 → Q16.16 (from_f32)
+    /// 2. Generates BLAKE3 Merkle proof over Q16.16 integers
+    /// 3. Inserts record with proof hash as Record.metadata
+    /// 4. Returns (record_id, proof_hash_hex)
+    ///
+    /// The proof is event-sourced, snapshot-persisted, and included
+    /// in kernel_state_hash() — it can never be out of sync.
+    #[pyo3(signature = (vector, tag))]
+    fn insert_with_proof(&self, vector: Vec<f32>, tag: u64) -> PyResult<(u32, String)> {
+        if vector.len() != D {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!("Expected {} dims", D)));
+        }
+
+        // 1. Validate range + convert to Q16.16
+        let mut fxp_vec = FxpVector::<D>::new_zeros();
+        let mut fixed_values = Vec::with_capacity(D);
+        for (i, &f) in vector.iter().enumerate() {
+            if f < -32767.0 || f > 32767.0 {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Float at index {} ({}) outside valid range [-32767.0, 32767.0]", i, f
+                )));
+            }
+            let scalar = from_f32(f);
+            fxp_vec.data[i] = scalar;
+            fixed_values.push(scalar.0);
+        }
+
+        // 2. Generate Merkle proof over Q16.16 integers
+        let proof_bytes = generate_proof_bytes(&fixed_values);
+        let proof_hex = hex::encode(&proof_bytes);
+
+        // 3. Insert with proof as Record.metadata (event-sourced)
+        let mut engine = self.inner.lock().unwrap();
+
+        let mut id_val = None;
+        for i in 0..MAX_RECORDS {
+            let rid = RecordId(i as u32);
+            if engine.state.get_record(rid).is_none() {
+                id_val = Some(rid);
+                break;
+            }
+        }
+
+        let rid = id_val.ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Capacity Exceeded")
+        })?;
+
+        if let Some(ref mut committer) = engine.event_committer {
+            let event = KernelEvent::InsertRecord {
+                id: rid,
+                vector: fxp_vec,
+                metadata: Some(proof_bytes),  // ← proof baked into record
+                tag,
+            };
+            match committer.commit_event(event.clone()) {
+                Ok(_) => {
+                    engine.apply_committed_event(&event).map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!("Apply failed: {:?}", e))
+                    })?;
+                    Ok((rid.0, proof_hex))
+                }
+                Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    format!("Commit failed: {:?}", e)
+                )),
+            }
+        } else {
+            Err(pyo3::exceptions::PyRuntimeError::new_err("Event Log not initialized"))
+        }
+    }
+}
+
+// ============================================================================
+// Bridge Functions — Standalone pyfunctions for deterministic proof generation
+// ============================================================================
+
+/// Convert float embeddings to Q16.16 fixed-point integers.
+///
+/// Uses the kernel's from_f32() — single source of truth.
+/// Rejects values outside [-32767.0, 32767.0] (Q16.16 safe range).
+#[pyfunction]
+fn ingest_embedding(floats: Vec<f32>) -> PyResult<Vec<i32>> {
+    for (i, &f) in floats.iter().enumerate() {
+        if f < -32767.0 || f > 32767.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Float at index {} ({}) outside valid range [-32767.0, 32767.0]. \
+                 Normalize before ingestion.",
+                i, f
+            )));
+        }
+    }
+
+    let fixed: Vec<i32> = floats.iter().map(|&f| from_f32(f).0).collect();
+    Ok(fixed)
+}
+
+/// Internal helper — generates Merkle proof as raw bytes.
+/// Single source of truth for Merkle logic.
+/// Used by both generate_proof() (hex output) and insert_with_proof() (Record.metadata).
+fn generate_proof_bytes(fixed_values: &[i32]) -> Vec<u8> {
+    let leaves: Vec<[u8; 32]> = fixed_values
+        .iter()
+        .enumerate()
+        .map(|(pos, &val)| {
+            let mut buf = [0u8; 8];
+            buf[..4].copy_from_slice(&(pos as u32).to_le_bytes());
+            buf[4..].copy_from_slice(&val.to_le_bytes());
+
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&buf);
+            *hasher.finalize().as_bytes()
+        })
+        .collect();
+
+    merkle_root(&leaves).to_vec()
+}
+
+/// Build a position-aware Merkle tree over Q16.16 integers.
+///
+/// Each leaf = BLAKE3(position_u32_le || value_i32_le).
+/// Returns the root hash as a hex string.
+/// Same BLAKE3 crate the kernel uses — zero divergence possible.
+#[pyfunction]
+fn generate_proof(fixed_values: Vec<i32>) -> PyResult<String> {
+    if fixed_values.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Cannot generate proof for empty vector"
+        ));
+    }
+    Ok(hex::encode(generate_proof_bytes(&fixed_values)))
+}
+
+/// Standard binary Merkle tree. Odd leaf: hashed with itself.
+fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.len() == 1 {
+        return leaves[0];
+    }
+
+    let next_level: Vec<[u8; 32]> = leaves
+        .chunks(2)
+        .map(|pair| {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(&pair[0]);
+            hasher.update(pair.get(1).unwrap_or(&pair[0]));
+            *hasher.finalize().as_bytes()
+        })
+        .collect();
+
+    merkle_root(&next_level)
+}
+
+/// Verify a float embedding against a claimed proof hash.
+///
+/// Full pipeline in Rust: f32 → Q16.16 → Merkle → compare.
+/// No Python math involved.
+#[pyfunction]
+fn verify_embedding(floats: Vec<f32>, claimed_hash: String) -> PyResult<bool> {
+    let fixed = ingest_embedding(floats)?;
+    let computed_hash = generate_proof(fixed)?;
+    Ok(computed_hash == claimed_hash)
 }
 
 #[pymodule]
 fn valori_ffi(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ValoriEngine>()?;
+    m.add_function(wrap_pyfunction!(ingest_embedding, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_proof, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_embedding, m)?)?;
     Ok(())
 }

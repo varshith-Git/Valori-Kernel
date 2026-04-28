@@ -35,12 +35,18 @@ pub fn fxp_mul(a: FxpScalar, b: FxpScalar) -> FxpScalar {
     FxpScalar(saturated)
 }
 
-/// Helper to convert f32 to FxpScalar (TEST/FFI ONLY).
+/// Canonical f32 → Q16.16 conversion (TEST/FFI ONLY).
+///
+/// This is the SINGLE SOURCE OF TRUTH for float-to-fixed-point conversion.
+/// All external boundaries (FFI, bridges, adapters) MUST use this function
+/// or replicate its exact semantics: multiply by SCALE, round to nearest,
+/// clamp to i32 range.
+///
+/// Core kernel logic (no_std) should never call this — it only operates on
+/// pre-converted FxpScalar values.
 #[cfg(any(test, feature = "std"))]
 pub fn from_f32(f: f32) -> FxpScalar {
-    // Note: this uses f32 which is allowed in tests/std.
-    // Core kernel logic should avoid this path.
-    let raw = (f * (SCALE as f32)) as i32;
+    let raw = (f * (SCALE as f32)).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
     FxpScalar(raw)
 }
 
