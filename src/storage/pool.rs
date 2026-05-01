@@ -7,24 +7,24 @@ use crate::types::vector::FxpVector;
 use crate::error::{Result, KernelError};
 
 #[derive(Clone)]
-pub struct RecordPool<const CAP: usize, const D: usize> {
-    pub(crate) records: [Option<Record<D>>; CAP],
+pub struct RecordPool {
+    pub(crate) records: alloc::vec::Vec<Option<Record>>,
 }
 
-impl<const CAP: usize, const D: usize> RecordPool<CAP, D> {
-    pub(crate) fn raw_records(&self) -> &[Option<Record<D>>] {
+impl RecordPool {
+    pub(crate) fn raw_records(&self) -> &[Option<Record>] {
         &self.records
     }
 
     pub fn new() -> Self {
         Self {
-            records: [const { None }; CAP],
+            records: alloc::vec::Vec::new(),
         }
     }
 
-    /// Inserts a vector into the first available slot.
+    /// Inserts a vector into the first available slot or appends.
     /// Returns the RecordId (which corresponds to the index).
-    pub fn insert(&mut self, vector: FxpVector<D>, metadata: Option<alloc::vec::Vec<u8>>, tag: u64) -> Result<RecordId> {
+    pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64) -> Result<RecordId> {
         // Deterministic scan for first empty slot
         for (i, slot) in self.records.iter_mut().enumerate() {
             if slot.is_none() {
@@ -33,13 +33,16 @@ impl<const CAP: usize, const D: usize> RecordPool<CAP, D> {
                 return Ok(id);
             }
         }
-        Err(KernelError::CapacityExceeded)
+        // If no empty slot, push a new one
+        let id = RecordId(self.records.len() as u32);
+        self.records.push(Some(Record::new(id, vector, metadata, tag)));
+        Ok(id)
     }
 
     /// Deletes the record at the specified ID (index).
     pub fn delete(&mut self, id: RecordId) -> Result<()> {
         let idx = id.0 as usize;
-        if idx >= CAP {
+        if idx >= self.records.len() {
             return Err(KernelError::NotFound); 
         }
         
@@ -52,16 +55,16 @@ impl<const CAP: usize, const D: usize> RecordPool<CAP, D> {
     }
 
     /// Gets a reference to the record.
-    pub fn get(&self, id: RecordId) -> Option<&Record<D>> {
+    pub fn get(&self, id: RecordId) -> Option<&Record> {
         let idx = id.0 as usize;
-        if idx >= CAP {
+        if idx >= self.records.len() {
             return None;
         }
         self.records[idx].as_ref()
     }
 
     /// Iterates over all active records in deterministic order (by index).
-    pub fn iter(&self) -> impl Iterator<Item = &Record<D>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Record> {
         self.records.iter().filter_map(|opt| opt.as_ref())
     }
 
@@ -70,6 +73,6 @@ impl<const CAP: usize, const D: usize> RecordPool<CAP, D> {
     }
 
     pub fn is_full(&self) -> bool {
-        self.len() >= CAP
+        false
     }
 }

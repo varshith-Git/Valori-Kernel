@@ -1,21 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 //! Event Commit - The Safety Wall
-//!
-//! This module enforces the commit barrier semantics:
-//! 1. Event persisted to disk (fsync)
-//! 2. Shadow execution succeeds
-//! 3. Verification passes
-//! 4. Commit boundary applied
-//! 5. Live state updated
-//!
-//! If ANY step fails → rollback buffer, state unchanged
-//!
-//! # Invariants
-//! - buffer ≠ truth
-//! - committed = truth
-//! - No partial commits
-//! - No ghost writes
-//! - Crash-symmetric recovery
 
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::event::KernelEvent;
@@ -52,28 +36,18 @@ pub enum CommitResult {
 }
 
 /// Shadow execution context for safe event application
-///
-/// This maintains a separate "test" kernel state that is used to
-/// validate events before they are applied to the live state.
-///
-/// Uses heap allocation for snapshot buffer to avoid stack overflow
-/// with large KernelState instances.
-pub struct ShadowExecutor<const M: usize, const D: usize, const N: usize, const E: usize> {
+pub struct ShadowExecutor {
     /// Shadow kernel (test execution environment)
-    shadow: KernelState<M, D, N, E>,
+    shadow: KernelState,
 }
 
-impl<const M: usize, const D: usize, const N: usize, const E: usize> ShadowExecutor<M, D, N, E> {
+impl ShadowExecutor {
     /// Create a new shadow executor from current live state
-    ///
-    /// Uses snapshot/decode to create a copy.
-    /// Buffer is heap-allocated to avoid stack overflow.
-    pub fn from_state(live: &KernelState<M, D, N, E>) -> std::result::Result<Self, CommitError> {
+    pub fn from_state(live: &KernelState) -> std::result::Result<Self, CommitError> {
         use valori_kernel::snapshot::encode::encode_state;
         use valori_kernel::snapshot::decode::decode_state;
 
         // Allocate snapshot buffer on HEAP (not stack)
-        // This avoids stack overflow with large KernelState instances
         let mut buffer = vec![0u8; 10 * 1024 * 1024]; // 10MB heap-allocated
         
         let len = encode_state(live, &mut buffer)
@@ -88,60 +62,39 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> ShadowExecu
     }
 
     /// Apply an event to the shadow kernel
-    ///
-    /// This tests the event without affecting live state
-    pub fn shadow_apply(&mut self, event: &KernelEvent<D>) -> std::result::Result<(), KernelError> {
+    pub fn shadow_apply(&mut self, event: &KernelEvent) -> std::result::Result<(), KernelError> {
         self.shadow.apply_event(event)
     }
 
     /// Get reference to shadow state (for verification)
-    pub fn shadow_state(&self) -> &KernelState<M, D, N, E> {
+    pub fn shadow_state(&self) -> &KernelState {
         &self.shadow
     }
 
     /// Consume shadow and return the state (after commit)
-    pub fn into_state(self) -> KernelState<M, D, N, E> {
+    pub fn into_state(self) -> KernelState {
         self.shadow
     }
 }
 
 /// Event committer - enforces the commit barrier
-///
-/// # Protocol
-/// ```text
-/// Event Input
-/// ↓
-/// 1. Append to EventLog (fsync)
-/// ↓
-/// 2. Add to Journal buffer
-/// ↓
-/// 3. Shadow apply (test execution)
-/// ↓
-/// 4. Verification (optional hash check)
-/// ↓
-/// 5. Commit boundary
-/// ↓
-/// 6. Apply to live state
-/// ```
-///
-/// Failure at any step → rollback buffer, discard shadow, unchanged live state
-pub struct EventCommitter<const M: usize, const D: usize, const N: usize, const E: usize> {
+pub struct EventCommitter {
     /// Event log writer (durable storage)
-    event_log: EventLogWriter<D>,
+    event_log: EventLogWriter,
     
     /// Event journal (runtime state)
-    journal: EventJournal<D>,
+    journal: EventJournal,
     
     /// Live kernel state
-    live_state: KernelState<M, D, N, E>,
+    live_state: KernelState,
 }
 
-impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommitter<M, D, N, E> {
+impl EventCommitter {
     /// Create a new event committer
     pub fn new(
-        event_log: EventLogWriter<D>,
-        journal: EventJournal<D>,
-        live_state: KernelState<M, D, N, E>,
+        event_log: EventLogWriter,
+        journal: EventJournal,
+        live_state: KernelState,
     ) -> Self {
         Self {
             event_log,
@@ -151,22 +104,8 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
     }
 
     /// Commit an event (the ONLY way to mutate state)
-    ///
-    /// # Safety Protocol
-    /// 1. Persist to disk (fsync)
-    /// 2. Buffer event
-    /// 3. Shadow apply
-    /// 4. Verify (optional)
-    /// 5. Commit
-    /// 6. Apply to live
-    ///
-    /// Returns:
-    /// - `Ok(CommitResult::Committed)` if successful
-    /// - `Ok(CommitResult::RolledBack)` if validation failed (safe failure)
-    /// - `Err(_)` if persistence failed (critical failure)
-    pub fn commit_event(&mut self, event: KernelEvent<D>) -> Result<CommitResult> {
+    pub fn commit_event(&mut self, event: KernelEvent) -> Result<CommitResult> {
         // Step 1: Persist to disk FIRST (crash safety)
-        // CRITICAL: This must succeed before ANY in-memory changes
         let entry = crate::events::event_log::LogEntry::Event(event.clone());
         self.event_log.append(&entry)?;
 
@@ -179,8 +118,6 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
         match shadow.shadow_apply(&event) {
             Ok(_) => {
                 // Shadow apply succeeded
-                // Optionally verify shadow state here (hash check, invariants, etc.)
-                // For now, we trust the kernel's internal validation
             }
             Err(e) => {
                 // Shadow apply failed → safe rollback
@@ -191,49 +128,31 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
         }
 
         // Step 4: COMMIT BOUNDARY
-        // At this point:
-        // - Event is durable on disk
-        // - Shadow execution succeeded
-        // - We are about to make this event canonical truth
-        
         self.journal.commit_buffer();
 
         // Step 5: Apply to live state
-        // This should never fail if shadow succeeded, but handle defensively
         match self.live_state.apply_event(&event) {
             Ok(_) => {
                 tracing::debug!("Event committed: {:?}", event.event_type());
                 Ok(CommitResult::Committed)
             }
             Err(e) => {
-                // This is a CRITICAL inconsistency
-                // Shadow succeeded but live failed
-                // This should be impossible, but we handle it defensively
                 tracing::error!(
                     "CRITICAL: Live apply failed after shadow success: {:?}",
                     e
                 );
-                
-                // The event is already committed to the journal
-                // We cannot rollback at this point
-                // This indicates a serious bug in the kernel
                 Err(CommitError::LiveApply(e))
             }
         }
     }
 
     /// Batch commit multiple events
-    ///
-    /// This is an optimization that amortizes the shadow clone cost
-    /// All events are shadow-applied, then all committed together
-    ///
-    /// If ANY event fails shadow apply → ALL are rolled back
-    pub fn commit_batch(&mut self, events: Vec<KernelEvent<D>>) -> Result<CommitResult> {
+    pub fn commit_batch(&mut self, events: Vec<KernelEvent>) -> Result<CommitResult> {
         if events.is_empty() {
             return Ok(CommitResult::Committed);
         }
 
-        // Step 1: Persist ALL events to disk first (Single Fsync)
+        // Step 1: Persist ALL events to disk first
         let log_entries: Vec<_> = events.iter()
             .map(|e| crate::events::event_log::LogEntry::Event(e.clone()))
             .collect();
@@ -252,7 +171,6 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
             match shadow.shadow_apply(event) {
                 Ok(_) => continue,
                 Err(e) => {
-                    // Shadow apply failed → rollback entire batch
                     tracing::warn!(
                         "Shadow apply failed in batch: {:?}. Rolling back {} events.",
                         e,
@@ -264,7 +182,7 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
             }
         }
 
-        // Step 4: COMMIT BOUNDARY (all events succeed)
+        // Step 4: COMMIT BOUNDARY
         self.journal.commit_buffer();
 
         // Step 5: Apply all to live state
@@ -278,27 +196,27 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
     }
 
     /// Get reference to live state
-    pub fn live_state(&self) -> &KernelState<M, D, N, E> {
+    pub fn live_state(&self) -> &KernelState {
         &self.live_state
     }
 
     /// Get mutable reference to live state (use sparingly)
-    pub fn live_state_mut(&mut self) -> &mut KernelState<M, D, N, E> {
+    pub fn live_state_mut(&mut self) -> &mut KernelState {
         &mut self.live_state
     }
 
     /// Get reference to journal
-    pub fn journal(&self) -> &EventJournal<D> {
+    pub fn journal(&self) -> &EventJournal {
         &self.journal
     }
 
     /// Get reference to event log
-    pub fn event_log(&self) -> &EventLogWriter<D> {
+    pub fn event_log(&self) -> &EventLogWriter {
         &self.event_log
     }
 
     /// Decompose into components (for reconstruction)
-    pub fn into_parts(self) -> (EventLogWriter<D>, EventJournal<D>, KernelState<M, D, N, E>) {
+    pub fn into_parts(self) -> (EventLogWriter, EventJournal, KernelState) {
         (self.event_log, self.journal, self.live_state)
     }
 
@@ -306,26 +224,24 @@ impl<const M: usize, const D: usize, const N: usize, const E: usize> EventCommit
     pub fn rotate_log(
         &mut self,
         archive_path: impl AsRef<std::path::Path>,
-        checkpoint_entry: Option<crate::events::event_log::LogEntry<D>>
+        checkpoint_entry: Option<crate::events::event_log::LogEntry>
     ) -> crate::events::event_commit::Result<()> {
         self.event_log.rotate(archive_path, checkpoint_entry)
             .map_err(crate::events::event_commit::CommitError::EventLog)
     }
 
     /// Subscribe to live event stream
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry<D>> {
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
         self.journal.subscribe()
     }
 
     /// Write a checkpoint entry and align journal height
     pub fn write_checkpoint(
         &mut self, 
-        entry: crate::events::event_log::LogEntry<D>
+        entry: crate::events::event_log::LogEntry
     ) -> Result<CommitResult> {
-        // Persist
         self.event_log.append(&entry)?;
         
-        // Update Journal Height if it matches
         if let crate::events::event_log::LogEntry::Checkpoint { event_count, .. } = entry {
             self.journal.set_height(event_count);
         }
@@ -341,24 +257,20 @@ mod tests {
     use valori_kernel::types::vector::FxpVector;
     use tempfile::tempdir;
 
-    // Use smaller state for tests to avoid stack overflow
-    // Production uses larger values, but test semantics remain identical
-    type TestState = KernelState<128, 16, 128, 256>;
-
     #[test]
     fn test_commit_success() {
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("events.log");
 
-        let event_log = EventLogWriter::<16>::open(&log_path).unwrap();
+        let event_log = EventLogWriter::open(&log_path, Some(16)).unwrap();
         let journal = EventJournal::new();
-        let live_state = TestState::new();
+        let live_state = KernelState::new();
 
         let mut committer = EventCommitter::new(event_log, journal, live_state);
 
         let event = KernelEvent::InsertRecord {
             id: RecordId(0),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };
@@ -366,10 +278,7 @@ mod tests {
         let result = committer.commit_event(event).unwrap();
         assert_eq!(result, CommitResult::Committed);
 
-        // Verify state was updated
         assert!(committer.live_state().get_record(RecordId(0)).is_some());
-        
-        // Verify journal was updated
         assert_eq!(committer.journal().committed_height(), 1);
     }
 
@@ -378,33 +287,29 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("events.log");
 
-        let event_log = EventLogWriter::<16>::open(&log_path).unwrap();
+        let event_log = EventLogWriter::open(&log_path, Some(16)).unwrap();
         let journal = EventJournal::new();
-        let live_state = TestState::new();
+        let live_state = KernelState::new();
 
         let mut committer = EventCommitter::new(event_log, journal, live_state);
 
-        // First insert succeeds
         let event1 = KernelEvent::InsertRecord {
             id: RecordId(0),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };
         committer.commit_event(event1).unwrap();
 
-        // Try to insert duplicate ID (should fail shadow apply)
         let event2 = KernelEvent::InsertRecord {
-            id: RecordId(0), // Same ID
-            vector: FxpVector::<16>::new_zeros(),
+            id: RecordId(0),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };
         
         let result = committer.commit_event(event2).unwrap();
         assert_eq!(result, CommitResult::RolledBack);
-
-        // Verify only first event was committed
         assert_eq!(committer.journal().committed_height(), 1);
     }
 
@@ -413,28 +318,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("events.log");
 
-        let event_log = EventLogWriter::<16>::open(&log_path).unwrap();
+        let event_log = EventLogWriter::open(&log_path, Some(16)).unwrap();
         let journal = EventJournal::new();
-        let live_state = TestState::new();
+        let live_state = KernelState::new();
 
         let mut committer = EventCommitter::new(event_log, journal, live_state);
 
         let events = vec![
             KernelEvent::InsertRecord {
                 id: RecordId(0),
-                vector: FxpVector::<16>::new_zeros(),
+                vector: FxpVector::new_zeros(16),
                 metadata: None,
                 tag: 0,
             },
             KernelEvent::InsertRecord {
                 id: RecordId(1),
-                vector: FxpVector::<16>::new_zeros(),
-                metadata: None,
-                tag: 0,
-            },
-            KernelEvent::InsertRecord {
-                id: RecordId(2),
-                vector: FxpVector::<16>::new_zeros(),
+                vector: FxpVector::new_zeros(16),
                 metadata: None,
                 tag: 0,
             },
@@ -442,7 +341,6 @@ mod tests {
 
         let result = committer.commit_batch(events).unwrap();
         assert_eq!(result, CommitResult::Committed);
-
-        assert_eq!(committer.journal().committed_height(), 3);
+        assert_eq!(committer.journal().committed_height(), 2);
     }
 }

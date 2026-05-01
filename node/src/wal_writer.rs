@@ -27,45 +27,40 @@ pub enum WalError {
 pub type WalResult<T> = Result<T, WalError>;
 
 /// WAL Writer for appending commands to durable storage
-pub struct WalWriter<const D: usize> {
+pub struct WalWriter {
     file: BufWriter<File>,
     bytes_written: u64,
+    dim: u32,
 }
 
-impl<const D: usize> WalWriter<D> {
+impl WalWriter {
     /// Open or create a WAL file at the specified path
-    pub fn open<P: AsRef<Path>>(path: P) -> WalResult<Self> {
+    pub fn open<P: AsRef<Path>>(path: P, dim: u32) -> WalResult<Self> {
         let path = path.as_ref();
         let exists = path.exists();
         
         let mut file = OpenOptions::new()
             .create(true)
-            .read(true) // Read to check header if exists
+            .read(true)
             .append(true)
             .open(path)?;
             
         let mut bytes_written = file.metadata()?.len();
         
         if exists && bytes_written > 0 {
-            // Validate existing header
              if bytes_written < WalHeader::SIZE as u64 {
                  return Err(WalError::Validation("Existing WAL too short for header".into()));
              }
-             
-             // We must read the header. Append mode makes reading tricky?
-             // Open separate reader or Reopen?
-             // Or just assume valid if we trust our files?
              // For safety, let's just append. If it's invalid, reader will catch it.
         } else {
              // New File: Write Header
              let header = WalHeader {
                  version: 1,
                  encoding_version: 0,
-                 dim: D as u32,
+                 dim,
                  checksum_len: 0,
              };
              
-             // Manual Serialize Header to match verify/embedded
              let mut head_buf = [0u8; 16];
              head_buf[0..4].copy_from_slice(&header.version.to_le_bytes());
              head_buf[4..8].copy_from_slice(&header.encoding_version.to_le_bytes());
@@ -73,41 +68,29 @@ impl<const D: usize> WalWriter<D> {
              head_buf[12..16].copy_from_slice(&header.checksum_len.to_le_bytes());
              
              file.write_all(&head_buf)?;
-             file.flush()?; // Ensure Header is on disk
+             file.flush()?; 
              bytes_written = 16;
         }
         
         Ok(Self {
             file: BufWriter::new(file),
             bytes_written,
+            dim,
         })
     }
 
     /// Append a command to the WAL
-    /// 
-    /// Format: Raw Bincode (Standard Config)
     pub fn append_command(
         &mut self,
-        cmd: &Command<D>,
+        cmd: &Command,
     ) -> WalResult<()> {
         let config = bincode::config::standard();
         
-        // Encode directly to writer
         let len = bincode::serde::encode_into_std_write(cmd, &mut self.file, config)
             .map_err(|e| WalError::Serialization(e.to_string()))?;
             
         self.bytes_written += len as u64;
-
-        // Flush to OS buffer (Page Cache)
-        // We do NOT strictly fsync every command for performance unless requested?
-        // Embedded uses Atomic Commit (Batch + Checkpoint).
-        // For Node durability, fsync per write is safest but slow.
-        // Let's flush (write to OS) but leave sync manual or periodic?
-        // User requirements: "Durable".
         self.file.flush()?;
-        
-        // self.file.get_ref().sync_all()?; // Too slow for high throughput? 
-        // Let's assume flush is sufficient for basic crashes, sync for consistency.
         
         Ok(())
     }
@@ -117,6 +100,10 @@ impl<const D: usize> WalWriter<D> {
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
         Ok(())
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
     }
 }
 
@@ -132,11 +119,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_header.wal");
         
-        let _writer = WalWriter::<16>::open(&path).unwrap();
+        let _writer = WalWriter::open(&path, 16).unwrap();
         
         let content = std::fs::read(&path).unwrap();
         assert_eq!(content.len(), 16);
-        // Check Dim at offset 8
         let dim = u32::from_le_bytes(content[8..12].try_into().unwrap());
         assert_eq!(dim, 16);
     }
@@ -145,11 +131,11 @@ mod tests {
     fn test_append_command() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_append.wal");
-        let mut writer = WalWriter::<16>::open(&path).unwrap();
+        let mut writer = WalWriter::open(&path, 16).unwrap();
         
         let cmd = Command::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };

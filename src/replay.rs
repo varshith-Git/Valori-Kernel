@@ -50,33 +50,28 @@ impl WalHeader {
 /// # Arguments
 /// - `snapshot_bytes`: Valid snapshot buffer (canonical encoding).
 /// - `wal_bytes`: WAL buffer including Header + Sequence of bincode-encoded `Command`s.
-pub fn replay_and_hash<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize>(
+pub fn replay_and_hash(
     snapshot_bytes: &[u8],
     wal_bytes: &[u8],
 ) -> Result<[u8; 32]> {
     // 1. Restore Base State
-    let mut state: KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> = if snapshot_bytes.is_empty() {
+    let mut state: KernelState = if snapshot_bytes.is_empty() {
         KernelState::new()
     } else {
          decode_state(snapshot_bytes)?
     };
 
     // 2. Validate WAL Header
-    // If WAL is empty, we permit it ONLY if truly empty (no header either? or must have header?)
-    // The prompt says "WAL must be [HEADER][...]" implies header is mandatory.
-    // If wal_bytes is empty, it's a "no op". But if it has bytes, it MUST have header.
-    // Let's assume strict compliance: empty buffer = valid (0 commands).
-    // Buffer with data = Must have header.
-    
     let mut slice = wal_bytes;
     if !slice.is_empty() {
         let (header, rest) = WalHeader::read(slice)?;
         
-        // Validate
-        if header.dim != D as u32 {
-            return Err(KernelError::InvalidInput);
+        // Validate dimension if kernel already has one locked
+        if let Some(locked_dim) = state.dim {
+            if header.dim != locked_dim as u32 {
+                return Err(KernelError::InvalidInput);
+            }
         }
-        // Future: Check version/encoding
         
         slice = rest;
     }
@@ -85,8 +80,7 @@ pub fn replay_and_hash<const MAX_RECORDS: usize, const D: usize, const MAX_NODES
     let config = bincode::config::standard();
     
     while !slice.is_empty() {
-        // bincode 2.0 decode_from_slice returns (Value, BytesRead)
-        match bincode::serde::decode_from_slice::<Command<D>, _>(slice, config) {
+        match bincode::serde::decode_from_slice::<Command, _>(slice, config) {
             Ok((cmd, read)) => {
                 // Apply Command
                 state.apply(&cmd)?;
@@ -95,8 +89,6 @@ pub fn replay_and_hash<const MAX_RECORDS: usize, const D: usize, const MAX_NODES
                 slice = &slice[read..];
             },
             Err(_) => {
-                // Determine if EOF or Error
-                // If slice wasn't empty but decode failed -> Corrupt WAL
                 return Err(KernelError::InvalidInput);
             }
         }

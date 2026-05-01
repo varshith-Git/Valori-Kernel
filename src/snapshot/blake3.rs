@@ -59,13 +59,8 @@ use blake3;
 /// ```
 ///
 /// Returns: [u8; 32] - BLAKE3 hash
-pub fn hash_state_blake3<
-    const MAX_RECORDS: usize,
-    const D: usize,
-    const MAX_NODES: usize,
-    const MAX_EDGES: usize
->(
-    state: &KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
+pub fn hash_state_blake3(
+    state: &KernelState,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
 
@@ -134,8 +129,8 @@ mod tests {
 
     #[test]
     fn test_blake3_determinism() {
-        let state1 = KernelState::<1024, 16, 1024, 2048>::new();
-        let state2 = KernelState::<1024, 16, 1024, 2048>::new();
+        let state1 = KernelState::new();
+        let state2 = KernelState::new();
 
         let hash1 = hash_state_blake3(&state1);
         let hash2 = hash_state_blake3(&state2);
@@ -145,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_blake3_output_length() {
-        let state = KernelState::<1024, 16, 1024, 2048>::new();
+        let state = KernelState::new();
         let hash = hash_state_blake3(&state);
 
         assert_eq!(hash.len(), 32, "BLAKE3 must produce 32 bytes");

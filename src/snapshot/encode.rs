@@ -5,7 +5,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 2; // Bumped for Metadata support
+pub const SCHEMA_VERSION: u32 = 3; // Bumped for Dynamic Scaling
 
 /// writes a u32 to the buffer at offset
 fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
@@ -50,8 +50,8 @@ fn write_bytes(buf: &mut [u8], offset: &mut usize, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn encode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize>(
-    state: &KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
+pub fn encode_state(
+    state: &KernelState,
     buf: &mut [u8],
 ) -> Result<usize> {
     let mut offset = 0;
@@ -61,11 +61,13 @@ pub fn encode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
     write_u32(buf, &mut offset, SCHEMA_VERSION)?; // Version
     write_u64(buf, &mut offset, state.version.0)?; // State Version
 
-    // Capacities
-    write_u32(buf, &mut offset, MAX_RECORDS as u32)?;
-    write_u32(buf, &mut offset, D as u32)?;
-    write_u32(buf, &mut offset, MAX_NODES as u32)?;
-    write_u32(buf, &mut offset, MAX_EDGES as u32)?;
+    // V3: Dynamic Capacities / Dimension
+    // Order: [RecordsCap/Len][Dim][NodesCap/Len][EdgesCap/Len]
+    // This matches V1/V2 header where D was the 2nd capacity field (offset 20).
+    write_u32(buf, &mut offset, state.records.raw_records().len() as u32)?;
+    write_u32(buf, &mut offset, state.dim.unwrap_or(0) as u32)?;
+    write_u32(buf, &mut offset, state.nodes.raw_nodes().len() as u32)?;
+    write_u32(buf, &mut offset, state.edges.raw_edges().len() as u32)?;
     // Records
     let record_count = state.records.len() as u32;
     write_u32(buf, &mut offset, record_count)?;
@@ -73,6 +75,7 @@ pub fn encode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
     for record in state.records.iter() {
         write_u32(buf, &mut offset, record.id.0)?;
         write_u8(buf, &mut offset, record.flags)?;
+        write_u64(buf, &mut offset, record.tag)?; // V3: Persistence for record tags
         for scalar in record.vector.data.iter() {
             write_i32(buf, &mut offset, scalar.0)?;
         }

@@ -27,17 +27,19 @@ maturin develop --release
 
 ---
 
-## 2. Your First Memory (Local Mode)
+# 2. Your First Memory (Local Mode)
+
+Valori is now **Zero-Config**. You don't need to declare vector dimensions or pool sizes upfront—the kernel auto-detects them on the first insertion.
 
 Create a file `memory_test.py`:
 
 ```python
 from valori import ProtocolClient
 
-# 1. Define a dummy embedder (In real apps, use OpenAI/SentenceTransformers)
+# 1. Define an embedder (SentenceTransformers example)
 def my_embed(text):
-    # Returns a 16-dim zero vector for demo
-    return [0.0] * 16
+    # This returns 384 dimensions. Valori adapts automatically.
+    return [0.0] * 384 
 
 # 2. Init Client
 client = ProtocolClient(embed=my_embed)

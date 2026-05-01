@@ -19,9 +19,10 @@
 
 use valori_kernel::event::KernelEvent;
 use std::fs::{File, OpenOptions};
-use std::io::{Write, BufWriter};
+use std::io::{Read, Write, BufWriter};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
+use serde::{Serialize, Deserialize};
 
 #[derive(Error, Debug)]
 pub enum EventLogError {
@@ -33,16 +34,16 @@ pub enum EventLogError {
     
     #[error("Invalid header")]
     InvalidHeader,
-}
 
-// use valori_kernel::event::KernelEvent; // Removed duplicate
-use serde::{Serialize, Deserialize};
+    #[error("Dimension mismatch: expected {expected}, found {found}")]
+    DimensionMismatch { expected: u32, found: u32 },
+}
 
 /// Wrapper for persisted events to include metadata/checkpoints
 /// without polluting the pure kernel event definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LogEntry<const D: usize> {
-    Event(KernelEvent<D>),
+pub enum LogEntry {
+    Event(KernelEvent),
     Checkpoint {
         event_count: u64,
         snapshot_hash: [u8; 32],
@@ -61,10 +62,10 @@ struct EventLogHeader {
 }
 
 impl EventLogHeader {
-    fn new(dim: usize) -> Self {
+    fn new(dim: u32) -> Self {
         Self {
             version: 1,
-            dim: dim as u32,
+            dim,
             reserved: 0,
         }
     }
@@ -85,12 +86,14 @@ impl EventLogHeader {
         }
     }
 
-    fn validate<const D: usize>(&self) -> Result<()> {
+    fn validate(&self, expected_dim: Option<u32>) -> Result<()> {
         if self.version != 1 {
             return Err(EventLogError::InvalidHeader);
         }
-        if self.dim != D as u32 {
-            return Err(EventLogError::InvalidHeader);
+        if let Some(expected) = expected_dim {
+            if self.dim != expected {
+                return Err(EventLogError::DimensionMismatch { expected, found: self.dim });
+            }
         }
         Ok(())
     }
@@ -102,23 +105,28 @@ impl EventLogHeader {
 /// - Write + fsync before returning
 /// - No buffering without explicit flush
 /// - Crash-safe: partial writes impossible
-pub struct EventLogWriter<const D: usize> {
+pub struct EventLogWriter {
     path: PathBuf,
     file: BufWriter<File>,
     event_count: u64,
+    dim: u32,
 }
 
-impl<const D: usize> EventLogWriter<D> {
+impl EventLogWriter {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    
+    pub fn dim(&self) -> u32 {
+        self.dim
+    }
+
     /// Open or create an event log file
     ///
     /// If file exists, validates header and appends
-    /// If file doesn't exist, creates with header
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// If file doesn't exist, creates with header (if dim provided)
+    pub fn open(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        
         let file_exists = path.exists();
         
         let mut file = OpenOptions::new()
@@ -128,42 +136,45 @@ impl<const D: usize> EventLogWriter<D> {
             .open(&path)?;
 
         let mut event_count = 0;
+        let dim;
 
         if file_exists {
             // Validate existing header
-            use std::io::Read;
             let mut header_bytes = [0u8; 16];
-            file.read_exact(&mut header_bytes)?;
+            // We need to read from the start, but we opened in append mode.
+            // Let's open a separate read-only handle to read the header.
+            let mut read_file = File::open(&path)?;
+            read_file.read_exact(&mut header_bytes)?;
             
             let header = EventLogHeader::from_bytes(&header_bytes);
-            header.validate::<D>()?;
+            header.validate(expected_dim)?;
+            dim = header.dim;
 
-            // Count existing events (for proof generation)
-            // This is a simple scan - could be optimized with metadata file
+            // Count existing events
             let mut event_buf = Vec::new();
-            while let Ok(_) = file.read_to_end(&mut event_buf) {
-                // Count events by attempting deserialization
-                let mut offset = 0;
-                while offset < event_buf.len() {
-                    match bincode::serde::decode_from_slice::<LogEntry<D>, _>(
-                        &event_buf[offset..],
-                        bincode::config::standard()
-                    ) {
-                        Ok((entry, bytes_read)) => {
-                            match entry {
-                                LogEntry::Event(_) => event_count += 1,
-                                LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
-                            }
-                            offset += bytes_read;
+            read_file.read_to_end(&mut event_buf)?;
+            
+            let mut offset = 0;
+            while offset < event_buf.len() {
+                match bincode::serde::decode_from_slice::<LogEntry, _>(
+                    &event_buf[offset..],
+                    bincode::config::standard()
+                ) {
+                    Ok((entry, bytes_read)) => {
+                        match entry {
+                            LogEntry::Event(_) => event_count += 1,
+                            LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
                         }
-                        Err(_) => break,
+                        offset += bytes_read;
                     }
+                    Err(_) => break,
                 }
-                break;
             }
         } else {
             // Write header for new file
-            let header = EventLogHeader::new(D);
+            let d = expected_dim.ok_or(EventLogError::InvalidHeader)?; // Need dim for new file
+            dim = d;
+            let header = EventLogHeader::new(dim);
             file.write_all(&header.to_bytes())?;
             file.sync_all()?; // fsync header
         }
@@ -172,33 +183,19 @@ impl<const D: usize> EventLogWriter<D> {
             path,
             file: BufWriter::new(file),
             event_count,
+            dim,
         })
     }
 
     /// Append an entry to the log
-    ///
-    /// # Safety
-    /// - Serializes entry with bincode
-    /// - Writes to buffer
-    /// - Flushes buffer
-    /// - fsync's file handle
-    ///
-    /// Only returns Ok() after durable write
-    pub fn append(&mut self, entry: &LogEntry<D>) -> Result<()> {
-        // Serialize entry
+    pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
         let bytes = bincode::serde::encode_to_vec(entry, bincode::config::standard())
             .map_err(|e| EventLogError::Serialization(e.to_string()))?;
 
-        // Write to buffer
         self.file.write_all(&bytes)?;
-        
-        // Flush buffer to OS
         self.file.flush()?;
-        
-        // Force fsync (critical for crash safety)
         self.file.get_ref().sync_all()?;
 
-        // Increment count only for actual events (not checkpoints)
         if let LogEntry::Event(_) = entry {
             self.event_count += 1;
         }
@@ -207,13 +204,7 @@ impl<const D: usize> EventLogWriter<D> {
     }
 
     /// Append multiple entries to the log with a SINGLE fsync
-    ///
-    /// This provides atomicity for batches: either all specific bytes are physically on disk
-    /// (after fsync return) or we crash before fsync returns (and they might not be).
-    ///
-    /// Note: If a partial write happens (less than full batch), the log recovery
-    /// logic must handle truncation of incomplete tail writes.
-    pub fn append_batch(&mut self, entries: &[LogEntry<D>]) -> Result<()> {
+    pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
         if entries.is_empty() {
              return Ok(());
         }
@@ -224,13 +215,9 @@ impl<const D: usize> EventLogWriter<D> {
             self.file.write_all(&bytes)?;
         }
         
-        // Flush buffer once
         self.file.flush()?;
-        
-        // Force fsync once
         self.file.get_ref().sync_all()?;
 
-        // Update counts
         for entry in entries {
             if let LogEntry::Event(_) = entry {
                 self.event_count += 1;
@@ -240,47 +227,30 @@ impl<const D: usize> EventLogWriter<D> {
         Ok(())
     }
 
-    /// Get the number of events written
     pub fn event_count(&self) -> u64 {
         self.event_count
     }
 
-    /// Get the log file path
     /// Rotate the event log
-    ///
-    /// 1. Rename current file to `archive_path`
-    /// 2. Create new file at `self.path`
-    /// 3. Write checkpoint header to new file
     pub fn rotate(
         &mut self, 
         archive_path: impl AsRef<Path>, 
-        checkpoint_entry: Option<LogEntry<D>>
+        checkpoint_entry: Option<LogEntry>
     ) -> Result<()> {
-        // 1. Sync current file
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
         
-        // 2. Rename (Atomic on POSIX)
-        // We need to close the file handle first? 
-        // On Unix, we can rename while open, but best to drop writer first or just rename.
-        // But self.file owns the FD.
-        // We can just rename the path. The struct holds a bufwriter to File.
-        
-        // Actually, renaming the path while we hold a File handle points to the OLD file (which is good).
         std::fs::rename(&self.path, archive_path)?;
         
-        // 3. Open NEW file at original path
         let mut new_file = OpenOptions::new()
             .create(true)
-            .write(true) // Truncate if exists? Should not exist if we just renamed it.
-            .create_new(true) // Ensure we don't overwrite if race condition
+            .write(true)
+            .create_new(true)
             .open(&self.path)?;
             
-        // 4. Write Header to NEW file
-        let header = EventLogHeader::new(D);
+        let header = EventLogHeader::new(self.dim);
         new_file.write_all(&header.to_bytes())?;
         
-        // 5. Write Checkpoint if provided
         if let Some(entry) = checkpoint_entry {
              let bytes = bincode::serde::encode_to_vec(&entry, bincode::config::standard())
                 .map_err(|e| EventLogError::Serialization(e.to_string()))?;
@@ -288,17 +258,7 @@ impl<const D: usize> EventLogWriter<D> {
         }
         
         new_file.sync_all()?;
-        
-        // 6. Replace handle
         self.file = BufWriter::new(new_file);
-        
-        // Keep event_count monotonically increasing?
-        // Or does rotation reset specific file count?
-        // The event_count field in this struct tracks TOTAL events if we want total history.
-        // But if we archived the old events, should this reset?
-        // The Checkpoint entry records the total count so far.
-        // If we keep appending to `self.event_count`, it tracks global height.
-        // That seems correct.
         
         Ok(())
     }
@@ -316,17 +276,16 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.log");
 
-        let mut writer = EventLogWriter::<16>::open(&path).unwrap();
+        let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
 
         let event = KernelEvent::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };
 
         writer.append(&LogEntry::Event(event)).unwrap();
-
         assert_eq!(writer.event_count(), 1);
     }
 
@@ -335,13 +294,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.log");
 
-        // Write some events
         {
-            let mut writer = EventLogWriter::<16>::open(&path).unwrap();
+            let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
             for i in 0..5 {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
-                    vector: FxpVector::<16>::new_zeros(),
+                    vector: FxpVector::new_zeros(16),
                     metadata: None,
                     tag: 0,
                 };
@@ -349,9 +307,8 @@ mod tests {
             }
         }
 
-        // Reopen and append more
         {
-            let writer = EventLogWriter::<16>::open(&path).unwrap();
+            let writer = EventLogWriter::open(&path, Some(16)).unwrap();
             assert_eq!(writer.event_count(), 5);
         }
     }
@@ -361,13 +318,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("events.log");
 
-        // Create with D=16
         {
-            let _writer = EventLogWriter::<16>::open(&path).unwrap();
+            let _writer = EventLogWriter::open(&path, Some(16)).unwrap();
         }
 
-        // Attempt to open with D=32 should fail
-        let result = EventLogWriter::<32>::open(&path);
+        let result = EventLogWriter::open(&path, Some(32));
         assert!(result.is_err());
     }
 }

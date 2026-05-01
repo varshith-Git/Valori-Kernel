@@ -7,18 +7,18 @@ use crate::types::id::{NodeId, EdgeId};
 use crate::error::{Result, KernelError};
 
 #[derive(Clone)]
-pub struct NodePool<const CAP: usize> {
-    pub(crate) nodes: [Option<GraphNode>; CAP],
+pub struct NodePool {
+    pub(crate) nodes: alloc::vec::Vec<Option<GraphNode>>,
 }
 
-impl<const CAP: usize> NodePool<CAP> {
+impl NodePool {
     pub(crate) fn raw_nodes(&self) -> &[Option<GraphNode>] {
         &self.nodes
     }
 
     pub fn new() -> Self {
         Self {
-            nodes: [None; CAP],
+            nodes: alloc::vec::Vec::new(),
         }
     }
 
@@ -32,7 +32,10 @@ impl<const CAP: usize> NodePool<CAP> {
                 return Ok(id);
             }
         }
-        Err(KernelError::CapacityExceeded)
+        let id = NodeId(self.nodes.len() as u32);
+        node.id = id;
+        self.nodes.push(Some(node));
+        Ok(id)
     }
 
     pub fn get(&self, id: NodeId) -> Option<&GraphNode> {
@@ -45,7 +48,7 @@ impl<const CAP: usize> NodePool<CAP> {
     
     pub fn delete(&mut self, id: NodeId) -> Result<()> {
          let idx = id.0 as usize;
-        if idx >= CAP || self.nodes[idx].is_none() {
+        if idx >= self.nodes.len() || self.nodes[idx].is_none() {
             return Err(KernelError::NotFound);
         }
         self.nodes[idx] = None;
@@ -54,7 +57,7 @@ impl<const CAP: usize> NodePool<CAP> {
 
     pub fn is_allocated(&self, id: NodeId) -> bool {
         let idx = id.0 as usize;
-        idx < CAP && self.nodes[idx].is_some()
+        idx < self.nodes.len() && self.nodes[idx].is_some()
     }
 
     pub fn len(&self) -> usize {
@@ -62,23 +65,23 @@ impl<const CAP: usize> NodePool<CAP> {
     }
 
     pub fn is_full(&self) -> bool {
-        self.len() >= CAP
+        false
     }
 }
 
 #[derive(Clone)]
-pub struct EdgePool<const CAP: usize> {
-    pub(crate) edges: [Option<GraphEdge>; CAP],
+pub struct EdgePool {
+    pub(crate) edges: alloc::vec::Vec<Option<GraphEdge>>,
 }
 
-impl<const CAP: usize> EdgePool<CAP> {
+impl EdgePool {
     pub(crate) fn raw_edges(&self) -> &[Option<GraphEdge>] {
         &self.edges
     }
 
     pub fn new() -> Self {
         Self {
-            edges: [None; CAP],
+            edges: alloc::vec::Vec::new(),
         }
     }
 
@@ -91,7 +94,10 @@ impl<const CAP: usize> EdgePool<CAP> {
                 return Ok(id);
             }
         }
-        Err(KernelError::CapacityExceeded)
+        let id = EdgeId(self.edges.len() as u32);
+        edge.id = id;
+        self.edges.push(Some(edge));
+        Ok(id)
     }
 
     pub fn get(&self, id: EdgeId) -> Option<&GraphEdge> {
@@ -104,7 +110,7 @@ impl<const CAP: usize> EdgePool<CAP> {
     
     pub fn delete(&mut self, id: EdgeId) -> Result<()> {
           let idx = id.0 as usize;
-        if idx >= CAP || self.edges[idx].is_none() {
+        if idx >= self.edges.len() || self.edges[idx].is_none() {
             return Err(KernelError::NotFound);
         }
         self.edges[idx] = None;
@@ -113,7 +119,7 @@ impl<const CAP: usize> EdgePool<CAP> {
 
     pub fn is_allocated(&self, id: EdgeId) -> bool {
         let idx = id.0 as usize;
-        idx < CAP && self.edges[idx].is_some()
+        idx < self.edges.len() && self.edges[idx].is_some()
     }
 
     pub fn len(&self) -> usize {
@@ -121,6 +127,6 @@ impl<const CAP: usize> EdgePool<CAP> {
     }
 
     pub fn is_full(&self) -> bool {
-        self.len() >= CAP
+        false
     }
 }

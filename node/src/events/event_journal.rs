@@ -23,22 +23,22 @@ use valori_kernel::event::KernelEvent;
 /// This is the in-memory representation of the event log state.
 /// It enforces the buffer/committed distinction for crash safety.
 #[derive(Clone, Debug)]
-pub struct EventJournal<const D: usize> {
+pub struct EventJournal {
     /// Committed events (canonical truth)
-    committed: Vec<KernelEvent<D>>,
+    committed: Vec<KernelEvent>,
     
     /// Buffered events (shadow execution, not yet truth)
-    buffer: Vec<KernelEvent<D>>,
+    buffer: Vec<KernelEvent>,
     
     /// Committed event count (for proof generation)
     committed_height: u64,
 
     /// Live event broadcast channel
     /// Capacity should be large enough to handle bursts
-    tx: tokio::sync::broadcast::Sender<crate::events::event_log::LogEntry<D>>,
+    tx: tokio::sync::broadcast::Sender<crate::events::event_log::LogEntry>,
 }
 
-impl<const D: usize> EventJournal<D> {
+impl EventJournal {
     /// Create a new empty journal
     pub fn new() -> Self {
         let (tx, _) = tokio::sync::broadcast::channel(10000);
@@ -62,7 +62,7 @@ impl<const D: usize> EventJournal<D> {
     }
 
     /// Create a journal from committed events (recovery scenario)
-    pub fn from_committed(events: Vec<KernelEvent<D>>) -> Self {
+    pub fn from_committed(events: Vec<KernelEvent>) -> Self {
         let committed_height = events.len() as u64;
         let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
@@ -78,25 +78,16 @@ impl<const D: usize> EventJournal<D> {
     }
 
     /// Append an event to the buffer (not yet committed)
-    ///
-    /// This event is in "shadow execution" state.
-    /// It will only become truth after commit_buffer()
-    pub fn append_buffered(&mut self, event: KernelEvent<D>) {
+    pub fn append_buffered(&mut self, event: KernelEvent) {
         self.buffer.push(event);
     }
 
     /// Commit all buffered events
-    ///
-    /// Promotes shadow events to canonical truth.
-    /// This should only be called after:
-    /// - Events are durably written to disk
-    /// - Shadow state validation passes
     pub fn commit_buffer(&mut self) {
         use crate::events::event_log::LogEntry;
         
         for event in &self.buffer {
             // Broadcast to live subscribers
-            // Ignore send errors (no subscribers)
             let _ = self.tx.send(LogEntry::Event(event.clone()));
         }
 
@@ -106,23 +97,17 @@ impl<const D: usize> EventJournal<D> {
     }
 
     /// Rollback buffered events
-    ///
-    /// Discards shadow execution state.
-    /// Used when:
-    /// - Validation fails
-    /// - Write to disk fails
-    /// - Hash verification fails
     pub fn rollback_buffer(&mut self) {
         self.buffer.clear();
     }
 
     /// Get committed events (canonical truth)
-    pub fn committed(&self) -> &[KernelEvent<D>] {
+    pub fn committed(&self) -> &[KernelEvent] {
         &self.committed
     }
 
     /// Get buffered events (shadow execution)
-    pub fn buffered(&self) -> &[KernelEvent<D>] {
+    pub fn buffered(&self) -> &[KernelEvent] {
         &self.buffer
     }
 
@@ -142,12 +127,12 @@ impl<const D: usize> EventJournal<D> {
     }
 
     /// Subscribe to live event stream
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry<D>> {
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
         self.tx.subscribe()
     }
 }
 
-impl<const D: usize> Default for EventJournal<D> {
+impl Default for EventJournal {
     fn default() -> Self {
         Self::new()
     }
@@ -161,12 +146,12 @@ mod tests {
 
     #[test]
     fn test_journal_buffer_commit() {
-        let mut journal = EventJournal::<16>::new();
+        let mut journal = EventJournal::new();
 
         // Add to buffer
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         });
@@ -184,12 +169,12 @@ mod tests {
 
     #[test]
     fn test_journal_buffer_rollback() {
-        let mut journal = EventJournal::<16>::new();
+        let mut journal = EventJournal::new();
 
         // Add to buffer
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         });
@@ -208,13 +193,13 @@ mod tests {
         let events = vec![
             KernelEvent::InsertRecord {
                 id: RecordId(1),
-                vector: FxpVector::<16>::new_zeros(),
+                vector: FxpVector::new_zeros(16),
                 metadata: None,
                 tag: 0,
             },
             KernelEvent::InsertRecord {
                 id: RecordId(2),
-                vector: FxpVector::<16>::new_zeros(),
+                vector: FxpVector::new_zeros(16),
                 metadata: None,
                 tag: 0,
             },
@@ -228,12 +213,12 @@ mod tests {
 
     #[test]
     fn test_journal_crash_safety() {
-        let mut journal = EventJournal::<16>::new();
+        let mut journal = EventJournal::new();
 
         // Simulate: append to buffer
         journal.append_buffered(KernelEvent::InsertRecord {
             id: RecordId(1),
-            vector: FxpVector::<16>::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         });

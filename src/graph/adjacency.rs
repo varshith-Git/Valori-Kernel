@@ -10,9 +10,9 @@ use crate::error::{Result, KernelError};
 /// Adds an edge to the graph, updating the adjacency list.
 /// 
 /// Returns the new EdgeId.
-pub fn add_edge<const MAX_NODES: usize, const MAX_EDGES: usize>(
-    nodes: &mut NodePool<MAX_NODES>,
-    edges: &mut EdgePool<MAX_EDGES>,
+pub fn add_edge(
+    nodes: &mut NodePool,
+    edges: &mut EdgePool,
     kind: EdgeKind,
     from: NodeId,
     to: NodeId,
@@ -53,13 +53,13 @@ pub fn add_edge<const MAX_NODES: usize, const MAX_EDGES: usize>(
 }
 
 /// Iterator for outgoing edges of a node.
-pub struct OutEdgeIterator<'a, const MAX_EDGES: usize> {
-    edges: &'a EdgePool<MAX_EDGES>,
+pub struct OutEdgeIterator<'a> {
+    edges: &'a EdgePool,
     current: Option<EdgeId>,
 }
 
-impl<'a, const MAX_EDGES: usize> OutEdgeIterator<'a, MAX_EDGES> {
-    pub fn new(edges: &'a EdgePool<MAX_EDGES>, start: Option<EdgeId>) -> Self {
+impl<'a> OutEdgeIterator<'a> {
+    pub fn new(edges: &'a EdgePool, start: Option<EdgeId>) -> Self {
         Self {
             edges,
             current: start,
@@ -67,7 +67,7 @@ impl<'a, const MAX_EDGES: usize> OutEdgeIterator<'a, MAX_EDGES> {
     }
 }
 
-impl<'a, const MAX_EDGES: usize> Iterator for OutEdgeIterator<'a, MAX_EDGES> {
+impl<'a> Iterator for OutEdgeIterator<'a> {
     type Item = &'a GraphEdge;
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -16,17 +16,17 @@ impl BruteForceIndex {
     // Keep internal implementation for direct use or trait delegation
 }
 
-impl<const MAX_RECORDS: usize, const D: usize> VectorIndex<MAX_RECORDS, D> for BruteForceIndex {
-    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector<D>) { }
+impl VectorIndex for BruteForceIndex {
+    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector) { }
 
     fn on_delete(&mut self, _id: RecordId) { }
 
-    fn rebuild(&mut self, _pool: &RecordPool<MAX_RECORDS, D>) { }
+    fn rebuild(&mut self, _pool: &RecordPool) { }
 
     fn search(
         &self,
-        pool: &RecordPool<MAX_RECORDS, D>,
-        query: &FxpVector<D>,
+        pool: &RecordPool,
+        query: &FxpVector,
         results: &mut [SearchResult],
         filter: Option<u64>,
     ) -> usize {
@@ -92,10 +92,10 @@ impl<const MAX_RECORDS: usize, const D: usize> VectorIndex<MAX_RECORDS, D> for B
 
 impl BruteForceIndex {
     /// Helper: returns a fixed-size array of top-K results.
-    pub fn search_topk<const CAP: usize, const D: usize, const K: usize>(
+    pub fn search_topk<const K: usize>(
         &self,
-        pool: &RecordPool<CAP, D>,
-        query: &FxpVector<D>,
+        pool: &RecordPool,
+        query: &FxpVector,
     ) -> [SearchResult; K] {
         let mut buf = [SearchResult::default(); K];
         // Use the trait method here or self implementation if we duplicated?

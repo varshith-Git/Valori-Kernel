@@ -20,8 +20,9 @@ from valori import ProtocolClient
 
 # Define an embedding function (e.g., OpenAI, HuggingFace)
 def my_embedder(text: str) -> list[float]:
-    # return [0.1, 0.2, ...] (Must match dim=16 or configured dim)
-    return [0.0] * 16
+    # Valori is now Zero-Config: dimensions are auto-detected
+    # from the first insertion. Any model will work!
+    return [0.0] * 1536  # Example: OpenAI text-embedding-3-small
 
 client = ProtocolClient(
     remote="https://your-node.koyeb.app",

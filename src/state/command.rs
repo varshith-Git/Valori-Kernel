@@ -8,10 +8,10 @@ use crate::types::enums::{NodeKind, EdgeKind};
 use serde::{Serialize, Deserialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Command<const D: usize> {
+pub enum Command {
     InsertRecord {
         id: RecordId,
-        vector: FxpVector<D>,
+        vector: FxpVector,
         metadata: Option<alloc::vec::Vec<u8>>,
         tag: u64,
     },

@@ -29,14 +29,14 @@ impl Ord for SearchResult {
     }
 }
 
-pub trait VectorIndex<const MAX_RECORDS: usize, const D: usize> {
-    fn on_insert(&mut self, id: RecordId, vec: &FxpVector<D>);
+pub trait VectorIndex {
+    fn on_insert(&mut self, id: RecordId, vec: &FxpVector);
     fn on_delete(&mut self, id: RecordId);
-    fn rebuild(&mut self, pool: &RecordPool<MAX_RECORDS, D>);
+    fn rebuild(&mut self, pool: &RecordPool);
     fn search(
         &self,
-        pool: &RecordPool<MAX_RECORDS, D>,
-        query: &FxpVector<D>,
+        pool: &RecordPool,
+        query: &FxpVector,
         results: &mut [SearchResult],
         filter: Option<u64>,
     ) -> usize;

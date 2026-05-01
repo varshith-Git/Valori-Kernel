@@ -22,9 +22,10 @@ This hybrid approach allows AI agents to "remember" in two ways:
 
 ### 1. The Record (Vector)
 The fundamental atomic unit of memory.
-*   **What it is**: A dense fixed-point vector (e.g., 16-dim or 768-dim) representing meaning.
-*   **Storage**: Stored in a contiguous memory pool for O(1) access.
+*   **What it is**: A dense fixed-point vector (e.g., 16-dim or 1536-dim) representing meaning.
+*   **Storage**: Stored in a heap-allocated, dynamic memory pool that grows on demand.
 *   **Addressing**: Identified by a `RecordId` (integer).
+*   **Self-Describing**: The kernel auto-detects vector dimensions from the first ingestion, making it model-agnostic (Zero-Config).
 *   **Metadata**: Optional binary blob (up to 64KB). Deterministically hashed and snapshotted.
 
 ### 2. The Knowlege Graph

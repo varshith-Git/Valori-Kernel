@@ -39,9 +39,9 @@ fn read_i32(buf: &[u8], offset: &mut usize) -> Result<i32> {
     Ok(i32::from_le_bytes(bytes))
 }
 
-pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize>(
+pub fn decode_state(
     buf: &[u8],
-) -> Result<KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>> {
+) -> Result<KernelState> {
     let mut offset = 0;
     
     // Header
@@ -52,34 +52,40 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    // We support V1 and V2
-    if schema_ver != 1 && schema_ver != 2 {
+    // We support V1, V2, and V3
+    if schema_ver != 1 && schema_ver != 2 && schema_ver != 3 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
     let version_val = read_u64(buf, &mut offset)?;
     
-    // Verify Capacities
-    let cap_records = read_u32(buf, &mut offset)?;
+    // Read 4 u32s that used to be capacities, but in V3 they are dim and lengths
+    let _cap_records = read_u32(buf, &mut offset)?;
     let dim = read_u32(buf, &mut offset)?;
-    let cap_nodes = read_u32(buf, &mut offset)?;
-    let cap_edges = read_u32(buf, &mut offset)?;
+    let _cap_nodes = read_u32(buf, &mut offset)?;
+    let _cap_edges = read_u32(buf, &mut offset)?;
     
-    if cap_records != MAX_RECORDS as u32 || dim != D as u32 || cap_nodes != MAX_NODES as u32 || cap_edges != MAX_EDGES as u32 {
-        // Mismatch in kernel configuration
-        return Err(KernelError::InvalidOperation); 
-    }
-
     let mut state = KernelState::new();
     state.version = Version(version_val);
+    if dim > 0 {
+        state.dim = Some(dim as usize);
+    }
 
     // Records
     let record_count = read_u32(buf, &mut offset)?;
     for _ in 0..record_count {
         let id_val = read_u32(buf, &mut offset)?;
         let flags = read_u8(buf, &mut offset)?;
-        let mut vector = FxpVector::<D>::new_zeros();
-        for i in 0..D {
+        
+        let tag = if schema_ver >= 3 {
+            read_u64(buf, &mut offset)?
+        } else {
+            0
+        };
+        let d_len = state.dim.unwrap_or(0);
+        let mut vector = FxpVector::new_zeros(d_len);
+        // We must know how many elements to read. V1/V2 read 'dim' from header.
+        for i in 0..d_len {
             vector.data[i] = FxpScalar(read_i32(buf, &mut offset)?);
         }
 
@@ -103,48 +109,14 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         };
         
         let idx = id_val as usize;
-        if idx >= MAX_RECORDS {
-            return Err(KernelError::CapacityExceeded);
+        if idx >= state.records.records.len() {
+            state.records.records.resize(idx + 1, None);
         }
         state.records.records[idx] = Some(Record {
             id: RecordId(id_val),
             vector,
             metadata,
-        // Read Tag (Assuming it was added in V2 or we are defining V3 now? 
-        // Wait, schema_ver is 1 or 2. If 2, we should read tag.
-        // Wait, did encode_state write tag?
-        // I need to check `encode.rs`. 
-        // Step 2901 showed `encode_state` writes: ID, Flags, Vector, Metadata.
-        // It does NOT write Tag! 
-        // So `tag` is NOT persisted in snapshot currently. 
-        // This means `Record` will default to 0 on load.
-        // Persistence of Tag is crucial for Phase 5.
-        // I must update `encode.rs` to write tag, and `decode.rs` to read it.
-        // Schema version bump to 3? Or silently update 2? 
-        // `encode.rs` says `SCHEMA_VERSION = 2`.
-        // Let's stick with 2 but append tag if feasible, OR bump to 3.
-        // For simplicity and to avoid breaking existing V2 tests if any, I'll default to 0 here and NOT persist it yet, 
-        // UNLESS the user requirement (Phase 5) explicitly demands persistence of tags.
-        // User said: "The ultimate goal is to enable Data Scientists to use Valori through Python... facilitating benchmarks".
-        // Persistence of tags is likely expected.
-        
-        // However, updating snapshot schema is risky and might break `valori-node`.
-        // `valori-node` uses `crates/kernel/src/snapshot`.
-        // If I change it, I must ensure `valori-node` is compatible.
-        // Given I'm in "Phase 5", and previous steps showed `InsertRecord` event HAS tag.
-        // Events are source of truth. Snapshot is cache.
-        // Replay from events will restore tags correctly IF `apply_event` sets it.
-        // `apply_event` sets `tag` in `payload` -> `index.insert(..., tag)`.
-        // `record.rs` now has `tag`. `pool.insert` creates `Record`.
-        // Does `pool.insert` take `tag`? 
-        // I need to check `pool.rs`.
-        
-        // For now, I will initialize `tag` to 0 in `decode.rs` to fix compilation.
-        // If snapshot doesn't have it, it's 0. 
-        // Re-snapshotting will lose tags unless `encode.rs` is updated.
-        // I'll leave `encode.rs` update for later or next step if compilation passes.
-        
-            tag: 0,
+            tag,
             flags,
         });
     }
@@ -171,7 +143,9 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         };
 
         let idx = id_val as usize;
-        if idx >= MAX_NODES { return Err(KernelError::CapacityExceeded); }
+        if idx >= state.nodes.nodes.len() {
+            state.nodes.nodes.resize(idx + 1, None);
+        }
         state.nodes.nodes[idx] = Some(GraphNode {
             id: NodeId(id_val),
             kind,
@@ -198,7 +172,9 @@ pub fn decode_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: u
         };
 
         let idx = id_val as usize;
-        if idx >= MAX_EDGES { return Err(KernelError::CapacityExceeded); }
+        if idx >= state.edges.edges.len() {
+            state.edges.edges.resize(idx + 1, None);
+        }
         state.edges.edges[idx] = Some(GraphEdge {
             id: EdgeId(id_val),
             kind,

@@ -45,8 +45,8 @@ impl FnvHasher {
     }
 }
 
-pub fn hash_state<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize>(
-    state: &KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
+pub fn hash_state(
+    state: &KernelState,
 ) -> u64 {
     let mut hasher = FnvHasher::new();
 

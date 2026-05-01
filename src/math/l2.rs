@@ -8,10 +8,11 @@ use crate::fxp::ops::fxp_add;
 
 /// Computes the squared L2 distance between two vectors.
 /// ||a - b||^2
-pub fn fxp_l2_sq<const D: usize>(a: &FxpVector<D>, b: &FxpVector<D>) -> FxpScalar {
+pub fn fxp_l2_sq(a: &FxpVector, b: &FxpVector) -> FxpScalar {
     let mut sum = FxpScalar::ZERO;
 
-    for i in 0..D {
+    let len = a.data.len().min(b.data.len());
+    for i in 0..len {
         let diff = fxp_sub(a.data[i], b.data[i]);
         let sq = fxp_mul(diff, diff);
         sum = fxp_add(sum, sq);

@@ -15,17 +15,19 @@ use crate::types::vector::FxpVector;
 use crate::storage::record::Record;
 
 #[derive(Clone)]
-pub struct KernelState<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> {
+pub struct KernelState {
+    pub dim: Option<usize>,
     pub(crate) version: Version,
-    pub(crate) records: RecordPool<MAX_RECORDS, D>,
-    pub(crate) nodes: NodePool<MAX_NODES>,
-    pub(crate) edges: EdgePool<MAX_EDGES>,
+    pub(crate) records: RecordPool,
+    pub(crate) nodes: NodePool,
+    pub(crate) edges: EdgePool,
     pub(crate) index: BruteForceIndex,
 }
 
-impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize> KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES> {
+impl KernelState {
     pub fn new() -> Self {
         Self {
+            dim: None,
             version: Version(0),
             records: RecordPool::new(),
             nodes: NodePool::new(),
@@ -44,7 +46,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.records.len()
     }
 
-    pub fn get_record(&self, id: RecordId) -> Option<&Record<D>> {
+    pub fn get_record(&self, id: RecordId) -> Option<&Record> {
         self.records.get(id)
     }
 
@@ -52,7 +54,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.nodes.get(id)
     }
 
-    pub fn outgoing_edges<'a>(&'a self, node_id: NodeId) -> Option<OutEdgeIterator<'a, MAX_EDGES>> {
+    pub fn outgoing_edges<'a>(&'a self, node_id: NodeId) -> Option<OutEdgeIterator<'a>> {
         self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
 
@@ -68,7 +70,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         self.edges.len()
     }
 
-    pub fn search_l2(&self, query: &FxpVector<D>, results: &mut [SearchResult], filter: Option<u64>) -> usize {
+    pub fn search_l2(&self, query: &FxpVector, results: &mut [SearchResult], filter: Option<u64>) -> usize {
         self.index.search(&self.records, query, results, filter)
     }
 
@@ -114,7 +116,7 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
     /// - Same event sequence => Same final state
     /// - No side effects or implicit state
     /// - Crash-symmetric: replay(committed_events) = recovered_state
-    pub fn apply_event(&mut self, evt: &crate::event::KernelEvent<D>) -> Result<()> {
+    pub fn apply_event(&mut self, evt: &crate::event::KernelEvent) -> Result<()> {
         use crate::event::KernelEvent;
 
         match evt {
@@ -163,9 +165,18 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
     // --- Write Logic ---
 
-    pub fn apply(&mut self, cmd: &Command<D>) -> Result<()> {
+    pub fn apply(&mut self, cmd: &Command) -> Result<()> {
         match cmd {
             Command::InsertRecord { id, vector, metadata, tag } => {
+                let d = vector.len();
+                if let Some(dim) = self.dim {
+                    if d != dim {
+                        return Err(KernelError::InvalidOperation);
+                    }
+                } else {
+                    self.dim = Some(d);
+                }
+                
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
                     if m.len() > MAX_METADATA_SIZE {
@@ -173,15 +184,15 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
                     }
                 }
 
-                let allocated_id = self.records.insert(*vector, metadata.clone(), *tag)?;
+                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag)?;
                 if allocated_id != *id {
                      return Err(KernelError::InvalidOperation);
                 }
-                <BruteForceIndex as VectorIndex<MAX_RECORDS, D>>::on_insert(&mut self.index, allocated_id, vector);
+                <BruteForceIndex as VectorIndex>::on_insert(&mut self.index, allocated_id, vector);
             }
             Command::DeleteRecord { id } => {
                 self.records.delete(*id)?;
-                <BruteForceIndex as VectorIndex<MAX_RECORDS, D>>::on_delete(&mut self.index, *id);
+                <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, *id);
             }
             Command::CreateNode { node_id, kind, record } => {
                 if let Some(rid) = record {

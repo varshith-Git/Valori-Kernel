@@ -21,6 +21,8 @@ Valori is a vector database built for **regulated industries** (healthcare, fina
 
 **Valori's Solution:** We give you **cryptographic proof**. Bit-identical state hash before and after crash. Zero trust required.
 
+**New in v0.2.0:** **Zero-Config Architecture**. No more hardcoded dimensions or record limits. The kernel adapts to your data on the fly.
+
 ---
 
 ## 🛡️ Crash Recovery: Proven, Not Claimed
@@ -182,8 +184,9 @@ Valori uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
 
 ### 5. Crash Recovery & Durability
 - **WAL & Event Log**: Every operation is synced to disk via length-prefixed logs
-- **Batch Ingestion**: Atomic commits for high-throughput bulk inserts
-- **Snapshots**: Instant checkpointing and restoration
+- **Zero-Config Persistence**: WAL and Snapshots are self-describing, restoring state without manual config
+- **Batch Ingestion**: Atomic commits for high-throughput bulk inserts (10k+ vectors/sec)
+- **Dynamic Snapshots**: Instant checkpointing that scales to millions of records
 
 ### 6. Flexible Deployment
 - **Embedded (Python FFI):** Link directly into Python for microsecond latency

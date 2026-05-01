@@ -29,11 +29,11 @@ use core::fmt;
 ///
 /// Each variant represents an atomic, deterministic operation on the kernel state.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KernelEvent<const D: usize> {
+pub enum KernelEvent {
     /// Insert a new vector record into the kernel
     InsertRecord {
         id: RecordId,
-        vector: FxpVector<D>,
+        vector: FxpVector,
         metadata: Option<alloc::vec::Vec<u8>>,
         tag: u64,
     },
@@ -64,7 +64,7 @@ pub enum KernelEvent<const D: usize> {
     },
 }
 
-impl<const D: usize> KernelEvent<D> {
+impl KernelEvent {
     /// Returns a human-readable description of the event type
     pub fn event_type(&self) -> &'static str {
         match self {
@@ -78,7 +78,7 @@ impl<const D: usize> KernelEvent<D> {
 }
 
 // Custom Serialization to support strict V2 Metadata format
-impl<const D: usize> Serialize for KernelEvent<D> {
+impl Serialize for KernelEvent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -149,7 +149,7 @@ impl<'a> Serialize for RawMetadata<'a> {
 }
 
 // Custom Deserialization
-impl<'de, const D: usize> Deserialize<'de> for KernelEvent<D> {
+impl<'de> Deserialize<'de> for KernelEvent {
     fn deserialize<Deser>(deserializer: Deser) -> Result<Self, Deser::Error>
     where
         Deser: Deserializer<'de>,
@@ -157,10 +157,10 @@ impl<'de, const D: usize> Deserialize<'de> for KernelEvent<D> {
         // Use a Shadow Enum that matches the structure but uses a custom type for Metadata
         // This allows us to intercept the metadata deserialization for backward compatibility logic
         #[derive(Serialize, Deserialize)]
-        enum KernelEventHelper<const D: usize> {
+        enum KernelEventHelper {
              InsertRecord {
                  id: RecordId,
-                 vector: FxpVector<D>,
+                 vector: FxpVector,
                  #[serde(with = "raw_metadata_serde")]
                  metadata: Option<alloc::vec::Vec<u8>>,
                  tag: u64,
@@ -185,7 +185,7 @@ impl<'de, const D: usize> Deserialize<'de> for KernelEvent<D> {
         }
         
         // Delegate to the Helper
-        let helper = KernelEventHelper::<D>::deserialize(deserializer)?;
+        let helper = KernelEventHelper::deserialize(deserializer)?;
         
         Ok(match helper {
             KernelEventHelper::InsertRecord { id, vector, metadata, tag } => KernelEvent::InsertRecord { id, vector, metadata, tag },
@@ -248,9 +248,9 @@ mod tests {
     #[test]
     fn test_event_serialization_determinism() {
         // Verify that serialization is deterministic
-        let event = KernelEvent::<16>::InsertRecord {
+        let event = KernelEvent::InsertRecord {
             id: RecordId(42),
-            vector: FxpVector::new_zeros(),
+            vector: FxpVector::new_zeros(16),
             metadata: Some(alloc::vec![0xAA, 0xBB]),
             tag: 123,
         };
@@ -264,14 +264,14 @@ mod tests {
     #[test]
     fn test_event_roundtrip() {
         // Verify serialize/deserialize roundtrip
-        let original = KernelEvent::<16>::CreateNode {
+        let original = KernelEvent::CreateNode {
             id: NodeId(1),
             kind: NodeKind::Document,
             record: Some(RecordId(42)),
         };
 
         let bytes = bincode::serde::encode_to_vec(&original, bincode::config::standard()).unwrap();
-        let (decoded, _): (KernelEvent<16>, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+        let (decoded, _): (KernelEvent, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
 
         assert_eq!(original, decoded, "Event must survive serialization roundtrip");
     }

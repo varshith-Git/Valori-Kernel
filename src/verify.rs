@@ -16,10 +16,23 @@ use crate::state::kernel::KernelState;
 /// - Node-level metadata (HTTP headers, user sessions)
 /// - Index structures (HNSW/IVF aux data)
 /// - Runtime caches
-pub fn kernel_state_hash<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX_EDGES: usize>(
-    state: &KernelState<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>,
+pub fn kernel_state_hash(
+    state: &KernelState,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
+
+    // Hash dimension locking state
+    if let Some(dim) = state.dim {
+        hasher.update(&[1]);
+        hasher.update(&(dim as u32).to_le_bytes());
+    } else {
+        hasher.update(&[0]);
+    }
+
+    // Hash pool capacities/lengths
+    hasher.update(&(state.records.raw_records().len() as u32).to_le_bytes());
+    hasher.update(&(state.nodes.raw_nodes().len() as u32).to_le_bytes());
+    hasher.update(&(state.edges.raw_edges().len() as u32).to_le_bytes());
 
     // 1. Kernel Version
     hasher.update(&state.version.0.to_le_bytes());

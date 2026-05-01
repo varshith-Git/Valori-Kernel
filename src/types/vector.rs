@@ -11,18 +11,18 @@ use serde::ser::SerializeTuple;
 use serde::de::{self, SeqAccess, Visitor};
 use core::fmt;
 
-/// A fixed-dimension vector definition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FxpVector<const D: usize> {
-    pub data: [FxpScalar; D],
+/// A dynamic-dimension vector definition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FxpVector {
+    pub data: alloc::vec::Vec<FxpScalar>,
 }
 
-impl<const D: usize> Serialize for FxpVector<D> {
+impl Serialize for FxpVector {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut seq = serializer.serialize_tuple(D)?;
+        let mut seq = serializer.serialize_tuple(self.data.len())?;
         for element in &self.data {
             seq.serialize_element(element)?;
         }
@@ -30,51 +30,55 @@ impl<const D: usize> Serialize for FxpVector<D> {
     }
 }
 
-// Deserialize manual impl for const generic array
-struct FxpVectorVisitor<const D: usize>;
+struct FxpVectorVisitor;
 
-impl<'de, const D: usize> Visitor<'de> for FxpVectorVisitor<D> {
-    type Value = FxpVector<D>;
+impl<'de> Visitor<'de> for FxpVectorVisitor {
+    type Value = FxpVector;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_fmt(format_args!("a sequence of {} FxpScalars", D))
+        formatter.write_str("a sequence of FxpScalars")
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
     {
-        // Must read D elements
-        let mut data = [FxpScalar::default(); D];
-        for i in 0..D {
-            data[i] = seq.next_element()?
-                .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+        let mut data = alloc::vec::Vec::new();
+        while let Some(elem) = seq.next_element()? {
+            data.push(elem);
         }
         Ok(FxpVector { data })
     }
 }
 
-impl<'de, const D: usize> Deserialize<'de> for FxpVector<D> {
+impl<'de> Deserialize<'de> for FxpVector {
     fn deserialize<Desc>(deserializer: Desc) -> Result<Self, Desc::Error>
     where
         Desc: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple(D, FxpVectorVisitor::<D>)
+        deserializer.deserialize_seq(FxpVectorVisitor)
     }
 }
 
-impl<const D: usize> Default for FxpVector<D> {
+impl Default for FxpVector {
     fn default() -> Self {
         Self {
-            data: [FxpScalar::ZERO; D],
+            data: alloc::vec::Vec::new(),
         }
     }
 }
 
-impl<const D: usize> FxpVector<D> {
-    /// Creates a new vector with all zeros.
-    pub fn new_zeros() -> Self {
+impl FxpVector {
+    /// Creates a new empty vector.
+    pub fn new_empty() -> Self {
         Self::default()
+    }
+
+    /// Creates a new vector of dimension D with all zeros.
+    pub fn new_zeros(dim: usize) -> Self {
+        let mut data = alloc::vec::Vec::with_capacity(dim);
+        data.resize(dim, FxpScalar::ZERO);
+        Self { data }
     }
 
     /// Returns a slice of the vector data.
@@ -86,10 +90,18 @@ impl<const D: usize> FxpVector<D> {
     pub fn as_mut_slice(&mut self) -> &mut [FxpScalar] {
         &mut self.data
     }
+    
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+    
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 // Iterator support
-impl<'a, const D: usize> IntoIterator for &'a FxpVector<D> {
+impl<'a> IntoIterator for &'a FxpVector {
     type Item = &'a FxpScalar;
     type IntoIter = core::slice::Iter<'a, FxpScalar>;
 
@@ -98,7 +110,7 @@ impl<'a, const D: usize> IntoIterator for &'a FxpVector<D> {
     }
 }
 
-impl<const D: usize> Index<usize> for FxpVector<D> {
+impl Index<usize> for FxpVector {
     type Output = FxpScalar;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -106,7 +118,7 @@ impl<const D: usize> Index<usize> for FxpVector<D> {
     }
 }
 
-impl<const D: usize> IndexMut<usize> for FxpVector<D> {
+impl IndexMut<usize> for FxpVector {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.data[index]
     }

@@ -34,9 +34,7 @@ pub struct SearchRequest {
 #[derive(Serialize)]
 pub struct SearchHit {
     pub id: u32,
-    pub score: i64, 
-    // Raw fixed-point distance (Q16.16) cast to i64.
-    // Underlying type is FxpScalar(i32) but sq dist can exceed range, so we expose as i64.
+    pub score: f32,
 }
 
 #[derive(Serialize)]
@@ -110,7 +108,7 @@ pub struct MemorySearchVectorRequest {
 pub struct MemorySearchHit {
     pub memory_id: String,
     pub record_id: u32,
-    pub score: i64,
+    pub score: f32,
     pub metadata: Option<serde_json::Value>,
 }
 

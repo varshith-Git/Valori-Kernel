@@ -21,15 +21,15 @@ use alloc::vec::Vec;
 /// - Only committed events define history
 /// - Commit flow: append → buffer → verify → commit → apply → hash → store
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EventJournal<const D: usize> {
+pub struct EventJournal {
     /// Committed events represent the canonical truth
-    pub committed: Vec<KernelEvent<D>>,
+    pub committed: Vec<KernelEvent>,
     
     /// Buffered events are pending commit (not yet state truth)
-    pub buffer: Vec<KernelEvent<D>>,
+    pub buffer: Vec<KernelEvent>,
 }
 
-impl<const D: usize> EventJournal<D> {
+impl EventJournal {
     /// Create a new empty journal
     pub fn new() -> Self {
         Self {
@@ -39,7 +39,7 @@ impl<const D: usize> EventJournal<D> {
     }
 
     /// Append an event to the buffer (not yet committed)
-    pub fn append(&mut self, event: KernelEvent<D>) {
+    pub fn append(&mut self, event: KernelEvent) {
         self.buffer.push(event);
     }
 
@@ -75,7 +75,7 @@ impl<const D: usize> EventJournal<D> {
 /// Schema changes require version bump and migration path.
 #[repr(C)]
 #[derive(Serialize, Deserialize, Debug)]
-pub struct EventLogFile<const D: usize> {
+pub struct EventLogFile {
     /// Protocol version (must match)
     pub version: u32,
     
@@ -83,27 +83,29 @@ pub struct EventLogFile<const D: usize> {
     pub dim: u32,
     
     /// Ordered sequence of events
-    pub events: Vec<KernelEvent<D>>,
+    pub events: Vec<KernelEvent>,
 }
 
-impl<const D: usize> EventLogFile<D> {
+impl EventLogFile {
     /// Create a new event log file
-    pub fn new(events: Vec<KernelEvent<D>>) -> Self {
+    pub fn new(events: Vec<KernelEvent>, dim: u32) -> Self {
         Self {
             version: 1,
-            dim: D as u32,
+            dim,
             events,
         }
     }
 
     /// Validate compatibility with runtime configuration
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self, expected_dim: Option<usize>) -> Result<()> {
         if self.version != 1 {
             return Err(KernelError::InvalidInput);
         }
 
-        if self.dim != D as u32 {
-            return Err(KernelError::InvalidInput);
+        if let Some(d) = expected_dim {
+            if self.dim != d as u32 {
+                return Err(KernelError::InvalidInput);
+            }
         }
 
         Ok(())
@@ -120,14 +122,9 @@ impl<const D: usize> EventLogFile<D> {
 /// - Snapshot serialization
 ///
 /// from the same event log.
-pub fn replay_events<
-    const M: usize,
-    const D: usize,
-    const N: usize,
-    const E: usize
->(
-    events: &[KernelEvent<D>]
-) -> Result<KernelState<M, D, N, E>>
+pub fn replay_events(
+    events: &[KernelEvent]
+) -> Result<KernelState>
 {
     let mut state = KernelState::new();
 
@@ -146,13 +143,14 @@ mod tests {
 
     #[test]
     fn test_journal_commit_semantics() {
-        let mut journal: EventJournal<16> = EventJournal::new();
+        let mut journal = EventJournal::new();
 
         // Append to buffer
         journal.append(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::new_zeros(),
             metadata: None,
+            tag: 0,
         });
 
         assert_eq!(journal.buffer_len(), 1);
@@ -167,12 +165,13 @@ mod tests {
 
     #[test]
     fn test_journal_discard() {
-        let mut journal: EventJournal<16> = EventJournal::new();
+        let mut journal = EventJournal::new();
 
         journal.append(KernelEvent::InsertRecord {
             id: RecordId(1),
             vector: FxpVector::new_zeros(),
             metadata: None,
+            tag: 0,
         });
 
         journal.discard_buffer();
@@ -183,23 +182,19 @@ mod tests {
 
     #[test]
     fn test_event_log_file_validation() {
-        let log_file: EventLogFile<16> = EventLogFile::new(vec![]);
+        let log_file = EventLogFile::new(vec![], 16);
         
-        assert!(log_file.validate().is_ok());
+        assert!(log_file.validate(Some(16)).is_ok());
     }
 
     #[test]
     fn test_event_log_file_dim_mismatch() {
-        // Create log with dimension 32
-        let log_file_32: EventLogFile<32> = EventLogFile::new(vec![]);
-        
-        // Manually create a mismatched validator (simulating deserialization)
-        let bad_log = EventLogFile::<16> {
+        let bad_log = EventLogFile {
             version: 1,
-            dim: 32, // Wrong!
+            dim: 32,
             events: vec![],
         };
 
-        assert!(bad_log.validate().is_err());
+        assert!(bad_log.validate(Some(16)).is_err());
     }
 }

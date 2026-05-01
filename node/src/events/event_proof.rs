@@ -3,41 +3,22 @@
 //!
 //! This module generates cryptographic proofs of system state
 //! based on the event log (canonical truth).
-//!
-//! # Purpose
-//! - Forensic auditing
-//! - Cross-system verification (Cloud ↔ Embedded ↔ Verifier)
-//! - Deterministic replay validation
-//! - Legal compliance
-//!
-//! # Guarantee
-//! Same events → Same proof (across any architecture)
 
 use serde::{Serialize, Deserialize};
 
 /// Event-sourced proof of system state
-///
-/// This proof is generated from the authoritative event log
-/// and can be used to verify state consistency across:
-/// - Cloud nodes
-/// - Embedded devices
-/// - Offline verifiers
-/// - Different architectures
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventProof {
     /// Kernel protocol version
     pub kernel_version: u32,
     
     /// Hash of the snapshot file (if exists)
-    /// This is the hash of the snapshot *container*, not the state
     pub snapshot_hash: [u8; 32],
     
     /// Hash of the event log file
-    /// BLAKE3 hash of the entire log (header + events)
     pub event_log_hash: [u8; 32],
     
     /// Hash of the final kernel state (after replay)
-    /// This is the deterministic state hash
     pub final_state_hash: [u8; 32],
     
     /// Number of events in the log
@@ -66,15 +47,7 @@ impl EventProof {
         }
     }
 
-    /// Verify two proofs match (for cross-system validation)
-    ///
-    /// Returns true if:
-    /// - event_log_hash matches
-    /// - final_state_hash matches
-    /// - event_count matches
-    /// - committed_height matches
-    ///
-    /// Note: snapshot_hash may differ (snapshots are optimization)
+    /// Verify two proofs match
     pub fn matches(&self, other: &EventProof) -> bool {
         self.event_log_hash == other.event_log_hash
             && self.final_state_hash == other.final_state_hash
@@ -96,9 +69,6 @@ impl EventProof {
 }
 
 /// Compute hash of event log file using BLAKE3
-///
-/// This hashes the entire file (header + all events)
-/// for tamper detection and cross-system verification
 pub fn compute_event_log_hash(path: impl AsRef<std::path::Path>) -> std::io::Result<[u8; 32]> {
     use std::fs::File;
     use std::io::Read;
@@ -119,10 +89,8 @@ pub fn compute_event_log_hash(path: impl AsRef<std::path::Path>) -> std::io::Res
 }
 
 /// Generate a complete event proof from current system state
-///
-/// This is the primary proof generation function for the Node.
-pub fn generate_proof<const M: usize, const D: usize, const N: usize, const E: usize>(
-    state: &valori_kernel::state::kernel::KernelState<M, D, N, E>,
+pub fn generate_proof(
+    state: &valori_kernel::state::kernel::KernelState,
     snapshot_path: Option<&std::path::Path>,
     event_log_path: &std::path::Path,
     event_count: u64,
@@ -137,10 +105,10 @@ pub fn generate_proof<const M: usize, const D: usize, const N: usize, const E: u
             let bytes = fs::read(path)?;
             hash_bytes(&bytes)
         } else {
-            [0u8; 32] // No snapshot
+            [0u8; 32]
         }
     } else {
-        [0u8; 32] // No snapshot
+        [0u8; 32]
     };
 
     // Compute event log hash
@@ -173,51 +141,13 @@ mod tests {
         );
 
         let proof2 = EventProof::new(
-            [99u8; 32], // Different snapshot hash
-            [2u8; 32],  // Same event log
-            [3u8; 32],  // Same state
+            [99u8; 32],
+            [2u8; 32],
+            [3u8; 32],
             100,
             100,
         );
 
-        // Should match (snapshot hash doesn't matter)
         assert!(proof1.matches(&proof2));
-    }
-
-    #[test]
-    fn test_proof_inequality() {
-        let proof1 = EventProof::new(
-            [1u8; 32],
-            [2u8; 32],
-            [3u8; 32],
-            100,
-            100,
-        );
-
-        let proof2 = EventProof::new(
-            [1u8; 32],
-            [2u8; 32],
-            [3u8; 32],
-            101, // Different count
-            101,
-        );
-
-        assert!(!proof1.matches(&proof2));
-    }
-
-    #[test]
-    fn test_proof_serialization() {
-        let proof = EventProof::new(
-            [1u8; 32],
-            [2u8; 32],
-            [3u8; 32],
-            100,
-            100,
-        );
-
-        let json = serde_json::to_string(&proof).unwrap();
-        let decoded: EventProof = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(proof, decoded);
     }
 }

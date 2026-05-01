@@ -11,10 +11,11 @@ use crate::fxp::qformat::FRAC_BITS;
 /// but shifts each product term individually.
 /// 
 /// Returns a saturated result if the final sum exceeds the range of FxpScalar (i32).
-pub fn fxp_dot<const D: usize>(a: &FxpVector<D>, b: &FxpVector<D>) -> FxpScalar {
+pub fn fxp_dot(a: &FxpVector, b: &FxpVector) -> FxpScalar {
     let mut sum: i64 = 0;
 
-    for i in 0..D {
+    let len = a.data.len().min(b.data.len());
+    for i in 0..len {
         let val_a = a.data[i].0 as i64;
         let val_b = b.data[i].0 as i64;
         
