@@ -19,6 +19,16 @@ class RemoteClient:
         resp = self._post("/records", data)
         return resp["id"]
 
+    def insert_with_proof(self, vector: List[float]) -> tuple:
+        """Insert a vector and return (id, proof_hash).
+        For RemoteClient, proof is generated locally from exact same fixed point logic.
+        """
+        import valori
+        fixed_vals = valori.ingest_embedding(vector)
+        proof = valori.generate_proof(fixed_vals)
+        rid = self.insert(vector)
+        return (rid, proof)
+
     def insert_batch(self, batch: List[List[float]]) -> List[int]:
         """Insert a batch of vectors. Returns list of new Record IDs."""
         data = {"batch": batch}

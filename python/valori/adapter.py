@@ -65,6 +65,41 @@ class ValoriAdapter:
         self._id_map[id] = record_id
         return proof_hash
 
+    def insert_batch(
+        self,
+        ids: list[str],
+        embeddings: list[np.ndarray],
+        metadata_list: list[dict] = None
+    ) -> list[str]:
+        """
+        Insert a batch into existing DB and generate kernel-backed proofs.
+
+        Returns:
+            List of proof hashes (hex strings).
+        """
+        if metadata_list is None:
+            metadata_list = [{}] * len(ids)
+
+        # 1. Store in existing DB
+        if hasattr(self.db, "insert_batch"):
+            self.db.insert_batch(ids, embeddings, metadata_list)
+        else:
+            # Fallback for DBs without batch method
+            for i in range(len(ids)):
+                self.db.insert(ids[i], embeddings[i], metadata_list[i])
+
+        # 2. Single atomic Rust call for the batch
+        vectors = [emb.flatten().tolist() for emb in embeddings]
+        results = self._valori.insert_batch_with_proof(vectors)
+
+        # 3. Track mapping and collect proofs
+        proof_hashes = []
+        for i, (record_id, proof_hash) in enumerate(results):
+            self._id_map[ids[i]] = record_id
+            proof_hashes.append(proof_hash)
+
+        return proof_hashes
+
     def search(
         self,
         query_embedding: np.ndarray,

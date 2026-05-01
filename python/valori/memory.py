@@ -69,6 +69,7 @@ class MemoryClient:
         
         chunk_node_ids = []
         record_ids = []
+        proof_hashes = []
         
         # 1. Create Document Node if needed
         if parent_document_node is None:
@@ -84,9 +85,10 @@ class MemoryClient:
             if len(vec) != EXPECTED_DIM:
                 raise ValueError(f"Embedding function must return {EXPECTED_DIM} dims, got {len(vec)}")
             
-            # Kernel insert
-            rid = self._db.insert(vec)
+            # Kernel insert with proof
+            rid, proof_hash = self._db.insert_with_proof(vec)
             record_ids.append(rid)
+            proof_hashes.append(proof_hash)
             
             # Create Chunk Node
             cid = self._db.create_node(kind=NODE_CHUNK, record_id=rid)
@@ -95,10 +97,10 @@ class MemoryClient:
             # Link Doc -> Chunk (ParentOf)
             self._db.create_edge(from_id=doc_node_id, to_id=cid, kind=EDGE_PARENT_OF)
             
-        return {
             "document_node_id": doc_node_id,
             "chunk_node_ids": chunk_node_ids,
             "record_ids": record_ids,
+            "proof_hashes": proof_hashes,
             "title": title,
             "chunk_count": len(chunks)
         }
@@ -116,7 +118,7 @@ class MemoryClient:
             raise ValueError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
 
         # Insert vector
-        rid = self._db.insert(vector)
+        rid, proof_hash = self._db.insert_with_proof(vector)
 
         # Doc node
         if attach_to_document_node is None:
@@ -134,6 +136,7 @@ class MemoryClient:
             "record_id": rid,
             "document_node_id": doc_node_id,
             "chunk_node_id": chunk_node_id,
+            "proof_hash": proof_hash,
         }
 
     def semantic_search(

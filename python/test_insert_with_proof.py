@@ -179,3 +179,25 @@ class TestInsertWithProof:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+    def test_insert_batch_with_proof(self, engine):
+        """insert_batch_with_proof returns list of tuples and stores metadata."""
+        np.random.seed(42)
+        batch = []
+        for _ in range(3):
+            emb = np.random.randn(384).astype(np.float32)
+            emb = (emb / np.linalg.norm(emb)).tolist()
+            batch.append(emb)
+
+        results = engine.insert_batch_with_proof(batch)
+        
+        assert len(results) == 3
+        for i, (rid, proof) in enumerate(results):
+            assert isinstance(rid, int)
+            assert isinstance(proof, str)
+            assert len(proof) == 64
+            
+            # Verify metadata was stored
+            meta = engine.kernel.get_metadata(rid)
+            assert meta is not None
+            assert bytes(meta).hex() == proof

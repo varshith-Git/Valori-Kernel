@@ -23,6 +23,10 @@ class LocalClient:
     def insert(self, vector: List[float], tag: int = 0) -> int:
         return self.kernel.insert(vector, tag)
 
+    def insert_with_proof(self, vector: List[float], tag: int = 0) -> tuple:
+        """Insert a vector and return its ID and Merkle proof hash."""
+        return self.kernel.insert_with_proof(vector, tag)
+
     def search(self, query: List[float], k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
         # FFI returns [(id, score), ...]
         hits = self.kernel.search(query, k, filter_tag)
@@ -56,6 +60,20 @@ class LocalClient:
             >>> print(ids)  # [0, 1, 2]
         """
         return self.kernel.insert_batch(vectors)
+    
+    def insert_batch_with_proof(self, vectors: List[List[float]], tags: Optional[List[int]] = None) -> List[tuple]:
+        """Insert multiple vectors atomically and generate a proof for each.
+        
+        Args:
+            vectors: List of vectors to insert
+            tags: Optional list of tags. If None, defaults to 0 for all vectors.
+            
+        Returns:
+            List of (record_id, proof_hash) tuples
+        """
+        if tags is None:
+            tags = [0] * len(vectors)
+        return self.kernel.insert_batch_with_proof(vectors, tags)
     
     def get_metadata(self, record_id: int) -> Optional[bytes]:
         """Get metadata for a record.

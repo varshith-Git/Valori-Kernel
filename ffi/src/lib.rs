@@ -7,6 +7,7 @@ use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::fxp::ops::from_f32;
 use valori_kernel::event::KernelEvent;
+use valori_kernel::proof::generate_proof_bytes;
 use serde_json;  // For metadata serialization
 use hex;  // For hash encoding
 
@@ -379,6 +380,85 @@ impl ValoriEngine {
             Err(pyo3::exceptions::PyRuntimeError::new_err("Event Log not initialized"))
         }
     }
+
+    /// Batch atomic insert with Merkle proofs.
+    /// Returns a list of (record_id, proof_hex).
+    #[pyo3(signature = (vectors, tags))]
+    fn insert_batch_with_proof(&self, vectors: Vec<Vec<f32>>, tags: Vec<u64>) -> PyResult<Vec<(u32, String)>> {
+        if vectors.len() != tags.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("vectors and tags must have the same length"));
+        }
+
+        let mut engine = self.inner.lock().unwrap();
+        
+        let mut events = Vec::with_capacity(vectors.len());
+        let mut results = Vec::with_capacity(vectors.len());
+        let mut temp_used_ids = std::collections::HashSet::new();
+        let mut next_candidate = 0;
+
+        for (vec, &tag) in vectors.iter().zip(tags.iter()) {
+            if vec.len() != D {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!("Expected {} dims", D)));
+            }
+
+            let mut fxp_vec = FxpVector::<D>::new_zeros();
+            let mut fixed_values = Vec::with_capacity(D);
+            for (i, &f) in vec.iter().enumerate() {
+                if f < -32767.0 || f > 32767.0 {
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Float at index {} ({}) outside valid range [-32767.0, 32767.0]", i, f
+                    )));
+                }
+                let scalar = from_f32(f);
+                fxp_vec.data[i] = scalar;
+                fixed_values.push(scalar.0);
+            }
+
+            let proof_bytes = generate_proof_bytes(&fixed_values);
+            let proof_hex = hex::encode(&proof_bytes);
+
+            let mut found_id = None;
+            for i in next_candidate..MAX_RECORDS {
+                let rid = RecordId(i as u32);
+                if engine.state.get_record(rid).is_none() && !temp_used_ids.contains(&i) {
+                    found_id = Some(rid);
+                    next_candidate = i + 1;
+                    break;
+                }
+            }
+
+            let rid = found_id.ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Capacity Exceeded")
+            })?;
+            temp_used_ids.insert(rid.0 as usize);
+
+            events.push(KernelEvent::InsertRecord {
+                id: rid,
+                vector: fxp_vec,
+                metadata: Some(proof_bytes),
+                tag,
+            });
+            results.push((rid.0, proof_hex));
+        }
+
+        if let Some(ref mut committer) = engine.event_committer {
+            match committer.commit_batch(events.clone()) {
+                Ok(_) => {
+                    for event in &events {
+                        engine.apply_committed_event(event).map_err(|e| {
+                            pyo3::exceptions::PyRuntimeError::new_err(format!("Apply failed: {:?}", e))
+                        })?;
+                    }
+                    Ok(results)
+                }
+                Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    format!("Batch commit failed: {:?}", e)
+                )),
+            }
+        } else {
+            Err(pyo3::exceptions::PyRuntimeError::new_err("Event Log not initialized"))
+        }
+    }
 }
 
 // ============================================================================
@@ -405,27 +485,6 @@ fn ingest_embedding(floats: Vec<f32>) -> PyResult<Vec<i32>> {
     Ok(fixed)
 }
 
-/// Internal helper — generates Merkle proof as raw bytes.
-/// Single source of truth for Merkle logic.
-/// Used by both generate_proof() (hex output) and insert_with_proof() (Record.metadata).
-fn generate_proof_bytes(fixed_values: &[i32]) -> Vec<u8> {
-    let leaves: Vec<[u8; 32]> = fixed_values
-        .iter()
-        .enumerate()
-        .map(|(pos, &val)| {
-            let mut buf = [0u8; 8];
-            buf[..4].copy_from_slice(&(pos as u32).to_le_bytes());
-            buf[4..].copy_from_slice(&val.to_le_bytes());
-
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&buf);
-            *hasher.finalize().as_bytes()
-        })
-        .collect();
-
-    merkle_root(&leaves).to_vec()
-}
-
 /// Build a position-aware Merkle tree over Q16.16 integers.
 ///
 /// Each leaf = BLAKE3(position_u32_le || value_i32_le).
@@ -439,25 +498,6 @@ fn generate_proof(fixed_values: Vec<i32>) -> PyResult<String> {
         ));
     }
     Ok(hex::encode(generate_proof_bytes(&fixed_values)))
-}
-
-/// Standard binary Merkle tree. Odd leaf: hashed with itself.
-fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-    if leaves.len() == 1 {
-        return leaves[0];
-    }
-
-    let next_level: Vec<[u8; 32]> = leaves
-        .chunks(2)
-        .map(|pair| {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(&pair[0]);
-            hasher.update(pair.get(1).unwrap_or(&pair[0]));
-            *hasher.finalize().as_bytes()
-        })
-        .collect();
-
-    merkle_root(&next_level)
 }
 
 /// Verify a float embedding against a claimed proof hash.

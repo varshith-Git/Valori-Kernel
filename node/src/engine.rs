@@ -9,7 +9,7 @@ use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
 // use valori_kernel::fxp::ops::from_f32; // Explicit rounding now preferred
 use valori_kernel::verify::{kernel_state_hash, snapshot_hash};
-use valori_kernel::proof::DeterministicProof;
+use valori_kernel::proof::{DeterministicProof, generate_proof_bytes};
 
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
 use crate::errors::EngineError;
@@ -180,9 +180,11 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         // 1. Build FxpVector for Kernel
         // STRICT DETERMINISM: Explicit Rounding to Nearest
         let mut vector = FxpVector::<D>::new_zeros();
+        let mut fixed_values = Vec::with_capacity(D);
         for (i, v) in values.iter().enumerate() {
             let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
             vector.data[i] = FxpScalar(fixed);
+            fixed_values.push(fixed);
         }
 
         // 2. Determine ID (first free slot strategy)
@@ -199,8 +201,9 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
         // Phase 23: Event-sourced path (preferred)
         if let Some(ref mut committer) = self.event_committer {
             let start = std::time::Instant::now();
+            let proof_bytes = generate_proof_bytes(&fixed_values);
             // Generate event (no state change yet)
-            let event = KernelEvent::InsertRecord { id, vector, metadata: None, tag: 0 };
+            let event = KernelEvent::InsertRecord { id, vector, metadata: Some(proof_bytes), tag: 0 };
             
             // Commit via event pipeline (shadow → persist → commit → live)
             // Clone event for local apply if needed
@@ -238,7 +241,8 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
             Ok(id.0)
         } else {
             // Fallback: Legacy WAL path
-            let cmd = Command::InsertRecord { id, vector, metadata: None, tag: 0 };
+            let proof_bytes = generate_proof_bytes(&fixed_values);
+            let cmd = Command::InsertRecord { id, vector, metadata: Some(proof_bytes), tag: 0 };
             
             // Write to WAL FIRST
             if let Some(ref mut wal) = self.wal_writer {
@@ -322,12 +326,15 @@ impl<const MAX_RECORDS: usize, const D: usize, const MAX_NODES: usize, const MAX
 
                 // Create FxpVector
                 let mut vector = FxpVector::<D>::new_zeros();
+                let mut fixed_values = Vec::with_capacity(D);
                 for (i, v) in values.iter().enumerate() {
                     let fixed = (v * SCALE).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
                     vector.data[i] = FxpScalar(fixed);
+                    fixed_values.push(fixed);
                 }
 
-                events.push(KernelEvent::InsertRecord { id, vector, metadata: None, tag: 0 });
+                let proof_bytes = generate_proof_bytes(&fixed_values);
+                events.push(KernelEvent::InsertRecord { id, vector, metadata: Some(proof_bytes), tag: 0 });
             }
 
             let start = std::time::Instant::now();

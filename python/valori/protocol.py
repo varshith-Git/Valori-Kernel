@@ -139,7 +139,14 @@ class ProtocolRemoteClient:
         if "metadata" in kwargs: payload["metadata"] = kwargs["metadata"]
         
         res = self._post("/v1/memory/upsert_vector", payload)
-        _ensure_keys(res, ("memory_id", "record_id", "document_node_id", "chunk_node_id"))
+        
+        # Support older nodes that don't return proof hash by calculating it locally
+        if "proof_hash" not in res:
+            import valori
+            fixed = valori.ingest_embedding(vector)
+            res["proof_hash"] = valori.generate_proof(fixed)
+            
+        _ensure_keys(res, ("memory_id", "record_id", "document_node_id", "chunk_node_id", "proof_hash"))
         return res
 
     def search_vector(self, vector: List[float], k: int = 5):
@@ -184,6 +191,7 @@ class ProtocolRemoteClient:
             
         record_ids = []
         chunk_node_ids = []
+        proof_hashes = []
         # create document node first via 1st upsert (server will create doc node id)
         doc_node_id = None
         
@@ -223,6 +231,7 @@ class ProtocolRemoteClient:
                 
             record_ids.append(res["record_id"])
             chunk_node_ids.append(res["chunk_node_id"])
+            proof_hashes.append(res["proof_hash"])
             
         memory_ids = [f"rec:{rid}" for rid in record_ids]
         return {
@@ -230,6 +239,7 @@ class ProtocolRemoteClient:
             "record_ids": record_ids,
             "document_node_id": doc_node_id,
             "chunk_node_ids": chunk_node_ids,
+            "proof_hashes": proof_hashes,
             "chunk_count": len(chunks),
         }
 
@@ -345,6 +355,7 @@ class ProtocolClient:
             "record_ids": record_ids,
             "document_node_id": res["document_node_id"],
             "chunk_node_ids": res["chunk_node_ids"],
+            "proof_hashes": res.get("proof_hashes", []),
             "chunk_count": res["chunk_count"],
         }
 
@@ -384,6 +395,7 @@ class ProtocolClient:
             "record_id": record_id,
             "document_node_id": res["document_node_id"],
             "chunk_node_id": res["chunk_node_id"],
+            "proof_hash": res.get("proof_hash", ""),
         }
 
     def search_text(self, query: str, k: int = 5) -> MemorySearchResponse:
