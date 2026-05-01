@@ -58,11 +58,18 @@ impl VectorIndex for IvfIndex {
         if self.centroids.is_empty() {
             if self.inverted_lists.is_empty() {
                 self.inverted_lists.push(Vec::new());
-                self.centroids.push(vec![0.0; vec.len()]);
             }
+            self.inverted_lists[0].push((id, vec.to_vec()));
+            return;
         }
         let (c_idx, _) = self.find_nearest_centroid(vec);
         self.inverted_lists[c_idx].push((id, vec.to_vec()));
+    }
+
+    fn delete(&mut self, id: u32) {
+        for list in self.inverted_lists.iter_mut() {
+            list.retain(|(rid, _)| *rid != id);
+        }
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)> {

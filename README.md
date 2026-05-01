@@ -1,4 +1,4 @@
-# Valori
+# Valoricore
 
 **The Only Vector Database That Can Cryptographically Prove Perfect Crash Recovery**
 
@@ -6,22 +6,22 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b.svg)](https://arxiv.org/abs/2512.22280)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
 [![Determinism: Verified](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
-[![Verification Report](https://img.shields.io/badge/docs-Verification_Report_v0.1.0-blue)](docs/verification_report.md)
-[![GitHub stars](https://img.shields.io/github/stars/varshith-Git/Valori-Kernel?style=social)](https://github.com/varshith-Git/Valori-Kernel/stargazers)
+[![Verification Report](https://img.shields.io/badge/docs-Verification_Report_v0.3.0-blue)](docs/verification_report.md)
+[![GitHub stars](https://img.shields.io/github/stars/varshith-Git/Valoricore-Kernel?style=social)](https://github.com/varshith-Git/Valoricore-Kernel/stargazers)
 
-Valori is a vector database built for **regulated industries** (healthcare, finance, legal) that need verifiable AI memory. Unlike Pinecone or Weaviate, which merely *claim* crash recovery, Valori **mathematically proves it** with cryptographic hashes.
+Valoricore is a high-performance Knowledge Graph & Vector Engine built for **regulated industries** (healthcare, finance, legal) that need verifiable AI memory. Unlike Pinecone or Weaviate, which merely *claim* crash recovery, Valoricore **mathematically proves it** with cryptographic state-hashes and event-sourced replay.
 
 ---
 
-## 🎯 Why Valori?
+## 🎯 Why Valoricore?
 
 **The Problem:** You deploy an AI system with vector memory. It crashes. Did it lose data? Did it corrupt state? *You have no way to know.*
 
 **Other Solutions:** Pinecone and Weaviate claim they have crash recovery. But you have to **trust them**.
 
-**Valori's Solution:** We give you **cryptographic proof**. Bit-identical state hash before and after crash. Zero trust required.
+**Valoricore's Solution:** We give you **cryptographic proof**. Bit-identical state hash before and after crash. Zero trust required.
 
-**New in v0.2.0:** **Zero-Config Architecture**. No more hardcoded dimensions or record limits. The kernel adapts to your data on the fly.
+**New in v0.3.0:** **Zero-Config Architecture**. No more hardcoded dimensions or record limits. The kernel adapts to your data on the fly.
 
 ---
 
@@ -55,9 +55,9 @@ diff before_crash.json after_crash.json
 
 ---
 
-## 📊 Valori vs. Competitors
+## 📊 Valoricore vs. Competitors
 
-| Feature | Pinecone | Weaviate | **Valori** |
+| Feature | Pinecone | Weaviate | **Valoricore** |
 |---------|----------|----------|------------|
 | **Crash Recovery** | ✓ (claimed) | ✓ (claimed) | ✅ **Proven** with cryptographic hash |
 | **State Verification** | ❌ | ❌ | ✅ Cryptographic proof via `/v1/proof/state` |
@@ -67,7 +67,7 @@ diff before_crash.json after_crash.json
 | **Open Source** | ❌ | ✅ | ✅ AGPL-3.0 |
 | **Pricing** | Usage-based | Usage-based | **Free** (open source) |
 
-**Valori's advantage:** We're the only one that lets you **verify** recovery, not just **hope** it worked.
+**Valoricore's advantage:** We're the only one that lets you **verify** recovery, not just **hope** it worked.
 
 ---
 
@@ -76,16 +76,16 @@ diff before_crash.json after_crash.json
 ### Install
 ```bash
 # Clone the repository
-git clone https://github.com/varshith-Git/Valori-Kernel.git
-cd Valori-Kernel/python
+git clone https://github.com/varshith-Git/Valoricore-Kernel.git
+cd Valoricore-Kernel/python
 pip install .
 ```
 
 ### Use
 ```python
-from valori import Valori
+from valoricore import Valoricore
 
-client = Valori()
+client = Valoricore()
 # Atomic Batch Insert
 client.insert_batch([[0.1]*16, [0.2]*16]) 
 # Search
@@ -98,16 +98,16 @@ results = client.search([0.1] * 16, k=5)
 
 ---
 
-## 👥 Who Should Use Valori?
+## 👥 Who Should Use Valoricore?
 
-### ✅ You Need Valori If:
+### ✅ You Need Valoricore If:
 - You're building AI for **healthcare** (HIPAA compliance requires audit trails)
 - You're building AI for **finance** (SOC2 audits need verifiable state)
 - You're building AI for **legal** (forensic replay of decisions)
 - You need to **debug production incidents** (replay exact state)
 - You deploy on **multiple architectures** (ARM, x86, WASM)
 
-### ❌ You DON'T Need Valori If:
+### ❌ You DON'T Need Valoricore If:
 - You need massive query-per-second scale (use Pinecone)
 - You don't care about crash recovery
 - You're okay trusting your vendor
@@ -123,13 +123,13 @@ results = client.search([0.1] * 16, k=5)
 
 | Metric | Result | Status |
 |--------|--------|--------|
-| **Ingestion** | 1.24M vectors/sec | ⚡ Production-ready |
+| **Ingestion** | 21,300 vectors/sec | ⚡ High-throughput |
 | **Search Accuracy** | 99% Recall@10 | ✅ State-of-the-art |
-| **Search Latency** | 0.47ms | ⚡ Real-time |
-| **Snapshot Save** | 50ms (50K vectors) | ✅ Fast checkpointing |
-| **Snapshot Load** | 33ms (50K vectors) | ✅ Fast recovery |
+| **Search Latency** | 9.8ms (10K records) | ⚡ Real-time |
+| **Snapshot Save** | 45ms (10K vectors) | ✅ Fast checkpointing |
+| **Verification** | Cryptographic proof | 🛡️ Auditable |
 
-**Verdict:** Determinism is free. You get verifiability at zero performance cost.
+**Verdict:** Determinism is free. You get verifiability at zero performance cost. Tested up to 10,000 records with consistent sub-10ms search latency.
 
 ![1M Vector Benchmark](assets/bench_1m.png)
 ![Ingestion Speed](assets/bench_ingest.png)
@@ -139,9 +139,9 @@ results = client.search([0.1] * 16, k=5)
 
 ## 🎯 Accuracy Benchmark
 
-We benchmarked Valori's **Q16.16 Fixed-Point Kernel** against the **SIFT1M Ground Truth**.
+We benchmarked Valoricore's **Q16.16 Fixed-Point Kernel** against the **SIFT1M Ground Truth**.
 
-| Metric | Valori (Fixed-Point) | Target | Verdict |
+| Metric | Valoricore (Fixed-Point) | Target | Verdict |
 | :--- | :--- | :--- | :--- |
 | **Recall@1** | **99.00%** | >90% | 🌟 **State of the Art** |
 | **Recall@10** | **99.00%** | >95% | ✅ **Production Ready** |
@@ -164,7 +164,7 @@ We benchmarked Valori's **Q16.16 Fixed-Point Kernel** against the **SIFT1M Groun
 - **Audit trail** - full history of all changes
 
 ### 2. Multi-Architecture Determinism
-Valori uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
+Valoricore uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
 - **Bit-identical results** on x86, ARM, WASM
 - **No floating-point bugs** - operations yield identical results across CPUs
 - **Cross-platform verified** - tested across all architectures
@@ -176,11 +176,11 @@ Valori uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
 - **Use case:** Filter by user_id, tenant_id, document_type
 - **Performance:** No graph traversal overhead
 
-### 4. Metadata & Knowledge Graph
-- **Zero-Cost Filtering**: Filter searches by `tag` (u64) with **O(1)** overhead
-- **Strict Enforcement**: 100% accuracy without graph traversal penalties
-- **Metadata**: Attach optional binary metadata (up to 64KB) per record
-- **Knowledge Graph**: Create nodes and edges for complex relationships
+### 4. Knowledge Graph & Semantic Metadata
+- **Graph Primitives**: Native support for Nodes and Edges to represent complex entity relationships.
+- **Semantic Metadata**: Attach arbitrary JSON or binary metadata (up to 64KB) per record.
+- **Zero-Cost Filtering**: Filter searches by `tag` (u64) with **O(1)** overhead.
+- **Strict Enforcement**: 100% accuracy without graph traversal penalties.
 
 ### 5. Crash Recovery & Durability
 - **WAL & Event Log**: Every operation is synced to disk via length-prefixed logs
@@ -205,12 +205,12 @@ Valori uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floats.
 
 ## 🔐 Deterministic Proof Bridge
 
-Valori can generate per-record cryptographic proofs over AI embeddings. Proofs are deterministic — identical on any hardware — and stored inside the kernel's event-sourced state.
+Valoricore can generate per-record cryptographic proofs over AI embeddings. Proofs are deterministic — identical on any hardware — and stored inside the kernel's event-sourced state.
 
 ### Direct Usage (Rust FFI)
 
 ```python
-from valori import ingest_embedding, generate_proof, verify_embedding
+from valoricore import ingest_embedding, generate_proof, verify_embedding
 
 # Any AI model → float embedding
 embedding = model.encode("patient diagnosis report")
@@ -228,9 +228,9 @@ assert verify_embedding(embedding.tolist(), proof_hash)  # True
 ### Atomic Insert with Proof (Kernel-Backed)
 
 ```python
-from valori import Valori
+from valoricore import Valoricore
 
-client = Valori()
+client = Valoricore()
 
 # Single FFI call — proof is baked into Record.metadata
 record_id, proof_hash = client.kernel.insert_with_proof(
@@ -248,12 +248,12 @@ record_id, proof_hash = client.kernel.insert_with_proof(
 ### Drop-in Adapter for Existing Systems
 
 ```python
-from valori import ValoriAdapter
+from valoricore import ValoricoreAdapter
 
 # Wrap your existing vector DB — zero changes to existing code
-db = ValoriAdapter(your_pinecone_client)
+db = ValoricoreAdapter(your_pinecone_client)
 
-# Insert goes to both: external DB + Valori kernel (for proofs)
+# Insert goes to both: external DB + Valoricore kernel (for proofs)
 proof = db.insert("doc_001", embedding)
 
 # Verify anytime
@@ -266,7 +266,7 @@ results = db.search(query_embedding, k=10)
 
 ### What Makes This Different
 
-| Feature | Other VectorDBs | Valori |
+| Feature | Other VectorDBs | Valoricore |
 |---------|----------------|--------|
 | **Per-record proof** | ❌ Not possible | ✅ BLAKE3 Merkle root per embedding |
 | **Offline verification** | ❌ Need running server | ✅ `verify_embedding()` runs anywhere |
@@ -279,7 +279,7 @@ results = db.search(query_embedding, k=10)
 ## 📚 Documentation
 
 - **[Node API Reference](node/API_README.md)** - HTTP endpoints (`/health`, `/v1/memory/...`)
-- **[Python SDK Guide](python/README.md)** - `Valori` & `ProtocolClient` usage
+- **[Python SDK Guide](python/README.md)** - `Valoricore` & `ProtocolClient` usage
 - **[FFI Internals](ffi/README.md)** - Rust ↔ Python bridge
 - **[Architecture Deep Dive](src/README.md)** - Kernel design, Fxp Math, State Machine
 - **[Crash Recovery Case Study](docs/crash-recovery-proof.md)** - Production proof
@@ -296,8 +296,8 @@ results = db.search(query_embedding, k=10)
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/varshith-Git/Valori-Kernel.git
-   cd Valori-Kernel
+   git clone https://github.com/varshith-Git/Valoricore-Kernel.git
+   cd Valoricore-Kernel
    ```
 
 2. **Download benchmark dataset (optional):**
@@ -309,7 +309,7 @@ results = db.search(query_embedding, k=10)
 3. **Build and test:**
    ```bash
    cargo build --release
-   cargo test --workspace --exclude valori-embedded
+   cargo test --workspace --exclude valoricore-embedded
    ```
 
 4. **Run benchmarks:**
@@ -323,20 +323,20 @@ results = db.search(query_embedding, k=10)
 
 ## 📡 HTTP Server (Production Mode)
 
-Run Valori as a standalone node.
+Run Valoricore as a standalone node.
 
 **Start Server:**
 ```bash
-cargo run --release -p valori-node
+cargo run --release -p valoricore-node
 # Server listening on 0.0.0.0:3000
 ```
 
 **Client Usage:**
 ```python
-from valori import Valori
+from valoricore import Valoricore
 
 # Connect to Remote Server
-client = Valori(remote="http://localhost:3000")
+client = Valoricore(remote="http://localhost:3000")
 
 # Atomic Batch Insert
 batch = [[0.1] * 16, [0.2] * 16, [0.3] * 16]
@@ -351,12 +351,12 @@ hits = client.search([0.1] * 16, k=1)
 
 ## � Replication & Clustering
 
-Valori supports **Leader-Follower Replication**.
+Valoricore supports **Leader-Follower Replication**.
 
 ### Running a Leader
 ```bash
 # Default (Leader)
-cargo run --release -p valori-node
+cargo run --release -p valoricore-node
 ```
 
 ### Running a Follower
@@ -366,7 +366,7 @@ Followers stream the WAL/Event Log from the leader and maintain an identical in-
 VALORI_REPLICATION_MODE=follower \
 VALORI_LEADER_URL=http://localhost:3000 \
 VALORI_HTTP_PORT=3001 \
-cargo run --release -p valori-node
+cargo run --release -p valoricore-node
 ```
 
 The follower will:
@@ -378,12 +378,12 @@ The follower will:
 
 ## 📊 Observability
 
-Valori exposes Prometheus metrics at `/metrics`.
+Valoricore exposes Prometheus metrics at `/metrics`.
 
 **Key Metrics**:
-- `valori_events_committed_total`: Total events persisted
-- `valori_batch_commit_duration_seconds`: Latency of batch commits
-- `valori_replication_lag`: Seconds behind leader (on followers)
+- `valoricore_events_committed_total`: Total events persisted
+- `valoricore_batch_commit_duration_seconds`: Latency of batch commits
+- `valoricore_replication_lag`: Seconds behind leader (on followers)
 
 ---
 
@@ -425,39 +425,39 @@ cargo build --release --workspace
 cargo test --workspace
 
 # Batch Ingestion Verification
-cargo test -p valori-node --test api_batch_ingest
+cargo test -p valoricore-node --test api_batch_ingest
 
 # Replication Verification
-cargo test -p valori-node --test api_replication
+cargo test -p valoricore-node --test api_replication
 ```
 
 **Python FFI Dev:**
 ```bash
 cd python
 pip install -e .
-python test_valori_integrated.py
+python test_valoricore_integrated.py
 ```
 
 ---
 
 ## ⭐ Star History
 
-If you find Valori useful, please star the repository! It helps others discover the project.
+If you find Valoricore useful, please star the repository! It helps others discover the project.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=varshith-Git/Valori-Kernel&type=Date)](https://star-history.com/#varshith-Git/Valori-Kernel&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=varshith-Git/Valoricore-Kernel&type=Date)](https://star-history.com/#varshith-Git/Valoricore-Kernel&Date)
 
 ---
 
 ## 🔬 Research & Citations
 
-Valori is based on peer-reviewed research into deterministic substrates.
+Valoricore is based on peer-reviewed research into deterministic substrates.
 
 **Paper**: [Deterministic Memory: A Substrate for Verifiable AI Agents](https://arxiv.org/abs/2512.22280)
 
 ```bibtex
-@article{valori2025deterministic,
+@article{valoricore2025deterministic,
   title={Deterministic Memory: A Substrate for Verifiable AI Agents},
-  author={Valori Research Team},
+  author={Valoricore Research Team},
   journal={arXiv preprint arXiv:2512.22280},
   year={2025}
 }
@@ -467,7 +467,7 @@ Valori is based on peer-reviewed research into deterministic substrates.
 
 ## 🏢 Enterprise Support
 
-Need help deploying Valori in production?
+Need help deploying Valoricore in production?
 
 - **Production deployment consulting**
 - **Custom compliance implementations** (SOC2, HIPAA)

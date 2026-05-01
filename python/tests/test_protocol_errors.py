@@ -3,7 +3,7 @@
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from valori.protocol import ProtocolRemoteClient, ProtocolError, AuthError, ValidationError
+from valoricore.protocol import ProtocolRemoteClient, ProtocolError, AuthError, ValidationError
 
 BASE_URL = "http://test-server"
 

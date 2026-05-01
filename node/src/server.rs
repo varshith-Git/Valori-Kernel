@@ -101,21 +101,7 @@ async fn delete_record(
     let mut engine = state.lock().await;
     use valori_kernel::types::id::RecordId;
     
-    if let Some(ref mut committer) = engine.event_committer {
-         use valori_kernel::event::KernelEvent;
-         let rid = RecordId(payload.id);
-         let event = KernelEvent::DeleteRecord { id: rid };
-         
-         match committer.commit_event(event.clone()) {
-             Ok(_) => {
-                 engine.apply_committed_event(&event)?;
-             }
-             Err(e) => return Err(EngineError::InvalidInput(format!("Commit failed: {:?}", e))),
-         }
-    } else {
-         engine.state.apply(&valori_kernel::state::command::Command::DeleteRecord { id: RecordId(payload.id) })
-            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-    }
+    engine.delete_record(payload.id)?;
 
     Ok(Json(DeleteRecordResponse { success: true }))
 }

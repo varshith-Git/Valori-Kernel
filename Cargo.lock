@@ -3027,18 +3027,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "valori-ffi"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "hex",
- "pyo3",
- "serde_json",
- "valori-kernel",
- "valori-node",
-]
-
-[[package]]
 name = "valori-kernel"
 version = "0.2.0"
 dependencies = [
@@ -3106,6 +3094,18 @@ dependencies = [
  "serde",
  "serde_json",
  "valori-kernel",
+]
+
+[[package]]
+name = "valoricore-ffi"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "pyo3",
+ "serde_json",
+ "valori-kernel",
+ "valori-node",
 ]
 
 [[package]]

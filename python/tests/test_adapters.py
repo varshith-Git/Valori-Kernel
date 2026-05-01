@@ -4,10 +4,10 @@ import pytest
 from unittest.mock import MagicMock, patch
 import numpy as np
 
-from valori.adapters.base import ValoriAdapter
-from valori.adapters.langchain import ValoriRetriever
-from valori.adapters.llamaindex import ValoriVectorStore as LlamaValoriVectorStore
-from valori.adapters.utils import validate_float_range
+from valoricore.adapters.base import ValoricoreAdapter
+from valoricore.adapters.langchain import ValoricoreRetriever
+from valoricore.adapters.llamaindex import ValoricoreVectorStore as LlamaValoricoreVectorStore
+from valoricore.adapters.utils import validate_float_range
 
 # Mock Embedder
 def mock_embed(text: str):
@@ -41,11 +41,11 @@ class MockProtocolClient:
 
 @pytest.fixture
 def mock_adapter():
-    with patch("valori.adapters.base.ProtocolRemoteClient", side_effect=MockProtocolClient) as mock:
-        adapter = ValoriAdapter(base_url="http://mock", api_key="test-key", embed_fn=mock_embed)
+    with patch("valoricore.adapters.base.ProtocolRemoteClient", side_effect=MockProtocolClient) as mock:
+        adapter = ValoricoreAdapter(base_url="http://mock", api_key="test-key", embed_fn=mock_embed)
         yield adapter, mock
 
-from valori.protocol import ValidationError
+from valoricore.protocol import ValidationError
 
 # ...
 
@@ -73,7 +73,7 @@ def test_langchain_retriever(mock_adapter):
     # Verify adapter client is our mock (due to side_effect init)
     assert isinstance(adapter.client, MockProtocolClient)
     
-    retriever = ValoriRetriever(adapter, mock_embed)
+    retriever = ValoricoreRetriever(adapter, mock_embed)
     docs = retriever.get_relevant_documents("test query")
     
     assert len(docs) == 1
@@ -82,7 +82,7 @@ def test_langchain_retriever(mock_adapter):
     
 def test_llamaindex_store_add(mock_adapter):
     adapter, _ = mock_adapter
-    store = LlamaValoriVectorStore(adapter)
+    store = LlamaValoricoreVectorStore(adapter)
     
     # Mock LlamaIndex Node
     class MockNode:

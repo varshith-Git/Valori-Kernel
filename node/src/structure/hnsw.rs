@@ -190,11 +190,6 @@ impl VectorIndex for HnswIndex {
 
     fn insert(&mut self, id: u32, vector: &[f32]) {
         self.vectors.write().unwrap().insert(id, vector.to_vec());
-        
-        // ... (lines 226-318) - I'll need to copy the insert logic or reference it if I want to keep it short, 
-        // but replace_file_content requires full replacement of the chunk.
-        // I will copy the insert implementation I verified earlier.
-        
         let level = self.deterministic_level(id);
         
         {
@@ -219,18 +214,15 @@ impl VectorIndex for HnswIndex {
         }
         
         let mut curr_entry_id = curr_entry.unwrap();
-        
         let vectors_guard = self.vectors.read().unwrap(); 
         {
             let layers_guard = self.layers.read().unwrap();
-            
             for l in (level + 1..=max_l).rev() {
                 let mut changed = true;
                 while changed {
                     changed = false;
                     let curr_vec = if let Some(v) = vectors_guard.get(&curr_entry_id) { v } else { break; };
                     let curr_dist = self.dist(vector, curr_vec);
-                    
                     if let Some(layer_l) = layers_guard.get(l) {
                          if let Some(neighbors) = layer_l.get(&curr_entry_id) {
                              for &neighbor in neighbors {
@@ -249,22 +241,16 @@ impl VectorIndex for HnswIndex {
         }
         
         let mut layers = self.layers.write().unwrap();
-        
         for l in (0..=level).rev() {
              let candidates = self.search_layer(curr_entry_id, vector, self.config.ef_construction, l, layers.get(l).unwrap(), &vectors_guard);
-             
              let m = if l == 0 { self.config.m_max0 } else { self.config.m };
              let neighbors = self.select_neighbors(candidates.clone(), m);
-             
              layers.get_mut(l).unwrap().insert(id, neighbors.clone());
-             
              for &neighbor_id in &neighbors {
                  if let Some(neighbor_edges) = layers.get_mut(l).unwrap().get_mut(&neighbor_id) {
                      neighbor_edges.push(id);
-
                      if neighbor_edges.len() > m {
                           let n_vec = if let Some(v) = vectors_guard.get(&neighbor_id) { v } else { continue };
-                          
                           let mut n_candidates: Vec<Candidate> = Vec::new();
                           for &nid in neighbor_edges.iter() {
                               if let Some(v) = vectors_guard.get(&nid) {
@@ -272,21 +258,19 @@ impl VectorIndex for HnswIndex {
                               }
                           }
                           n_candidates.sort(); 
-                          
                           let best: Vec<u32> = n_candidates.into_iter().take(m).map(|c| c.id).collect();
                           *neighbor_edges = best;
                      }
                  }
              }
-             
              if !candidates.is_empty() {
                  curr_entry_id = candidates[0].id;
              }
         }
-        
-        if level > max_l {
-             *self.entry_point.write().unwrap() = Some(id);
-        }
+    }
+
+    fn delete(&mut self, id: u32) {
+        self.vectors.write().unwrap().remove(&id);
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)> {

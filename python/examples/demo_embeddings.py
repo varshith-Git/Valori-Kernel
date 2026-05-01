@@ -1,15 +1,15 @@
 import sys
 import random
 from typing import List
-import valori
-from valori.protocol import ProtocolClient
+import valoricore
+from valoricore.protocol import ProtocolClient
 
 def dummy_embed(text: str) -> List[float]:
     raise Exception("Embedder should NOT be called when vector is provided!")
 
 def main():
     remote_url = "http://localhost:3000"
-    print(f"--- Valori Pre-computed Embeddings Test ---")
+    print(f"--- Valoricore Pre-computed Embeddings Test ---")
     
     client = ProtocolClient(
         embed=dummy_embed, # Passing a broken embedder to prove it's not used

@@ -22,18 +22,9 @@ impl RecordPool {
         }
     }
 
-    /// Inserts a vector into the first available slot or appends.
+    /// Inserts a vector into the pool (always appends to maintain monotonic IDs).
     /// Returns the RecordId (which corresponds to the index).
     pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64) -> Result<RecordId> {
-        // Deterministic scan for first empty slot
-        for (i, slot) in self.records.iter_mut().enumerate() {
-            if slot.is_none() {
-                let id = RecordId(i as u32);
-                *slot = Some(Record::new(id, vector, metadata, tag));
-                return Ok(id);
-            }
-        }
-        // If no empty slot, push a new one
         let id = RecordId(self.records.len() as u32);
         self.records.push(Some(Record::new(id, vector, metadata, tag)));
         Ok(id)
@@ -69,7 +60,7 @@ impl RecordPool {
     }
 
     pub fn len(&self) -> usize {
-        self.records.iter().filter(|s| s.is_some()).count()
+        self.records.len()
     }
 
     pub fn is_full(&self) -> bool {

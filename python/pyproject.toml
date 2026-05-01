@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "valoricore"
+version = "0.1.0"
+description = "Deterministic Knowledge Graph & Vector Engine with Bit-Exact Audit Trails"
+authors = [
+    { name = "Varshith Gudur" }
+]
+dependencies = [
+    "requests>=2.25.0",
+    "numpy>=1.20.0",
+    "pydantic>=2.0.0",
+    "typing-extensions>=4.0.0",
+    "httpx>=0.25.0",
+    "pytest-asyncio>=0.23.0"
+]
+requires-python = ">=3.8"
+license = { text = "AGPL-3.0" }
+readme = "README.md"
+keywords = ["vector-database", "knowledge-graph", "determinism", "ai", "event-sourcing"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Topic :: Database :: Database Engines",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "valoricore.valoricore_ffi"
+manifest-path = "../ffi/Cargo.toml"
+python-source = "."
+
+[project.urls]
+Homepage = "https://github.com/valoricore/valoricore"
+Repository = "https://github.com/valoricore/valoricore"

@@ -12,12 +12,12 @@ use serde_json;
 use hex;
 
 #[pyclass]
-struct ValoriEngine {
+struct ValoricoreEngine {
     inner: Arc<Mutex<Engine>>,
 }
 
 #[pymethods]
-impl ValoriEngine {
+impl ValoricoreEngine {
     #[new]
     fn new(path: String) -> PyResult<Self> {
         let mut config = NodeConfig::default();
@@ -30,7 +30,7 @@ impl ValoriEngine {
 
         let engine = Engine::new(&config);
         
-        Ok(ValoriEngine {
+        Ok(ValoricoreEngine {
             inner: Arc::new(Mutex::new(engine)),
         })
     }
@@ -149,11 +149,67 @@ impl ValoriEngine {
             ))
         }
     }
+
+    #[pyo3(signature = (vectors, tags))]
+    fn insert_batch_with_proof(&self, vectors: Vec<Vec<f32>>, tags: Vec<u64>) -> PyResult<Vec<(u32, String)>> {
+        if vectors.len() != tags.len() {
+            return Err(pyo3::exceptions::PyValueError::new_err("Vectors and tags must have the same length"));
+        }
+
+        let mut results = Vec::with_capacity(vectors.len());
+        let mut engine = self.inner.lock().unwrap();
+        
+        for (i, vector) in vectors.iter().enumerate() {
+            let mut fxp_data = Vec::with_capacity(vector.len());
+            let mut fixed_values = Vec::with_capacity(vector.len());
+            for &f in vector {
+                let scalar = valori_kernel::types::scalar::FxpScalar(from_f32(f).0);
+                fxp_data.push(scalar);
+                fixed_values.push(scalar.0);
+            }
+            let fxp_vec = FxpVector { data: fxp_data };
+            let proof_bytes = generate_proof_bytes(&fixed_values);
+            let proof_hex = hex::encode(&proof_bytes);
+
+            let rid = RecordId(engine.state.record_count() as u32);
+            let tag = tags[i];
+
+            if let Some(ref mut committer) = engine.event_committer {
+                let event = KernelEvent::InsertRecord {
+                    id: rid,
+                    vector: fxp_vec,
+                    metadata: Some(proof_bytes),
+                    tag,
+                };
+                committer.commit_event(event.clone()).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("Commit failed: {:?}", e))
+                })?;
+                engine.apply_committed_event(&event).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("Apply failed: {:?}", e))
+                })?;
+                results.push((rid.0, proof_hex));
+            } else {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err("Event Log not initialized"));
+            }
+        }
+        
+        Ok(results)
+    }
     
     fn get_metadata(&self, record_id: u32) -> PyResult<Option<Vec<u8>>> {
         let engine = self.inner.lock().unwrap();
         let rid = RecordId(record_id);
         
+        // 1. Check MetadataStore (high-level metadata)
+        let key = format!("record_{}", record_id);
+        if let Some(val) = engine.metadata.get(&key) {
+             // Deserialize from JSON back to Vec<u8>
+             if let Ok(vec) = serde_json::from_value::<Vec<u8>>(val) {
+                 return Ok(Some(vec));
+             }
+        }
+
+        // 2. Fallback to Record-level metadata (proofs)
         match engine.state.get_record(rid) {
             Some(record) => Ok(record.metadata.clone()),
             None => Err(pyo3::exceptions::PyValueError::new_err(
@@ -194,6 +250,16 @@ impl ValoriEngine {
     fn record_count(&self) -> PyResult<usize> {
         let engine = self.inner.lock().unwrap();
         Ok(engine.state.record_count())
+    }
+
+    fn snapshot(&self) -> PyResult<Vec<u8>> {
+        let engine = self.inner.lock().unwrap();
+        match engine.snapshot() {
+            Ok(data) => Ok(data),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                format!("Snapshot failed: {:?}", e)
+            ))
+        }
     }
     
     fn restore(&self, data: Vec<u8>) -> PyResult<()> {
@@ -295,8 +361,8 @@ fn verify_embedding(floats: Vec<f32>, claimed_hash: String) -> PyResult<bool> {
 }
 
 #[pymodule]
-fn valori_ffi(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<ValoriEngine>()?;
+fn valoricore_ffi(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<ValoricoreEngine>()?;
     m.add_function(wrap_pyfunction!(ingest_embedding, m)?)?;
     m.add_function(wrap_pyfunction!(generate_proof, m)?)?;
     m.add_function(wrap_pyfunction!(verify_embedding, m)?)?;

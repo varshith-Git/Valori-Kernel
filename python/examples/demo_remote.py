@@ -1,14 +1,14 @@
 """
-Valori Remote Mode Verification Script
+Valoricore Remote Mode Verification Script
 
-This script attempts to connect to a running Valori node at http://localhost:3000.
+This script attempts to connect to a running Valoricore node at http://localhost:3000.
 It demonstrates:
 1. Connecting via ProtocolClient (the higher-level SDK).
 2. Inserting a vector.
 3. Searching for a vector.
 
 Usage:
-1. Open Terminal 1: Run the Valori server
+1. Open Terminal 1: Run the Valoricore server
    $ cd node
    $ cargo run --release
 
@@ -22,10 +22,10 @@ import random
 import time
 from typing import List
 
-# Ensure we can import `valori` from the local checkout if installed or in pythonpath
+# Ensure we can import `valoricore` from the local checkout if installed or in pythonpath
 # You may need to run `pip install .` in the `python/` folder first.
-import valori
-from valori.protocol import ProtocolClient
+import valoricore
+from valoricore.protocol import ProtocolClient
 
 def dummy_embed(text: str) -> List[float]:
     """Generates a random deterministic 16-dim vector for testing."""
@@ -35,7 +35,7 @@ def dummy_embed(text: str) -> List[float]:
 
 def main():
     remote_url = "http://localhost:3000"
-    print(f"--- Valori Remote Mode Test ---")
+    print(f"--- Valoricore Remote Mode Test ---")
     print(f"Target: {remote_url}")
     
     # 1. Initialize Client

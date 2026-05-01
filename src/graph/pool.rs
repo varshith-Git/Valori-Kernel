@@ -23,15 +23,6 @@ impl NodePool {
     }
 
     pub fn insert(&mut self, mut node: GraphNode) -> Result<NodeId> {
-        // Deterministic scan for first empty slot
-        for (i, slot) in self.nodes.iter_mut().enumerate() {
-            if slot.is_none() {
-                let id = NodeId(i as u32);
-                node.id = id; // Ensure ID matches index
-                *slot = Some(node);
-                return Ok(id);
-            }
-        }
         let id = NodeId(self.nodes.len() as u32);
         node.id = id;
         self.nodes.push(Some(node));
@@ -61,7 +52,7 @@ impl NodePool {
     }
 
     pub fn len(&self) -> usize {
-        self.nodes.iter().filter(|s| s.is_some()).count()
+        self.nodes.len()
     }
 
     pub fn is_full(&self) -> bool {
@@ -86,14 +77,6 @@ impl EdgePool {
     }
 
     pub fn insert(&mut self, mut edge: GraphEdge) -> Result<EdgeId> {
-        for (i, slot) in self.edges.iter_mut().enumerate() {
-            if slot.is_none() {
-                let id = EdgeId(i as u32);
-                edge.id = id;
-                *slot = Some(edge);
-                return Ok(id);
-            }
-        }
         let id = EdgeId(self.edges.len() as u32);
         edge.id = id;
         self.edges.push(Some(edge));
@@ -123,7 +106,7 @@ impl EdgePool {
     }
 
     pub fn len(&self) -> usize {
-        self.edges.iter().filter(|s| s.is_some()).count()
+        self.edges.len()
     }
 
     pub fn is_full(&self) -> bool {

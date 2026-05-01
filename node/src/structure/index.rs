@@ -5,6 +5,7 @@ pub trait VectorIndex {
     fn build(&mut self, records: &[(u32, Vec<f32>)]);
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)>;
     fn insert(&mut self, id: u32, vec: &[f32]);
+    fn delete(&mut self, id: u32);
     fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>;
     fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
@@ -20,6 +21,7 @@ impl VectorIndex for BruteForceIndex {
         for (id, vec) in records { self.vectors.insert(*id, vec.clone()); }
     }
     fn insert(&mut self, id: u32, vec: &[f32]) { self.vectors.insert(id, vec.to_vec()); }
+    fn delete(&mut self, id: u32) { self.vectors.remove(&id); }
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)> {
         let mut scores: Vec<(u32, f32)> = self.vectors.iter()
             .map(|(id, vec)| { let dist = l2_distance_sq(query, vec); (*id, dist) }).collect();

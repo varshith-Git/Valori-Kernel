@@ -1,30 +1,30 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 """
-Valori + Sentence Transformers Demo
+Valoricore + Sentence Transformers Demo
 
 This script demonstrates using the `SentenceTransformerAdapter` to seamlessly
-integrate huggingface models with Valori.
+integrate huggingface models with Valoricore.
 
 Requirements:
     pip install sentence-transformers
     
 Usage:
-    Ensure Valori Node is running on localhost:3000
+    Ensure Valoricore Node is running on localhost:3000
     python3 python/examples/demo_sentence_transformers.py
 """
 import sys
-import valori
-from valori.protocol import ProtocolClient
-from valori.adapters import SentenceTransformerAdapter
+import valoricore
+from valoricore.protocol import ProtocolClient
+from valoricore.adapters import SentenceTransformerAdapter
 
 def main():
-    print("--- Valori + Sentence Transformers Demo ---")
+    print("--- Valoricore + Sentence Transformers Demo ---")
     
     # 1. Initialize Adapter
     # This downloads the model if not present (approx 80MB for all-MiniLM-L6-v2)
     try:
         print("Loading Model 'all-MiniLM-L6-v2'...")
-        # Reduce 384-dim vector to 16-dim to fit default Valori Kernel
+        # Reduce 384-dim vector to 16-dim to fit default Valoricore Kernel
         adapter = SentenceTransformerAdapter("all-MiniLM-L6-v2", output_dim=16)
     except ImportError:
         print("❌ Error: sentence-transformers not installed.")
@@ -54,11 +54,11 @@ def main():
         print(f"✅ Upsert Success! Response: {res}")
         rec_id = res['record_ids'][0]
     except Exception as e:
-         # Valori default dim is 16. MiniLM is 384. 
+         # Valoricore default dim is 16. MiniLM is 384. 
          # This WILL fail if the server expects 16.
          # For this demo to work, the server must be started with DIM=384 or check handling.
         print(f"❌ Upsert Failed: {e}")
-        print("Note: If error is 'Embedding mismatch', you need to restart Valori Node with VALORI_DIM=384")
+        print("Note: If error is 'Embedding mismatch', you need to restart Valoricore Node with VALORI_DIM=384")
         return
 
     # 4. Search

@@ -125,32 +125,74 @@ impl Engine {
             fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
         }
         let vector = FxpVector { data: fxp_data };
-        let id = self.state.record_count() as u32;
-        let rid = RecordId(id);
+        let rid = RecordId(self.state.record_count() as u32);
 
-        let cmd = Command::InsertRecord {
+        let event = valori_kernel::event::KernelEvent::InsertRecord {
             id: rid,
-            vector: vector.clone(),
+            vector,
             metadata: None,
             tag: 0,
         };
 
-        if let Some(ref mut writer) = self.wal_writer {
-            writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event(&event)?;
+        } else {
+            let (rid, vector) = if let valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } = &event {
+                (*id, vector.clone())
+            } else {
+                unreachable!()
+            };
+            
+            let cmd = Command::InsertRecord {
+                id: rid,
+                vector,
+                metadata: None,
+                tag: 0,
+            };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
+            self.index.insert(rid.0, values);
         }
 
-        self.state.apply(&cmd)?;
-        self.index.insert(id, values);
-
-        Ok(id)
+        Ok(rid.0)
     }
 
     pub fn insert_batch(&mut self, batch: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
-        let mut ids = Vec::with_capacity(batch.len());
-        for values in batch {
-            ids.push(self.insert_record_from_f32(values)?);
+        if let Some(ref mut committer) = self.event_committer {
+            let mut events = Vec::with_capacity(batch.len());
+            let mut ids = Vec::with_capacity(batch.len());
+            let start_id = self.state.record_count() as u32;
+
+            for (i, values) in batch.iter().enumerate() {
+                let mut fxp_data = Vec::with_capacity(values.len());
+                for &v in values {
+                    fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
+                }
+                let id = start_id + i as u32;
+                events.push(valori_kernel::event::KernelEvent::InsertRecord {
+                    id: RecordId(id),
+                    vector: FxpVector { data: fxp_data },
+                    metadata: None,
+                    tag: 0,
+                });
+                ids.push(id);
+            }
+
+            committer.commit_batch(events.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            for event in &events {
+                self.apply_committed_event(event)?;
+            }
+            Ok(ids)
+        } else {
+            let mut ids = Vec::with_capacity(batch.len());
+            for values in batch {
+                ids.push(self.insert_record_from_f32(values)?);
+            }
+            Ok(ids)
         }
-        Ok(ids)
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>, EngineError> {
@@ -220,41 +262,74 @@ impl Engine {
         self.restore_from_components(k_data, m_data, i_data)
     }
 
+    pub fn delete_record(&mut self, id: u32) -> Result<(), EngineError> {
+        let rid = RecordId(id);
+        let event = valori_kernel::event::KernelEvent::DeleteRecord { id: rid };
+
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event(&event)?;
+        } else {
+            let cmd = Command::DeleteRecord { id: rid };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
+            self.index.delete(id);
+        }
+        Ok(())
+    }
+
     pub fn create_node_for_record(&mut self, record_id: Option<u32>, kind: u8) -> Result<u32, EngineError> {
          use valori_kernel::types::id::NodeId;
-         
-         let node_id = self.state.node_count() as u32;
-         let cmd = Command::CreateNode {
-             node_id: NodeId(node_id),
-             kind: NodeKind::from_u8(kind).unwrap_or_default(),
-             record: record_id.map(RecordId),
+         let node_id = NodeId(self.state.node_count() as u32);
+         let kind = NodeKind::from_u8(kind).unwrap_or_default();
+         let record = record_id.map(RecordId);
+
+         let event = valori_kernel::event::KernelEvent::CreateNode {
+             id: node_id,
+             kind,
+             record,
          };
 
-         if let Some(ref mut writer) = self.wal_writer {
-             writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+         if let Some(ref mut committer) = self.event_committer {
+             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             self.apply_committed_event(&event)?;
+         } else {
+             let cmd = Command::CreateNode { node_id, kind, record };
+             if let Some(ref mut writer) = self.wal_writer {
+                 writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             }
+             self.state.apply(&cmd)?;
          }
-
-         self.state.apply(&cmd)?;
-         Ok(node_id)
+         Ok(node_id.0)
     }
 
     pub fn create_edge(&mut self, from: u32, to: u32, kind: u8) -> Result<u32, EngineError> {
          use valori_kernel::types::id::{NodeId, EdgeId};
-         
-         let edge_id = self.state.edge_count() as u32;
-         let cmd = Command::CreateEdge {
-             edge_id: EdgeId(edge_id),
-             kind: EdgeKind::from_u8(kind).unwrap_or_default(),
-             from: NodeId(from),
-             to: NodeId(to),
+         let edge_id = EdgeId(self.state.edge_count() as u32);
+         let kind = EdgeKind::from_u8(kind).unwrap_or_default();
+         let from = NodeId(from);
+         let to = NodeId(to);
+
+         let event = valori_kernel::event::KernelEvent::CreateEdge {
+             id: edge_id,
+             kind,
+             from,
+             to,
          };
 
-         if let Some(ref mut writer) = self.wal_writer {
-             writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+         if let Some(ref mut committer) = self.event_committer {
+             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             self.apply_committed_event(&event)?;
+         } else {
+             let cmd = Command::CreateEdge { edge_id, kind, from, to };
+             if let Some(ref mut writer) = self.wal_writer {
+                 writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             }
+             self.state.apply(&cmd)?;
          }
-
-         self.state.apply(&cmd)?;
-         Ok(edge_id)
+         Ok(edge_id.0)
     }
 
     pub fn get_proof(&self) -> valori_kernel::proof::DeterministicProof {
@@ -271,12 +346,18 @@ impl Engine {
     pub fn apply_committed_event(&mut self, event: &valori_kernel::event::KernelEvent) -> Result<(), EngineError> {
         self.state.apply_event(event)?;
         
-        if let valori_kernel::event::KernelEvent::InsertRecord { id, ref vector, .. } = event {
-             let mut vals = Vec::with_capacity(vector.data.len());
-             for fxp in &vector.data {
-                 vals.push(fxp.0 as f32 / SCALE as f32);
-             }
-             self.index.insert(id.0, &vals);
+        match event {
+            valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } => {
+                let mut vals = Vec::with_capacity(vector.data.len());
+                for fxp in &vector.data {
+                    vals.push(fxp.0 as f32 / SCALE as f32);
+                }
+                self.index.insert(id.0, &vals);
+            }
+            valori_kernel::event::KernelEvent::DeleteRecord { id } => {
+                self.index.delete(id.0);
+            }
+            _ => {}
         }
         
         Ok(())

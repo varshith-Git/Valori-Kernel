@@ -69,25 +69,29 @@ pub fn encode_state(
     write_u32(buf, &mut offset, state.nodes.raw_nodes().len() as u32)?;
     write_u32(buf, &mut offset, state.edges.raw_edges().len() as u32)?;
     // Records
-    let record_count = state.records.len() as u32;
-    write_u32(buf, &mut offset, record_count)?;
+    let total_slots = state.records.raw_records().len() as u32;
+    write_u32(buf, &mut offset, total_slots)?;
 
-    for record in state.records.iter() {
-        write_u32(buf, &mut offset, record.id.0)?;
-        write_u8(buf, &mut offset, record.flags)?;
-        write_u64(buf, &mut offset, record.tag)?; // V3: Persistence for record tags
-        for scalar in record.vector.data.iter() {
-            write_i32(buf, &mut offset, scalar.0)?;
-        }
-        // V2 Metadata
-        match &record.metadata {
-            Some(m) => {
-                write_u32(buf, &mut offset, m.len() as u32)?;
-                write_bytes(buf, &mut offset, m)?;
+    for slot in state.records.raw_records() {
+        if let Some(record) = slot {
+            write_u8(buf, &mut offset, 1)?; // Present
+            write_u32(buf, &mut offset, record.id.0)?;
+            write_u8(buf, &mut offset, record.flags)?;
+            write_u64(buf, &mut offset, record.tag)?;
+            for scalar in record.vector.data.iter() {
+                write_i32(buf, &mut offset, scalar.0)?;
             }
-            None => {
-                write_u32(buf, &mut offset, 0)?;
+            match &record.metadata {
+                Some(m) => {
+                    write_u32(buf, &mut offset, m.len() as u32)?;
+                    write_bytes(buf, &mut offset, m)?;
+                }
+                None => {
+                    write_u32(buf, &mut offset, 0)?;
+                }
             }
+        } else {
+            write_u8(buf, &mut offset, 0)?; // Absent
         }
     }
 // ...

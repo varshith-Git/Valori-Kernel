@@ -1,10 +1,10 @@
 [package]
-name = "valori-ffi"
+name = "valoricore-ffi"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "valori_ffi"
+name = "valoricore_ffi"
 crate-type = ["cdylib"]
 
 [dependencies]

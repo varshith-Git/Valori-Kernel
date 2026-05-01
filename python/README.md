@@ -1,137 +1,99 @@
-# Valori Python SDK
+# Valoricore 🛡️
 
-The `valori` package provides two levels of access to the Valori system:
-1.  **Core Client** (`Valori`): Raw access to the kernel (vectors, graph nodes).
-2.  **Protocol Client** (`ProtocolClient`): High-level "Memory" features (text chunking, metadata, memory IDs).
+**The Deterministic Knowledge Graph & Vector Engine with Bit-Exact Audit Trails**
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](../LICENSE)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Rust](https://img.shields.io/badge/built%20with-Rust-orange)](https://www.rust-lang.org/)
+
+`valoricore` is the official Python SDK for the Valoricore Kernel. It provides a high‑performance, async-capable interface for applications where **determinism** and **auditability** are absolute requirements.
+
+---
+
+## 🔒 What Makes Valoricore Different?
+
+- **True Determinism** – Fixed‑point arithmetic ensures identical results on x86, ARM, and RISC‑V, forever.
+- **Cryptographic Audit Trails** – Every insert, update, and delete is logged. The BLAKE3‑based Merkle root proves the exact state at any point in time.
+- **Unified Graph + Vector** – Seamlessly combine semantic search with structured knowledge graph relationships (nodes and edges).
+- **Embedded & Distributed** – Run as a lightweight, embedded engine via FFI or scale to a multi‑node cluster.
+- **Zero‑Config** – Vector dimensions and pool capacities are auto‑detected. No manual tuning required.
+
+---
 
 ## 📦 Installation
+
+Valoricore ships with a pre‑compiled native extension for most platforms. A Rust compiler is **only** required when building from source.
+
 ```bash
-pip install .
-# or
-pip install values
-```
-
-## 1. Protocol Client (Recommended for Agents)
-Handles text embedding, chunking, metadata, and memory IDs (`rec:0`).
-
-### Initialization
-```python
-from valori import ProtocolClient
-
-# Define an embedding function (e.g., OpenAI, HuggingFace)
-def my_embedder(text: str) -> list[float]:
-    # Valori is now Zero-Config: dimensions are auto-detected
-    # from the first insertion. Any model will work!
-    return [0.0] * 1536  # Example: OpenAI text-embedding-3-small
-
-client = ProtocolClient(
-    remote="https://your-node.koyeb.app",
-    embed=my_embedder
-)
-```
-
-### Methods
-
-#### `upsert_text(text, metadata=...)`
-Chunks text, embeds it, and stores it as a Document + Chunks.
-```python
-res = client.upsert_text(
-    text="Valori is a deterministic memory kernel.",
-    metadata={"source": "documentation", "author": "Varshith"}
-)
-print(res["memory_ids"]) # ['rec:10', 'rec:11'...]
-```
-
-#### `search_text(query, k=5)`
-Embeds query and finds similar memories.
-```python
-results = client.search_text("What is Valori?", k=3)
-for hit in results["results"]:
-    print(hit["memory_id"], hit["score"])
-```
-
-#### `upsert_vector(vector, metadata=...)`
-Directly store a vector with metadata.
-```python
-vec = [0.1] * 16
-client.upsert_vector(vector=vec, metadata={"type": "raw_embedding"})
-```
-
-#### `get_metadata(target_id)` / `set_metadata(target_id, metadata)`
-Read/Write metadata for any ID (`rec:0`, `node:100`).
-```python
-meta = client.get_metadata("rec:10")
-client.set_metadata("rec:10", {"status": "archived"})
+pip install valoricore
 ```
 
 ---
 
-## 2. Core Client (`Valori`)
-Direct access to `valori-node` endpoints. Useful for raw vector ops or graph management.
+## 🚀 Quick Start
 
-### Initialization
+### Local embedded engine
+No server required – import and go.
+
 ```python
-from valori import Valori
+from valoricore import Valoricore
 
-# Connects to Node
-client = Valori(remote="https://your-node.koyeb.app")
+# Create or open a local database
+db = Valoricore(path="./my_knowledge_base")
 
-# OR Local (In-Memory FFI)
-# client = Valori(remote=None)
+# Insert a vector
+record_id = db.insert(
+    vector=[0.1, 0.2, 0.3, 0.4],   # any dimension
+    tag=101
+)
+
+# Set binary metadata (up to 64KB)
+db.set_metadata(record_id, b"{\"title\": \"Project Alpha\"}")
+
+# Semantic search (with optional tag filter)
+results = db.search(query=[0.1, 0.2, 0.3, 0.5], k=5, filter_tag=101)
+
+# Get a cryptographic proof of the full state
+state_hash = db.get_state_hash()
 ```
 
-### Methods
+### Async support
+For non‑blocking operations inside FastAPI or modern async applications, use the built‑in async factory:
 
-#### `insert(vector)` / `insert_batch(vectors)`
-Insert single or multiple vectors atomically.
 ```python
-# Single
-rid = client.insert([0.1, ...])
+from valoricore import AsyncValoricore
 
-# Batch (Atomic)
-vectors = [[0.1]*16, [0.2]*16, [0.3]*16]
-ids = client.insert_batch(vectors) # [0, 1, 2]
+# Use AsyncValoricore for high-performance non-blocking I/O
+db = AsyncValoricore(remote="http://localhost:3033")
+results = await db.search(query=[...], k=10)
 ```
 
-#### `search(query, k)`
-Raw search. Returns IDs and scores.
-```python
-hits = client.search([0.1, ...], k=5)
-# [{'id': 10, 'score': 12345}, ...]
-```
+> 💡 The async client uses `httpx` and is fully compatible with `asyncio` event loops.
 
-#### `get_metadata(id)` / `set_metadata(id, data)`
-Read/Write metadata (for both HTTP and Local modes).
-```python
-client.set_metadata(10, b"user:123")
-meta = client.get_metadata(10)
-```
+---
 
-#### `get_state_hash()`
-**Verifiable AI**: Get cryptographic proof of current database state.
-```python
-hash1 = client.get_state_hash()
-# 1a2b3c... (BLAKE3 hash)
-```
+## 🧠 Key Abstractions
 
-#### `record_count()`
-Get total number of records.
-```python
-count = client.record_count()
-```
+- **Record** – A vector with an optional tag (integer) and arbitrary binary metadata.
+- **Node** – A higher‑level entity (e.g., “Document”, “User”) that wraps one or more records.
+- **Edge** – A directed relationship between nodes (e.g., “parentOf”, “authoredBy”).
+- **Proof** – A BLAKE3‑based Merkle inclusion proof that verifies a record’s presence in a given global state.
 
-#### `soft_delete(id)`
-Mark record as deleted (excluded from search).
-```python
-client.soft_delete(10)
-```
+---
 
-#### `snapshot()` / `restore(data)`
-Backup and recovery.
-```python
-# Save to bytes
-data = client.snapshot()
+## 🔐 Cryptographic Determinism
 
-# Restore (Local mode only)
-client.restore(data)
-```
+Valoricore’s core engine performs all distance calculations in **fixed‑point arithmetic (Q16.16)**. This guarantees that the same sequence of operations will produce the **exact same** score values, state hashes, and proofs—regardless of the hardware or operating system.
+
+The global state hash is a single 32‑byte BLAKE3 Merkle root that represents the entire database.
+
+---
+
+## 📚 Documentation
+
+- **[Getting Started Guide](docs/getting_started.md)** – Your first 5 minutes with Valoricore.
+- **[API Reference](docs/api_reference.md)** – Complete method signatures, types, and error codes.
+
+---
+
+**Built with ❤️ by the Valoricore team** – integrity‑first AI infrastructure.

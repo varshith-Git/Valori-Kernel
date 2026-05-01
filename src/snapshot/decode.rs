@@ -72,53 +72,60 @@ pub fn decode_state(
     }
 
     // Records
-    let record_count = read_u32(buf, &mut offset)?;
-    for _ in 0..record_count {
-        let id_val = read_u32(buf, &mut offset)?;
-        let flags = read_u8(buf, &mut offset)?;
-        
-        let tag = if schema_ver >= 3 {
-            read_u64(buf, &mut offset)?
-        } else {
-            0
-        };
-        let d_len = state.dim.unwrap_or(0);
-        let mut vector = FxpVector::new_zeros(d_len);
-        // We must know how many elements to read. V1/V2 read 'dim' from header.
-        for i in 0..d_len {
-            vector.data[i] = FxpScalar(read_i32(buf, &mut offset)?);
-        }
+    let total_slots = read_u32(buf, &mut offset)?;
+    for i in 0..total_slots {
+        let is_present = read_u8(buf, &mut offset)?;
+        if is_present == 1 {
+            let id_val = read_u32(buf, &mut offset)?;
+            let flags = read_u8(buf, &mut offset)?;
+            let tag = if schema_ver >= 3 {
+                read_u64(buf, &mut offset)?
+            } else {
+                0
+            };
+            let d_len = state.dim.unwrap_or(0);
+            let mut vector = FxpVector::new_zeros(d_len);
+            for i in 0..d_len {
+                vector.data[i] = FxpScalar(read_i32(buf, &mut offset)?);
+            }
 
-        // Metadata V2 logic
-        let metadata = if schema_ver >= 2 {
-            let meta_len = read_u32(buf, &mut offset)?;
-            if meta_len > 0 {
-                let len = meta_len as usize;
-                if offset + len > buf.len() {
-                    return Err(KernelError::InvalidOperation); // Truncated
+            let metadata = if schema_ver >= 2 {
+                let meta_len = read_u32(buf, &mut offset)?;
+                if meta_len > 0 {
+                    let len = meta_len as usize;
+                    if offset + len > buf.len() {
+                        return Err(KernelError::InvalidOperation);
+                    }
+                    let mut bytes = alloc::vec![0u8; len];
+                    bytes.copy_from_slice(&buf[offset..offset+len]);
+                    offset += len;
+                    Some(bytes)
+                } else {
+                    None
                 }
-                let mut bytes = alloc::vec![0u8; len];
-                bytes.copy_from_slice(&buf[offset..offset+len]);
-                offset += len;
-                Some(bytes)
             } else {
                 None
+            };
+
+            let idx = i as usize;
+            if idx >= state.records.records.len() {
+                state.records.records.resize(idx + 1, None);
             }
+            state.records.records[idx] = Some(Record {
+                id: RecordId(id_val),
+                vector,
+                metadata,
+                tag,
+                flags,
+            });
         } else {
-            None
-        };
-        
-        let idx = id_val as usize;
-        if idx >= state.records.records.len() {
-            state.records.records.resize(idx + 1, None);
+            // Hole
+            let idx = i as usize;
+            if idx >= state.records.records.len() {
+                state.records.records.resize(idx + 1, None);
+            }
+            state.records.records[idx] = None;
         }
-        state.records.records[idx] = Some(Record {
-            id: RecordId(id_val),
-            vector,
-            metadata,
-            tag,
-            flags,
-        });
     }
 
     // Nodes
