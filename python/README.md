@@ -55,6 +55,22 @@ results = db.search(query=[0.1, 0.2, 0.3, 0.5], k=5, filter_tag=101)
 
 # Get a cryptographic proof of the full state
 state_hash = db.get_state_hash()
+
+# --- Offline Verification ---
+# You can verify an embedding's integrity WITHOUT the database running
+from valoricore import verify_embedding
+is_valid = verify_embedding(vector=[0.1, 0.2, 0.3, 0.4], claimed_hash="a3f8c2d1...")
+
+# --- Auto-Snapshots ---
+# Automatically take and save a snapshot to the db directory every 1,000,000 inserts
+db.snapshot(auto_interval=1_000_000)
+
+# --- Restoring from a Snapshot ---
+# Read the binary file into memory, then pass the bytes to restore()
+with open("valoricore_db/auto_snapshot_1000000.snap", "rb") as f:
+    snapshot_bytes = f.read()
+    
+db.restore(snapshot_bytes)
 ```
 
 ### Async support

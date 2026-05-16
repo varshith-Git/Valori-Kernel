@@ -222,8 +222,14 @@ fixed = ingest_embedding(embedding.tolist())
 proof_hash = generate_proof(fixed)
 
 # Verify on any machine, any time — no server needed
-assert verify_embedding(embedding.tolist(), proof_hash)  # True
+is_valid = verify_embedding(embedding.tolist(), proof_hash)  # True
 ```
+
+### 🛡️ Why "Offline" Verification Matters?
+Standard vector databases are "Black Boxes"—you have to trust the server to tell you the truth. With Valoricore's offline verification:
+*   **Third-Party Auditing**: A client can verify search results without having access to your private database.
+*   **Tamper-Proof Storage**: You can store vectors in S3 or a public cloud and verify their integrity locally before using them.
+*   **Zero-Trust**: The proof is based on math (BLAKE3 + Fixed-Point), not a server's response.
 
 ### Atomic Insert with Proof (Kernel-Backed)
 

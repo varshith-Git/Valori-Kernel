@@ -28,7 +28,7 @@ If your autonomous agent, trading bot, or retrieval system makes a different dec
 **From Source:**
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/valori.git
+git clone https://github.com/varshith-Git/Valori-Kernel.git
 cd valori
 
 # Build the CLI

@@ -11,6 +11,21 @@ class SyncRemoteClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
+        self._auto_snapshot_interval = None
+        self._insert_count = 0
+        self._snapshot_dir = "./valoricore_snapshots"
+
+    def _check_auto_snapshot(self, count: int = 1):
+        if self._auto_snapshot_interval:
+            old_count = self._insert_count
+            self._insert_count += count
+            if (old_count // self._auto_snapshot_interval) < (self._insert_count // self._auto_snapshot_interval):
+                import os
+                snap_bytes = self.snapshot()
+                os.makedirs(self._snapshot_dir, exist_ok=True)
+                file_path = os.path.join(self._snapshot_dir, f"auto_snapshot_{self._insert_count}.snap")
+                with open(file_path, "wb") as f:
+                    f.write(snap_bytes)
 
     def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
         url = self.base_url + path
@@ -27,6 +42,7 @@ class SyncRemoteClient:
         """Insert a vector record. Returns the new Record ID."""
         data = {"values": vector}
         resp = self._post("/records", data)
+        self._check_auto_snapshot(1)
         return resp["id"]
 
     def insert_with_proof(self, vector: Vector) -> Tuple[RecordId, Proof]:
@@ -43,6 +59,7 @@ class SyncRemoteClient:
         """Insert a batch of vectors. Returns list of new Record IDs."""
         data = {"batch": batch}
         resp = self._post("/v1/vectors/batch_insert", data)
+        self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
     def search(self, query: Vector, k: int) -> List[Dict[str, Any]]:
@@ -98,8 +115,13 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException:
             return 0
 
-    def snapshot(self) -> bytes:
+    def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
         """Download snapshot from remote."""
+        if auto_interval is not None:
+            self._auto_snapshot_interval = auto_interval
+            self._insert_count = 0
+            self._snapshot_dir = save_dir
+            
         url = self.base_url + "/snapshot"
         try:
             resp = self.session.post(url, timeout=30)
@@ -125,6 +147,21 @@ class AsyncRemoteClient:
         import httpx
         self.base_url = base_url.rstrip("/")
         self.client = httpx.AsyncClient(timeout=10.0)
+        self._auto_snapshot_interval = None
+        self._insert_count = 0
+        self._snapshot_dir = "./valoricore_snapshots"
+
+    async def _check_auto_snapshot(self, count: int = 1):
+        if self._auto_snapshot_interval:
+            old_count = self._insert_count
+            self._insert_count += count
+            if (old_count // self._auto_snapshot_interval) < (self._insert_count // self._auto_snapshot_interval):
+                import os
+                snap_bytes = await self.snapshot()
+                os.makedirs(self._snapshot_dir, exist_ok=True)
+                file_path = os.path.join(self._snapshot_dir, f"auto_snapshot_{self._insert_count}.snap")
+                with open(file_path, "wb") as f:
+                    f.write(snap_bytes)
 
     async def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
         url = self.base_url + path
@@ -140,6 +177,7 @@ class AsyncRemoteClient:
     async def insert(self, vector: Vector) -> RecordId:
         data = {"values": vector}
         resp = await self._post("/records", data)
+        await self._check_auto_snapshot(1)
         return resp["id"]
 
     async def insert_with_proof(self, vector: Vector) -> Tuple[RecordId, Proof]:
@@ -153,6 +191,7 @@ class AsyncRemoteClient:
     async def insert_batch(self, batch: List[Vector]) -> List[RecordId]:
         data = {"batch": batch}
         resp = await self._post("/v1/vectors/batch_insert", data)
+        await self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
     async def search(self, query: Vector, k: int) -> List[Dict[str, Any]]:
@@ -201,7 +240,12 @@ class AsyncRemoteClient:
         except Exception:
             return 0
 
-    async def snapshot(self) -> bytes:
+    async def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
+        if auto_interval is not None:
+            self._auto_snapshot_interval = auto_interval
+            self._insert_count = 0
+            self._snapshot_dir = save_dir
+            
         url = self.base_url + "/snapshot"
         try:
             resp = await self.client.post(url)

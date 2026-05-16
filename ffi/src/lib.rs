@@ -140,6 +140,36 @@ impl ValoricoreEngine {
         Ok(edge_id.0)
     }
 
+    #[pyo3(signature = (node_id))]
+    fn get_node(&self, node_id: u32) -> PyResult<Option<(u8, Option<u32>)>> {
+        let engine = self.inner.lock().unwrap();
+        use valori_kernel::types::id::NodeId;
+        
+        match engine.state.get_node(NodeId(node_id)) {
+            Some(n) => {
+                let rec = n.record.map(|r| r.0);
+                Ok(Some((n.kind as u8, rec)))
+            },
+            None => Ok(None)
+        }
+    }
+
+    #[pyo3(signature = (node_id))]
+    fn get_edges(&self, node_id: u32) -> PyResult<Vec<(u32, u32, u8)>> {
+        let engine = self.inner.lock().unwrap();
+        use valori_kernel::types::id::NodeId;
+        
+        let mut py_edges = Vec::new();
+        
+        if let Some(iter) = engine.state.outgoing_edges(NodeId(node_id)) {
+            for edge in iter {
+                py_edges.push((edge.id.0, edge.to.0, edge.kind as u8));
+            }
+        }
+        
+        Ok(py_edges)
+    }
+
     fn insert_batch(&self, vectors: Vec<Vec<f32>>) -> PyResult<Vec<u32>> {
         let mut engine = self.inner.lock().unwrap();
         match engine.insert_batch(&vectors) {

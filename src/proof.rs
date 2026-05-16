@@ -23,6 +23,9 @@ pub struct DeterministicProof {
     pub final_state_hash: [u8; 32],
 }
 
+const DOMAIN_LEAF: &[u8] = b"VALORI_LEAF";
+const DOMAIN_NODE: &[u8] = b"VALORI_NODE";
+
 /// Computes the recursive Merkle tree root from leaf hashes.
 /// Odd leaf is hashed with itself.
 pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
@@ -37,6 +40,7 @@ pub fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         .chunks(2)
         .map(|pair| {
             let mut hasher = blake3::Hasher::new();
+            hasher.update(DOMAIN_NODE);
             hasher.update(&pair[0]);
             hasher.update(pair.get(1).unwrap_or(&pair[0]));
             *hasher.finalize().as_bytes()
@@ -56,10 +60,11 @@ pub fn generate_proof_bytes(fixed_values: &[i32]) -> Vec<u8> {
         .iter()
         .enumerate()
         .map(|(pos, &val)| {
-            let mut buf = [0u8; 8];
-            buf[..4].copy_from_slice(&(pos as u32).to_le_bytes());
-            buf[4..].copy_from_slice(&val.to_le_bytes());
-            *blake3::hash(&buf).as_bytes()
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(DOMAIN_LEAF);
+            hasher.update(&(pos as u32).to_le_bytes());
+            hasher.update(&val.to_le_bytes());
+            *hasher.finalize().as_bytes()
         })
         .collect();
 
