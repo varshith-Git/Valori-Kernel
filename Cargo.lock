@@ -600,7 +600,6 @@ dependencies = [
  "byteorder",
  "crc64fast",
  "valori-kernel",
- "valori-persistence",
 ]
 
 [[package]]
@@ -2997,6 +2996,7 @@ name = "valori-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "bytemuck",
  "chrono",
  "clap",
@@ -3007,7 +3007,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "valori-kernel",
- "valori-persistence",
+ "valori-node",
 ]
 
 [[package]]
@@ -3072,20 +3072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "valori-persistence"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "bytes",
- "crc64fast",
- "serde",
- "tempfile",
- "thiserror 1.0.69",
- "valori-kernel",
-]
-
-[[package]]
 name = "valori-verify"
 version = "0.1.0"
 dependencies = [
@@ -3100,6 +3086,7 @@ dependencies = [
 name = "valoricore-ffi"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "blake3",
  "hex",
  "pyo3",

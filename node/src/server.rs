@@ -72,6 +72,7 @@ pub fn build_router(
         .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
         .route("/v1/replication/events", axum::routing::get(get_replication_events))
         .route("/v1/replication/state", axum::routing::get(get_replication_state))
+        .route("/timeline", axum::routing::get(get_timeline))
         .route("/metrics", axum::routing::get(metrics_handler))
         .with_state(state);
 
@@ -367,4 +368,69 @@ async fn get_replication_state() -> Json<serde_json::Value> {
 
 async fn metrics_handler() -> String {
     crate::telemetry::get_metrics()
+}
+
+async fn get_timeline(
+    State(state): State<SharedEngine>,
+) -> Result<Json<Vec<String>>, EngineError> {
+    let log_path = {
+        let engine = state.lock().await;
+        if let Some(ref committer) = engine.event_committer {
+            committer.event_log().path().to_path_buf()
+        } else {
+            return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
+        }
+    };
+
+    if !log_path.exists() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let mut file = std::fs::File::open(&log_path)
+        .map_err(|e| EngineError::InvalidInput(format!("Could not open events.log: {}", e)))?;
+        
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|e| EngineError::InvalidInput(format!("Could not read events.log: {}", e)))?;
+
+    if bytes.len() < 16 {
+        return Ok(Json(Vec::new()));
+    }
+
+    use crate::events::event_log::LogEntry;
+    use valori_kernel::event::KernelEvent;
+    
+    let mut events = Vec::new();
+    let mut offset = 16;
+    let mut event_id = 0;
+
+    while offset < bytes.len() {
+        match bincode::serde::decode_from_slice::<LogEntry, _>(
+            &bytes[offset..],
+            bincode::config::standard()
+        ) {
+            Ok((entry, bytes_read)) => {
+                let event_str = match entry {
+                    LogEntry::Event(e) => match e {
+                        KernelEvent::InsertRecord { id, tag, .. } => format!("Event ID {}: InsertRecord (Record {}, Tag: {})", event_id, id.0, tag),
+                        KernelEvent::DeleteRecord { id } => format!("Event ID {}: DeleteRecord (Record {})", event_id, id.0),
+                        KernelEvent::CreateNode { id, kind, .. } => format!("Event ID {}: CreateNode (Node {}, Kind: {:?})", event_id, id.0, kind),
+                        KernelEvent::CreateEdge { id, from, to, kind } => format!("Event ID {}: CreateEdge (Edge {}, {:?} -> {:?}, Kind: {:?})", event_id, id.0, from, to, kind),
+                        KernelEvent::DeleteEdge { id } => format!("Event ID {}: DeleteEdge (Edge {})", event_id, id.0),
+                    },
+                    LogEntry::Checkpoint { event_count, .. } => format!("Event ID {}: Checkpoint (Event Count {})", event_id, event_count),
+                };
+                events.push(event_str);
+                offset += bytes_read;
+                event_id += 1;
+            }
+            Err(e) => {
+                events.push(format!("Decoding stopped at offset {} due to error: {:?}", offset, e));
+                break;
+            }
+        }
+    }
+    
+    Ok(Json(events))
 }

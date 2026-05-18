@@ -3,7 +3,7 @@ from .local import LocalClient
 from .remote import SyncRemoteClient, AsyncRemoteClient
 from .memory import MemoryClient
 from .async_memory import AsyncMemoryClient
-from .valoricore_ffi import ingest_embedding, generate_proof, verify_embedding
+from valoricore_ffi import ingest_embedding, generate_proof, verify_embedding
 from .adapter import ValoricoreAdapter
 from .exceptions import ValoricoreError, IntegrityError, ValidationError, ConnectionError, NotFoundError
 from .factory import Valoricore, AsyncValoricore

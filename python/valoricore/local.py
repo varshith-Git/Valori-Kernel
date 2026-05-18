@@ -180,3 +180,13 @@ class LocalClient:
     def delete(self, record_id: int) -> None:
         """Permanently remove a record from the pool and the search index."""
         self.soft_delete(record_id)
+
+    def get_timeline(self) -> List[str]:
+        """
+        Reads the underlying events.log directly from the engine and returns a chronological
+        list of all append-only state transitions.
+        """
+        try:
+            return self.kernel.get_timeline()
+        except Exception as e:
+            raise KernelError(f"Failed to read timeline: {e}")

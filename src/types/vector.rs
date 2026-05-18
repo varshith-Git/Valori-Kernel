@@ -6,58 +6,12 @@
 use crate::types::scalar::FxpScalar;
 use core::ops::{Index, IndexMut};
 
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-use serde::ser::SerializeTuple;
-use serde::de::{self, SeqAccess, Visitor};
-use core::fmt;
+use serde::{Serialize, Deserialize};
 
 /// A dynamic-dimension vector definition.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FxpVector {
     pub data: alloc::vec::Vec<FxpScalar>,
-}
-
-impl Serialize for FxpVector {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_tuple(self.data.len())?;
-        for element in &self.data {
-            seq.serialize_element(element)?;
-        }
-        seq.end()
-    }
-}
-
-struct FxpVectorVisitor;
-
-impl<'de> Visitor<'de> for FxpVectorVisitor {
-    type Value = FxpVector;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a sequence of FxpScalars")
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut data = alloc::vec::Vec::new();
-        while let Some(elem) = seq.next_element()? {
-            data.push(elem);
-        }
-        Ok(FxpVector { data })
-    }
-}
-
-impl<'de> Deserialize<'de> for FxpVector {
-    fn deserialize<Desc>(deserializer: Desc) -> Result<Self, Desc::Error>
-    where
-        Desc: Deserializer<'de>,
-    {
-        deserializer.deserialize_seq(FxpVectorVisitor)
-    }
 }
 
 impl Default for FxpVector {

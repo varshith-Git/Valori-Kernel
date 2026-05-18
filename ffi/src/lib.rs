@@ -14,6 +14,7 @@ use hex;
 #[pyclass]
 struct ValoricoreEngine {
     inner: Arc<Mutex<Engine>>,
+    path: String,
 }
 
 #[pymethods]
@@ -32,6 +33,7 @@ impl ValoricoreEngine {
         
         Ok(ValoricoreEngine {
             inner: Arc::new(Mutex::new(engine)),
+            path,
         })
     }
 
@@ -359,6 +361,59 @@ impl ValoricoreEngine {
         } else {
             Err(pyo3::exceptions::PyRuntimeError::new_err("Event Log not initialized"))
         }
+    }
+    
+    fn get_timeline(&self) -> PyResult<Vec<String>> {
+        let log_path = format!("{}/events.log", self.path);
+        if !std::path::Path::new(&log_path).exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut file = std::fs::File::open(&log_path)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("Could not open events.log: {}", e)))?;
+            
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("Could not read events.log: {}", e)))?;
+
+        if bytes.len() < 16 {
+            return Ok(Vec::new());
+        }
+
+        use valori_node::events::event_log::LogEntry;
+        let mut events = Vec::new();
+        let mut offset = 16;
+        let mut event_id = 0;
+
+        while offset < bytes.len() {
+            match bincode::serde::decode_from_slice::<LogEntry, _>(
+                &bytes[offset..],
+                bincode::config::standard()
+            ) {
+                Ok((entry, bytes_read)) => {
+                    let event_str = match entry {
+                        LogEntry::Event(e) => match e {
+                            KernelEvent::InsertRecord { id, tag, .. } => format!("Event ID {}: InsertRecord (Record {}, Tag: {})", event_id, id.0, tag),
+                            KernelEvent::DeleteRecord { id } => format!("Event ID {}: DeleteRecord (Record {})", event_id, id.0),
+                            KernelEvent::CreateNode { id, kind, .. } => format!("Event ID {}: CreateNode (Node {}, Kind: {:?})", event_id, id.0, kind),
+                            KernelEvent::CreateEdge { id, from, to, kind } => format!("Event ID {}: CreateEdge (Edge {}, {:?} -> {:?}, Kind: {:?})", event_id, id.0, from, to, kind),
+                            KernelEvent::DeleteEdge { id } => format!("Event ID {}: DeleteEdge (Edge {})", event_id, id.0),
+                        },
+                        LogEntry::Checkpoint { event_count, .. } => format!("Event ID {}: Checkpoint (Event Count {})", event_id, event_count),
+                    };
+                    events.push(event_str);
+                    offset += bytes_read;
+                    event_id += 1;
+                }
+                Err(e) => {
+                    events.push(format!("Decoding stopped at offset {} due to error: {:?}", offset, e));
+                    break;
+                }
+            }
+        }
+        
+        Ok(events)
     }
 }
 

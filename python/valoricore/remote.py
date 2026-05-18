@@ -136,9 +136,23 @@ class SyncRemoteClient:
         headers = {"Content-Type": "application/octet-stream"}
         try:
             resp = self.session.post(url, data=data, headers=headers, timeout=60)
-            resp.raise_for_status()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to restore snapshot: {e}")
+
+    def get_timeline(self) -> List[str]:
+        """
+        Reads the underlying events.log directly from the remote engine and returns a chronological
+        list of all append-only state transitions.
+        """
+        url = self.base_url + "/timeline"
+        try:
+            resp = self.session.get(url, timeout=10)
+            if resp.status_code == 404:
+                raise NotFoundError("Timeline endpoint not found on remote node.")
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
 class AsyncRemoteClient:
     """Asynchronous REST client for a standalone Valoricore node using httpx."""
@@ -262,6 +276,21 @@ class AsyncRemoteClient:
             resp.raise_for_status()
         except Exception as e:
             raise ConnectionError(f"Failed to restore snapshot: {e}")
+
+    async def get_timeline(self) -> List[str]:
+        """
+        Reads the underlying events.log directly from the remote engine and returns a chronological
+        list of all append-only state transitions.
+        """
+        url = self.base_url + "/timeline"
+        try:
+            resp = await self.client.get(url)
+            if resp.status_code == 404:
+                raise NotFoundError("Timeline endpoint not found on remote node.")
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
     async def close(self):
         """Close the underlying httpx client."""

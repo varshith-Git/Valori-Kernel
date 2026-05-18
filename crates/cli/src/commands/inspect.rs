@@ -2,7 +2,10 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{ContentArrangement, Table};
 
 use std::path::PathBuf;
-use valori_persistence::{idx, snapshot, wal};
+use valori_persistence::{idx, snapshot};
+use valori_kernel::event::KernelEvent;
+
+use valori_node::events::event_log::LogEntry;
 
 pub fn run(
     dir: Option<PathBuf>,
@@ -57,22 +60,46 @@ pub fn run(
         table.add_row(vec!["Snapshot", "MISSING", ""]);
     }
 
-    // 2. WAL Info
+    // 2. WAL Info (Phase 23 Event Log format)
     if w_path.exists() {
-        match wal::read_stream(&w_path) {
-            Ok(iter) => {
-                 match iter.collect::<Result<Vec<_>, _>>() {
-                     Ok(entries) => {
-                         table.add_row(vec!["WAL", "FOUND", &format!("{} events", entries.len())]);
-                     }
-                     Err(e) => {
-                         table.add_row(vec!["WAL", "CORRUPT", &e.to_string()]);
-                     }
-                 }
-            },
-            Err(e) => {
-                 table.add_row(vec!["WAL", "ERROR", &e.to_string()]);
+        if let Ok(file_bytes) = std::fs::read(&w_path) {
+            if file_bytes.len() < 16 {
+                table.add_row(vec!["WAL", "CORRUPT", "File smaller than 16-byte header"]);
+            } else {
+                let dim = u32::from_le_bytes(file_bytes[4..8].try_into().unwrap());
+                let mut event_count = 0;
+                let mut offset = 16;
+                let mut corrupt = false;
+                let mut err_msg = String::new();
+                
+                while offset < file_bytes.len() {
+                    match bincode::serde::decode_from_slice::<LogEntry, _>(
+                        &file_bytes[offset..],
+                        bincode::config::standard()
+                    ) {
+                        Ok((entry, bytes_read)) => {
+                            match entry {
+                                LogEntry::Event(_) => event_count += 1,
+                                LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
+                            }
+                            offset += bytes_read;
+                        }
+                        Err(e) => {
+                            corrupt = true;
+                            err_msg = format!("Decoding failed at offset {} after {} events: {}", offset, event_count, e);
+                            break;
+                        }
+                    }
+                }
+                
+                if corrupt {
+                    table.add_row(vec!["WAL", "CORRUPT", &err_msg]);
+                } else {
+                    table.add_row(vec!["WAL", "FOUND", &format!("{} events (dim {})", event_count, dim)]);
+                }
             }
+        } else {
+            table.add_row(vec!["WAL", "ERROR", "Failed to read file"]);
         }
     } else {
         table.add_row(vec!["WAL", "MISSING", ""]);

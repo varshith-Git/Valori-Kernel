@@ -13,7 +13,7 @@ import numpy as np
 from typing import Optional
 
 # Import bridge functions from Rust FFI
-from .valoricore_ffi import verify_embedding
+from valoricore_ffi import verify_embedding
 from .local import LocalClient
 
 

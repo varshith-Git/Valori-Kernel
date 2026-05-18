@@ -23,9 +23,7 @@ members = [
     "ffi",
     "verify",
     "embedded",
-    "crates/persistence",
     "crates/cli",
-    "crates/demo-generator",
 ]
 
 # Firmware requires abort on panic (no unwinding support in no_std)

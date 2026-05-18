@@ -17,11 +17,12 @@ path = "src/bin/bench_ingest.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-valori-persistence = { path = "../persistence" }
 anyhow = "1.0"
 comfy-table = "7.1"
 chrono = "0.4"
 crc64fast = "1.0"
+bincode = { version = "2.0.1", features = ["serde"] }
+valori-node = { path = "../../node" }
 valori-kernel = { path = "../.." }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

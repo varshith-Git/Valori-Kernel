@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 
 use valori_kernel::ValoriKernel;
-use valori_persistence::{snapshot, wal};
+use valori_persistence::snapshot;
+use valori_node::events::event_log::LogEntry;
 
 pub struct ForensicEngine {
     pub snapshot_index: u64,
@@ -28,35 +29,56 @@ impl ForensicEngine {
 
     pub fn replay_to(&mut self, wal_path: &str, target_index: u64) -> Result<usize> {
         let mut replayed_count = 0;
-        let reader = wal::read_stream(wal_path)
-            .context("Failed to open WAL stream")?;
-
-        for entry_result in reader {
-            let entry = entry_result?;
-            let eid = entry.header.event_id;
-
-            // 1. FILTER: Skip if already in snapshot
-            if eid <= self.snapshot_index {
-                continue;
-            }
-
-            // 3. STOP: If beyond target
-            if eid > target_index {
-                break;
-            }
-
-            // 2. REPLAY: Apply event
-            // FAIL-CLOSED: Any error from kernel stops replay immediately.
-            self.state.apply_event(&entry.payload)
-                .map_err(|e| anyhow::anyhow!("Kernel Error at Event {}: {}", eid, e))?;
-
-            self.current_index = eid; // Set to strictly the last applied event ID
-            self.applied_events.push(eid);
-            replayed_count += 1;
+        let file_bytes = std::fs::read(wal_path)
+            .context("Failed to read events.log")?;
+            
+        if file_bytes.len() < 16 {
+            return Ok(0); // Empty or corrupt log
         }
-        
-        // Graceful End: If we finish the loop (EOF) without reaching target_index,
-        // we just stop. The calling code can check forensic_engine.current_index vs target_index if it cares.
+
+        let mut offset = 16;
+        let mut virtual_eid = 0;
+
+        while offset < file_bytes.len() {
+            match bincode::serde::decode_from_slice::<LogEntry, _>(
+                &file_bytes[offset..],
+                bincode::config::standard()
+            ) {
+                Ok((entry, bytes_read)) => {
+                    offset += bytes_read;
+                    
+                    match entry {
+                        LogEntry::Event(event) => {
+                            virtual_eid += 1;
+                            
+                            // 1. FILTER: Skip if already in snapshot
+                            if virtual_eid <= self.snapshot_index {
+                                continue;
+                            }
+
+                            // 3. STOP: If beyond target
+                            if virtual_eid > target_index {
+                                break;
+                            }
+
+                            // 2. REPLAY: Apply event
+                            self.state.apply_event(&bincode::serde::encode_to_vec(&event, bincode::config::standard()).unwrap())
+                                .map_err(|e| anyhow::anyhow!("Kernel Error at Event {}: {:?}", virtual_eid, e))?;
+
+                            self.current_index = virtual_eid;
+                            self.applied_events.push(virtual_eid);
+                            replayed_count += 1;
+                        }
+                        LogEntry::Checkpoint { event_count, .. } => {
+                            virtual_eid = event_count;
+                        }
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("WAL corrupt at offset {}: {}", offset, e));
+                }
+            }
+        }
         
         Ok(replayed_count)
     }
