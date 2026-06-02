@@ -185,6 +185,7 @@ Valoricore uses **Q16.16 Fixed-Point Arithmetic** instead of standard `f32` floa
 ### 5. Crash Recovery & Durability
 - **WAL & Event Log**: Every operation is synced to disk via length-prefixed logs
 - **Zero-Config Persistence**: WAL and Snapshots are self-describing, restoring state without manual config
+- **Dynamic Allocation**: Limits like `VALORI_MAX_RECORDS` act as soft hints. Memory pools use dynamic `Vec` allocation, so if the node fills up, it will safely scale past the limit without crashing until out of RAM. To pre-allocate a larger limit, simply restart the node!
 - **Batch Ingestion**: Atomic commits for high-throughput bulk inserts (10k+ vectors/sec)
 - **Dynamic Snapshots**: Instant checkpointing that scales to millions of records
 

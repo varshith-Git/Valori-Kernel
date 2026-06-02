@@ -104,14 +104,14 @@ def main():
         
         import json
         
-        # 1. Pre-declare core Concept Nodes in the Valoricore Knowledge Graph (Kind=4 is Concept)
-        concept_materials = db.create_node(kind=4)
-        concept_maintenance = db.create_node(kind=4)
-        concept_ship = db.create_node(kind=4)
+        # 1. Pre-declare core Concept Nodes in the Valoricore Knowledge Graph (NodeKind.Concept = 1)
+        concept_materials = db.create_node(kind=1)
+        concept_maintenance = db.create_node(kind=1)
+        concept_ship = db.create_node(kind=1)
         
-        # 2. Logically link concepts together (Kind=5 is LogicalLink/ParentOf)
-        # E.g., Maintenance operations rely on Materials
-        db.create_edge(from_id=concept_maintenance, to_id=concept_materials, kind=5)
+        # 2. Logically link concepts together (EdgeKind.Relation = 0)
+        # E.g., Maintenance operations relate to Materials
+        db.create_edge(from_id=concept_maintenance, to_id=concept_materials, kind=0)
         
         # 3. Define Semantic Anchors for Concept Edges
         prefix_anchor = "passage: " if "e5" in model_name else ""
@@ -141,7 +141,7 @@ def main():
             # A. Insert into Vector Engine
             record_id = db.insert(vector=embedding, tag=i)
             
-            # B. Wrap Vector in Graph Node (Kind=0 is Record)
+            # B. Wrap Vector in Graph Node (NodeKind.Record = 0)
             record_node = db.create_node(kind=0, record_id=record_id)
             
             # Persist text, tag, and node_id permanently using Valoricore metadata
@@ -153,9 +153,10 @@ def main():
                 # Both embeddings are normalized, so dot product == cosine similarity
                 similarity = sum(a * b for a, b in zip(embedding, anchor_emb))
                 if similarity > CONCEPT_EDGE_THRESHOLD:
-                    db.create_edge(from_id=record_node, to_id=concept_id, kind=3)
+                    # EdgeKind.Mentions = 4
+                    db.create_edge(from_id=record_node, to_id=concept_id, kind=4)
                     # Make it bidirectional so db.expand() can traverse from Concept back down to Records!
-                    db.create_edge(from_id=concept_id, to_id=record_node, kind=3)
+                    db.create_edge(from_id=concept_id, to_id=record_node, kind=4)
             
         print(f"Inserted {len(chunks)} documents & constructed Knowledge Graph.\n")
         

@@ -25,7 +25,7 @@ The `KernelState` struct holds the in-memory database.
 ## 🧩 Modules
 *   **`kernel.rs`**: The main entry point (`ValoriKernel`).
 *   **`index/`**: Vector indexing algorithms.
-*   **`storage/`**: Memory pools for records and nodes.
+*   **`storage/`**: Dynamic memory pools for records and nodes (automatically scales past configuration limits if filled up).
 *   **`proof/`**: Merkle tree and hashing for state verification.
 *   **`replay/`**: Logic to rebuild state from an Event Log.
 
