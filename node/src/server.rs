@@ -58,7 +58,9 @@ pub fn build_router(
         .route("/v1/vectors/batch_insert", post(batch_insert))
         .route("/search", post(search))
         .route("/graph/node", post(create_node))
+        .route("/graph/node/:id", axum::routing::get(get_node))
         .route("/graph/edge", post(create_edge))
+        .route("/graph/edges/:id", axum::routing::get(get_edges))
         .route("/v1/snapshot/download", axum::routing::get(snapshot)) 
         .route("/v1/snapshot/upload", post(restore))
         .route("/v1/snapshot/save", post(snapshot_save))
@@ -203,6 +205,43 @@ async fn create_edge(
     let mut engine = state.lock().await;
     let edge_id = engine.create_edge(payload.from, payload.to, payload.kind)?;
     Ok(Json(CreateEdgeResponse { edge_id }))
+}
+
+async fn get_node(
+    State(state): State<SharedEngine>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+) -> Result<Json<GetNodeResponse>, EngineError> {
+    let engine = state.lock().await;
+    use valori_kernel::types::id::NodeId;
+    match engine.state.get_node(NodeId(id)) {
+        Some(node) => {
+            Ok(Json(GetNodeResponse {
+                kind: node.kind as u8,
+                record_id: node.record.map(|r| r.0),
+            }))
+        },
+        None => Err(EngineError::Kernel(valori_kernel::error::KernelError::NotFound)),
+    }
+}
+
+async fn get_edges(
+    State(state): State<SharedEngine>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+) -> Result<Json<GetEdgesResponse>, EngineError> {
+    let engine = state.lock().await;
+    use valori_kernel::types::id::NodeId;
+    
+    let mut edges = Vec::new();
+    if let Some(iter) = engine.state.outgoing_edges(NodeId(id)) {
+        for edge in iter {
+            edges.push(EdgeData {
+                edge_id: edge.id.0,
+                to_node: edge.to.0,
+                kind: edge.kind as u8,
+            });
+        }
+    }
+    Ok(Json(GetEdgesResponse { edges }))
 }
 
 async fn snapshot(

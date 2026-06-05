@@ -79,6 +79,24 @@ pub struct CreateEdgeResponse {
     pub edge_id: u32,
 }
 
+#[derive(Serialize)]
+pub struct GetNodeResponse {
+    pub kind: u8,
+    pub record_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct EdgeData {
+    pub edge_id: u32,
+    pub to_node: u32,
+    pub kind: u8,
+}
+
+#[derive(Serialize)]
+pub struct GetEdgesResponse {
+    pub edges: Vec<EdgeData>,
+}
+
 #[derive(Deserialize)]
 pub struct MemoryUpsertVectorRequest {
     pub vector: Vec<f32>,
