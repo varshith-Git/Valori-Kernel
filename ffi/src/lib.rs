@@ -318,6 +318,14 @@ impl ValoricoreEngine {
         Ok(())
     }
 
+    fn delete(&self, record_id: u32) -> PyResult<()> {
+        let mut engine = self.inner.lock().unwrap();
+        engine.delete_record(record_id).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
+        })?;
+        Ok(())
+    }
+
     #[pyo3(signature = (vector, tag))]
     fn insert_with_proof(&self, vector: Vec<f32>, tag: u64) -> PyResult<(u32, String)> {
         let mut fxp_data = Vec::with_capacity(vector.len());

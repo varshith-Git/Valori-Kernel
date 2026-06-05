@@ -179,7 +179,11 @@ class LocalClient:
 
     def delete(self, record_id: int) -> None:
         """Permanently remove a record from the pool and the search index."""
-        self.soft_delete(record_id)
+        try:
+            self.kernel.delete(record_id)
+            self._check_auto_snapshot()
+        except Exception as e:
+            raise KernelError(f"Failed to delete record: {e}")
 
     def get_timeline(self) -> List[str]:
         """

@@ -43,7 +43,7 @@ impl KernelState {
     }
 
     pub fn record_count(&self) -> usize {
-        self.records.len()
+        self.records.iter().count()
     }
 
     pub fn get_record(&self, id: RecordId) -> Option<&Record> {
