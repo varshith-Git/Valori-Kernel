@@ -4,7 +4,7 @@ import os
 import shutil
 import sys
 import requests
-from valori import ProtocolClient as Client
+from valoricore import ProtocolClient as Client
 
 # Config
 # Assumes running from project root
