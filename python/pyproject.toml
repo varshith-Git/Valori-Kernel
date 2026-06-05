@@ -4,36 +4,130 @@ build-backend = "maturin"
 
 [project]
 name = "valoricore"
-version = "0.1.0"
+version = "0.1.2"
 description = "Deterministic Knowledge Graph & Vector Engine with Bit-Exact Audit Trails"
 authors = [
     { name = "Varshith Gudur" }
 ]
+readme = "valoricore_readme.md"
+requires-python = ">=3.8"
+license = { text = "AGPL-3.0" }
+
+# ── Core dependencies (always installed) ──────────────────────────────────────
 dependencies = [
     "requests>=2.25.0",
     "numpy>=1.20.0",
     "pydantic>=2.0.0",
     "typing-extensions>=4.0.0",
     "httpx>=0.25.0",
-    "pytest-asyncio>=0.23.0"
-]
-requires-python = ">=3.8"
-license = { text = "AGPL-3.0" }
-readme = "README.md"
-keywords = ["vector-database", "knowledge-graph", "determinism", "ai", "event-sourcing"]
-classifiers = [
-    "Programming Language :: Rust",
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
-    "Topic :: Database :: Database Engines",
 ]
 
+keywords = [
+    "vector-database", "knowledge-graph", "determinism",
+    "ai", "event-sourcing", "rust", "embedded", "fixed-point",
+    "blake3", "audit-trail", "llm", "rag",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+]
+
+# ── Optional dependency groups ────────────────────────────────────────────────
+[project.optional-dependencies]
+
+# Local / offline embedding (no API key required)
+local = [
+    "sentence-transformers>=2.2.0",
+    "torch>=1.11.0",
+]
+
+# OpenAI cloud embeddings
+openai = [
+    "openai>=1.0.0",
+]
+
+# Cohere cloud embeddings
+cohere = [
+    "cohere>=4.0.0",
+]
+
+# PDF document ingestion
+pdf = [
+    "pypdf>=3.0.0",
+]
+
+# LangChain integration
+langchain = [
+    "langchain-core>=0.1.0",
+    "langchain>=0.1.0",
+]
+
+# LlamaIndex integration
+llamaindex = [
+    "llama-index-core>=0.10.0",
+]
+
+# Development & testing
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "sentence-transformers>=2.2.0",
+]
+
+# Install everything
+all = [
+    "sentence-transformers>=2.2.0",
+    "torch>=1.11.0",
+    "openai>=1.0.0",
+    "cohere>=4.0.0",
+    "pypdf>=3.0.0",
+    "langchain-core>=0.1.0",
+    "langchain>=0.1.0",
+    "llama-index-core>=0.10.0",
+]
+
+# ── Maturin (Rust FFI build) ──────────────────────────────────────────────────
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "valoricore.valoricore_ffi"
 manifest-path = "../ffi/Cargo.toml"
 python-source = "."
 
+# ── Project URLs ──────────────────────────────────────────────────────────────
 [project.urls]
-Homepage = "https://github.com/valoricore/valoricore"
-Repository = "https://github.com/valoricore/valoricore"
+Homepage      = "https://github.com/varshith-Git/Valori-Kernel"
+Repository    = "https://github.com/varshith-Git/Valori-Kernel"
+Documentation = "https://github.com/varshith-Git/Valori-Kernel/tree/main/python/docs"
+"Bug Tracker" = "https://github.com/varshith-Git/Valori-Kernel/issues"
+Changelog     = "https://github.com/varshith-Git/Valori-Kernel/blob/main/CHANGELOG.md"
+
+# ── Linting / type-checking ───────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.mypy]
+python_version = "3.8"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
