@@ -1,6 +1,14 @@
 # Valori Kernel Architecture
 
-This document outlines the complete architecture of Valori, including the deterministic kernel, WAL persistence, crash recovery, and deployment modes.
+This document outlines the complete architecture of Valori, a **Hybrid Graph + Vector Engine**, including the deterministic kernel, WAL persistence, crash recovery, and deployment modes.
+
+---
+
+## 🧠 Hybrid Graph + Vector Engine
+Unlike traditional vector databases that treat embeddings as isolated points in space, Valori natively supports a hybrid storage model within a single unified memory space:
+- **Vector Memory (`RecordPool`)**: Dense, fixed-point storage for AI embeddings optimized for L2 distance retrieval.
+- **Semantic Graph (`NodePool` & `EdgePool`)**: Deterministic adjacency lists that map complex relationships between entities (e.g., `User` --`Follows`--> `User`, or `Concept` --`RefersTo`--> `Record`).
+- **Unified State**: Both the spatial vector data and the relational graph topology live inside the exact same `KernelState`. This means a single snapshot or cryptographic proof securely captures the *entire* hybrid context in one atomic sweep.
 
 ---
 
@@ -123,9 +131,9 @@ graph TD
 
 **Components**:
 - **KernelState**: Deterministic state machine
-  - `RecordPool`: Vector storage
-  - `NodePool`: Knowledge graph nodes
-  - `EdgePool`: Knowledge graph edges
+  - `RecordPool`: Dynamic vector storage using `alloc::vec::Vec` (scales automatically)
+  - `NodePool`: Dynamic knowledge graph nodes
+  - `EdgePool`: Dynamic knowledge graph edges
   - `AdjacencyList`: Graph topology
 
 - **Fixed-Point Math**: Q16.16 arithmetic for cross-platform determinism
@@ -148,7 +156,7 @@ graph TD
   - State hash: `hash(all_records || all_nodes || all_edges)`
   - Deterministic across architectures
 
-**Critical Property**: `#![no_std]` - Runs without operating system
+**Critical Property**: `#![no_std]` - Runs without an OS, using `alloc` for dynamic scaling of memory pools instead of rigid `const` constraints.
 
 ---
 
@@ -182,6 +190,8 @@ graph TD
 - Cross-platform replay (ARM WAL → x86 kernel)
 
 #### Event Log (Phase 23 - Event-Sourced Evolution)
+
+**Status:** The Event-Sourced architecture (Phase 23) is fully implemented and tested, but the **legacy WAL path remains the default** operational configuration for new deployments unless explicitly enabled.
 
 **Evolution:** Valori has evolved from legacy WAL to a full **Event-Sourced** architecture.
 
@@ -414,8 +424,9 @@ Then:
 
 ```rust
 #![no_std]
+extern crate alloc;
 
-let mut kernel = KernelState::<256, 16, 64, 128>::new();
+let mut kernel = KernelState::new();
 kernel.apply(&cmd)?;
 ```
 
@@ -432,6 +443,7 @@ kernel.apply(&cmd)?;
 ```python
 from valori import EmbeddedKernel
 
+# max_records acts as a soft hint for pre-allocation
 kernel = EmbeddedKernel(max_records=1024, dim=16)
 kernel.insert(embedding)
 ```
