@@ -1,0 +1,262 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# publish-pypi.yml
+#
+# Builds pre-compiled "valoricore" wheels for every major platform/arch and
+# uploads them all to PyPI in one go.
+#
+# Why is this necessary?
+#   valoricore wraps a Rust binary via PyO3/maturin.  When a user runs
+#   `pip install valoricore`, pip looks for a matching pre-built wheel first.
+#   If none exists for their platform (e.g. Google Colab = Linux x86-64),
+#   pip falls back to the source distribution (.tar.gz) which requires the
+#   user to have Rust installed — they usually don't, so the install fails.
+#
+#   By building wheels for all common targets here, *every* user gets a
+#   fast, zero-dependency install regardless of their OS or architecture.
+#
+# Platforms covered after this workflow runs:
+#   ✅ Linux x86-64        (GitHub hosted: ubuntu-latest)
+#   ✅ Linux ARM64         (cross-compiled via zig inside linux job)
+#   ✅ macOS x86-64        (GitHub hosted: macos-13 = Intel)
+#   ✅ macOS ARM64         (GitHub hosted: macos-latest = Apple Silicon)
+#   ✅ Windows x86-64      (GitHub hosted: windows-latest)
+#
+# Trigger:
+#   • Any push of a version tag like v0.1.3, v1.0.0, etc.
+#   • OR manually via Actions tab → "Run workflow"
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Publish Python SDK to PyPI
+
+on:
+  push:
+    tags:
+      # Only run on semver tags — prevents accidental publishes from branch pushes
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"   # pre-releases: v0.2.0-beta.1
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (build wheels but skip upload)"
+        required: false
+        default: "false"
+        type: boolean
+
+# Only one publish can run at a time — prevents duplicate uploads
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 1: Build wheels for Linux (x86-64 + ARM64 in one job via zig cross-compile)
+  # ───────────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux wheels (${{ matrix.target }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false   # let other platforms finish even if one fails
+      matrix:
+        target:
+          - x86_64        # Standard Linux — Google Colab, most servers
+          - aarch64       # Linux ARM — AWS Graviton, Raspberry Pi, etc.
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # We use abi3 bindings (min python 3.9) — one wheel covers 3.9, 3.10, 3.11, 3.12+
+          python-version: "3.11"
+
+      # maturin-action handles everything: installs Rust, cross-compiles via zig,
+      # and builds the wheel.  It's the official maturin GitHub Action.
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          # 'manylinux' ensures the compiled .so works on any glibc-based Linux
+          # (not just the exact Ubuntu version used here).
+          # This is what makes a wheel installable on Colab, Debian, RHEL, etc.
+          manylinux: auto
+          working-directory: python
+          args: >-
+            --release
+            --out dist
+            --find-interpreter
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Each matrix leg needs a unique artifact name
+          name: wheels-linux-${{ matrix.target }}
+          path: python/dist/
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 2: Build wheels for macOS (Intel + Apple Silicon)
+  # ───────────────────────────────────────────────────────────────────────────
+  build-macos:
+    name: Build macOS wheels (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (M1/M2/M3) — the most common macOS target today
+          - target: aarch64-apple-darwin
+            runner: macos-latest   # GitHub's latest macOS = Apple Silicon
+          # Intel Mac — still widely used, needed for older MacBooks
+          - target: x86_64-apple-darwin
+            runner: macos-13       # macos-13 = last Intel runner on GitHub
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          working-directory: python
+          args: >-
+            --release
+            --out dist
+            --find-interpreter
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: python/dist/
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 3: Build wheels for Windows (x86-64)
+  # ───────────────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows wheels
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-pc-windows-msvc
+          working-directory: python
+          args: >-
+            --release
+            --out dist
+            --find-interpreter
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x86_64
+          path: python/dist/
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 4: Build source distribution (sdist)
+  #
+  # The sdist is a fallback for platforms we don't explicitly target above
+  # (e.g. FreeBSD, exotic Linux distros).  It contains the full Rust source
+  # so pip can compile it locally if Rust is available.
+  # ───────────────────────────────────────────────────────────────────────────
+  build-sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          working-directory: python
+          args: --out dist
+
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: python/dist/
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Job 5: Upload everything to PyPI
+  #
+  # Runs only after ALL build jobs succeed.
+  # Uses PyPI's "Trusted Publishers" (OIDC) — no API token stored as a secret,
+  # no password in the workflow.  Much more secure than username/password.
+  #
+  # To set this up on PyPI:
+  #   1. Go to https://pypi.org/manage/project/valoricore/settings/publishing/
+  #   2. Add a new "trusted publisher":
+  #        Owner:    varshith-Git
+  #        Repo:     Valori-Kernel
+  #        Workflow: publish-pypi.yml
+  #        Env:      pypi   (matches the `environment:` field below)
+  # ───────────────────────────────────────────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    # Wait for every build job to succeed before uploading
+    needs:
+      - build-linux
+      - build-macos
+      - build-windows
+      - build-sdist
+
+    # The 'pypi' GitHub environment can have additional protection rules,
+    # e.g. requiring a reviewer to approve before the upload runs.
+    environment: pypi
+
+    # Required for Trusted Publisher (OIDC) authentication
+    permissions:
+      id-token: write   # allows GitHub to mint a short-lived OIDC token for PyPI
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Download all artifacts whose names start with "wheels-"
+          pattern: wheels-*
+          # Merge them all into a single flat "dist/" directory
+          merge-multiple: true
+          path: dist/
+
+      - name: List packages that will be uploaded
+        run: |
+          echo "📦 Packages ready for upload:"
+          ls -lh dist/
+          echo ""
+          echo "Total: $(ls dist/ | wc -l) files"
+
+      # Skip upload entirely if this is a dry run (manual trigger with dry_run=true)
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # verbose=true prints exactly which files are uploaded and their sizes
+          verbose: true
