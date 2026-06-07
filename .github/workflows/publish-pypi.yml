@@ -55,12 +55,20 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      - name: Build wheel (via QEMU + aarch64 manylinux)
-        uses: PyO3/maturin-action@v1
-        with:
-          container: quay.io/pypa/manylinux2014_aarch64
-          working-directory: python
-          args: --release --out dist --find-interpreter
+      - name: Build wheel natively in ARM64 container
+        run: |
+          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/io quay.io/pypa/manylinux2014_aarch64 bash -c "
+            # Install Rust
+            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+            source \$HOME/.cargo/env
+            
+            # Install Maturin using the Python 3.9 interpreter (for ABI3 wheel)
+            /opt/python/cp39-cp39/bin/pip install maturin
+            
+            # Build the wheel inside the container
+            cd /io/python
+            /opt/python/cp39-cp39/bin/maturin build --release --out dist
+          "
 
       - uses: actions/upload-artifact@v4
         with:
