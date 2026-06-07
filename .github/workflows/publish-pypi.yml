@@ -45,12 +45,9 @@ jobs:
           path: python/dist/
           if-no-files-found: error
 
-  # ── Linux ARM64 ───────────────────────────────────────────────────────────
-  # Needed for AWS Graviton, Raspberry Pi, and ARM-based Linux servers.
-  # Cross-compilation requires zig as the linker — installed before maturin runs.
   build-linux-arm64:
     name: Build Linux ARM64 wheel
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -58,20 +55,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      # zig is the cross-compilation linker that maturin uses for aarch64 on x86 machines.
-      # Without this, cargo can't link the final .so for a different CPU architecture.
-      - name: Install zig (cross-compilation linker)
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.13.0
-
-      - name: Build wheel (aarch64 via zig cross-compile)
+      - name: Build wheel (native aarch64)
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
-          manylinux: off
+          manylinux: auto
           working-directory: python
-          args: --release --out dist --find-interpreter --zig --compatibility manylinux2014
+          args: --release --out dist --find-interpreter
 
       - uses: actions/upload-artifact@v4
         with:
