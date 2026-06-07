@@ -60,7 +60,7 @@ except ImportError:
     generate_proof   = None   # type: ignore[assignment]
     verify_embedding = None   # type: ignore[assignment]
 
-__version__ = "0.1.2"
+__version__ = "0.1.10"
 __author__  = "Varshith Gudur"
 __license__ = "AGPL-3.0"
 
