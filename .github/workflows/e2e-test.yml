@@ -22,13 +22,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install maturin
-        run: pip install maturin
-
-      - name: Build and install local Python SDK (valoricore)
-        working-directory: python
-        # maturin develop builds the Rust FFI and injects it directly into the current Python environment
-        run: maturin develop --release
-
-      - name: Run E2E Tracer Script
-        run: python valori_e2e_tracer.py
+      - name: Build, Install, and Run E2E Test
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin
+          cd python
+          maturin develop --release
+          cd ..
+          python valori_e2e_tracer.py
