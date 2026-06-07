@@ -107,7 +107,7 @@ jobs:
   # ── macOS Intel ───────────────────────────────────────────────────────────
   build-macos-intel:
     name: Build macOS Intel wheel
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
