@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import requests
+# pyrefly: ignore [missing-import]
 from valoricore import ProtocolClient as Client
 
 # Config

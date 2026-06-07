@@ -73,6 +73,12 @@ diff before_crash.json after_crash.json
 
 ## 🚀 Quick Start
 
+### ⚡ Interactive Colab Notebooks
+The fastest way to test Valoricore directly in your browser with zero local setup:
+- [**Total End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) (Determinism, Knowledge Graph, Crypto Proofs)
+- [**LangChain Integration Demo**](https://colab.research.google.com/drive/1HezK4l-Hbc6AdHxJNLwSqAgzr8WaKhiq#scrollTo=Hxcyq4OkN0MO)
+- [**LlamaIndex Integration Demo**](https://colab.research.google.com/drive/1Q72ANZxBm1fthNpgVW-FftS8sZz6uCr3#scrollTo=XHFOODSTVE6N)
+
 ### Install
 ```bash
 # Clone the repository

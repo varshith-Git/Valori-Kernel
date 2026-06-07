@@ -1,5 +1,6 @@
 import sys
 import time
+# pyrefly: ignore [missing-import]
 from valoricore.remote import SyncRemoteClient
 
 def test_remote_graph():

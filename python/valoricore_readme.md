@@ -42,31 +42,37 @@ Every insert, search, and graph edge is backed by **fixed-point Q16.16 arithmeti
 
 ## 📦 Installation
 
+Valoricore is designed to be **extremely lightweight and secure**. Instead of forcing you to download heavy Machine Learning libraries (like PyTorch, which is 2GB+) or unnecessary network clients, the core engine is decoupled from the integrations via **Optional Dependencies (Extras)**. You only install exactly what you need for your environment.
+
 Valoricore ships with **pre-compiled Rust binaries** for Linux (x86-64, arm64), macOS (x86-64, Apple Silicon), and Windows. A Rust compiler is **only** required when building from source.
 
 ### Core (vector DB + knowledge graph)
+The leanest possible installation. Installs just the Rust binary engine and core Python types.
 ```bash
 pip install valoricore
 ```
 
 ### With local / offline embeddings (no API key needed)
+Installs the heavy `sentence-transformers` and PyTorch libraries. Recommended for air-gapped or entirely local deployments.
 ```bash
 pip install "valoricore[local]"
-# Uses sentence-transformers + PyTorch
 ```
 
 ### With cloud embedding providers
+Installs tiny networking SDKs. Recommended for cloud apps to keep your Docker images small (avoids downloading PyTorch).
 ```bash
 pip install "valoricore[openai]"    # OpenAI text-embedding-3-*
 pip install "valoricore[cohere]"    # Cohere embed-english-v3.0
 ```
 
-### Full installation (all providers + LangChain + LlamaIndex)
+### Full installation
+Installs absolutely everything (all providers + LangChain + LlamaIndex). Great for quick prototyping or Jupyter Notebooks!
 ```bash
 pip install "valoricore[all]"
 ```
 
 ### Optional integrations
+Only pull in the specific ecosystem integrations you use.
 ```bash
 pip install "valoricore[langchain]"    # LangChain VectorStore + Retriever
 pip install "valoricore[llamaindex]"   # LlamaIndex VectorStore
@@ -76,6 +82,12 @@ pip install "valoricore[pdf]"          # PDF document ingestion (pypdf)
 ---
 
 ## 🚀 Quick Start
+
+### ⚡ Interactive Colab Notebooks
+The fastest way to test Valoricore directly in your browser with zero local setup:
+- [**Total End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) (Determinism, Knowledge Graph, Crypto Proofs)
+- [**LangChain Integration Demo**](https://colab.research.google.com/drive/1HezK4l-Hbc6AdHxJNLwSqAgzr8WaKhiq#scrollTo=Hxcyq4OkN0MO)
+- [**LlamaIndex Integration Demo**](https://colab.research.google.com/drive/1Q72ANZxBm1fthNpgVW-FftS8sZz6uCr3#scrollTo=XHFOODSTVE6N)
 
 ### 1 · Embedded Local Engine (no server required)
 

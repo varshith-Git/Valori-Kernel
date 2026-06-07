@@ -28,6 +28,7 @@ jobs:
           source .venv/bin/activate
           pip install maturin
           cd python
-          maturin develop --release
+          maturin build --release
+          pip install ../target/wheels/valoricore*.whl --force-reinstall
           cd ..
           python valori_e2e_tracer.py
