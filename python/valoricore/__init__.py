@@ -52,7 +52,7 @@ from .chunking import split_by_sentences, naive_paragraph_chunker
 
 # Cryptographic helpers (from compiled Rust FFI)
 try:
-    from valoricore_ffi import ingest_embedding, generate_proof, verify_embedding
+    from .valoricore_ffi import ingest_embedding, generate_proof, verify_embedding
 except ImportError:
     # Graceful degradation – allows importing the pure-Python SDK layer
     # without the compiled extension (useful for docs builds, type stubs, etc.)
