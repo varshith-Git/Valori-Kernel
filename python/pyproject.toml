@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "valoricore"
-version = "0.1.6"
+version = "0.1.7"
 description = "Deterministic Knowledge Graph & Vector Engine with Bit-Exact Audit Trails"
 authors = [
     { name = "Varshith Gudur" }

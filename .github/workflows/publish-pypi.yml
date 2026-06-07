@@ -69,10 +69,9 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
-          # manylinux2014 is the most compatible manylinux for cross-compilation
-          manylinux: manylinux2014
+          manylinux: off
           working-directory: python
-          args: --release --out dist --find-interpreter
+          args: --release --out dist --find-interpreter --zig
 
       - uses: actions/upload-artifact@v4
         with:
