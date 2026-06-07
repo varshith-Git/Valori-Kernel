@@ -55,15 +55,10 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Build wheel (via QEMU + aarch64 manylinux)
         uses: PyO3/maturin-action@v1
         with:
-          target: aarch64
-          manylinux: auto
+          container: quay.io/pypa/manylinux2014_aarch64
           working-directory: python
           args: --release --out dist --find-interpreter
 
