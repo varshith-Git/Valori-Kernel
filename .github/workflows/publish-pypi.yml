@@ -71,7 +71,7 @@ jobs:
           target: aarch64
           manylinux: off
           working-directory: python
-          args: --release --out dist --find-interpreter --zig
+          args: --release --out dist --find-interpreter --zig --compatibility manylinux2014
 
       - uses: actions/upload-artifact@v4
         with:
