@@ -47,15 +47,19 @@ jobs:
 
   build-linux-arm64:
     name: Build Linux ARM64 wheel
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # QEMU allows the x86_64 runner to transparently run the ARM64 manylinux docker container
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Build wheel (native aarch64)
+      - name: Build wheel (via QEMU + aarch64 manylinux)
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
