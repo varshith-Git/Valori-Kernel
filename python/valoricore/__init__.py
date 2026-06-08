@@ -22,6 +22,7 @@ from .memory import MemoryClient
 from .async_memory import AsyncMemoryClient
 from .factory import Valoricore, AsyncValoricore
 from .adapter import ValoricoreAdapter
+from .integrations import ValoricoreLangChain, ValoricoreRetriever, ValoricoreLlamaIndex
 from .exceptions import (
     ValoricoreError,
     IntegrityError,
@@ -80,6 +81,11 @@ __all__ = [
 
     # ── Adapters ───────────────────────────────────────────────────
     "ValoricoreAdapter",
+
+    # ── Framework integrations ─────────────────────────────────────
+    "ValoricoreLangChain",
+    "ValoricoreRetriever",
+    "ValoricoreLlamaIndex",
 
     # ── Cryptographic helpers ──────────────────────────────────────
     "ingest_embedding",

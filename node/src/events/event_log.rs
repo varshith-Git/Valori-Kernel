@@ -110,6 +110,8 @@ pub struct EventLogWriter {
     file: BufWriter<File>,
     event_count: u64,
     dim: u32,
+    /// Bytes written since last rotation (header not counted).
+    bytes_written: u64,
 }
 
 impl EventLogWriter {
@@ -184,7 +186,18 @@ impl EventLogWriter {
             file: BufWriter::new(file),
             event_count,
             dim,
+            bytes_written: 0,
         })
+    }
+
+    /// Returns how many bytes have been written since last rotation.
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    /// Resets the byte counter (called automatically inside rotate()).
+    fn reset_bytes_written(&mut self) {
+        self.bytes_written = 0;
     }
 
     /// Append an entry to the log
@@ -195,6 +208,8 @@ impl EventLogWriter {
         self.file.write_all(&bytes)?;
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
+
+        self.bytes_written += bytes.len() as u64;
 
         if let LogEntry::Event(_) = entry {
             self.event_count += 1;
@@ -209,14 +224,17 @@ impl EventLogWriter {
              return Ok(());
         }
 
+        let mut total_bytes = 0u64;
         for entry in entries {
             let bytes = bincode::serde::encode_to_vec(entry, bincode::config::standard())
                 .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+            total_bytes += bytes.len() as u64;
             self.file.write_all(&bytes)?;
         }
-        
+
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
+        self.bytes_written += total_bytes;
 
         for entry in entries {
             if let LogEntry::Event(_) = entry {
@@ -259,7 +277,8 @@ impl EventLogWriter {
         
         new_file.sync_all()?;
         self.file = BufWriter::new(new_file);
-        
+        self.reset_bytes_written();
+
         Ok(())
     }
 }

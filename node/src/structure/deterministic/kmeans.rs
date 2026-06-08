@@ -1,139 +1,103 @@
 
-
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-/// Deterministic K-Means clustering.
+/// Deterministic K-Means clustering over Q16.16 fixed-point vectors.
 ///
-/// Guarantees bit-identical centroids given the same inputs (sorted by ID).
+/// All distance computations use i64 integer arithmetic — no f32 in the hot
+/// path, so results are bit-identical across x86/ARM/WASM regardless of SIMD
+/// auto-vectorization or FPU rounding modes.
 ///
 /// # Arguments
-/// * records - List of (ID, Vector) tuples.
-/// * k - Number of centroids to find.
-/// * iterations - Fixed number of Lloyd's iterations (default 20 recommended).
+/// * records    - (ID, f32 vector) pairs; converted to Q16.16 at entry.
+/// * k          - Number of centroids.
+/// * iterations - Fixed Lloyd's iterations (20 recommended).
 ///
 /// # Returns
-/// * Vec<Vec<f32>> - K centroids, sorted by centroid index.
+/// * Vec<Vec<i32>> - K centroids in Q16.16, sorted by centroid index.
 pub fn deterministic_kmeans(
     records: &[(u32, Vec<f32>)],
     k: usize,
     iterations: usize,
-) -> Vec<Vec<f32>> {
+) -> Vec<Vec<i32>> {
     if records.is_empty() || k == 0 {
         return Vec::new();
     }
 
     let dim = records[0].1.len();
-    // ensure all records have same dim
     for (_, v) in records.iter() {
         assert_eq!(v.len(), dim, "All vectors must share the same dimension");
     }
 
-    // If k >= records.len(), return first k vectors deterministically sorted by id.
-    if k >= records.len() {
-        let mut sorted_recs: Vec<_> = records.iter().cloned().collect();
-        sorted_recs.sort_by_key(|r| r.0);
-        return sorted_recs.into_iter().map(|r| r.1).collect();
+    // Convert all input vectors to Q16.16 once at the boundary.
+    let q_records: Vec<(u32, Vec<i32>)> = records
+        .iter()
+        .map(|(id, vec)| (*id, vec.iter().map(|&v| f32_to_q16(v)).collect()))
+        .collect();
+
+    if k >= q_records.len() {
+        let mut sorted = q_records.clone();
+        sorted.sort_by_key(|r| r.0);
+        return sorted.into_iter().map(|r| r.1).collect();
     }
 
-    // Helper: deterministic FNV-1a hashing over rounded Q16.16 bytes + id
-    fn hash_vec_id(id: u32, vec: &[f32]) -> u64 {
+    // Deterministic seed: FNV-1a over Q16.16 bytes + id.
+    fn hash_vec_id(id: u32, vec: &[i32]) -> u64 {
         let mut hash: u64 = 0xcbf29ce484222325;
         const FNV_PRIME: u64 = 0x100000001b3;
-
         for &val in vec {
-            // round-to-nearest and clamp to i32 range
-            let scaled = (val * 65536.0).round();
-            let clamped = if scaled.is_nan() {
-                0i32
-            } else {
-                let s = scaled as i64;
-                let s = s.max(i32::MIN as i64).min(i32::MAX as i64);
-                s as i32
-            };
-            for byte in clamped.to_le_bytes() {
+            for byte in val.to_le_bytes() {
                 hash ^= byte as u64;
                 hash = hash.wrapping_mul(FNV_PRIME);
             }
         }
-
         for byte in id.to_le_bytes() {
             hash ^= byte as u64;
             hash = hash.wrapping_mul(FNV_PRIME);
         }
-
         hash
     }
 
-    struct ScoredRecord<'a> {
-        score: u64,
-        id: u32,
-        vec: &'a [f32],
-    }
-
-    let mut scored: Vec<ScoredRecord<'_>> = records
+    let mut scored: Vec<(u64, u32, &[i32])> = q_records
         .iter()
-        .map(|(id, vec)| ScoredRecord {
-            score: hash_vec_id(*id, vec),
-            id: *id,
-            vec: vec.as_slice(),
-        })
+        .map(|(id, vec)| (hash_vec_id(*id, vec), *id, vec.as_slice()))
         .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-    // sort by hash then id deterministically
-    scored.sort_by(|a, b| a.score.cmp(&b.score).then_with(|| a.id.cmp(&b.id)));
+    let mut centroids: Vec<Vec<i32>> = scored.iter().take(k).map(|(_, _, v)| v.to_vec()).collect();
 
-    // initial centroids: take top-k hashed records (clone vectors)
-    let mut centroids: Vec<Vec<f32>> = scored
-        .iter()
-        .take(k)
-        .map(|s| s.vec.to_vec())
-        .collect();
-
-    const SCALE: f32 = 65536.0;
-
-    // main Lloyd iterations
     for _ in 0..iterations {
-        let mut assignments = vec![0usize; records.len()];
+        let mut assignments = vec![0usize; q_records.len()];
 
-        // assign - Deterministic tie-breaking
-        for (i, (_, vec)) in records.iter().enumerate() {
-            let mut best_dist = f32::MAX;
+        for (i, (_, vec)) in q_records.iter().enumerate() {
+            let mut best_dist = i64::MAX;
             let mut best_c = 0usize;
             for (c_idx, centroid) in centroids.iter().enumerate() {
-                let d = l2_sq(vec, centroid);
-                if d < best_dist {
+                let d = l2_sq_q16(vec, centroid);
+                // Strict integer comparison — no epsilon, no hardware sensitivity.
+                if d < best_dist || (d == best_dist && c_idx < best_c) {
                     best_dist = d;
                     best_c = c_idx;
-                } else if (d - best_dist).abs() < f32::EPSILON {
-                    // tie-break deterministically by centroid index
-                    if c_idx < best_c {
-                        best_c = c_idx;
-                    }
                 }
             }
             assignments[i] = best_c;
         }
 
-        // accumulate using i128 for safety
+        // Accumulate in i128 to avoid overflow on large clusters.
         let mut sums: Vec<Vec<i128>> = vec![vec![0i128; dim]; k];
-        let mut counts: Vec<usize> = vec![0usize; k];
+        let mut counts: Vec<usize> = vec![0; k];
 
-        for (i, (_, vec)) in records.iter().enumerate() {
-            let c_idx = assignments[i];
-            counts[c_idx] += 1;
-            for (d_idx, &val) in vec.iter().enumerate() {
-                let scaled = (val * SCALE).round() as i128; // Use .round() for determinism
-                sums[c_idx][d_idx] = sums[c_idx][d_idx].saturating_add(scaled);
+        for (i, (_, vec)) in q_records.iter().enumerate() {
+            let c = assignments[i];
+            counts[c] += 1;
+            for (d, &val) in vec.iter().enumerate() {
+                sums[c][d] = sums[c][d].saturating_add(val as i128);
             }
         }
 
-        for c_idx in 0..k {
-            let count = counts[c_idx];
-            if count > 0 {
-                for d_idx in 0..dim {
-                    let avg_fxp = sums[c_idx][d_idx] / (count as i128);
-                    // clamp to i32 range and convert back to f32
-                    let avg_fxp_i32 = avg_fxp.max(i32::MIN as i128).min(i32::MAX as i128) as i32;
-                    centroids[c_idx][d_idx] = (avg_fxp_i32 as f32) / SCALE;
+        for c in 0..k {
+            if counts[c] > 0 {
+                for d in 0..dim {
+                    let avg = sums[c][d] / counts[c] as i128;
+                    centroids[c][d] = avg.clamp(i32::MIN as i128, i32::MAX as i128) as i32;
                 }
             }
         }
@@ -142,6 +106,21 @@ pub fn deterministic_kmeans(
     centroids
 }
 
-fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum()
+/// Squared L2 distance over Q16.16 fixed-point vectors.
+/// Returns an i64; exact, no floating-point involved.
+pub fn l2_sq_q16(a: &[i32], b: &[i32]) -> i64 {
+    a.iter().zip(b).map(|(x, y)| {
+        let d = (*x as i64) - (*y as i64);
+        d * d
+    }).sum()
+}
+
+/// Convert an f32 to Q16.16 fixed-point (deterministic: round-to-nearest, then clamp).
+pub fn f32_to_q16(val: f32) -> i32 {
+    let scaled = (val * 65536.0).round();
+    if scaled.is_nan() {
+        0
+    } else {
+        scaled.clamp(i32::MIN as f32, i32::MAX as f32) as i32
+    }
 }

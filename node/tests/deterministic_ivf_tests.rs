@@ -2,6 +2,10 @@
 use valori_node::structure::ivf::{IvfIndex, IvfConfig};
 use valori_node::structure::index::VectorIndex;
 
+// NOTE: This test verifies same-machine determinism only.
+// Cross-architecture determinism (x86 snapshot == ARM restore) must be
+// validated in CI with a matrix build: build on ARM, ship snapshot bytes,
+// restore on x86, assert equal state hash.
 #[test]
 fn test_ivf_determinism() {
     let mut records = Vec::new();

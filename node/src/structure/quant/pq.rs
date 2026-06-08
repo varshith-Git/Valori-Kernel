@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use super::super::deterministic::kmeans::deterministic_kmeans;
+use super::super::deterministic::kmeans::{deterministic_kmeans, l2_sq_q16, f32_to_q16};
 use super::Quantizer;
 use serde::{Serialize, Deserialize};
 
@@ -19,7 +19,8 @@ pub struct ProductQuantizer {
     pub config: PqConfig,
     pub dim: usize,
     pub sub_dim: usize,
-    pub codebooks: Vec<Vec<Vec<f32>>>, // [subvector][centroid][sub_dim]
+    /// Codebooks in Q16.16 fixed-point: [subvector][centroid][sub_dim].
+    pub codebooks: Vec<Vec<Vec<i32>>>,
 }
 
 impl ProductQuantizer {
@@ -34,13 +35,12 @@ impl ProductQuantizer {
         for m in 0..self.config.n_subvectors {
             let start = m * self.sub_dim;
             let end = start + self.sub_dim;
-            let sub_records: Vec<(u32, Vec<f32>)> = records.iter().map(|(id, vec)| {
-                (*id, vec[start..end].to_vec())
-            }).collect();
-
-            let mut sorted_subs = sub_records;
-            sorted_subs.sort_by_key(|(id, _)| *id);
-            let centroids = deterministic_kmeans(&sorted_subs, self.config.n_centroids, 15);
+            let mut sub_records: Vec<(u32, Vec<f32>)> = records.iter()
+                .map(|(id, vec)| (*id, vec[start..end].to_vec()))
+                .collect();
+            sub_records.sort_by_key(|(id, _)| *id);
+            // deterministic_kmeans returns Vec<Vec<i32>> (Q16.16).
+            let centroids = deterministic_kmeans(&sub_records, self.config.n_centroids, 15);
             self.codebooks.push(centroids);
         }
     }
@@ -50,7 +50,7 @@ impl ProductQuantizer {
         struct PqDump<'a> {
             config: &'a PqConfig,
             dim: usize,
-            codebooks: &'a Vec<Vec<Vec<f32>>>,
+            codebooks: &'a Vec<Vec<Vec<i32>>>,
         }
         let dump = PqDump { config: &self.config, dim: self.dim, codebooks: &self.codebooks };
         Ok(bincode::serde::encode_to_vec(&dump, bincode::config::standard())?)
@@ -61,7 +61,7 @@ impl ProductQuantizer {
         struct PqLoad {
             config: PqConfig,
             dim: usize,
-            codebooks: Vec<Vec<Vec<f32>>>,
+            codebooks: Vec<Vec<Vec<i32>>>,
         }
         let dump: PqLoad = bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
         self.config = dump.config;
@@ -77,13 +77,14 @@ impl Quantizer for ProductQuantizer {
         let mut codes = Vec::with_capacity(self.config.n_subvectors);
         for m in 0..self.config.n_subvectors {
             let start = m * self.sub_dim;
-            let sub_vec = &vec[start..start + self.sub_dim];
+            let sub_vec: Vec<i32> = vec[start..start + self.sub_dim]
+                .iter().map(|&v| f32_to_q16(v)).collect();
             let mut best_idx = 0usize;
-            let mut best_dist = f32::MAX;
+            let mut best_dist = i64::MAX;
             if m < self.codebooks.len() {
                 for (k, c) in self.codebooks[m].iter().enumerate() {
-                    let d = l2_sq(sub_vec, c);
-                    if d < best_dist {
+                    let d = l2_sq_q16(&sub_vec, c);
+                    if d < best_dist || (d == best_dist && k < best_idx) {
                         best_dist = d;
                         best_idx = k;
                     }
@@ -100,7 +101,8 @@ impl Quantizer for ProductQuantizer {
             if m < self.codebooks.len() {
                 let c_idx = code as usize;
                 if c_idx < self.codebooks[m].len() {
-                    out.extend_from_slice(&self.codebooks[m][c_idx]);
+                    // Convert Q16.16 back to f32 only at the output boundary.
+                    out.extend(self.codebooks[m][c_idx].iter().map(|&v| v as f32 / 65536.0));
                 } else {
                     out.extend(std::iter::repeat(0.0).take(self.sub_dim));
                 }
@@ -108,8 +110,4 @@ impl Quantizer for ProductQuantizer {
         }
         out
     }
-}
-
-fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum()
 }

@@ -391,18 +391,8 @@ async fn get_replication_events(
 }
 
 async fn get_replication_state() -> Json<serde_json::Value> {
-    use crate::replication::REPLICATION_STATUS;
-    use std::sync::atomic::Ordering;
-    
-    let status_u8 = REPLICATION_STATUS.load(Ordering::Relaxed);
-    let status_str = match status_u8 {
-        1 => "Synced",
-        2 => "Diverged",
-        3 => "Healing",
-        _ => "Unknown",
-    };
-    
-    Json(serde_json::json!({ "status": status_str, "code": status_u8 }))
+    let status_str = crate::replication::replication_display_state();
+    Json(serde_json::json!({ "status": status_str }))
 }
 
 async fn metrics_handler() -> String {

@@ -38,21 +38,20 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
 
-    def insert(self, vector: Vector) -> RecordId:
+    def insert(self, vector: Vector, tag: int = 0) -> RecordId:
         """Insert a vector record. Returns the new Record ID."""
-        data = {"values": vector}
+        data = {"values": vector, "tag": tag}
         resp = self._post("/records", data)
         self._check_auto_snapshot(1)
         return resp["id"]
 
-    def insert_with_proof(self, vector: Vector) -> Tuple[RecordId, Proof]:
+    def insert_with_proof(self, vector: Vector, tag: int = 0) -> Tuple[RecordId, Proof]:
         """Insert a vector and return (id, proof_bytes)."""
         import valoricore
         fixed_vals = valoricore.ingest_embedding(vector)
-        # Convert hex proof from generate_proof to bytes for consistency
         proof_hex = valoricore.generate_proof(fixed_vals)
         proof_bytes = bytes.fromhex(proof_hex)
-        rid = self.insert(vector)
+        rid = self.insert(vector, tag=tag)
         return (rid, proof_bytes)
 
     def insert_batch(self, batch: List[Vector]) -> List[RecordId]:
@@ -62,9 +61,27 @@ class SyncRemoteClient:
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
-    def search(self, query: Vector, k: int) -> List[Dict[str, Any]]:
+    def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
+        """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
+        import valoricore
+        if tags is None:
+            tags = [0] * len(vectors)
+        results = []
+        for vector, tag in zip(vectors, tags):
+            rid, proof = self.insert_with_proof(vector, tag=tag)
+            results.append((rid, proof))
+        self._check_auto_snapshot(len(vectors))
+        return results
+
+    def soft_delete(self, record_id: int) -> None:
+        """Mark a record as inactive without physically removing it."""
+        self._post("/v1/vectors/soft_delete", {"id": record_id})
+
+    def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}]."""
-        data = {"query": query, "k": k}
+        data: Dict[str, Any] = {"query": query, "k": k}
+        if filter_tag is not None:
+            data["filter_tag"] = filter_tag
         resp = self._post("/search", data)
         return resp["results"]
 
@@ -267,18 +284,18 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
 
-    async def insert(self, vector: Vector) -> RecordId:
-        data = {"values": vector}
+    async def insert(self, vector: Vector, tag: int = 0) -> RecordId:
+        data = {"values": vector, "tag": tag}
         resp = await self._post("/records", data)
         await self._check_auto_snapshot(1)
         return resp["id"]
 
-    async def insert_with_proof(self, vector: Vector) -> Tuple[RecordId, Proof]:
+    async def insert_with_proof(self, vector: Vector, tag: int = 0) -> Tuple[RecordId, Proof]:
         import valoricore
         fixed_vals = valoricore.ingest_embedding(vector)
         proof_hex = valoricore.generate_proof(fixed_vals)
         proof_bytes = bytes.fromhex(proof_hex)
-        rid = await self.insert(vector)
+        rid = await self.insert(vector, tag=tag)
         return (rid, proof_bytes)
 
     async def insert_batch(self, batch: List[Vector]) -> List[RecordId]:
@@ -287,8 +304,26 @@ class AsyncRemoteClient:
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
-    async def search(self, query: Vector, k: int) -> List[Dict[str, Any]]:
-        data = {"query": query, "k": k}
+    async def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
+        """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
+        import valoricore
+        if tags is None:
+            tags = [0] * len(vectors)
+        results = []
+        for vector, tag in zip(vectors, tags):
+            rid, proof = await self.insert_with_proof(vector, tag=tag)
+            results.append((rid, proof))
+        await self._check_auto_snapshot(len(vectors))
+        return results
+
+    async def soft_delete(self, record_id: int) -> None:
+        """Mark a record as inactive without physically removing it."""
+        await self._post("/v1/vectors/soft_delete", {"id": record_id})
+
+    async def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
+        data: Dict[str, Any] = {"query": query, "k": k}
+        if filter_tag is not None:
+            data["filter_tag"] = filter_tag
         resp = await self._post("/search", data)
         return resp["results"]
 

@@ -20,13 +20,21 @@ struct ValoricoreEngine {
 #[pymethods]
 impl ValoricoreEngine {
     #[new]
-    fn new(path: String) -> PyResult<Self> {
+    #[pyo3(signature = (path, index_kind = "bruteforce"))]
+    fn new(path: String, index_kind: &str) -> PyResult<Self> {
         let mut config = NodeConfig::default();
         let wal_path = std::path::PathBuf::from(format!("{}/wal.log", path));
         let event_log_path = std::path::PathBuf::from(format!("{}/events.log", path));
         config.wal_path = Some(wal_path);
         config.event_log_path = Some(event_log_path);
-        
+
+        use valori_node::config::IndexKind;
+        config.index_kind = match index_kind {
+            "hnsw" => IndexKind::Hnsw,
+            "ivf" => IndexKind::Ivf,
+            _ => IndexKind::BruteForce,
+        };
+
         std::fs::create_dir_all(&path)?;
 
         let engine = Engine::new(&config);

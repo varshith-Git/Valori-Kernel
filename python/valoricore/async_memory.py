@@ -30,7 +30,7 @@ class AsyncMemoryClient:
         path:         Local database directory.  Ignored when ``remote`` is set.
         remote:       HTTP URL of a standalone ``valori-node``.  When set, all
                       operations are forwarded over the network.
-        index_kind:   Reserved for future use.
+        index_kind:   Vector index backend: ``"bruteforce"``, ``"hnsw"``, or ``"ivf"``.
         quantization: Reserved for future use.
 
     Example::

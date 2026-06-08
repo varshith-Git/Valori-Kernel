@@ -78,15 +78,21 @@ impl ShadowExecutor {
 }
 
 /// Event committer - enforces the commit barrier
+/// Default rotation threshold: 256 MiB.
+pub const DEFAULT_LOG_ROTATION_BYTES: u64 = 256 * 1024 * 1024;
+
 pub struct EventCommitter {
     /// Event log writer (durable storage)
     event_log: EventLogWriter,
-    
+
     /// Event journal (runtime state)
     journal: EventJournal,
-    
+
     /// Live kernel state
     live_state: KernelState,
+
+    /// Rotate the log when it exceeds this many bytes. None disables auto-rotation.
+    log_rotation_bytes: Option<u64>,
 }
 
 impl EventCommitter {
@@ -100,7 +106,13 @@ impl EventCommitter {
             event_log,
             journal,
             live_state,
+            log_rotation_bytes: Some(DEFAULT_LOG_ROTATION_BYTES),
         }
+    }
+
+    pub fn with_rotation_bytes(mut self, limit: Option<u64>) -> Self {
+        self.log_rotation_bytes = limit;
+        self
     }
 
     /// Commit an event (the ONLY way to mutate state)
@@ -134,6 +146,7 @@ impl EventCommitter {
         match self.live_state.apply_event(&event) {
             Ok(_) => {
                 tracing::debug!("Event committed: {:?}", event.event_type());
+                self.maybe_rotate();
                 Ok(CommitResult::Committed)
             }
             Err(e) => {
@@ -143,6 +156,53 @@ impl EventCommitter {
                 );
                 Err(CommitError::LiveApply(e))
             }
+        }
+    }
+
+    /// Rotate the log if it has exceeded the configured byte limit.
+    fn maybe_rotate(&mut self) {
+        let limit = match self.log_rotation_bytes {
+            Some(l) => l,
+            None => return,
+        };
+
+        if self.event_log.bytes_written() < limit {
+            return;
+        }
+
+        let height = self.journal.committed_height();
+        let state_hash = {
+            use valori_kernel::snapshot::blake3::hash_state_blake3;
+            hash_state_blake3(&self.live_state)
+        };
+
+        let archive_path = {
+            let stem = self.event_log.path().to_path_buf();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            stem.with_extension(format!("log.{}", ts))
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let checkpoint = crate::events::event_log::LogEntry::Checkpoint {
+            event_count: height,
+            snapshot_hash: state_hash,
+            timestamp: now,
+        };
+
+        match self.event_log.rotate(archive_path, Some(checkpoint)) {
+            Ok(_) => tracing::info!(
+                "Event log rotated at height {} ({} bytes)",
+                height,
+                limit,
+            ),
+            Err(e) => tracing::error!("Event log rotation failed: {}", e),
         }
     }
 

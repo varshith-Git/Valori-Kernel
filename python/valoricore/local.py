@@ -16,11 +16,11 @@ except ImportError:
 class LocalClient:
     """Synchronous FFI client for the embedded Valoricore Kernel."""
     
-    def __init__(self, path: str = "./valoricore_db"):
+    def __init__(self, path: str = "./valoricore_db", index_kind: str = "bruteforce"):
         if _ffi is None:
              raise ImportError("Could not load 'valoricore_ffi' module. Ensure it is compiled and in PYTHONPATH.")
         try:
-            self.kernel = _ffi.ValoricoreEngine(path)
+            self.kernel = _ffi.ValoricoreEngine(path, index_kind)
             self.path = path
             self._auto_snapshot_interval = None
             self._insert_count = 0

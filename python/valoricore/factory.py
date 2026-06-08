@@ -5,7 +5,8 @@ from .remote import SyncRemoteClient, AsyncRemoteClient
 
 def Valoricore(
     remote: Optional[str] = None,
-    path: str = "./valori_db"
+    path: str = "./valori_db",
+    index_kind: str = "bruteforce",
 ) -> Union[LocalClient, SyncRemoteClient]:
     """
     Standard Synchronous Factory.
@@ -15,11 +16,12 @@ def Valoricore(
     if remote:
         return SyncRemoteClient(base_url=remote)
     else:
-        return LocalClient(path=path)
+        return LocalClient(path=path, index_kind=index_kind)
 
 def AsyncValoricore(
     remote: Optional[str] = None,
-    path: str = "./valori_db"
+    path: str = "./valori_db",
+    index_kind: str = "bruteforce",
 ) -> Union[LocalClient, AsyncRemoteClient]:
     """
     Standard Asynchronous Factory.
@@ -29,4 +31,4 @@ def AsyncValoricore(
     if remote:
         return AsyncRemoteClient(base_url=remote)
     else:
-        return LocalClient(path=path)
+        return LocalClient(path=path, index_kind=index_kind)

@@ -33,10 +33,10 @@ class MemoryClient:
                           when ``remote`` is ``None``.
             remote:       HTTP URL of a standalone ``valori-node``
                           (e.g. ``"http://localhost:3000"``).
-            index_kind:   Reserved for future indexing strategies.
+            index_kind:   Vector index backend: ``"bruteforce"``, ``"hnsw"``, or ``"ivf"``.
             quantization: Reserved for future quantization options.
         """
-        self._db = Valoricore(remote=remote, path=path)
+        self._db = Valoricore(remote=remote, path=path, index_kind=index_kind)
         self._index_kind = index_kind
         self._quantization = quantization
 
@@ -145,6 +145,61 @@ class MemoryClient:
             normalized_hits.append({"id": rid, "score": score})
             
         return normalized_hits
+
+    # ── Batch operations ───────────────────────────────────────────────────
+
+    def insert_batch(self, vectors: List[Vector]) -> List[int]:
+        """
+        Insert multiple pre-computed vectors atomically.
+
+        Args:
+            vectors: List of embedding vectors (all must match kernel dimension).
+
+        Returns:
+            List of new record IDs in insertion order.
+        """
+        return self._db.insert_batch(vectors)
+
+    def insert_batch_with_proof(
+        self,
+        vectors: List[Vector],
+        tags: Optional[List[int]] = None,
+    ) -> List[tuple]:
+        """
+        Insert multiple vectors and return a BLAKE3 proof for each.
+
+        Args:
+            vectors: List of embedding vectors.
+            tags:    Optional per-vector tag for filtered search. Defaults to 0.
+
+        Returns:
+            List of ``(record_id, proof_bytes)`` tuples in insertion order.
+        """
+        return self._db.insert_batch_with_proof(vectors, tags)
+
+    # ── Metadata ───────────────────────────────────────────────────────────
+
+    def get_metadata(self, record_id: int) -> Optional[bytes]:
+        """
+        Retrieve raw binary metadata attached to a record.
+
+        Args:
+            record_id: Integer record ID.
+
+        Returns:
+            Metadata bytes, or ``None`` if no metadata has been set.
+        """
+        return self._db.get_metadata(record_id)
+
+    def set_metadata(self, record_id: int, metadata: bytes) -> None:
+        """
+        Attach raw binary metadata to a record (max 64 KB).
+
+        Args:
+            record_id: Integer record ID.
+            metadata:  Raw bytes to store (JSON, msgpack, or any binary format).
+        """
+        self._db.set_metadata(record_id, metadata)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
