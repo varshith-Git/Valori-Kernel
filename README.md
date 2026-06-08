@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Valoricore-v0.1.10-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
+<img src="https://img.shields.io/badge/Valoricore-v0.1.11-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
 
 # Valori-Kernel
 
