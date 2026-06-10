@@ -1,10 +1,16 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use valori_cli::commands::{diff, inspect, replay_query, timeline, verify};
 
 #[derive(Parser)]
-#[command(name = "valori")]
-#[command(about = "Valori Forensic CLI - The Black Box Flight Recorder for AI Memory", long_about = None)]
+#[command(
+    name    = "valori",
+    version = env!("CARGO_PKG_VERSION"),
+    author  = "Varshith Gudur",
+    about   = "Valori Forensic CLI — black-box flight recorder for Valori AI memory databases",
+    long_about = None,
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -12,100 +18,116 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Inspect the database files and show status.
-    /// If --dir is provided, it tries to auto-resolve snapshot.val, events.log, and metadata.idx.
+    /// Inspect database files and print a status summary.
+    ///
+    /// Pass --dir to auto-resolve snapshot.val and events.log from a database
+    /// directory, or supply individual file paths with --snapshot / --log.
     Inspect {
-        /// Optional directory containing the Valori files.
+        /// Database directory (auto-resolves snapshot.val and events.log).
         #[arg(long, short)]
         dir: Option<PathBuf>,
 
-        /// Path to the snapshot file (overrides auto-detection)
+        /// Path to the snapshot file (overrides --dir).
         #[arg(long)]
-        snapshot_path: Option<String>,
+        snapshot: Option<String>,
 
-        /// Path to the WAL file (overrides auto-detection)
+        /// Path to the event log file (overrides --dir).
         #[arg(long)]
-        wal_path: Option<String>,
-
-        /// Path to the Index file (overrides auto-detection)
-        #[arg(long)]
-        idx_path: Option<String>,
+        log: Option<String>,
     },
-    /// Verify the integrity of a snapshot file
+
+    /// Verify the structural integrity and magic bytes of a snapshot file.
     Verify {
-        snapshot_path: String,
+        /// Path to the snapshot file.
+        snapshot: String,
     },
-    /// List the event timeline
+
+    /// Print the event timeline from an event log.
     Timeline {
-        idx_path: String,
+        /// Path to the events.log file.
+        log: String,
+
+        /// Maximum number of events to display (0 = all).
+        #[arg(long, default_value = "0")]
+        limit: usize,
     },
-    /// Fast-forward replay to a specific point and simulate a query
+
+    /// Fast-forward to a specific event count and report the database state.
+    ///
+    /// Restores the snapshot baseline, then replays events 1–N from the event
+    /// log, and prints the state hash and optional search results at event N.
     ReplayQuery {
-        snapshot_path: String,
-        wal_path: String,
-        
-        /// The target event ID to time travel to
+        /// Path to the snapshot file (baseline state).
+        #[arg(long)]
+        snapshot: String,
+
+        /// Path to the event log file.
+        #[arg(long)]
+        log: String,
+
+        /// Replay events 1–N and report the kernel state at event N.
         #[arg(long, short)]
         at: u64,
 
-        /// Optional JSON query to simulate
+        /// Optional JSON float array query, e.g. '[0.1, 0.2, 0.3]'.
         #[arg(long, short)]
         query: Option<String>,
+
+        /// Number of nearest neighbours to return (applies to --query).
+        #[arg(long, default_value = "5")]
+        top_k: usize,
     },
-    /// Compare system state at two points in time
+
+    /// Compare database state between two event counts (semantic diff).
+    ///
+    /// Replays to --from and --to independently from the same snapshot
+    /// baseline and reports the state-hash delta and nearest-neighbour rank
+    /// changes for an optional --query vector.
     Diff {
-        snapshot_path: String,
-        wal_path: String,
-        
-        /// From Event ID
+        /// Path to the snapshot file (baseline state).
+        #[arg(long)]
+        snapshot: String,
+
+        /// Path to the event log file.
+        #[arg(long)]
+        log: String,
+
+        /// Starting event count (inclusive lower bound).
         #[arg(long)]
         from: u64,
 
-        /// To Event ID
+        /// Ending event count (inclusive upper bound).
         #[arg(long)]
         to: u64,
 
-        /// Optional Query for Semantic Diff
+        /// Optional JSON float array for semantic diff, e.g. '[0.1, 0.2]'.
         #[arg(long)]
         query: Option<String>,
+
+        /// Number of nearest neighbours to compare.
+        #[arg(long, default_value = "5")]
+        top_k: usize,
     },
 }
 
 fn main() -> anyhow::Result<()> {
-    println!(r#"
-__     __    _            _ 
-\ \   / /_ _| | ___  _ __(_)
- \ \ / / _` | |/ _ \| '__| |
-  \ V / (_| | | (_) | |  | |
-   \_/ \__,_|_|\___/|_|  |_|
-   
-   Valori Forensic Tool v0.1.0-mvp
-   "Flight Recorder" Build
-    "#);
-
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Inspect {
-            dir,
-            snapshot_path,
-            wal_path,
-            idx_path,
-        } => inspect::run(dir, snapshot_path, wal_path, idx_path),
-        Commands::Verify { snapshot_path } => verify::run(&snapshot_path),
-        Commands::Timeline { idx_path } => timeline::run(&idx_path),
-        Commands::ReplayQuery {
-            snapshot_path,
-            wal_path,
-            at,
-            query,
-        } => replay_query::run(&snapshot_path, &wal_path, at, query),
-        Commands::Diff {
-            snapshot_path,
-            wal_path,
-            from,
-            to,
-            query,
-        } => diff::run(&snapshot_path, &wal_path, from, to, query),
+        Commands::Inspect { dir, snapshot, log } => {
+            inspect::run(dir, snapshot, log)
+        }
+        Commands::Verify { snapshot } => {
+            verify::run(&snapshot)
+        }
+        Commands::Timeline { log, limit } => {
+            timeline::run(&log, limit)
+        }
+        Commands::ReplayQuery { snapshot, log, at, query, top_k } => {
+            replay_query::run(&snapshot, &log, at, query, top_k)
+        }
+        Commands::Diff { snapshot, log, from, to, query, top_k } => {
+            diff::run(&snapshot, &log, from, to, query, top_k)
+        }
     }
 }
