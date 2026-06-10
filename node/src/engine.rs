@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Node Engine - The High-Level Orchestrator
 //!
 //! This module coordinates the Valori Kernel with persistence, indexing,
@@ -22,8 +22,58 @@ use crate::events::event_commit::EventCommitter;
 use crate::events::event_log::EventLogWriter;
 use crate::events::event_journal::EventJournal;
 use crate::errors::EngineError;
+use valori_kernel::error::KernelError;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+// ── Health response types ─────────────────────────────────────────────────────
+
+/// Utilisation stats for a single bounded pool (records, nodes, or edges).
+#[derive(Debug, serde::Serialize)]
+pub struct PoolStats {
+    /// Number of live (non-deleted) entries.
+    pub live: usize,
+    /// Total allocated slots, including soft-deleted tombstones.
+    pub slots_used: usize,
+    /// Hard capacity limit from config.
+    pub capacity: usize,
+    /// `live / capacity × 100`, rounded to one decimal place.
+    pub fill_pct: f64,
+}
+
+/// Structured response for `GET /health`.
+///
+/// `status` drives load-balancer routing:
+/// * `"ok"`       → 200, route freely
+/// * `"degraded"` → 200, any pool ≥ 90 % full; still serves all operations
+///                  but operator should increase capacity soon
+/// * `"full"`     → 503, at least one pool at 100 %; inserts will be rejected
+#[derive(Debug, serde::Serialize)]
+pub struct EngineHealth {
+    pub status: &'static str,
+    pub version: &'static str,
+    pub dim: usize,
+    pub index: String,
+    pub persistence: String,
+    pub records: PoolStats,
+    pub nodes: PoolStats,
+    pub edges: PoolStats,
+    /// Height of the event journal if the event log is configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_log_height: Option<u64>,
+}
+
+/// Result of `Engine::try_recover()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryMode {
+    /// Recovered by replaying N events from the event log.
+    EventLog(u64),
+    /// Recovered by loading a snapshot file.
+    Snapshot,
+    /// No durable state found; engine started from scratch.
+    Fresh,
+}
 
 /// The Node Engine orchestrates state, persistence, and indexing.
 pub struct Engine {
@@ -31,12 +81,19 @@ pub struct Engine {
     pub metadata: crate::metadata::MetadataStore,
     pub index: Box<dyn VectorIndex + Send + Sync>,
     pub quant: Box<dyn Quantizer + Send + Sync>,
-    
+
     // Config tracking
     pub index_kind: IndexKind,
     pub quantization_kind: QuantizationKind,
     pub wal_path: Option<PathBuf>,
     pub snapshot_path: Option<PathBuf>,
+
+    // Capacity limits — stored so health() and metrics can compute fill ratios
+    // without needing the original NodeConfig to be kept alive.
+    pub max_records: usize,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+    pub dim: usize,
 
     // WAL Persistence (Phase 20)
     pub wal_writer: Option<WalWriter>,
@@ -44,6 +101,17 @@ pub struct Engine {
 
     // Event-sourced persistence (Phase 23 - NEW)
     pub event_committer: Option<EventCommitter>,
+
+    /// Sidecar file for `MetadataStore` (JSON key-value pairs set via
+    /// `set_metadata` / `meta_set`).  Written atomically on every mutation;
+    /// loaded by `try_recover()` after event-log replay so user metadata
+    /// survives crashes without needing its own event-log entries.
+    pub metadata_path: Option<PathBuf>,
+
+    /// Derived index: record_id → node_id.
+    /// Enables O(1) auto-cascade: deleting a vector automatically removes its graph node.
+    /// Not persisted — rebuilt from the node pool on restore.
+    pub record_to_node: HashMap<u32, u32>,
 }
 
 impl Engine {
@@ -71,16 +139,23 @@ impl Engine {
             }
         };
 
-        let wal_writer = if let Some(ref path) = cfg.wal_path {
-            match WalWriter::open(path, cfg.dim as u32) {
-                Ok(writer) => {
-                    tracing::info!("WAL initialized at {:?}", path);
-                    Some(writer)
-                },
-                Err(e) => {
-                    tracing::error!("Failed to open WAL: {}", e);
-                    None
+        // WAL is the legacy persistence path.  When the event log is active it
+        // supersedes the WAL entirely — every mutation goes through EventCommitter.
+        // Initialising both would waste an fd and create a confusing dual-write.
+        let wal_writer = if cfg.event_log_path.is_none() {
+            if let Some(ref path) = cfg.wal_path {
+                match WalWriter::open(path, cfg.dim as u32) {
+                    Ok(writer) => {
+                        tracing::info!("WAL initialized at {:?}", path);
+                        Some(writer)
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to open WAL: {}", e);
+                        None
+                    }
                 }
+            } else {
+                None
             }
         } else {
             None
@@ -104,6 +179,11 @@ impl Engine {
             None
         };
 
+        // Derive the metadata sidecar path from the event log path so the two
+        // files always live in the same directory and are easy to identify.
+        let metadata_path = cfg.event_log_path.as_ref()
+            .map(|p| p.with_extension("metadata.json"));
+
         Self {
             state: KernelState::new(),
             metadata: crate::metadata::MetadataStore::new(),
@@ -113,19 +193,179 @@ impl Engine {
             quantization_kind: cfg.quantization_kind,
             wal_path: cfg.wal_path.clone(),
             snapshot_path: cfg.snapshot_path.clone(),
+            max_records: cfg.max_records,
+            max_nodes: cfg.max_nodes,
+            max_edges: cfg.max_edges,
+            dim: cfg.dim,
             wal_writer,
             wal_accumulator,
             event_committer,
+            record_to_node: HashMap::new(),
+            metadata_path,
         }
     }
 
+    /// Rebuild the `record_to_node` map from the current node pool.
+    /// Called after snapshot restore so the derived index stays consistent.
+    fn rebuild_record_to_node(&mut self) {
+        self.record_to_node.clear();
+        for node in self.state.iter_nodes() {
+            if let Some(rid) = node.record {
+                self.record_to_node.insert(rid.0, node.id.0);
+            }
+        }
+    }
+
+    // ── Metadata sidecar helpers ──────────────────────────────────────────────
+
+    /// Atomically persist the `MetadataStore` to the sidecar file.
+    ///
+    /// No-op when `metadata_path` is not configured.  Called by every HTTP /
+    /// FFI handler that mutates metadata so the file stays in sync.
+    pub fn flush_metadata(&self) -> Result<(), EngineError> {
+        if let Some(ref path) = self.metadata_path {
+            self.metadata
+                .flush_to(path)
+                .map_err(|e| EngineError::InvalidInput(
+                    format!("Failed to flush metadata sidecar: {}", e),
+                ))?;
+        }
+        Ok(())
+    }
+
+    /// Load the `MetadataStore` from the sidecar file, replacing in-memory state.
+    ///
+    /// A missing file is silently treated as an empty store (valid fresh start).
+    /// No-op when `metadata_path` is not configured.  Called by `try_recover()`
+    /// after every successful recovery branch.
+    pub fn load_metadata(&mut self) -> Result<(), EngineError> {
+        if let Some(ref path) = self.metadata_path {
+            self.metadata
+                .load_from(path)
+                .map_err(|e| EngineError::InvalidInput(
+                    format!("Failed to load metadata sidecar: {}", e),
+                ))?;
+        }
+        Ok(())
+    }
+
+    // ── Observability ─────────────────────────────────────────────────────────
+
+    /// Snapshot the current engine state into a structured health report.
+    ///
+    /// `status` is computed from pool fill levels:
+    /// * `"full"`     — any pool at 100 % capacity; inserts will be rejected → 503
+    /// * `"degraded"` — any pool ≥ 90 % full; still operational but needs attention → 200
+    /// * `"ok"`       — all pools below 90 % → 200
+    pub fn health(&self) -> EngineHealth {
+        let live_records  = self.state.record_count();
+        let slot_records  = self.state.total_record_slots();
+        let live_nodes    = self.state.node_count();
+        let live_edges    = self.state.edge_count();
+
+        let rec_fill  = pct(live_records, self.max_records);
+        let node_fill = pct(live_nodes,   self.max_nodes);
+        let edge_fill = pct(live_edges,   self.max_edges);
+
+        let status = if rec_fill >= 100.0 || node_fill >= 100.0 || edge_fill >= 100.0 {
+            "full"
+        } else if rec_fill >= 90.0 || node_fill >= 90.0 || edge_fill >= 90.0 {
+            "degraded"
+        } else {
+            "ok"
+        };
+
+        let persistence = if self.event_committer.is_some() {
+            "event_log"
+        } else if self.wal_writer.is_some() {
+            "wal"
+        } else if self.snapshot_path.is_some() {
+            "snapshot"
+        } else {
+            "none"
+        };
+
+        let event_log_height = self.event_committer.as_ref()
+            .map(|c| c.journal().committed_height());
+
+        EngineHealth {
+            status,
+            version: env!("CARGO_PKG_VERSION"),
+            dim: self.dim,
+            index: format!("{:?}", self.index_kind),
+            persistence: persistence.to_string(),
+            records: PoolStats {
+                live: live_records,
+                slots_used: slot_records,
+                capacity: self.max_records,
+                fill_pct: round1(rec_fill),
+            },
+            nodes: PoolStats {
+                live: live_nodes,
+                slots_used: live_nodes,
+                capacity: self.max_nodes,
+                fill_pct: round1(node_fill),
+            },
+            edges: PoolStats {
+                live: live_edges,
+                slots_used: live_edges,
+                capacity: self.max_edges,
+                fill_pct: round1(edge_fill),
+            },
+            event_log_height,
+        }
+    }
+
+    /// Push current KernelState gauges into the Prometheus recorder.
+    ///
+    /// Called by both `GET /health` and `GET /metrics` so the scrape always
+    /// reflects the live state rather than a value that was last set during a
+    /// mutation.
+    pub fn update_prometheus_metrics(&self) {
+        let live_records = self.state.record_count() as f64;
+        let live_nodes   = self.state.node_count()   as f64;
+        let live_edges   = self.state.edge_count()   as f64;
+
+        metrics::gauge!("valori_records_live",     live_records);
+        metrics::gauge!("valori_records_capacity", self.max_records as f64);
+        metrics::gauge!("valori_record_fill_ratio",
+            if self.max_records > 0 { live_records / self.max_records as f64 } else { 0.0 });
+
+        metrics::gauge!("valori_nodes_live",     live_nodes);
+        metrics::gauge!("valori_nodes_capacity", self.max_nodes as f64);
+        metrics::gauge!("valori_node_fill_ratio",
+            if self.max_nodes > 0 { live_nodes / self.max_nodes as f64 } else { 0.0 });
+
+        metrics::gauge!("valori_edges_live",     live_edges);
+        metrics::gauge!("valori_edges_capacity", self.max_edges as f64);
+        metrics::gauge!("valori_edge_fill_ratio",
+            if self.max_edges > 0 { live_edges / self.max_edges as f64 } else { 0.0 });
+
+        metrics::gauge!("valori_dim", self.dim as f64);
+
+        if let Some(ref c) = self.event_committer {
+            metrics::gauge!("valori_event_log_height", c.journal().committed_height() as f64);
+        }
+    }
+
+    // FFI Entry point for inserting a single record from f32
     pub fn insert_record_from_f32(&mut self, values: &[f32]) -> Result<u32, EngineError> {
+        // ── Capacity guard ─────────────────────────────────────────────────────
+        // Enforced hard limit: reject inserts once the record pool is full.
+        // Returns HTTP 507 Insufficient Storage via EngineError → IntoResponse.
+        if self.state.record_count() >= self.max_records {
+            return Err(EngineError::Kernel(KernelError::CapacityExceeded));
+        }
+
         let mut fxp_data = Vec::with_capacity(values.len());
         for &v in values {
+            if v > 32767.99 || v < -32768.0 {
+                return Err(EngineError::InvalidInput("Vector values must be between -32768.0 and 32767.99".to_string()));
+            }
             fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
         }
         let vector = FxpVector { data: fxp_data };
-        let rid = RecordId(self.state.record_count() as u32);
+        let rid = self.state.next_record_id();
 
         let event = valori_kernel::event::KernelEvent::InsertRecord {
             id: rid,
@@ -161,14 +401,25 @@ impl Engine {
     }
 
     pub fn insert_batch(&mut self, batch: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
+        // ── Capacity guard ─────────────────────────────────────────────────────
+        // Reject the entire batch atomically if it would overflow the record
+        // pool.  This prevents partial writes: either the whole batch fits, or
+        // none of it is committed.
+        if self.state.record_count() + batch.len() > self.max_records {
+            return Err(EngineError::Kernel(KernelError::CapacityExceeded));
+        }
+
         if let Some(ref mut committer) = self.event_committer {
             let mut events = Vec::with_capacity(batch.len());
             let mut ids = Vec::with_capacity(batch.len());
-            let start_id = self.state.record_count() as u32;
+            let start_id = self.state.next_record_id().0;
 
             for (i, values) in batch.iter().enumerate() {
                 let mut fxp_data = Vec::with_capacity(values.len());
                 for &v in values {
+                    if v > 32767.99 || v < -32768.0 {
+                        return Err(EngineError::InvalidInput("Vector values must be between -32768.0 and 32767.99".to_string()));
+                    }
                     fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
                 }
                 let id = start_id + i as u32;
@@ -196,6 +447,11 @@ impl Engine {
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>, EngineError> {
+        for &v in query {
+            if v > 32767.99 || v < -32768.0 {
+                return Err(EngineError::InvalidInput("Query vector values must be between -32768.0 and 32767.99".to_string()));
+            }
+        }
         Ok(self.index.search(query, k))
     }
 
@@ -203,7 +459,22 @@ impl Engine {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(b"VAL1");
 
-        let mut k_buf = vec![0u8; 10 * 1024 * 1024];
+        // Compute a tight upper bound for the kernel state encoding.
+        // Per record slot: 1 (presence flag) + 4 (id) + 1 (flags) + 8 (tag)
+        //                  + dim×4 (Q16.16 vector) + 4 (metadata len) = 18 + dim×4
+        // Per node: up to 15 bytes; per edge: up to 18 bytes.
+        // Header: 64 bytes.  2 MB safety margin covers node/edge metadata variance.
+        let dim = self.state.dim.unwrap_or(384);
+        let total_slots = self.state.total_record_slots();
+        let node_count  = self.state.node_count();
+        let edge_count  = self.state.edge_count();
+        // V4 layout: nodes gain `first_in_edge` (5 bytes), edges gain `next_in` (5 bytes)
+        let k_buf_size  = 64
+            + total_slots * (18 + dim * 4)
+            + node_count  * 25   // 20 + 5 for first_in_edge
+            + edge_count  * 29   // 24 + 5 for next_in
+            + 2 * 1024 * 1024;   // 2 MB safety margin
+        let mut k_buf = vec![0u8; k_buf_size];
         let k_len = encode_state(&self.state, &mut k_buf)?;
         k_buf.truncate(k_len);
         buffer.extend_from_slice(&(k_len as u32).to_le_bytes());
@@ -241,17 +512,39 @@ impl Engine {
         }
 
         let mut offset = 4;
-        let k_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize;
+
+        // Read kernel section ─────────────────────────────────────────────────
+        if offset + 4 > data.len() {
+            return Err(EngineError::InvalidInput("Truncated snapshot: missing k_len".into()));
+        }
+        let k_len = u32::from_le_bytes(data[offset..offset+4].try_into()
+            .map_err(|_| EngineError::InvalidInput("Failed to read k_len".into()))?) as usize;
         offset += 4;
+        if offset + k_len > data.len() {
+            return Err(EngineError::InvalidInput("Truncated snapshot: k_data out of bounds".into()));
+        }
         let k_data = &data[offset..offset+k_len];
         offset += k_len;
 
-        let m_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize;
+        // Read metadata section ────────────────────────────────────────────────
+        if offset + 4 > data.len() {
+            return Err(EngineError::InvalidInput("Truncated snapshot: missing m_len".into()));
+        }
+        let m_len = u32::from_le_bytes(data[offset..offset+4].try_into()
+            .map_err(|_| EngineError::InvalidInput("Failed to read m_len".into()))?) as usize;
         offset += 4;
+        if offset + m_len > data.len() {
+            return Err(EngineError::InvalidInput("Truncated snapshot: m_data out of bounds".into()));
+        }
         let m_data = &data[offset..offset+m_len];
         offset += m_len;
 
-        let i_len = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()) as usize;
+        // Read index section ───────────────────────────────────────────────────
+        if offset + 4 > data.len() {
+            return Err(EngineError::InvalidInput("Truncated snapshot: missing i_len".into()));
+        }
+        let i_len = u32::from_le_bytes(data[offset..offset+4].try_into()
+            .map_err(|_| EngineError::InvalidInput("Failed to read i_len".into()))?) as usize;
         offset += 4;
         let i_data = if offset + i_len <= data.len() {
              Some(&data[offset..offset+i_len])
@@ -262,7 +555,38 @@ impl Engine {
         self.restore_from_components(k_data, m_data, i_data)
     }
 
+    /// Soft-delete a record: mark it as a tombstone and remove it from the search index.
+    /// Also auto-deletes any graph node that references this record (Issue 4).
+    pub fn soft_delete_record(&mut self, id: u32) -> Result<(), EngineError> {
+        // Auto-cascade: remove the associated graph node first
+        if let Some(node_id) = self.record_to_node.get(&id).copied() {
+            self.delete_node(node_id)?;
+        }
+
+        let rid = RecordId(id);
+        let event = valori_kernel::event::KernelEvent::SoftDeleteRecord { id: rid };
+
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event(&event)?;
+        } else {
+            let cmd = valori_kernel::state::command::Command::SoftDeleteRecord { id: rid };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
+            self.index.delete(id);
+        }
+        Ok(())
+    }
+
+    /// Hard-delete a record and its associated graph node (if any).
     pub fn delete_record(&mut self, id: u32) -> Result<(), EngineError> {
+        // Auto-cascade: remove the associated graph node first
+        if let Some(node_id) = self.record_to_node.get(&id).copied() {
+            self.delete_node(node_id)?;
+        }
+
         let rid = RecordId(id);
         let event = valori_kernel::event::KernelEvent::DeleteRecord { id: rid };
 
@@ -280,7 +604,58 @@ impl Engine {
         Ok(())
     }
 
+    /// Delete a graph node and cascade-delete all its incident edges.
+    /// Writes a `DeleteNode` event to the WAL / event log so the deletion survives crashes.
+    pub fn delete_node(&mut self, id: u32) -> Result<(), EngineError> {
+        use valori_kernel::types::id::NodeId;
+        let node_id = NodeId(id);
+
+        let event = valori_kernel::event::KernelEvent::DeleteNode { id: node_id };
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event(&event)?;
+        } else {
+            let cmd = Command::DeleteNode { node_id };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            // Pre-apply: clean up record_to_node before the node is gone
+            if let Some(node) = self.state.get_node(node_id) {
+                if let Some(rid) = node.record {
+                    self.record_to_node.remove(&rid.0);
+                }
+            }
+            self.state.apply(&cmd)?;
+        }
+        Ok(())
+    }
+
+    /// Delete a single graph edge by ID.
+    /// Writes a `DeleteEdge` event to the WAL / event log.
+    pub fn delete_edge(&mut self, id: u32) -> Result<(), EngineError> {
+        use valori_kernel::types::id::EdgeId;
+        let edge_id = EdgeId(id);
+
+        let event = valori_kernel::event::KernelEvent::DeleteEdge { id: edge_id };
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event(&event)?;
+        } else {
+            let cmd = Command::DeleteEdge { edge_id };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
+        }
+        Ok(())
+    }
+
     pub fn create_node_for_record(&mut self, record_id: Option<u32>, kind: u8) -> Result<u32, EngineError> {
+         // ── Capacity guard ────────────────────────────────────────────────────
+         if self.state.node_count() >= self.max_nodes {
+             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
+         }
+
          use valori_kernel::types::id::NodeId;
          let node_id = NodeId(self.state.node_count() as u32);
          let kind = NodeKind::from_u8(kind).unwrap_or_default();
@@ -301,11 +676,20 @@ impl Engine {
                  writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              }
              self.state.apply(&cmd)?;
+             // Keep derived record→node index in sync even without event log
+             if let Some(r) = record {
+                 self.record_to_node.insert(r.0, node_id.0);
+             }
          }
          Ok(node_id.0)
     }
 
     pub fn create_edge(&mut self, from: u32, to: u32, kind: u8) -> Result<u32, EngineError> {
+         // ── Capacity guard ────────────────────────────────────────────────────
+         if self.state.edge_count() >= self.max_edges {
+             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
+         }
+
          use valori_kernel::types::id::{NodeId, EdgeId};
          let edge_id = EdgeId(self.state.edge_count() as u32);
          let kind = EdgeKind::from_u8(kind).unwrap_or_default();
@@ -344,27 +728,83 @@ impl Engine {
     }
 
     pub fn apply_committed_event(&mut self, event: &valori_kernel::event::KernelEvent) -> Result<(), EngineError> {
-        self.state.apply_event(event)?;
-        
+        use valori_kernel::event::KernelEvent;
+
+        // ── Pre-apply: capture derived state BEFORE the kernel mutates it ──────
         match event {
-            valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } => {
+            KernelEvent::DeleteNode { id } => {
+                // The node is about to be deleted; capture its record association
+                // so we can clean up record_to_node *before* the slot disappears.
+                if let Some(node) = self.state.get_node(*id) {
+                    if let Some(rid) = node.record {
+                        self.record_to_node.remove(&rid.0);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // ── Apply the event to the kernel state ──────────────────────────────
+        self.state.apply_event(event)?;
+
+        // ── Post-apply: update derived indexes AFTER the kernel mutates ───────
+        match event {
+            KernelEvent::InsertRecord { id, vector, .. } => {
                 let mut vals = Vec::with_capacity(vector.data.len());
                 for fxp in &vector.data {
                     vals.push(fxp.0 as f32 / SCALE as f32);
                 }
                 self.index.insert(id.0, &vals);
             }
-            valori_kernel::event::KernelEvent::DeleteRecord { id } => {
+            KernelEvent::DeleteRecord { id } => {
                 self.index.delete(id.0);
+            }
+            KernelEvent::SoftDeleteRecord { id } => {
+                self.index.delete(id.0);
+            }
+            KernelEvent::CreateNode { id, record, .. } => {
+                if let Some(rid) = record {
+                    self.record_to_node.insert(rid.0, id.0);
+                }
             }
             _ => {}
         }
-        
+
         Ok(())
     }
 
+    /// Trigger a full index build from the current kernel state.
+    ///
+    /// Unlike `rebuild_index()`, which reconstructs the index by inserting each
+    /// record one at a time, `build_index()` collects all live records into a
+    /// batch and calls `VectorIndex::build()`.  This is important for
+    /// cluster-based indexes like IVF that need to see the full data distribution
+    /// before they can compute centroids.  Call this once after bulk-loading data.
+    pub fn build_index(&mut self) {
+        let total_slots = self.state.total_record_slots();
+        let mut records: Vec<(u32, Vec<f32>)> = Vec::with_capacity(total_slots);
+        for i in 0..total_slots {
+            if let Some(record) = self.state.get_record(RecordId(i as u32)) {
+                if !record.is_active() { continue; }
+                let vals: Vec<f32> = record.vector.data.iter()
+                    .map(|fxp| fxp.0 as f32 / SCALE as f32)
+                    .collect();
+                records.push((i as u32, vals));
+            }
+        }
+        self.index.build(&records);
+    }
+
+    /// Discard and rebuild the search index from the current kernel state.
+    ///
+    /// A fresh, empty index of the correct type is allocated first, then
+    /// `build_index()` fills it from the record pool.  Using `build()` (batch
+    /// path) rather than repeated `insert()` calls is critical for cluster-based
+    /// indexes like IVF, which need to see the full data distribution before
+    /// computing centroids.
     pub fn rebuild_index(&mut self) {
-         let mut index: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
+         // Replace the live index with a fresh empty one of the same type.
+         let blank: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
               IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
               IndexKind::Hnsw => {
                   use crate::structure::hnsw::HnswIndex;
@@ -376,31 +816,98 @@ impl Engine {
                   Box::new(IvfIndex::new(IvfConfig::default(), dim))
               }
          };
+         self.index = blank;
 
-         // We need a way to iterate records. KernelState doesn't expose it publicly?
-         // Ah, I need to add a public iterator to KernelState or use a method.
-         // Actually, I can't iterate records if they are private.
-         // Let's assume for now I rebuild from the index if possible, or I need to add a public record iterator to kernel.
-         // "Do NOT modify valori-kernel". 
-         // Wait, if I can't iterate records, I can't rebuild index.
-         // Let's check if there is ANY public way to get records.
-         // `get_record(id)` is public.
-         // `record_count()` is public.
-         // So I can iterate 0..record_count() and call get_record.
-         
-         let count = self.state.record_count();
-         for i in 0..count {
-              if let Some(record) = self.state.get_record(RecordId(i as u32)) {
-                  let mut vals: Vec<f32> = Vec::with_capacity(record.vector.data.len());
-                  for fxp in record.vector.data.iter() {
-                      let f = fxp.0 as f32 / SCALE as f32;
-                      vals.push(f);
-                  }
-                  index.insert(i as u32, &vals);
-              }
-         }
-         
-         self.index = index;
+         // Batch-build from the full record set (critical for IVF centroid init).
+         self.build_index();
+    }
+
+    /// Attempt crash recovery using the best available source, in priority order:
+    ///
+    /// 1. **Event log** — canonical truth.  If the event log file exists and
+    ///    contains at least one committed event, replay all events from scratch
+    ///    to rebuild `state`, the search index, and `record_to_node`.  The
+    ///    existing `EventCommitter` is torn down and rebuilt with the recovered
+    ///    journal so that future commits append correctly to the existing file.
+    ///
+    /// 2. **Snapshot** — fast-path cache.  Loaded only when the event log is
+    ///    absent or empty.
+    ///
+    /// 3. **Fresh start** — no durable state found.
+    ///
+    /// The method never panics.  On partial failure it logs an error and falls
+    /// through to the next priority.
+    pub fn try_recover(&mut self) -> RecoveryMode {
+        // ── Priority 1: event log ─────────────────────────────────────────────
+        let log_info = self.event_committer.as_ref().map(|c| {
+            (c.event_log().path().to_path_buf(), c.event_log().dim())
+        });
+
+        if let Some((log_path, dim)) = log_info {
+            if log_path.exists() {
+                match crate::recovery::recover_from_events(&log_path) {
+                    Ok((recovered_state, recovered_journal, count)) => {
+                        if count == 0 {
+                            tracing::info!("Event log exists but is empty; trying snapshot");
+                        } else {
+                            tracing::info!("Event-log recovery: replaying {} events from {:?}", count, log_path);
+
+                            // Drop the old committer (releases its BufWriter / file handle).
+                            self.event_committer = None;
+
+                            // Re-open the log for append (preserves existing content).
+                            match EventLogWriter::open(&log_path, Some(dim)) {
+                                Ok(log_writer) => {
+                                    let state_for_committer = recovered_state.clone();
+                                    self.state = recovered_state;
+                                    self.event_committer = Some(EventCommitter::new(
+                                        log_writer,
+                                        recovered_journal,
+                                        state_for_committer,
+                                    ));
+                                    self.rebuild_index();
+                                    self.rebuild_record_to_node();
+                                    self.load_metadata().ok();
+                                    return RecoveryMode::EventLog(count);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to reopen event log after recovery: {}", e);
+                                    // Fall through to snapshot.
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Event-log recovery failed ({:?}); trying snapshot", e);
+                    }
+                }
+            }
+        }
+
+        // ── Priority 2: snapshot ──────────────────────────────────────────────
+        if let Some(path) = self.snapshot_path.clone() {
+            if path.exists() {
+                match std::fs::read(&path) {
+                    Ok(data) => match self.restore(&data) {
+                        Ok(()) => {
+                            tracing::info!("Snapshot recovery succeeded from {:?}", path);
+                            self.load_metadata().ok();
+                            return RecoveryMode::Snapshot;
+                        }
+                        Err(e) => {
+                            tracing::error!("Snapshot restore failed ({:?}); starting fresh", e);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to read snapshot file {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+
+        // ── Priority 3: fresh start ───────────────────────────────────────────
+        tracing::info!("No durable state found; starting from an empty store");
+        RecoveryMode::Fresh
     }
 
     fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>) -> Result<(), EngineError> {
@@ -413,11 +920,29 @@ impl Engine {
         if let Some(blob) = i_data {
              if !blob.is_empty() {
                  self.index.restore(blob).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-                 return Ok(());
+             } else {
+                 self.rebuild_index();
              }
+        } else {
+             self.rebuild_index();
         }
 
-        self.rebuild_index();
+        // Always rebuild the derived record→node map after any restore
+        self.rebuild_record_to_node();
         Ok(())
     }
+}
+
+// ── Module-level helpers for health computation ───────────────────────────────
+
+/// Compute `used / capacity × 100`; returns 0.0 when capacity is 0.
+#[inline]
+fn pct(used: usize, capacity: usize) -> f64 {
+    if capacity == 0 { 0.0 } else { used as f64 / capacity as f64 * 100.0 }
+}
+
+/// Round a percentage to one decimal place.
+#[inline]
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
 }
