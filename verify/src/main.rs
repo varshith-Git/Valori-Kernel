@@ -4,12 +4,9 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
 
-// Use core default constants matching node/src/config.rs
-// Ideally these would be shared, but values are effectively protocol constants for v1.
-const MAX_RECORDS: usize = 1024;
+// Protocol constants (informational, for log output only)
 const D: usize = 16;
-const MAX_NODES: usize = 1024;
-const MAX_EDGES: usize = 2048;
+const MAX_RECORDS: usize = 1024;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -91,9 +88,9 @@ fn main() -> Result<()> {
         .context("Failed to read WAL file")?;
 
     // 3. Replay and Compute State Hash
-    let final_state_hash = valori_kernel::replay::replay_and_hash::<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>(
-        &kernel_blob, 
-        &wal_bytes
+    let final_state_hash = valori_kernel::replay::replay_and_hash(
+        &kernel_blob,
+        &wal_bytes,
     ).map_err(|e| anyhow::anyhow!("Replay failed: {:?}", e))?;
 
     // 4. Compute Input Hashes
