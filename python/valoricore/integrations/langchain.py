@@ -195,6 +195,7 @@ class ValoricoreLangChain(VectorStore):
         self,
         texts: Iterable[str],
         metadatas: Optional[List[dict]] = None,
+        tags: Optional[List[int]] = None,
         **kwargs: Any,
     ) -> List[str]:
         """
@@ -203,6 +204,9 @@ class ValoricoreLangChain(VectorStore):
         Args:
             texts:     Iterable of text strings.
             metadatas: Optional list of metadata dicts — one per text.
+            tags:      Optional list of integer tags — one per text.
+                       Use for tenant isolation or filtered search.
+                       Defaults to 0 for all records when omitted.
 
         Returns:
             List of record IDs (as strings) in insertion order.
@@ -211,12 +215,21 @@ class ValoricoreLangChain(VectorStore):
         if not texts_list:
             return []
         metadatas = metadatas or [{} for _ in texts_list]
+        tags      = tags      or [0] * len(texts_list)
+
+        if len(tags) != len(texts_list):
+            raise ValueError(
+                f"len(tags)={len(tags)} must match len(texts)={len(texts_list)}"
+            )
 
         # Batch embed (single round-trip to the embedding API)
         vectors = self._embedding.embed_documents(texts_list)
 
-        # Batch insert into the kernel (single event-log fsync)
-        record_ids = self._client.insert_batch(vectors)
+        # Insert each vector with its tag; collect record IDs
+        record_ids: List[int] = []
+        for vec, tag in zip(vectors, tags):
+            rid = self._client._db.insert(vec, tag=tag)
+            record_ids.append(rid)
 
         # Attach text + metadata to each record
         for record_id, text, meta in zip(record_ids, texts_list, metadatas):
@@ -366,6 +379,7 @@ class ValoricoreLangChain(VectorStore):
         texts: List[str],
         embedding: "Embeddings",
         metadatas: Optional[List[dict]] = None,
+        tags: Optional[List[int]] = None,
         path: str = "./valori_db",
         remote: Optional[str] = None,
         index_kind: str = "bruteforce",
@@ -383,7 +397,7 @@ class ValoricoreLangChain(VectorStore):
             )
         """
         store = cls(embedding=embedding, path=path, remote=remote, index_kind=index_kind)
-        store.add_texts(texts, metadatas)
+        store.add_texts(texts, metadatas, tags=tags)
         return store
 
     @classmethod
