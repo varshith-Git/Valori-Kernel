@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Event-Sourced Persistence Layer
 //!
 //! This module provides the canonical event log infrastructure for Valori Node.
