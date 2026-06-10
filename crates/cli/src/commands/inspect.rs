@@ -1,125 +1,186 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! `valori inspect` — structural status report for a database directory.
+
+use crate::engine::{inspect_snapshot_bytes, parse_kernel_from_snapshot_bytes};
 use comfy_table::presets::UTF8_FULL;
-use comfy_table::{ContentArrangement, Table};
-
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use std::path::PathBuf;
-use valori_persistence::{idx, snapshot};
-use valori_kernel::event::KernelEvent;
-
 use valori_node::events::event_log::LogEntry;
 
-pub fn run(
-    dir: Option<PathBuf>,
-    snapshot_path_arg: Option<String>,
-    wal_path_arg: Option<String>,
-    idx_path_arg: Option<String>,
-) -> anyhow::Result<()> {
+const DEFAULT_SNAPSHOT: &str = "snapshot.val";
+const DEFAULT_LOG:      &str = "events.log";
 
-    let (s_path, w_path, i_path) = match dir {
-        Some(d) => (
-            d.join("snapshot.val"),
-            d.join("events.log"),
-            d.join("metadata.idx"),
-        ),
+pub fn run(
+    dir:          Option<PathBuf>,
+    snapshot_arg: Option<String>,
+    log_arg:      Option<String>,
+) -> anyhow::Result<()> {
+    let (s_path, w_path) = match &dir {
+        Some(d) => (d.join(DEFAULT_SNAPSHOT), d.join(DEFAULT_LOG)),
         None => (
-            PathBuf::from(snapshot_path_arg.unwrap_or_else(|| "snapshot.val".to_string())),
-            PathBuf::from(wal_path_arg.unwrap_or_else(|| "events.log".to_string())),
-            PathBuf::from(idx_path_arg.unwrap_or_else(|| "metadata.idx".to_string())),
+            PathBuf::from(snapshot_arg.as_deref().unwrap_or(DEFAULT_SNAPSHOT)),
+            PathBuf::from(log_arg.as_deref().unwrap_or(DEFAULT_LOG)),
         ),
     };
 
-    println!("\nValori Status Report");
-    println!("--------------------");
+    let db_label = dir
+        .as_ref()
+        .map(|d| d.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
 
-    // Build Table
+    println!("\nValori Status Report  ·  {db_label}");
+    println!("{}", "─".repeat(52));
+
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["File", "Status", "Details"]);
+        .set_header(vec![
+            Cell::new("File").add_attribute(Attribute::Bold),
+            Cell::new("Status").add_attribute(Attribute::Bold),
+            Cell::new("Details").add_attribute(Attribute::Bold),
+        ]);
 
-    // 1. Snapshot Info
+    // ── Snapshot ─────────────────────────────────────────────────────────────
     if s_path.exists() {
-        match snapshot::read_header(&s_path) {
-            Ok(header) => {
-                 let msg = format!(
-                     "Format: V1, Magic: {:?}, Ver: {}, Idx: {}, Ts: {}", 
-                    std::str::from_utf8(&header.magic).unwrap_or("BAD"),
-                    header.version,
-                    header.event_index,
-                    chrono::DateTime::from_timestamp(header.timestamp as i64, 0)
-                        .unwrap_or_default()
-                        .to_rfc3339()
-                 );
-                 table.add_row(vec!["Snapshot", "FOUND", &msg]);
-            },
+        match std::fs::read(&s_path) {
             Err(e) => {
-                table.add_row(vec!["Snapshot", "CORRUPT", &e.to_string()]);
+                table.add_row(vec![
+                    Cell::new("snapshot.val"),
+                    Cell::new("ERROR").fg(Color::Red),
+                    Cell::new(e.to_string()),
+                ]);
             }
+            Ok(bytes) => match inspect_snapshot_bytes(&bytes) {
+                Err(e) => {
+                    table.add_row(vec![
+                        Cell::new("snapshot.val"),
+                        Cell::new("ERROR").fg(Color::Red),
+                        Cell::new(e.to_string()),
+                    ]);
+                }
+                Ok(info) if !info.magic_ok => {
+                    table.add_row(vec![
+                        Cell::new("snapshot.val"),
+                        Cell::new("CORRUPT").fg(Color::Red),
+                        Cell::new(format!(
+                            "Invalid magic bytes — expected VAL1  ({:.2} KB)",
+                            bytes.len() as f64 / 1024.0
+                        )),
+                    ]);
+                }
+                Ok(_info) => {
+                    // Try to fully decode for richer statistics.
+                    let detail = match parse_kernel_from_snapshot_bytes(&bytes) {
+                        Ok(state) => format!(
+                            "{:.2} KB  │  {} record(s)  │  {} node(s)  │  {} edge(s)  │  dim {}",
+                            bytes.len() as f64 / 1024.0,
+                            state.record_count(),
+                            state.node_count(),
+                            state.edge_count(),
+                            state.dim.unwrap_or(0),
+                        ),
+                        Err(_) => format!(
+                            "{:.2} KB  │  kernel={} B  │  (decode error — state may be from a newer schema)",
+                            bytes.len() as f64 / 1024.0,
+                            _info.kernel_len,
+                        ),
+                    };
+                    table.add_row(vec![
+                        Cell::new("snapshot.val"),
+                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new(detail),
+                    ]);
+                }
+            },
         }
     } else {
-        table.add_row(vec!["Snapshot", "MISSING", ""]);
+        table.add_row(vec![
+            Cell::new("snapshot.val"),
+            Cell::new("MISSING").fg(Color::Yellow),
+            Cell::new("No snapshot — call db.snapshot() to create one"),
+        ]);
     }
 
-    // 2. WAL Info (Phase 23 Event Log format)
+    // ── Event Log ────────────────────────────────────────────────────────────
     if w_path.exists() {
-        if let Ok(file_bytes) = std::fs::read(&w_path) {
-            if file_bytes.len() < 16 {
-                table.add_row(vec!["WAL", "CORRUPT", "File smaller than 16-byte header"]);
-            } else {
-                let dim = u32::from_le_bytes(file_bytes[4..8].try_into().unwrap());
-                let mut event_count = 0;
-                let mut offset = 16;
-                let mut corrupt = false;
-                let mut err_msg = String::new();
-                
-                while offset < file_bytes.len() {
+        match std::fs::read(&w_path) {
+            Err(e) => {
+                table.add_row(vec![
+                    Cell::new("events.log"),
+                    Cell::new("ERROR").fg(Color::Red),
+                    Cell::new(e.to_string()),
+                ]);
+            }
+            Ok(bytes) if bytes.len() < 16 => {
+                table.add_row(vec![
+                    Cell::new("events.log"),
+                    Cell::new("CORRUPT").fg(Color::Red),
+                    Cell::new(format!(
+                        "Only {} byte(s) — smaller than the required 16-byte header",
+                        bytes.len()
+                    )),
+                ]);
+            }
+            Ok(bytes) => {
+                let log_version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+                let dim         = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                let mut event_count: u64 = 0;
+                let mut offset = 16usize;
+                let mut corrupt_msg: Option<String> = None;
+
+                'parse: while offset < bytes.len() {
                     match bincode::serde::decode_from_slice::<LogEntry, _>(
-                        &file_bytes[offset..],
-                        bincode::config::standard()
+                        &bytes[offset..],
+                        bincode::config::standard(),
                     ) {
-                        Ok((entry, bytes_read)) => {
+                        Ok((entry, n)) => {
+                            offset += n;
                             match entry {
                                 LogEntry::Event(_) => event_count += 1,
-                                LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
+                                LogEntry::Checkpoint { event_count: c, .. } => {
+                                    event_count = c;
+                                }
                             }
-                            offset += bytes_read;
                         }
                         Err(e) => {
-                            corrupt = true;
-                            err_msg = format!("Decoding failed at offset {} after {} events: {}", offset, event_count, e);
-                            break;
+                            corrupt_msg = Some(format!(
+                                "Decode error at byte {offset} after {event_count} event(s): {e}"
+                            ));
+                            break 'parse;
                         }
                     }
                 }
-                
-                if corrupt {
-                    table.add_row(vec!["WAL", "CORRUPT", &err_msg]);
+
+                if let Some(msg) = corrupt_msg {
+                    table.add_row(vec![
+                        Cell::new("events.log"),
+                        Cell::new("CORRUPT").fg(Color::Red),
+                        Cell::new(msg),
+                    ]);
                 } else {
-                    table.add_row(vec!["WAL", "FOUND", &format!("{} events (dim {})", event_count, dim)]);
+                    table.add_row(vec![
+                        Cell::new("events.log"),
+                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new(format!(
+                            "{:.2} KB  │  {} event(s)  │  dim {}  │  log-version {}",
+                            bytes.len() as f64 / 1024.0,
+                            event_count,
+                            dim,
+                            log_version,
+                        )),
+                    ]);
                 }
             }
-        } else {
-            table.add_row(vec!["WAL", "ERROR", "Failed to read file"]);
         }
     } else {
-        table.add_row(vec!["WAL", "MISSING", ""]);
-    }
-
-    // 3. IDX Info
-    if i_path.exists() {
-         match idx::read_all(&i_path) {
-             Ok(entries) => {
-                 table.add_row(vec!["Index", "FOUND", &format!("{} labeled entries", entries.len())]);
-             }
-             Err(e) => {
-                 table.add_row(vec!["Index", "CORRUPT", &e.to_string()]);
-             }
-         }
-    } else {
-        table.add_row(vec!["Index", "MISSING", ""]);
+        table.add_row(vec![
+            Cell::new("events.log"),
+            Cell::new("MISSING").fg(Color::Yellow),
+            Cell::new("No event log found"),
+        ]);
     }
 
     println!("{table}\n");
-
     Ok(())
 }
