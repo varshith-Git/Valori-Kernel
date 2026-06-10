@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! End-to-end proof and hash determinism tests.
 //!
 //! What the unit tests in src/snapshot/blake3.rs do NOT cover:
