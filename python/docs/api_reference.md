@@ -56,17 +56,66 @@ These clients expose the raw power of the Valori Kernel. All methods on `SyncRem
 - **`search(query_vector: List[float], k: int = 5, filter_tag: Optional[int] = None) -> List[dict]`**
   - Performs an exhaustive, deterministic L2 nearest neighbor search.
 
-### Knowledge Graph Operations
+### Knowledge Graph — Fluent API *(recommended)*
+
+These methods return Python **`Node` objects** instead of raw integers, so you never need to
+track IDs manually.
+
+- **`node(kind: int, vector: List[float] = None, tag: int = 0) -> Node`**
+  - One-liner: optionally insert the vector, create the node, and return a `Node` object.
+    Replaces the previous `insert` + `create_node` two-step.
+- **`edge(from_node, to_node, kind: int) -> int`**
+  - Create a directed edge. Both `Node` objects and raw `int` IDs are accepted.
+- **`build_document(title: str = None) -> DocumentGraph`**
+  - Returns a context manager. Inside the `with` block call `builder.add_chunk(vector)` for
+    each chunk — it inserts the vector, creates a `NODE_CHUNK` node, and wires a
+    `EDGE_PARENT_OF` edge automatically.
+
+#### `Node` — the object returned by `db.node()`
+
+| Attribute | Type | Description |
+|---|---|---|
+| `node.id` | `int` | Raw integer node ID (low-level escape hatch) |
+| `node.kind` | `int` | Node kind (matches `NODE_*` constants) |
+| `node.record_id` | `int \| None` | Attached vector record ID, or `None` |
+
+| Method | Returns | Description |
+|---|---|---|
+| `node.link_to(other, edge_kind)` | `self` | Create edge(s) from this node. `other` can be a `Node`, `int`, or list of either. |
+| `node.link_from(other, edge_kind)` | `self` | Create edge from `other` into this node. |
+| `node.children(edge_kind=None)` | `List[Node]` | Outgoing neighbours, optionally filtered by edge kind. |
+| `node.walk(max_depth=2)` | `List[Node]` | BFS traversal; returns visited nodes as `Node` objects. |
+| `node.record_ids(max_depth=2)` | `List[int]` | All reachable vector record IDs (use with `search()` for RAG). |
+| `node.delete()` | `None` | Cascade-delete this node and all its incident edges. |
+| `int(node)` | `int` | Escape hatch — retrieve the raw integer ID. |
+
+#### `DocumentGraph` — the context manager returned by `build_document()`
+
+| Attribute / Method | Description |
+|---|---|
+| `builder.add_chunk(vector, tag=0, metadata=None)` | Insert vector, create `NODE_CHUNK`, wire `EDGE_PARENT_OF`. Returns the new `Node`. |
+| `builder.document` | The root `NODE_DOCUMENT` `Node`. |
+| `builder.chunks` | Ordered list of chunk `Node` objects. |
+| `builder.record_ids` | List of vector record IDs in insertion order. |
+
+### Knowledge Graph — Low-Level API *(still fully supported)*
+
 - **`create_node(kind: int, record_id: Optional[int] = None) -> int`**
-  - Creates a Node. `kind` is a user-defined integer representing the node type.
+  - Creates a Node. Returns a raw integer node ID.
 - **`create_edge(from_id: int, to_id: int, kind: int) -> int`**
-  - Creates a directional Edge between two nodes.
+  - Creates a directional Edge. Returns a raw integer edge ID.
+- **`delete_node(node_id: int) -> None`**
+  - Cascade-deletes a node and all its incident edges.
+- **`delete_edge(edge_id: int) -> None`**
+  - Deletes a single directed edge.
 - **`get_node(node_id: int) -> Optional[dict]`**
-  - Retrieves a Node's structure (its `kind` and its underlying `record_id` if present).
+  - Returns `{"kind": int, "record_id": int | None}`.
 - **`get_edges(node_id: int) -> List[dict]`**
-  - Retrieves all outgoing edges for a node.
+  - Returns `[{"edge_id": int, "to_node": int, "kind": int}, …]`.
+- **`walk(start_node: int, max_depth: int = 2) -> List[int]`**
+  - BFS traversal; returns integer node IDs.
 - **`expand(start_node: int, max_depth: int = 2) -> List[int]`**
-  - Performs a breadth-first search across the Knowledge Graph starting from `start_node`. Returns a list of all unique `record_id`s found attached to any node in the traversal path.
+  - BFS traversal; returns all reachable vector record IDs.
 
 ### Snapshots & Audit Trails
 - **`get_state_hash() -> str`**
