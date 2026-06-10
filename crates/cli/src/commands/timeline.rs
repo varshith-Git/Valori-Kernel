@@ -1,69 +1,143 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! `valori timeline` — print the event history from an event log.
+
 use comfy_table::presets::UTF8_FULL;
-use comfy_table::{ContentArrangement, Table};
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
+use valori_kernel::event::KernelEvent;
 use valori_node::events::event_log::LogEntry;
 
-pub fn run(events_path: &str) -> anyhow::Result<()> {
-    let file_bytes = std::fs::read(events_path)?;
-    if file_bytes.len() < 16 {
-        println!("\n⚠️  WARNING: Event log is empty or corrupt.\n");
+pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
+    let bytes = std::fs::read(log_path)
+        .map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", log_path, e))?;
+
+    if bytes.len() < 16 {
+        println!("\n⚠️  Event log is empty or too short to parse ({} bytes).\n", bytes.len());
         return Ok(());
     }
+
+    let log_version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+    let dim         = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+
+    println!(
+        "\nEvent Timeline  ·  {}  (log-version {}, dim {})\n",
+        log_path, log_version, dim
+    );
 
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["Event ID", "Type", "Details"]);
+        .set_header(vec![
+            Cell::new("Event #").add_attribute(Attribute::Bold),
+            Cell::new("Type").add_attribute(Attribute::Bold),
+            Cell::new("Details").add_attribute(Attribute::Bold),
+        ]);
 
-    let mut offset = 16;
-    let mut current_id = 0;
+    let mut offset    = 16usize;
+    let mut event_num = 0u64;      // 1-based display counter
 
-    while offset < file_bytes.len() {
+    while offset < bytes.len() {
         match bincode::serde::decode_from_slice::<LogEntry, _>(
-            &file_bytes[offset..],
-            bincode::config::standard()
+            &bytes[offset..],
+            bincode::config::standard(),
         ) {
             Ok((entry, bytes_read)) => {
+                offset += bytes_read;
+
                 match entry {
                     LogEntry::Event(event) => {
-                        let details = match &event {
-                            valori_kernel::event::KernelEvent::InsertRecord { id, tag, .. } => {
-                                format!("Record {} (Tag: {})", id.0, tag)
-                            }
-                            valori_kernel::event::KernelEvent::CreateNode { id, kind, .. } => {
-                                format!("Node {} ({:?})", id.0, kind)
-                            }
-                            valori_kernel::event::KernelEvent::CreateEdge { id, from, to, kind } => {
-                                format!("Edge {} ({} -> {}) [{:?}]", id.0, from.0, to.0, kind)
-                            }
-                            _ => String::new(),
-                        };
+                        event_num += 1;
+
+                        let (type_cell, detail) = describe_event(&event);
+
                         table.add_row(vec![
-                            current_id.to_string(),
-                            event.event_type().to_string(),
-                            details,
+                            Cell::new(event_num.to_string()),
+                            type_cell,
+                            Cell::new(detail),
                         ]);
-                        current_id += 1;
+
+                        if limit > 0 && event_num as usize >= limit {
+                            println!("{table}");
+                            println!(
+                                "\n  … display limited to first {limit} events. \
+                                 Pass --limit 0 to show all.\n"
+                            );
+                            return Ok(());
+                        }
                     }
+
                     LogEntry::Checkpoint { event_count, .. } => {
                         table.add_row(vec![
-                            "-".to_string(),
-                            "Checkpoint".to_string(),
-                            format!("Count: {}", event_count),
+                            Cell::new("—"),
+                            Cell::new("Checkpoint").fg(Color::Cyan),
+                            Cell::new(format!("snapshot taken at event count {event_count}")),
                         ]);
+                        event_num = event_count;
                     }
                 }
-                offset += bytes_read;
             }
             Err(e) => {
-                println!("\n⚠️  WARNING: Decoding stopped at offset {} due to error: {}\n", offset, e);
-                break;
+                println!("{table}");
+                println!(
+                    "\n⚠️  Decoding stopped at byte offset {offset} after {} event(s): {e}\n",
+                    event_num
+                );
+                return Ok(());
             }
         }
     }
 
-    println!("\nEvent Timeline (from Phase 23 Event Log)\n");
-    println!("{table}\n");
-
+    println!("{table}");
+    println!("\n  Total: {} event(s)\n", event_num);
     Ok(())
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn describe_event(event: &KernelEvent) -> (Cell, String) {
+    match event {
+        KernelEvent::InsertRecord { id, tag, .. } => (
+            Cell::new("InsertRecord").fg(Color::Green),
+            format!("record_id={} tag={}", id.0, tag),
+        ),
+
+        KernelEvent::DeleteRecord { id } => (
+            Cell::new("DeleteRecord").fg(Color::Red),
+            format!("record_id={}", id.0),
+        ),
+
+        KernelEvent::SoftDeleteRecord { id } => (
+            Cell::new("SoftDeleteRecord").fg(Color::Yellow),
+            format!("record_id={} (tombstoned — slot retained for replay)", id.0),
+        ),
+
+        KernelEvent::CreateNode { id, kind, record } => {
+            let rec = record
+                .as_ref()
+                .map(|r| format!(" → record_id={}", r.0))
+                .unwrap_or_default();
+            (
+                Cell::new("CreateNode").fg(Color::Cyan),
+                format!("node_id={} kind={:?}{rec}", id.0, kind),
+            )
+        }
+
+        KernelEvent::CreateEdge { id, from, to, kind } => (
+            Cell::new("CreateEdge").fg(Color::Cyan),
+            format!(
+                "edge_id={}  {}→{}  kind={:?}",
+                id.0, from.0, to.0, kind
+            ),
+        ),
+
+        KernelEvent::DeleteEdge { id } => (
+            Cell::new("DeleteEdge").fg(Color::Yellow),
+            format!("edge_id={}", id.0),
+        ),
+
+        KernelEvent::DeleteNode { id } => (
+            Cell::new("DeleteNode").fg(Color::Red),
+            format!("node_id={} (cascade-deleted incident edges)", id.0),
+        ),
+    }
 }
