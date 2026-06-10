@@ -1,7 +1,7 @@
 //! Graph Node and Edge Pools.
 
 use crate::graph::node::GraphNode;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::graph::edge::GraphEdge;
 use crate::types::id::{NodeId, EdgeId};
 use crate::error::{Result, KernelError};
