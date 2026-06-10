@@ -208,6 +208,69 @@ class AsyncMemoryClient:
         """Async version of :meth:`MemoryClient.expand`."""
         return await self._thread(self._sync_client.expand, start_node, max_depth)
 
+    # ── Batch operations ───────────────────────────────────────────────────
+
+    async def insert_batch(self, vectors) -> list:
+        """Async version of :meth:`MemoryClient.insert_batch`."""
+        return await self._thread(self._sync_client.insert_batch, vectors)
+
+    async def insert_batch_with_proof(self, vectors, tags=None) -> list:
+        """Async version of :meth:`MemoryClient.insert_batch_with_proof`."""
+        return await self._thread(
+            self._sync_client.insert_batch_with_proof, vectors, tags
+        )
+
+    # ── Metadata ───────────────────────────────────────────────────────────
+
+    async def get_metadata(self, record_id: int):
+        """Async version of :meth:`MemoryClient.get_metadata`."""
+        return await self._thread(self._sync_client.get_metadata, record_id)
+
+    async def set_metadata(self, record_id: int, metadata: bytes) -> None:
+        """Async version of :meth:`MemoryClient.set_metadata`."""
+        await self._thread(self._sync_client.set_metadata, record_id, metadata)
+
+    # ── High-level fluent graph API ────────────────────────────────────────
+
+    async def node(self, kind: int, vector=None, tag: int = 0):
+        """Async version of :meth:`MemoryClient.node`."""
+        return await self._thread(
+            self._sync_client.node, kind, vector, tag
+        )
+
+    async def edge(self, from_node, to_node, kind: int) -> int:
+        """Async version of :meth:`MemoryClient.edge`."""
+        return await self._thread(
+            self._sync_client.edge, from_node, to_node, kind
+        )
+
+    def build_document(self, title=None):
+        """
+        Async-compatible version of :meth:`MemoryClient.build_document`.
+
+        Returns a :class:`~valoricore.graph.DocumentGraph` context manager.
+        ``DocumentGraph.__enter__`` / ``__exit__`` are synchronous but their
+        operations hold the internal lock via the sync client — safe to use
+        inside an ``async with`` block when holding the engine lock is
+        acceptable for the duration of the build::
+
+            async with client.build_document(title="My Doc") as builder:
+                for emb in embeddings:
+                    await asyncio.to_thread(builder.add_chunk, emb)
+
+        For fully async chunk addition, use :meth:`node` and :meth:`edge`
+        directly instead.
+        """
+        return self._sync_client.build_document(title=title)
+
+    async def delete_node(self, node_id: int) -> None:
+        """Async version of :meth:`MemoryClient.delete_node`."""
+        await self._thread(self._sync_client.delete_node, node_id)
+
+    async def delete_edge(self, edge_id: int) -> None:
+        """Async version of :meth:`MemoryClient.delete_edge`."""
+        await self._thread(self._sync_client.delete_edge, edge_id)
+
     # ── Cleanup ────────────────────────────────────────────────────────────
 
     async def close(self) -> None:
