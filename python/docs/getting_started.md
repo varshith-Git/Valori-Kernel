@@ -93,30 +93,69 @@ else:
 ---
 
 ## 5. Using the Hybrid Knowledge Graph
-Valoricore natively bridges Semantic Vectors and Knowledge Graphs in the exact same memory space. You can manually link entities to form complex contextual relationships.
+
+Valoricore natively bridges Semantic Vectors and Knowledge Graphs in the same memory space.
+The **fluent API** lets you build the graph without ever touching raw integer IDs.
+
+### 5a. Fluent API (recommended)
 
 ```python
-from valoricore import Valoricore
+from valoricore import MemoryClient, Node
+from valoricore.kinds import NODE_DOCUMENT, NODE_CHUNK, NODE_AGENT, EDGE_PARENT_OF, EDGE_BY_AGENT
 
-db = Valoricore()
+client = MemoryClient(path="./my_db")
 
-# Insert raw vectors into the RecordPool
-vector_a_id = db.insert([0.5]*384)
-vector_b_id = db.insert([-0.5]*384)
+# db.node() inserts the vector AND creates the graph node in a single call
+doc   = client.node(NODE_DOCUMENT)
+chunk = client.node(NODE_CHUNK, vector=[0.5]*384)  # returns a Node object
 
-# Create nodes mapping to those records
-# Let's assume Kind '1' is 'Person', and Kind '2' is 'Company'
-person_node = db.create_node(kind=1, record_id=vector_a_id)
-company_node = db.create_node(kind=2, record_id=vector_b_id)
+# node.link_to() creates the edge — returns self for chaining
+doc.link_to(chunk, EDGE_PARENT_OF)
 
-# Create a directional relationship (Edge)
-# Let's assume Kind '100' is 'WORKS_AT'
-db.create_edge(from_id=person_node, to_id=company_node, kind=100)
+# Link to multiple nodes at once
+c2 = client.node(NODE_CHUNK, vector=[-0.5]*384)
+doc.link_to([chunk, c2], EDGE_PARENT_OF)
 
-# Traverse the Graph!
-# We can expand outward from the person_node to find all associated vectors
-related_record_ids = db.expand(start_node=person_node, max_depth=1)
-print(f"Graph traversal yielded vector IDs: {related_record_ids}")
+# Traverse as Node objects — no raw ID bookkeeping
+children = doc.children(EDGE_PARENT_OF)
+print(children)   # [Node(id=1, kind=6, record_id=0), Node(id=2, kind=6, record_id=1)]
+
+# BFS traversal
+visited   = doc.walk(max_depth=2)      # List[Node]
+rids      = doc.record_ids(max_depth=2)  # [0, 1]  — pass to search() for RAG
+
+# Cascade-delete node + all edges
+chunk.delete()
+```
+
+### 5b. Build a full document → chunk graph (the RAG pattern)
+
+```python
+def my_embedder(text: str) -> list: return [0.1] * 384
+
+text_chunks = ["Intro paragraph.", "Main content.", "Conclusion."]
+embeddings  = [my_embedder(t) for t in text_chunks]
+
+with client.build_document(title="My Article") as builder:
+    for emb in embeddings:
+        builder.add_chunk(emb)   # insert + create + link, all in one call
+
+doc_node   = builder.document    # root Node
+chunk_rids = builder.record_ids  # [0, 1, 2] — ready for search retrieval
+print(f"Built doc node {doc_node.id} with {len(builder.chunks)} chunks")
+```
+
+### 5c. Low-level API (still fully supported)
+
+```python
+# Raw integer IDs still work — the two styles mix freely
+vector_a_id  = client._db.insert([0.5]*384)
+agent_node   = client.create_node(kind=NODE_AGENT)
+doc_node_id  = client.create_node(kind=NODE_DOCUMENT, record_id=vector_a_id)
+client.create_edge(from_id=agent_node, to_id=doc_node_id, kind=EDGE_BY_AGENT)
+
+related_ids = client.expand(start_node=agent_node, max_depth=1)
+print(f"Graph traversal yielded record IDs: {related_ids}")
 ```
 
 ---
