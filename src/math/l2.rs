@@ -1,6 +1,6 @@
 //! Fixed-point L2 squared distance.
 
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::types::vector::FxpVector;
 use crate::types::scalar::FxpScalar;
 use crate::fxp::ops::{fxp_sub, fxp_mul}; // Reuse existing ops which handle saturation
