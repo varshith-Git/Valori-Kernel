@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use std::sync::OnceLock;
@@ -26,14 +26,44 @@ pub fn init_telemetry() {
         tracing::warn!("Prometheus handle already set. Telemetry re-initialized?");
     }
     
-    // Default metrics to 0
-    metrics::describe_counter!("valori_events_committed_total", "Total number of events committed");
-    metrics::describe_histogram!("valori_event_commit_duration_seconds", "Time taken to commit an event");
-    metrics::describe_gauge!("valori_snapshot_size_bytes", "Size of the last saved snapshot in bytes");
-    metrics::describe_counter!("valori_proofs_generated_total", "Total number of cryptographic proofs generated");
-    metrics::describe_histogram!("valori_replay_duration_seconds", "Time taken to replay WAL/Event Log");
+    // ── Event / WAL metrics ───────────────────────────────────────────────────
+    metrics::describe_counter!("valori_events_committed_total",
+        "Total number of events committed to the event log");
+    metrics::describe_histogram!("valori_event_commit_duration_seconds",
+        "Time taken to commit a single event");
+    metrics::describe_gauge!("valori_snapshot_size_bytes",
+        "Size of the last written snapshot in bytes");
+    metrics::describe_counter!("valori_proofs_generated_total",
+        "Total number of cryptographic proof queries served");
+    metrics::describe_histogram!("valori_replay_duration_seconds",
+        "Time spent replaying the WAL or event log on startup");
 
-    // Ensure at least one metric exists on startup
+    // ── KernelState capacity gauges (updated on /health and /metrics) ─────────
+    metrics::describe_gauge!("valori_records_live",
+        "Number of live (non-deleted) records in the store");
+    metrics::describe_gauge!("valori_records_capacity",
+        "Maximum records allowed (VALORI_MAX_RECORDS)");
+    metrics::describe_gauge!("valori_record_fill_ratio",
+        "Live records divided by capacity (0.0–1.0); alert above 0.9");
+    metrics::describe_gauge!("valori_nodes_live",
+        "Number of live graph nodes");
+    metrics::describe_gauge!("valori_nodes_capacity",
+        "Maximum nodes allowed (VALORI_MAX_NODES)");
+    metrics::describe_gauge!("valori_node_fill_ratio",
+        "Live nodes divided by capacity (0.0–1.0)");
+    metrics::describe_gauge!("valori_edges_live",
+        "Number of live graph edges");
+    metrics::describe_gauge!("valori_edges_capacity",
+        "Maximum edges allowed (VALORI_MAX_EDGES)");
+    metrics::describe_gauge!("valori_edge_fill_ratio",
+        "Live edges divided by capacity (0.0–1.0)");
+    metrics::describe_gauge!("valori_dim",
+        "Configured vector dimension (VALORI_DIM)");
+    metrics::describe_gauge!("valori_event_log_height",
+        "Number of committed events in the event journal");
+
+    // ── Liveness sentinel ─────────────────────────────────────────────────────
+    // Ensure at least one gauge exists at startup before any request arrives.
     metrics::gauge!("valori_node_up", 1.0);
 }
 
