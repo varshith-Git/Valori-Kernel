@@ -1,105 +1,114 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! Benchmark: snapshot save and load round-trip latency.
+//!
+//! Measures the real production persistence path:
+//!   Engine::snapshot()  → write to disk
+//!   read from disk      → Engine::restore()
+//!
+//! Data source: SIFT1M base vectors at `data/sift/sift/sift_base.fvecs`.
+
 use anyhow::Result;
-use std::time::Instant;
-use valori_kernel::ValoriKernel;
-use valori_kernel::hnsw::ValoriHNSW;
-use valori_kernel::adapters::sift_batch::SiftBatchLoader;
+use bytemuck::cast_slice;
 use memmap2::Mmap;
 use std::fs::File;
-use bytemuck::cast_slice;
+use std::time::Instant;
 
-const Q16_SCALE: f32 = 65536.0;
+use valori_kernel::adapters::sift_batch::SiftBatchLoader;
+use valori_node::engine::Engine;
+use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+
 const DIM: usize = 128;
+const INGEST_LIMIT: usize = 50_000;
 
 fn main() -> Result<()> {
-    println!("🚀 Starting Persistence Benchmark...");
+    println!("🚀 Persistence Benchmark  (real Engine, {} vectors)", INGEST_LIMIT);
 
-    let db_path = "valori_bench.db";
-    let _ = std::fs::remove_file(db_path);
+    // ── 1. Build Engine ──────────────────────────────────────────────────────
+    let cfg = NodeConfig {
+        dim:               DIM,
+        index_kind:        IndexKind::BruteForce,
+        quantization_kind: QuantizationKind::None,
+        wal_path:          None,
+        snapshot_path:     None,
+        event_log_path:    None,
+        ..NodeConfig::default()
+    };
+    let mut engine = Engine::new(&cfg);
 
-    // 1. INGEST (Build the Graph)
-    let ingest_limit = 50_000; // Use reasonable size to measure save/load
-    println!("📥 Ingesting {} vectors...", ingest_limit);
-    
-    let mut kernel = ValoriKernel::new();
+    // ── 2. Ingest SIFT1M vectors ─────────────────────────────────────────────
+    println!("📥 Ingesting {} vectors …", INGEST_LIMIT);
+
     let path = "data/sift/sift/sift_base.fvecs";
-    let file = File::open(path).expect("Failed to open SIFT base file");
+    let file = File::open(path).expect("SIFT base file not found at data/sift/sift/sift_base.fvecs");
     let mmap = unsafe { Mmap::map(&file)? };
-    let mut loader = SiftBatchLoader::new(&mmap).unwrap();
+    let mut loader = SiftBatchLoader::new(&mmap)
+        .ok_or_else(|| anyhow::anyhow!("Invalid SIFT fvecs format"))?;
 
-    let mut id_counter = 0;
-    // Buffer: CMD(1) + ID(8) + DIM(2) + VEC(DIM*4) + TAG(8)
-    let mut packet_buffer = vec![0u8; 1 + 8 + 2 + (DIM * 4) + 8]; 
-    packet_buffer[0] = 1; // CMD_INSERT
-    packet_buffer[9..11].copy_from_slice(&(DIM as u16).to_le_bytes());
-
-    while let Some((raw_bytes, count)) = loader.next_batch(1000) {
-        let stride = 4 + (DIM * 4);
+    let mut ingested = 0usize;
+    'outer: while let Some((raw_bytes, count)) = loader.next_batch(1_000) {
+        let stride = 4 + DIM * 4;
         for i in 0..count {
-            if id_counter >= ingest_limit { break; }
-            let offset = i * stride;
-            let vec_f32: &[f32] = cast_slice(&raw_bytes[offset+4 .. offset+stride]);
-            
-            // Construct Payload
-            let id = id_counter as u64;
-            packet_buffer[1..9].copy_from_slice(&id.to_le_bytes());
-            
-            // Vector
-            let payload_vec_start = 11;
-            let payload_vec_end = 11 + (DIM * 4);
-            let payload_vec = &mut packet_buffer[payload_vec_start..payload_vec_end];
-            for (j, &val) in vec_f32.iter().enumerate() {
-                let fixed = (val * Q16_SCALE) as i32;
-                payload_vec[j*4..(j+1)*4].copy_from_slice(&fixed.to_le_bytes());
+            if ingested >= INGEST_LIMIT {
+                break 'outer;
             }
-            
-            // Tag (Default 0)
-            packet_buffer[payload_vec_end..payload_vec_end+8].copy_from_slice(&0u64.to_le_bytes());
-
-            kernel.apply_event(&packet_buffer)?;
-            id_counter += 1;
+            let offset = i * stride;
+            let vec_f32: &[f32] = cast_slice(&raw_bytes[offset + 4..offset + stride]);
+            engine.insert_record_from_f32(vec_f32)
+                .map_err(|e| anyhow::anyhow!("insert failed: {e:?}"))?;
+            ingested += 1;
         }
-        if id_counter >= ingest_limit { break; }
     }
-    println!("✅ Ingest Complete. Graph Size: {}", kernel.record_count());
+    println!("✅ Ingested {} records", engine.state.record_count());
 
-    // 2. SAVE SNAPSHOT
-    println!("💾 Saving Snapshot to {}...", db_path);
-    let start_save = Instant::now();
-    // We need to access the inner index to call save, or expose save on kernel?
-    // Using `pub index` from kernel structure (it is pub in ValoriKernel?)
-    // `kernel.index` is public? Let's assume so or fix it.
-    kernel.index.save(db_path)?;
-    let save_time = start_save.elapsed();
-    println!("✅ Save Complete in {:.2?}", save_time);
+    // ── 3. Save snapshot ─────────────────────────────────────────────────────
+    let snap_path = "valori_bench_persist.val";
+    let _ = std::fs::remove_file(snap_path);
 
-    // 3. DROP KERNEL
-    drop(kernel);
-    println!("🗑️  Kernel Dropped from RAM.");
+    println!("💾 Saving snapshot to {} …", snap_path);
+    let t_save = Instant::now();
+    let snap_bytes = engine.snapshot()
+        .map_err(|e| anyhow::anyhow!("snapshot failed: {e:?}"))?;
+    std::fs::write(snap_path, &snap_bytes)?;
+    let save_time = t_save.elapsed();
 
-    // 4. LOAD SNAPSHOT
-    println!("📂 Loading Snapshot from {}...", db_path);
-    let start_load = Instant::now();
-    let loaded_index = ValoriHNSW::load(db_path)?;
-    let load_time = start_load.elapsed();
-    println!("✅ Load Complete in {:.2?}", load_time);
-    
-    // Verify restored state
-    let restored_kernel = ValoriKernel { index: loaded_index };
-    println!("📊 Restored Graph Size: {}", restored_kernel.record_count());
-    assert_eq!(restored_kernel.record_count(), ingest_limit);
+    println!("✅ Saved  {:.2} KB  in {:.2?}", snap_bytes.len() as f64 / 1024.0, save_time);
 
-    // 5. QUERY CHECK
-    println!("🔎 Verifying Query...");
-    let q_vec = vec![0i32; DIM]; // Zero query just to see if it runs
-    let results = restored_kernel.search(&q_vec, 1, None)?;
-    println!("Got {} results. First: {:?}", results.len(), results.get(0));
+    // ── 4. Drop the old engine ───────────────────────────────────────────────
+    let original_count = engine.state.record_count();
+    drop(engine);
+    println!("🗑️  Original engine dropped.");
 
-    println!("--------------------------------------------------");
-    println!("⏱️  PERSISTENCE REPORT ({} Vectors)", ingest_limit);
-    println!("   - Save Time: {:.2?}", save_time);
-    println!("   - Load Time: {:.2?}", load_time);
-    println!("--------------------------------------------------");
+    // ── 5. Restore from snapshot ─────────────────────────────────────────────
+    println!("📂 Restoring from {} …", snap_path);
+    let file_bytes = std::fs::read(snap_path)?;
 
-    let _ = std::fs::remove_file(db_path);
+    let mut restored = Engine::new(&cfg);
+    let t_load = Instant::now();
+    restored.restore(&file_bytes)
+        .map_err(|e| anyhow::anyhow!("restore failed: {e:?}"))?;
+    let load_time = t_load.elapsed();
+
+    println!("✅ Restored {} records in {:.2?}", restored.state.record_count(), load_time);
+    assert_eq!(
+        restored.state.record_count(),
+        original_count,
+        "Restored record count must match original"
+    );
+
+    // ── 6. Spot-check search works ───────────────────────────────────────────
+    let q = vec![0.0f32; DIM];
+    let results = restored.search_l2(&q, 1)
+        .map_err(|e| anyhow::anyhow!("search failed: {e:?}"))?;
+    println!("🔎 Spot search: {} result(s). First ID: {:?}", results.len(), results.first().map(|r| r.0));
+
+    // ── 7. Report ────────────────────────────────────────────────────────────
+    println!();
+    println!("──────────────────────────────────────────────");
+    println!("  PERSISTENCE REPORT  ({} vectors, {} KB snapshot)", INGEST_LIMIT, snap_bytes.len() / 1024);
+    println!("  Save time:    {:>10.3?}", save_time);
+    println!("  Restore time: {:>10.3?}", load_time);
+    println!("──────────────────────────────────────────────");
+
+    let _ = std::fs::remove_file(snap_path);
     Ok(())
 }
