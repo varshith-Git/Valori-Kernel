@@ -104,14 +104,16 @@ def main():
         
         import json
         
-        # 1. Pre-declare core Concept Nodes in the Valoricore Knowledge Graph (NodeKind.Concept = 1)
-        concept_materials = db.create_node(kind=1)
-        concept_maintenance = db.create_node(kind=1)
-        concept_ship = db.create_node(kind=1)
+        from valoricore.kinds import NODE_CONCEPT, EDGE_RELATION, NODE_RECORD, EDGE_MENTIONS
         
-        # 2. Logically link concepts together (EdgeKind.Relation = 0)
+        # 1. Pre-declare core Concept Nodes using Fluent API
+        concept_materials = db.node(kind=NODE_CONCEPT)
+        concept_maintenance = db.node(kind=NODE_CONCEPT)
+        concept_ship = db.node(kind=NODE_CONCEPT)
+        
+        # 2. Logically link concepts together
         # E.g., Maintenance operations relate to Materials
-        db.create_edge(from_id=concept_maintenance, to_id=concept_materials, kind=0)
+        concept_maintenance.link_to(concept_materials, EDGE_RELATION)
         
         # 3. Define Semantic Anchors for Concept Edges
         prefix_anchor = "passage: " if "e5" in model_name else ""
@@ -138,25 +140,22 @@ def main():
                 normalize_embeddings=True
             ).tolist()
             
-            # A. Insert into Vector Engine
-            record_id = db.insert(vector=embedding, tag=i)
-            
-            # B. Wrap Vector in Graph Node (NodeKind.Record = 0)
-            record_node = db.create_node(kind=0, record_id=record_id)
+            # A/B. Insert Vector & Wrap in Graph Node (Fluent API One-liner)
+            record_node = db.node(kind=NODE_RECORD, vector=embedding, tag=i)
+            record_id = record_node.record_id
             
             # Persist text, tag, and node_id permanently using Valoricore metadata
-            metadata_bytes = json.dumps({'tag': i, 'text': text, 'node_id': record_node}).encode('utf-8')
+            metadata_bytes = json.dumps({'tag': i, 'text': text, 'node_id': record_node.id}).encode('utf-8')
             db.set_metadata(record_id, metadata_bytes)
             
             # C. Connect Record Nodes to the Concept Nodes via Semantic Gates
-            for concept_id, anchor_emb in concept_anchors.items():
+            for concept_node, anchor_emb in concept_anchors.items():
                 # Both embeddings are normalized, so dot product == cosine similarity
                 similarity = sum(a * b for a, b in zip(embedding, anchor_emb))
                 if similarity > CONCEPT_EDGE_THRESHOLD:
-                    # EdgeKind.Mentions = 4
-                    db.create_edge(from_id=record_node, to_id=concept_id, kind=4)
-                    # Make it bidirectional so db.expand() can traverse from Concept back down to Records!
-                    db.create_edge(from_id=concept_id, to_id=record_node, kind=4)
+                    # Bidirectional edge using fluent API
+                    record_node.link_to(concept_node, EDGE_MENTIONS)
+                    record_node.link_from(concept_node, EDGE_MENTIONS)
             
         print(f"Inserted {len(chunks)} documents & constructed Knowledge Graph.\n")
         
