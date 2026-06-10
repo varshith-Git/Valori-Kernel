@@ -1,7 +1,7 @@
 pub mod brute_force;
 
 use crate::storage::pool::RecordPool;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::types::vector::FxpVector;
 use crate::types::id::RecordId;
 use crate::types::scalar::FxpScalar;
