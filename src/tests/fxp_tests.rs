@@ -1,5 +1,5 @@
 use crate::types::scalar::FxpScalar;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::fxp::ops::{fxp_add, fxp_sub, fxp_mul, from_f32, to_f32};
 use crate::config::SCALE;
 
