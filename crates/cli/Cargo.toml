@@ -1,7 +1,8 @@
 [package]
-name = "valori-cli"
-version = "0.1.0"
-edition = "2021"
+name        = "valori-cli"
+version     = "0.1.0"
+edition     = "2021"
+description = "Valori Forensic CLI — black-box flight recorder for Valori AI memory databases"
 
 [lib]
 name = "valori_cli"
@@ -15,21 +16,35 @@ path = "src/main.rs"
 name = "bench_ingest"
 path = "src/bin/bench_ingest.rs"
 
-[dependencies]
-clap = { version = "4.5", features = ["derive"] }
-anyhow = "1.0"
-comfy-table = "7.1"
-chrono = "0.4"
-crc64fast = "1.0"
-bincode = { version = "2.0.1", features = ["serde"] }
-valori-node = { path = "../../node" }
-valori-kernel = { path = "../.." }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-memmap2 = "0.9"
-bytemuck = "1.14"
+[[bin]]
+name = "bench_1m"
+path = "src/bin/bench_1m.rs"
 
+[[bin]]
+name = "bench_filter"
+path = "src/bin/bench_filter.rs"
+
+[[bin]]
+name = "bench_persistence"
+path = "src/bin/bench_persistence.rs"
+
+[[bin]]
+name = "bench_recall"
+path = "src/bin/bench_recall.rs"
+
+[dependencies]
+clap        = { version = "4.5",   features = ["derive"] }
+anyhow      = "1.0"
+comfy-table = "7.1"
+chrono      = "0.4"
+crc64fast   = "1.0"
+bincode     = { version = "2.0.1", features = ["serde"] }
+valori-node   = { path = "../../node" }
+valori-kernel = { path = "../.." }
+serde       = { version = "1.0",   features = ["derive"] }
+serde_json  = "1.0"
+memmap2     = "0.9"
+bytemuck    = "1.14"
 
 [dev-dependencies]
 tempfile = "3.24.0"
-
