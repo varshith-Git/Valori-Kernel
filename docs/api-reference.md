@@ -28,6 +28,12 @@ Inserts a vector, creates a chunk node, and optionally links it to a document.
       "chunk_node_id": 200
     }
     ```
+*   **Error responses**:
+    | Status | Condition |
+    |---|---|
+    | `400 Bad Request` | Missing or malformed fields |
+    | `401 Unauthorized` | Auth token required but not provided |
+    | `507 Insufficient Storage` | `VALORI_MAX_RECORDS` (or `MAX_NODES` / `MAX_EDGES`) limit reached |
 
 #### `POST /v1/memory/search_vector`
 Search for nearest neighbors.
@@ -55,6 +61,7 @@ Direct access to kernel primitives.
 Insert a new vector record.
 *   **Body**: `{"values": [...]}`
 *   **Response**: `{"id": 123}`
+*   **Errors**: `507 Insufficient Storage` when `VALORI_MAX_RECORDS` is reached.
 
 #### `POST /search`
 Primitive search.
