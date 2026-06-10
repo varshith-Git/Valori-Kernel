@@ -1,5 +1,5 @@
 
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 /// Deterministic K-Means clustering over Q16.16 fixed-point vectors.
 ///
 /// All distance computations use i64 integer arithmetic — no f32 in the hot
