@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 extern crate std;
 use std::vec::Vec;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::state::kernel::KernelState;
 use crate::state::command::Command;
 use crate::types::id::{RecordId, NodeId, EdgeId};
