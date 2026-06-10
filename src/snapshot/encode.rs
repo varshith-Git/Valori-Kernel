@@ -1,11 +1,11 @@
 //! Snapshot encoding.
 
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 3; // Bumped for Dynamic Scaling
+pub const SCHEMA_VERSION: u32 = 4; // Bumped for back-pointer edge lists (first_in_edge / next_in)
 
 /// writes a u32 to the buffer at offset
 fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
@@ -123,6 +123,15 @@ pub fn encode_state(
                 }
                 None => write_u8(buf, &mut offset, 0)?,
             }
+
+            // V4: incoming edge back-pointer head
+            match node.first_in_edge {
+                Some(eid) => {
+                    write_u8(buf, &mut offset, 1)?;
+                    write_u32(buf, &mut offset, eid.0)?;
+                }
+                None => write_u8(buf, &mut offset, 0)?,
+            }
         }
     }
 
@@ -141,6 +150,15 @@ pub fn encode_state(
             write_u32(buf, &mut offset, edge.to.0)?;
             
             match edge.next_out {
+                Some(eid) => {
+                    write_u8(buf, &mut offset, 1)?;
+                    write_u32(buf, &mut offset, eid.0)?;
+                }
+                None => write_u8(buf, &mut offset, 0)?,
+            }
+
+            // V4: incoming list back-pointer
+            match edge.next_in {
                 Some(eid) => {
                     write_u8(buf, &mut offset, 1)?;
                     write_u32(buf, &mut offset, eid.0)?;
