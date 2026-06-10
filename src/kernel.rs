@@ -3,11 +3,24 @@ use crate::types::{InsertPayload, CMD_DELETE, CMD_INSERT};
 use crate::hnsw::ValoriHNSW;
 use crc64fast::Digest;
 
+/// **LEGACY** — do not use in new code.
+///
+/// `ValoriKernel` is the original HNSW-based kernel from the prototype era.
+/// All new development happens in the `valori-node` crate (`Engine` + `KernelState`).
+/// This struct is retained only for backward-compatibility with the CLI bench
+/// binaries in `crates/cli/src/bin/` and will be removed in a future version.
+///
+/// Use `valori_node::engine::Engine` instead.
+#[deprecated(
+    since = "0.3.0",
+    note = "Use valori_node::engine::Engine. This HNSW-backed struct will be removed."
+)]
 #[derive(Debug, Default)]
 pub struct ValoriKernel {
     pub index: ValoriHNSW,
 }
 
+#[allow(deprecated)] // impl block for the deprecated struct itself
 impl ValoriKernel {
     pub fn new() -> Self {
         Self::default()
