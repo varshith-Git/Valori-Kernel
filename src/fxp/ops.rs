@@ -1,6 +1,6 @@
 //! Fixed-point operations.
 
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::types::scalar::FxpScalar;
 use crate::fxp::qformat::FRAC_BITS;
 #[cfg(any(test, feature = "std"))]
