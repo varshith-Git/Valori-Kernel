@@ -22,6 +22,10 @@ class MemoryClient:
         remote: Optional[str] = None,
         index_kind: str = "bruteforce",
         quantization: str = "none",
+        max_records: int = 0,
+        dim: int = 0,
+        max_nodes: int = 0,
+        max_edges: int = 0,
     ):
         """
         Wraps a Valoricore instance (local or remote).
@@ -29,16 +33,32 @@ class MemoryClient:
         Else -> Remote (HTTP).
 
         Args:
-            path:         Directory for the local embedded database. Only used
-                          when ``remote`` is ``None``.
-            remote:       HTTP URL of a standalone ``valori-node``
-                          (e.g. ``"http://localhost:3000"``).
-            index_kind:   Vector index backend: ``"bruteforce"``, ``"hnsw"``, or ``"ivf"``.
+            path:         Directory for the local embedded database.
+            remote:       HTTP URL of a standalone ``valori-node``.
+            index_kind:   ``"bruteforce"`` | ``"hnsw"``
             quantization: Reserved for future quantization options.
+            max_records:  Vector pool capacity. **Always set this explicitly.**
+                          The default (1024) is only suitable for unit tests.
+                          Example: ``max_records=1_100_000`` for a 1M-vector store.
+            dim:          Vector dimension. Must match your embedding model output.
+                          Example: ``dim=384`` for ``all-MiniLM-L6-v2``.
+            max_nodes:    Knowledge Graph node capacity.
+            max_edges:    Knowledge Graph edge capacity.
         """
-        self._db = Valoricore(remote=remote, path=path, index_kind=index_kind)
+        self._db = Valoricore(
+            remote=remote,
+            path=path,
+            index_kind=index_kind,
+            max_records=max_records,
+            dim=dim,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+        )
         self._index_kind = index_kind
         self._quantization = quantization
+        # Dimension configured at construction time.  0 means "infer from
+        # first insert" — we skip explicit validation in that case.
+        self._dim = dim
 
     def add_document(
         self,
@@ -102,8 +122,8 @@ class MemoryClient:
         attach_to_document_node: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Directly upsert a vector, optionally attaching to a doc node."""
-        if len(vector) != EXPECTED_DIM:
-            raise ValidationError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
+        if self._dim and len(vector) != self._dim:
+            raise ValidationError(f"Embedding must be {self._dim}-dimensional, got {len(vector)}")
 
         rid, proof = self._db.insert_with_proof(vector)
 
@@ -130,8 +150,8 @@ class MemoryClient:
     ) -> List[Dict[str, Any]]:
         """Encode query string and perform nearest neighbor search."""
         vec = embed(query)
-        if len(vec) != EXPECTED_DIM:
-            raise ValidationError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vec)}")
+        if self._dim and len(vec) != self._dim:
+            raise ValidationError(f"Embedding must be {self._dim}-dimensional, got {len(vec)}")
             
         hits = self._db.search(vec, k=k)
         
@@ -215,7 +235,10 @@ class MemoryClient:
     def soft_delete(self, record_id: int) -> None:
         """
         Mark a record as inactive without physically removing it.
-        The slot can be reused by future inserts.  The state hash will
+
+        The record slot is **not** freed or reused — it stays allocated but is
+        excluded from search results and the record count.  Use ``delete()``
+        if you need the slot to be physically removed.  The state hash will
         change to reflect the deletion.
 
         Args:
@@ -298,6 +321,81 @@ class MemoryClient:
             New edge ID.
         """
         return self._db.create_edge(from_id=from_id, to_id=to_id, kind=kind)
+
+    # ── High-level fluent graph API ────────────────────────────────────────────
+
+    def node(self, kind: int, vector=None, tag: int = 0):
+        """
+        Create a graph node and return a :class:`~valoricore.graph.Node` object.
+
+        If *vector* is provided the embedding is inserted first and the record
+        is automatically linked — no manual ID juggling::
+
+            chunk = db.node(NODE_CHUNK, vector=my_embedding)
+            # replaces:
+            #   rid = db.insert(my_embedding)
+            #   nid = db.create_node(NODE_CHUNK, record_id=rid)
+
+        Args:
+            kind:   Node kind integer (``NODE_DOCUMENT``, ``NODE_CHUNK``, …).
+            vector: Optional embedding vector to insert and attach.
+            tag:    Optional integer tag applied to the vector record.
+
+        Returns:
+            A :class:`~valoricore.graph.Node` ready for method chaining.
+        """
+        return self._db.node(kind=kind, vector=vector, tag=tag)
+
+    def edge(self, from_node, to_node, kind: int) -> int:
+        """
+        Create a directed edge. Accepts :class:`~valoricore.graph.Node` objects
+        **or** raw integer IDs interchangeably::
+
+            db.edge(doc_node, chunk_node, EDGE_PARENT_OF)
+            db.edge(3, 7, EDGE_REFERS_TO)   # raw ints still work
+
+        Returns:
+            Integer edge ID.
+        """
+        return self._db.edge(from_node, to_node, kind)
+
+    def build_document(self, title: Optional[str] = None):
+        """
+        Return a :class:`~valoricore.graph.DocumentGraph` context manager.
+
+        Builds the classic RAG document → chunk graph in one clean block::
+
+            with db.build_document(title="Annual Report") as builder:
+                for emb in chunk_embeddings:
+                    builder.add_chunk(emb)
+
+            doc  = builder.document    # root Node
+            rids = builder.record_ids  # vector record IDs in order
+
+        Returns:
+            :class:`~valoricore.graph.DocumentGraph` context manager.
+        """
+        return self._db.build_document(title=title)
+
+    def delete_node(self, node_id: int) -> None:
+        """
+        Delete a graph node and cascade-delete all its incident edges.
+        The deletion is committed to the WAL so it survives crashes.
+
+        Args:
+            node_id: The integer node ID to remove.
+        """
+        return self._db.delete_node(node_id)
+
+    def delete_edge(self, edge_id: int) -> None:
+        """
+        Delete a single directed edge by ID.
+        The deletion is committed to the WAL so it survives crashes.
+
+        Args:
+            edge_id: The integer edge ID to remove.
+        """
+        return self._db.delete_edge(edge_id)
 
     def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a node's ``kind`` and ``record_id``."""
