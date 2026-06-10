@@ -298,7 +298,7 @@ Key environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `VALORI_DIM` | `16` | Embedding dimension |
-| `VALORI_MAX_RECORDS` | `1024` | Soft record limit (pool grows dynamically) |
+| `VALORI_MAX_RECORDS` | `1024` | Hard record limit; inserts return HTTP 507 when full |
 | `VALORI_INDEX` | `bruteforce` | `bruteforce` · `hnsw` · `ivf` |
 | `VALORI_AUTH_TOKEN` | — | Bearer token for HTTP API |
 | `VALORI_EVENT_LOG_PATH` | — | Durable event log location |
