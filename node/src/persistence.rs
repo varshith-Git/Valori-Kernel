@@ -2,7 +2,7 @@ use serde::{Serialize, Deserialize};
 use crate::config::{IndexKind, QuantizationKind};
 use std::fs::File;
 use std::io::Write;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use std::path::Path;
 use crc32fast::Hasher;
 
