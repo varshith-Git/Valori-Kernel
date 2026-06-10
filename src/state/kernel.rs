@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Kernel State definition.
 
 use crate::types::id::Version;
@@ -10,7 +10,7 @@ use crate::state::command::Command;
 use crate::error::{Result, KernelError};
 use crate::graph::node::GraphNode;
 use crate::graph::adjacency::{add_edge, OutEdgeIterator};
-use crate::types::id::{RecordId, NodeId, EdgeId, EdgeId as GraphEdgeId};
+use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
 use crate::storage::record::Record;
 
@@ -46,6 +46,12 @@ impl KernelState {
         self.records.iter().count()
     }
 
+    /// Total number of allocated record slots (live + soft-deleted; excludes hard-deleted gaps).
+    /// Used to size snapshot buffers and rebuild-index loops correctly.
+    pub fn total_record_slots(&self) -> usize {
+        self.records.total_slots()
+    }
+
     pub fn get_record(&self, id: RecordId) -> Option<&Record> {
         self.records.get(id)
     }
@@ -58,16 +64,35 @@ impl KernelState {
         self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
 
-    pub fn is_edge_active(&self, id: EdgeId) -> bool {
-        self.edges.get(id).is_some()
+    /// Iterate over all live graph nodes (excludes deleted/hole slots).
+    pub fn iter_nodes(&self) -> impl Iterator<Item = &crate::graph::node::GraphNode> {
+        self.nodes.nodes.iter().filter_map(|slot| slot.as_ref())
+    }
+
+
+
+    pub fn next_record_id(&self) -> RecordId {
+        RecordId(self.records.raw_records().len() as u32)
     }
 
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
 
+    pub fn next_node_id(&self) -> NodeId {
+        NodeId(self.nodes.len() as u32)
+    }
+
     pub fn edge_count(&self) -> usize {
         self.edges.len()
+    }
+
+    pub fn next_edge_id(&self) -> EdgeId {
+        EdgeId(self.edges.len() as u32)
+    }
+
+    pub fn is_edge_active(&self, id: EdgeId) -> bool {
+        self.edges.get(id).is_some()
     }
 
     pub fn search_l2(&self, query: &FxpVector, results: &mut [SearchResult], filter: Option<u64>) -> usize {
@@ -158,6 +183,16 @@ impl KernelState {
                 let cmd = Command::DeleteEdge { edge_id: *id };
                 self.apply(&cmd)?;
             }
+
+            KernelEvent::SoftDeleteRecord { id } => {
+                let cmd = Command::SoftDeleteRecord { id: *id };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::DeleteNode { id } => {
+                let cmd = Command::DeleteNode { node_id: *id };
+                self.apply(&cmd)?;
+            }
         }
 
         Ok(())
@@ -218,6 +253,12 @@ impl KernelState {
             Command::DeleteEdge { edge_id } => {
                 self._delete_edge(*edge_id)?;
             }
+            Command::SoftDeleteRecord { id } => {
+                // Mark the pool slot as a tombstone.
+                self.records.soft_delete(*id)?;
+                // Remove from the search index so it never surfaces in queries.
+                <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, *id);
+            }
         }
 
         self.version = self.version.next();
@@ -229,23 +270,32 @@ impl KernelState {
             return Err(KernelError::NotFound);
         }
 
-        // Cascading delete: Remove all edges involving this node.
-        loop {
-            let mut edge_to_remove: Option<EdgeId> = None;
-            // Scan all edges to find one that involves this node.
-            // Note: inefficient O(E) scan per edge, but robust for no_std without reverse index.
-            for edge in self.edges.edges.iter().flatten() {
-                if edge.from == node_id || edge.to == node_id {
-                    edge_to_remove = Some(edge.id);
-                    break;
-                }
+        // Collect all outgoing edge IDs via first_out_edge → next_out chain  O(out-degree)
+        let out_edges: alloc::vec::Vec<EdgeId> = {
+            let mut acc = alloc::vec::Vec::new();
+            let mut curr = self.nodes.get(node_id).and_then(|n| n.first_out_edge);
+            while let Some(eid) = curr {
+                acc.push(eid);
+                curr = self.edges.get(eid).and_then(|e| e.next_out);
             }
-            
-            if let Some(eid) = edge_to_remove {
-                // _delete_edge handles unlinking from adjacency lists
+            acc
+        };
+
+        // Collect all incoming edge IDs via first_in_edge → next_in chain  O(in-degree)
+        let in_edges: alloc::vec::Vec<EdgeId> = {
+            let mut acc = alloc::vec::Vec::new();
+            let mut curr = self.nodes.get(node_id).and_then(|n| n.first_in_edge);
+            while let Some(eid) = curr {
+                acc.push(eid);
+                curr = self.edges.get(eid).and_then(|e| e.next_in);
+            }
+            acc
+        };
+
+        // Delete each incident edge once (guard against double-delete on self-loops)
+        for &eid in out_edges.iter().chain(in_edges.iter()) {
+            if self.edges.get(eid).is_some() {
                 self._delete_edge(eid)?;
-            } else {
-                break; 
             }
         }
 
@@ -256,35 +306,46 @@ impl KernelState {
     fn _delete_edge(&mut self, edge_id: EdgeId) -> Result<()> {
         let edge = self.edges.get(edge_id).ok_or(KernelError::NotFound)?;
         let from_node_id = edge.from;
-        
-        let mut prev_id: Option<GraphEdgeId> = None;
-        
-        if let Some(node) = self.nodes.get(from_node_id) {
-            let mut curr_id = node.first_out_edge;
-            
-            while let Some(c) = curr_id {
+        let to_node_id   = edge.to;
+
+        // --- Unlink from `from` node's outgoing list ---
+        {
+            let mut prev: Option<EdgeId> = None;
+            let mut curr = self.nodes.get(from_node_id).and_then(|n| n.first_out_edge);
+            while let Some(c) = curr {
                 if c == edge_id {
-                    // Found it. Unlink.
-                    let next_id = self.edges.get(c).unwrap().next_out;
-                    
-                    if let Some(p) = prev_id {
-                        // Interior
-                        self.edges.get_mut(p).unwrap().next_out = next_id;
+                    let next = self.edges.get(c).and_then(|e| e.next_out);
+                    if let Some(p) = prev {
+                        self.edges.get_mut(p).unwrap().next_out = next;
                     } else {
-                        // Head
-                        self.nodes.get_mut(from_node_id).unwrap().first_out_edge = next_id;
+                        self.nodes.get_mut(from_node_id).unwrap().first_out_edge = next;
                     }
                     break;
                 }
-                prev_id = Some(c);
-                if let Some(e) = self.edges.get(c) {
-                    curr_id = e.next_out;
-                } else {
-                    break;
-                }
+                prev = Some(c);
+                curr = self.edges.get(c).and_then(|e| e.next_out);
             }
         }
-        
+
+        // --- Unlink from `to` node's incoming list ---
+        {
+            let mut prev: Option<EdgeId> = None;
+            let mut curr = self.nodes.get(to_node_id).and_then(|n| n.first_in_edge);
+            while let Some(c) = curr {
+                if c == edge_id {
+                    let next = self.edges.get(c).and_then(|e| e.next_in);
+                    if let Some(p) = prev {
+                        self.edges.get_mut(p).unwrap().next_in = next;
+                    } else {
+                        self.nodes.get_mut(to_node_id).unwrap().first_in_edge = next;
+                    }
+                    break;
+                }
+                prev = Some(c);
+                curr = self.edges.get(c).and_then(|e| e.next_in);
+            }
+        }
+
         self.edges.delete(edge_id)?;
         Ok(())
     }
