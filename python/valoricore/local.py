@@ -15,10 +15,43 @@ except ImportError:
 
 class LocalClient:
     """Synchronous FFI client for the embedded Valoricore Kernel."""
-    
-    def __init__(self, path: str = "./valoricore_db", index_kind: str = "bruteforce"):
+
+    def __init__(
+        self,
+        path: str = "./valoricore_db",
+        index_kind: str = "bruteforce",
+        max_records: int = 0,
+        dim: int = 0,
+        max_nodes: int = 0,
+        max_edges: int = 0,
+    ):
+        """
+        Args:
+            path:        Database directory.
+            index_kind:  ``"bruteforce"`` | ``"hnsw"``
+            max_records: Vector pool capacity. Overrides ``VALORI_MAX_RECORDS``.
+                         Defaults to the env var value (1024 if unset — too small
+                         for production; always pass an explicit value).
+            dim:         Vector dimension. Overrides ``VALORI_DIM``.
+                         Must match the embedding model output (e.g. 384).
+            max_nodes:   Knowledge Graph node capacity. Overrides ``VALORI_MAX_NODES``.
+            max_edges:   Knowledge Graph edge capacity. Overrides ``VALORI_MAX_EDGES``.
+        """
         if _ffi is None:
-             raise ImportError("Could not load 'valoricore_ffi' module. Ensure it is compiled and in PYTHONPATH.")
+            raise ImportError(
+                "Could not load 'valoricore_ffi' module. "
+                "Ensure it is compiled and in PYTHONPATH."
+            )
+        # Set env vars right before the Rust engine boots so NodeConfig::default()
+        # picks them up. This is the only way to pass capacity without a Rust ABI change.
+        if max_records > 0:
+            os.environ["VALORI_MAX_RECORDS"] = str(max_records)
+        if dim > 0:
+            os.environ["VALORI_DIM"] = str(dim)
+        if max_nodes > 0:
+            os.environ["VALORI_MAX_NODES"] = str(max_nodes)
+        if max_edges > 0:
+            os.environ["VALORI_MAX_EDGES"] = str(max_edges)
         try:
             self.kernel = _ffi.ValoricoreEngine(path, index_kind)
             self.path = path
@@ -70,6 +103,71 @@ class LocalClient:
 
     def create_edge(self, from_id: int, to_id: int, kind: int) -> int:
         return self.kernel.create_edge(from_id, to_id, kind)
+
+    # ── High-level fluent graph API ────────────────────────────────────────────
+
+    def node(self, kind: int, vector=None, tag: int = 0):
+        """
+        Create a graph node and return a :class:`~valoricore.graph.Node` object.
+
+        If *vector* is provided the embedding is inserted first and the record
+        is automatically linked — no manual ID juggling::
+
+            chunk = db.node(NODE_CHUNK, vector=my_embedding)
+            # replaces the old three-liner:
+            #   rid = db.insert(my_embedding)
+            #   nid = db.create_node(NODE_CHUNK, record_id=rid)
+        """
+        from . import graph as _g
+        record_id = None
+        if vector is not None:
+            record_id = self.insert(vector, tag=tag)
+        node_id = self.create_node(kind=kind, record_id=record_id)
+        return _g.Node(node_id, kind, record_id, self)
+
+    def edge(self, from_node, to_node, kind: int) -> int:
+        """
+        Create a directed edge. Accepts :class:`~valoricore.graph.Node` objects
+        **or** raw integer IDs, so both styles work freely::
+
+            db.edge(doc_node, chunk_node, EDGE_PARENT_OF)
+            db.edge(3, 7, EDGE_REFERS_TO)   # raw ints still work
+        """
+        from . import graph as _g
+        from_id = from_node.id if isinstance(from_node, _g.Node) else int(from_node)
+        to_id   = to_node.id   if isinstance(to_node,   _g.Node) else int(to_node)
+        return self.create_edge(from_id=from_id, to_id=to_id, kind=kind)
+
+    def build_document(self, title=None):
+        """
+        Return a :class:`~valoricore.graph.DocumentGraph` context manager for
+        building a document-root + chunk-nodes graph without any ID management::
+
+            with db.build_document(title="My Article") as builder:
+                for emb in embeddings:
+                    builder.add_chunk(emb)
+
+            doc  = builder.document    # root Node
+            rids = builder.record_ids  # [0, 1, 2, …]
+        """
+        from . import graph as _g
+        return _g.DocumentGraph(self, title=title)
+
+    def delete_node(self, node_id: int) -> None:
+        """Delete a graph node and all its incident edges (cascade)."""
+        try:
+            self.kernel.delete_node(node_id)
+        except Exception as e:
+            from .exceptions import KernelError
+            raise KernelError(f"Failed to delete node {node_id}: {e}")
+
+    def delete_edge(self, edge_id: int) -> None:
+        """Delete a single graph edge by ID."""
+        try:
+            self.kernel.delete_edge(edge_id)
+        except Exception as e:
+            from .exceptions import KernelError
+            raise KernelError(f"Failed to delete edge {edge_id}: {e}")
 
     def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
         """Fetch node data (kind, record_id)."""
