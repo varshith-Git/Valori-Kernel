@@ -1,85 +1,232 @@
-use anyhow::{Context, Result};
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! Forensic replay engine.
+//!
+//! [`ForensicEngine`] loads a Valori snapshot into a live [`KernelState`] and
+//! then replays events from the write-ahead event log to any target event
+//! count.  No WAL writers or event-log writers are opened — this is a
+//! **read-only, forensic view** of the database.
 
-use valori_kernel::ValoriKernel;
-use valori_persistence::snapshot;
+use anyhow::{bail, Context, Result};
+use valori_kernel::snapshot::blake3::hash_state_blake3;
+use valori_kernel::snapshot::decode::decode_state;
+use valori_kernel::state::kernel::KernelState;
 use valori_node::events::event_log::LogEntry;
 
+/// Magic bytes that prefix every Valori snapshot blob.
+const SNAPSHOT_MAGIC: &[u8; 4] = b"VAL1";
+
+// ─── ForensicEngine ──────────────────────────────────────────────────────────
+
+/// A read-only, forensic view of a Valori database.
+///
+/// The engine can be seeded from a snapshot file (the recommended workflow) or
+/// started with an empty state and replayed from the very first event.
 pub struct ForensicEngine {
-    pub snapshot_index: u64,
-    pub current_index: u64,
-    pub state: ValoriKernel,
+    /// Live kernel state — mutated only by [`replay_to`](Self::replay_to).
+    pub state: KernelState,
+
+    /// Total events that have been applied to `state` so far.
+    pub current_event_count: u64,
+
+    /// Ordered list of 1-based event indices applied during [`replay_to`](Self::replay_to).
     pub applied_events: Vec<u64>,
 }
 
 impl ForensicEngine {
-    pub fn new(snapshot_path: &str) -> Result<Self> {
-        let (header, body) = snapshot::read_snapshot(snapshot_path)
-            .context("Failed to read snapshot")?;
-        
-        let kernel = ValoriKernel::load_snapshot(&body)
-            .map_err(|e| anyhow::anyhow!("Failed to load kernel from snapshot: {}", e))?;
-        
+    /// Restore from a `snapshot_path` (VAL1 format).
+    ///
+    /// The resulting state reflects the exact point-in-time captured by the
+    /// snapshot.  Call [`replay_to`](Self::replay_to) afterwards to advance
+    /// the state further along the event log.
+    pub fn from_snapshot(snapshot_path: &str) -> Result<Self> {
+        let data = std::fs::read(snapshot_path)
+            .with_context(|| format!("Cannot read snapshot: {snapshot_path}"))?;
+
+        let state = parse_kernel_from_snapshot_bytes(&data).context(
+            "Snapshot decode failed — file may be corrupt or from an incompatible version",
+        )?;
+
         Ok(Self {
-            snapshot_index: header.event_index,
-            current_index: header.event_index,
-            state: kernel,
+            state,
+            current_event_count: 0,
             applied_events: Vec::new(),
         })
     }
 
-    pub fn replay_to(&mut self, wal_path: &str, target_index: u64) -> Result<usize> {
-        let mut replayed_count = 0;
-        let file_bytes = std::fs::read(wal_path)
-            .context("Failed to read events.log")?;
-            
-        if file_bytes.len() < 16 {
-            return Ok(0); // Empty or corrupt log
+    /// Build an engine starting from an **empty** state (no snapshot required).
+    ///
+    /// Use this when you want to replay the full history from event zero.
+    pub fn empty() -> Self {
+        Self {
+            state: KernelState::new(),
+            current_event_count: 0,
+            applied_events: Vec::new(),
+        }
+    }
+
+    /// Replay events from `log_path`, applying each one to `self.state` until
+    /// `target_count` events have been applied.
+    ///
+    /// Events are **1-indexed**: event #1 is the first entry in the log.
+    ///
+    /// Returns the number of events actually applied in this call.
+    pub fn replay_to(&mut self, log_path: &str, target_count: u64) -> Result<usize> {
+        let raw = std::fs::read(log_path)
+            .with_context(|| format!("Cannot read event log: {log_path}"))?;
+
+        if raw.len() < 16 {
+            return Ok(0); // Empty log — nothing to replay.
         }
 
-        let mut offset = 16;
-        let mut virtual_eid = 0;
+        let mut offset = 16usize; // Skip the 16-byte log header.
+        let mut event_index: u64 = 0;
+        let mut replayed = 0;
 
-        while offset < file_bytes.len() {
+        while offset < raw.len() {
             match bincode::serde::decode_from_slice::<LogEntry, _>(
-                &file_bytes[offset..],
-                bincode::config::standard()
+                &raw[offset..],
+                bincode::config::standard(),
             ) {
                 Ok((entry, bytes_read)) => {
                     offset += bytes_read;
-                    
                     match entry {
                         LogEntry::Event(event) => {
-                            virtual_eid += 1;
-                            
-                            // 1. FILTER: Skip if already in snapshot
-                            if virtual_eid <= self.snapshot_index {
-                                continue;
-                            }
+                            event_index += 1;
 
-                            // 3. STOP: If beyond target
-                            if virtual_eid > target_index {
+                            if event_index > target_count {
                                 break;
                             }
 
-                            // 2. REPLAY: Apply event
-                            self.state.apply_event(&bincode::serde::encode_to_vec(&event, bincode::config::standard()).unwrap())
-                                .map_err(|e| anyhow::anyhow!("Kernel Error at Event {}: {:?}", virtual_eid, e))?;
+                            self.state.apply_event(&event).map_err(|e| {
+                                anyhow::anyhow!("Event #{event_index} failed: {e:?}")
+                            })?;
 
-                            self.current_index = virtual_eid;
-                            self.applied_events.push(virtual_eid);
-                            replayed_count += 1;
+                            self.current_event_count = event_index;
+                            self.applied_events.push(event_index);
+                            replayed += 1;
                         }
                         LogEntry::Checkpoint { event_count, .. } => {
-                            virtual_eid = event_count;
+                            // Checkpoint entries record cumulative event count
+                            // at the time a snapshot was taken.
+                            event_index = event_count;
                         }
                     }
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!("WAL corrupt at offset {}: {}", offset, e));
+                    bail!("Event log corrupt at byte offset {offset}: {e}");
                 }
             }
         }
-        
-        Ok(replayed_count)
+
+        Ok(replayed)
     }
+
+    /// Returns the BLAKE3 content hash of the current kernel state as raw bytes.
+    ///
+    /// This is the same hash exposed by the Python `db.get_state_hash()` API.
+    pub fn blake3_hash(&self) -> [u8; 32] {
+        hash_state_blake3(&self.state)
+    }
+
+    /// Returns the BLAKE3 hash as a 64-character lowercase hex string.
+    pub fn blake3_hex(&self) -> String {
+        self.blake3_hash()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+}
+
+// ─── Snapshot parsing helpers ─────────────────────────────────────────────────
+
+/// Parse a [`KernelState`] from raw snapshot bytes (VAL1 format).
+///
+/// # Layout
+/// ```text
+/// [4 B]  magic       "VAL1"
+/// [4 B]  kernel_len  (u32 LE)
+/// [N B]  kernel_data (VALK-encoded KernelState)
+/// [4 B]  meta_len    (u32 LE)
+/// [M B]  meta_data
+/// [4 B]  index_len   (u32 LE)
+/// [K B]  index_data
+/// ```
+pub fn parse_kernel_from_snapshot_bytes(data: &[u8]) -> Result<KernelState> {
+    if data.len() < 12 {
+        bail!("Snapshot is too short ({} bytes)", data.len());
+    }
+    if &data[0..4] != SNAPSHOT_MAGIC {
+        bail!(
+            "Invalid snapshot magic: expected {:?}, got {:?}",
+            SNAPSHOT_MAGIC,
+            &data[0..4]
+        );
+    }
+
+    let k_len = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    if 8 + k_len > data.len() {
+        bail!(
+            "Snapshot kernel section truncated (need {} bytes, have {})",
+            8 + k_len,
+            data.len()
+        );
+    }
+
+    decode_state(&data[8..8 + k_len])
+        .map_err(|e| anyhow::anyhow!("KernelState decode error: {e:?}"))
+}
+
+/// Read the snapshot magic and section lengths without fully decoding the
+/// state.  Cheap structural check — suitable for the `inspect` command.
+pub fn inspect_snapshot_bytes(data: &[u8]) -> Result<SnapshotInfo> {
+    if data.len() < 4 {
+        bail!("File is too short to be a Valori snapshot ({} bytes)", data.len());
+    }
+
+    let magic_ok = &data[0..4] == SNAPSHOT_MAGIC;
+
+    if !magic_ok || data.len() < 12 {
+        return Ok(SnapshotInfo {
+            magic_ok,
+            kernel_len: 0,
+            metadata_len: 0,
+            index_len: 0,
+            total_size: data.len(),
+        });
+    }
+
+    let k_len = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    let mut cursor = 8 + k_len;
+
+    let metadata_len = if cursor + 4 <= data.len() {
+        let v = u32::from_le_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize;
+        cursor += 4 + v;
+        v
+    } else {
+        0
+    };
+
+    let index_len = if cursor + 4 <= data.len() {
+        u32::from_le_bytes(data[cursor..cursor + 4].try_into().unwrap()) as usize
+    } else {
+        0
+    };
+
+    Ok(SnapshotInfo {
+        magic_ok,
+        kernel_len: k_len,
+        metadata_len,
+        index_len,
+        total_size: data.len(),
+    })
+}
+
+/// Lightweight structural summary returned by [`inspect_snapshot_bytes`].
+#[derive(Debug)]
+pub struct SnapshotInfo {
+    pub magic_ok:     bool,
+    pub kernel_len:   usize,
+    pub metadata_len: usize,
+    pub index_len:    usize,
+    pub total_size:   usize,
 }
