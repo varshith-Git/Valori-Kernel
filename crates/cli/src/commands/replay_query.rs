@@ -1,67 +1,121 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! `valori replay-query` — time-travel to a specific event count and query.
+
 use crate::engine::ForensicEngine;
 use comfy_table::presets::UTF8_FULL;
-use comfy_table::{ContentArrangement, Table};
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
+use std::time::Instant;
+use valori_kernel::index::SearchResult;
+use valori_kernel::types::id::RecordId;
+use valori_kernel::types::scalar::FxpScalar;
+use valori_kernel::types::vector::FxpVector;
 
-pub fn run(snapshot_path: &str, wal_path: &str, target_index: u64, query_arg: Option<String>) -> anyhow::Result<()> {
-    let mut engine = ForensicEngine::new(snapshot_path)?;
-    
-    // Check if target is before snapshot
-    if target_index < engine.snapshot_index {
-        println!("\n⚠️  WARNING: Target index ({}) is older than snapshot ({})", target_index, engine.snapshot_index);
-        println!("Cannot time travel backwards without an older snapshot.\n");
-        return Ok(());
+pub fn run(
+    snapshot_path: &str,
+    log_path:      &str,
+    target_count:  u64,
+    query_arg:     Option<String>,
+    top_k:         usize,
+) -> anyhow::Result<()> {
+    // ── Restore baseline ─────────────────────────────────────────────────────
+    let mut engine = ForensicEngine::from_snapshot(snapshot_path)?;
+
+    // ── Replay ───────────────────────────────────────────────────────────────
+    let t0 = Instant::now();
+    let replayed = engine.replay_to(log_path, target_count)?;
+    let elapsed  = t0.elapsed();
+
+    if engine.current_event_count < target_count {
+        println!(
+            "\n⚠️  Reached end of event log before target event #{target_count}.\n\
+             State is fast-forwarded to event #{}.\n",
+            engine.current_event_count
+        );
     }
 
-    let replayed = engine.replay_to(wal_path, target_index)?;
-    
-    // Check for partial replay
-    if engine.current_index < target_index {
-         println!("\n⚠️  WARNING: Reached end of WAL before target index.");
-         println!("State fast-forwarded to last available event: {}\n", engine.current_index);
-    }
-
+    // ── State summary table ───────────────────────────────────────────────────
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_header(vec!["Metric", "Value"]);
+        .set_header(vec![
+            Cell::new("Metric").add_attribute(Attribute::Bold),
+            Cell::new("Value").add_attribute(Attribute::Bold),
+        ]);
 
-    table.add_row(vec!["Snapshot Index", &engine.snapshot_index.to_string()]);
-    table.add_row(vec!["Target Index", &target_index.to_string()]);
-    table.add_row(vec!["Current Index (Final)", &engine.current_index.to_string()]);
-    table.add_row(vec!["Replayed Events", &replayed.to_string()]);
-    table.add_row(vec!["State Hash (Mock)", &format!("{:016x}", engine.state.state_hash())]);
-    table.add_row(vec!["Query Status", if query_arg.is_some() { "Executed" } else { "Skipped" }]);
+    table.add_row(vec!["Target event",    &target_count.to_string()]);
+    table.add_row(vec!["Current event",   &engine.current_event_count.to_string()]);
+    table.add_row(vec!["Events replayed", &replayed.to_string()]);
+    table.add_row(vec!["Replay time",     &format!("{:.3} ms", elapsed.as_secs_f64() * 1000.0)]);
+    table.add_row(vec!["Records",         &engine.state.record_count().to_string()]);
+    table.add_row(vec!["Nodes",           &engine.state.node_count().to_string()]);
+    table.add_row(vec!["Edges",           &engine.state.edge_count().to_string()]);
+    table.add_row(vec!["State Hash (BLAKE3)", &engine.blake3_hex()]);
 
     println!("\nSimulation Report");
-    println!("-----------------");
+    println!("{}", "─".repeat(40));
     println!("{table}\n");
 
+    // ── Optional search ───────────────────────────────────────────────────────
     if let Some(query_str) = query_arg {
-        let query_vec: Vec<i32> = serde_json::from_str(&query_str)
-            .map_err(|_| anyhow::anyhow!("Invalid JSON query. Expected [x, y, z]"))?;
-        
-        // Hardcoded K=5 for now
-        let results = engine.state.search(&query_vec, 5, None)?;
-        
-        let mut table_results = Table::new();
-        table_results
+        let floats: Vec<f64> = serde_json::from_str(&query_str)
+            .map_err(|_| anyhow::anyhow!(
+                "Invalid --query value. Expected a JSON float array, e.g. '[0.1, 0.2, 0.3]'. \
+                 Got: {query_str}"
+            ))?;
+
+        let query_fxp = floats_to_fxp(&floats);
+        let top_k     = top_k.max(1);
+        let mut buf   = vec![SearchResult { id: RecordId(0), score: FxpScalar(i32::MAX) }; top_k];
+
+        let qt = Instant::now();
+        let found = engine.state.search_l2(&query_fxp, &mut buf, None);
+        let query_ms = qt.elapsed().as_secs_f64() * 1000.0;
+
+        buf.truncate(found);
+
+        let mut res_table = Table::new();
+        res_table
             .load_preset(UTF8_FULL)
             .set_content_arrangement(ContentArrangement::Dynamic)
-            .set_header(vec!["Rank", "ID", "Distance"]);
+            .set_header(vec![
+                Cell::new("Rank").add_attribute(Attribute::Bold),
+                Cell::new("Record ID").add_attribute(Attribute::Bold),
+                Cell::new("L2 Distance").add_attribute(Attribute::Bold),
+            ]);
 
-        for (rank, (id, dist)) in results.iter().enumerate() {
-            table_results.add_row(vec![
-                (rank + 1).to_string(),
-                id.to_string(),
-                dist.to_string(),
+        for (rank, r) in buf.iter().enumerate() {
+            res_table.add_row(vec![
+                Cell::new(rank + 1),
+                Cell::new(r.id.0).fg(Color::Cyan),
+                Cell::new(r.score.0),
             ]);
         }
 
-        println!("Search Results (Top-5)");
-        println!("----------------------");
-        println!("{table_results}\n");
+        println!(
+            "Search Results  ·  top-{}  ·  {:.3} ms",
+            top_k, query_ms
+        );
+        println!("{}", "─".repeat(40));
+        println!("{res_table}\n");
     }
 
     Ok(())
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/// Convert f64 values to Q16.16 fixed-point vectors.
+/// Replicates `valori_kernel::fxp::ops::from_f32` without requiring the `std` feature.
+fn floats_to_fxp(floats: &[f64]) -> FxpVector {
+    FxpVector {
+        data: floats
+            .iter()
+            .map(|&f| FxpScalar(
+                (f as f32 * 65536.0)
+                    .round()
+                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
+            ))
+            .collect(),
+    }
 }
