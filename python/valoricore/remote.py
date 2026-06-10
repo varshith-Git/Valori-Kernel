@@ -199,26 +199,27 @@ class SyncRemoteClient:
             return 0
 
     def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
-        """Download snapshot from remote."""
+        """Download a binary snapshot of the remote engine state."""
         if auto_interval is not None:
             self._auto_snapshot_interval = auto_interval
             self._insert_count = 0
             self._snapshot_dir = save_dir
-            
-        url = self.base_url + "/snapshot"
+
+        url = self.base_url + "/v1/snapshot/download"
         try:
-            resp = self.session.post(url, timeout=30)
+            resp = self.session.get(url, timeout=30)
             resp.raise_for_status()
             return resp.content
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to download snapshot: {e}")
 
     def restore(self, data: bytes) -> None:
-        """Upload snapshot to remote."""
-        url = self.base_url + "/restore"
+        """Upload a binary snapshot to restore the remote engine state."""
+        url = self.base_url + "/v1/snapshot/upload"
         headers = {"Content-Type": "application/octet-stream"}
         try:
             resp = self.session.post(url, data=data, headers=headers, timeout=60)
+            resp.raise_for_status()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to restore snapshot: {e}")
 
@@ -426,21 +427,23 @@ class AsyncRemoteClient:
             return 0
 
     async def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
+        """Download a binary snapshot of the remote engine state."""
         if auto_interval is not None:
             self._auto_snapshot_interval = auto_interval
             self._insert_count = 0
             self._snapshot_dir = save_dir
-            
-        url = self.base_url + "/snapshot"
+
+        url = self.base_url + "/v1/snapshot/download"
         try:
-            resp = await self.client.post(url)
+            resp = await self.client.get(url)
             resp.raise_for_status()
             return resp.content
         except Exception as e:
             raise ConnectionError(f"Failed to download snapshot: {e}")
 
     async def restore(self, data: bytes) -> None:
-        url = self.base_url + "/restore"
+        """Upload a binary snapshot to restore the remote engine state."""
+        url = self.base_url + "/v1/snapshot/upload"
         headers = {"Content-Type": "application/octet-stream"}
         try:
             resp = await self.client.post(url, content=data, headers=headers)
