@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Event Log as Primary Truth
 //!
 //! This module defines the canonical event representation for Valori.
@@ -62,6 +62,18 @@ pub enum KernelEvent {
     DeleteEdge {
         id: EdgeId,
     },
+
+    /// Soft-delete a record: mark it as a tombstone without removing the slot.
+    /// The record is excluded from search and record_count but the slot is
+    /// retained so WAL replay can reconstruct the tombstone state.
+    SoftDeleteRecord {
+        id: RecordId,
+    },
+
+    /// Delete a graph node and cascade-delete all its incident edges.
+    DeleteNode {
+        id: NodeId,
+    },
 }
 
 impl KernelEvent {
@@ -73,6 +85,8 @@ impl KernelEvent {
             KernelEvent::CreateNode { .. } => "CreateNode",
             KernelEvent::CreateEdge { .. } => "CreateEdge",
             KernelEvent::DeleteEdge { .. } => "DeleteEdge",
+            KernelEvent::SoftDeleteRecord { .. } => "SoftDeleteRecord",
+            KernelEvent::DeleteNode { .. } => "DeleteNode",
         }
     }
 }
@@ -119,6 +133,16 @@ impl Serialize for KernelEvent {
             }
             KernelEvent::DeleteEdge { id } => {
                 let mut state = serializer.serialize_struct_variant("KernelEvent", 4, "DeleteEdge", 1)?;
+                state.serialize_field("id", id)?;
+                state.end()
+            }
+            KernelEvent::SoftDeleteRecord { id } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 5, "SoftDeleteRecord", 1)?;
+                state.serialize_field("id", id)?;
+                state.end()
+            }
+            KernelEvent::DeleteNode { id } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 6, "DeleteNode", 1)?;
                 state.serialize_field("id", id)?;
                 state.end()
             }
@@ -182,17 +206,25 @@ impl<'de> Deserialize<'de> for KernelEvent {
              DeleteEdge {
                  id: EdgeId,
              },
+             SoftDeleteRecord {
+                 id: RecordId,
+             },
+             DeleteNode {
+                 id: NodeId,
+             },
         }
-        
+
         // Delegate to the Helper
         let helper = KernelEventHelper::deserialize(deserializer)?;
-        
+
         Ok(match helper {
             KernelEventHelper::InsertRecord { id, vector, metadata, tag } => KernelEvent::InsertRecord { id, vector, metadata, tag },
             KernelEventHelper::DeleteRecord { id } => KernelEvent::DeleteRecord { id },
             KernelEventHelper::CreateNode { id, kind, record } => KernelEvent::CreateNode { id, kind, record },
             KernelEventHelper::CreateEdge { id, from, to, kind } => KernelEvent::CreateEdge { id, from, to, kind },
             KernelEventHelper::DeleteEdge { id } => KernelEvent::DeleteEdge { id },
+            KernelEventHelper::SoftDeleteRecord { id } => KernelEvent::SoftDeleteRecord { id },
+            KernelEventHelper::DeleteNode { id } => KernelEvent::DeleteNode { id },
         })
     }
 }
