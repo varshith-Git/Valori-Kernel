@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Adjacency List for graph traversal.
 
 use crate::graph::pool::{NodePool, EdgePool};
@@ -7,8 +7,11 @@ use crate::types::id::{NodeId, EdgeId};
 use crate::types::enums::EdgeKind;
 use crate::error::{Result, KernelError};
 
-/// Adds an edge to the graph, updating the adjacency list.
-/// 
+/// Adds an edge to the graph, maintaining both outgoing and incoming linked lists.
+///
+/// Both `from.first_out_edge` and `to.first_in_edge` are updated so that
+/// cascade-deletes are O(degree) rather than O(E).
+///
 /// Returns the new EdgeId.
 pub fn add_edge(
     nodes: &mut NodePool,
@@ -17,42 +20,31 @@ pub fn add_edge(
     from: NodeId,
     to: NodeId,
 ) -> Result<EdgeId> {
-    // Verify nodes exist
+    // Verify both endpoints exist
     if nodes.get(from).is_none() || nodes.get(to).is_none() {
         return Err(KernelError::NotFound);
     }
 
-    // Create edge (id will be assigned by pool)
-    // We init next_out to None temporarily, but we'll link it.
-    let mut edge = GraphEdge::new(EdgeId(0), kind, from, to);
-    
-    // 1. Get current head of outgoing list from 'from' node
-    let head = nodes.get(from).unwrap().first_out_edge;
-    
-    // 2. Set new edge's next_out to current head
-    edge.next_out = head;
+    // Snapshot current list heads — immutable borrows are dropped after these lines
+    let head_out = nodes.get(from).and_then(|n| n.first_out_edge);
+    let head_in  = nodes.get(to).and_then(|n| n.first_in_edge);
 
-    // 3. Insert edge into pool
+    // Build the new edge, prepending it to both lists
+    let mut edge = GraphEdge::new(EdgeId(0), kind, from, to);
+    edge.next_out = head_out;
+    edge.next_in  = head_in;
+
     let edge_id = edges.insert(edge)?;
 
-    // 4. Update head of 'from' node to point to new edge
-    // We must get mutable access again (re-borrow check might be tricky if we hold ref, but insert uses pool self)
-    // edges.insert consumed 'edge', returned id.
-    // 'nodes' is disjoint from 'edges', so we can borrow nodes mutably.
-    
-    if let Some(node) = nodes.get_mut(from) {
-        node.first_out_edge = Some(edge_id);
-    } else {
-        // Should not happen as we checked existence, but for safety:
-        // If node disappeared (?), we should rollback edge?
-        // In single threaded kernel, it won't disappear.
-        return Err(KernelError::NotFound);
-    }
+    // Update outgoing head on the source node
+    nodes.get_mut(from).unwrap().first_out_edge = Some(edge_id);
+    // Update incoming head on the destination node
+    nodes.get_mut(to).unwrap().first_in_edge    = Some(edge_id);
 
     Ok(edge_id)
 }
 
-/// Iterator for outgoing edges of a node.
+/// Iterator over outgoing edges of a node (follows `next_out` pointers).
 pub struct OutEdgeIterator<'a> {
     edges: &'a EdgePool,
     current: Option<EdgeId>,
@@ -60,10 +52,7 @@ pub struct OutEdgeIterator<'a> {
 
 impl<'a> OutEdgeIterator<'a> {
     pub fn new(edges: &'a EdgePool, start: Option<EdgeId>) -> Self {
-        Self {
-            edges,
-            current: start,
-        }
+        Self { edges, current: start }
     }
 }
 
@@ -74,6 +63,29 @@ impl<'a> Iterator for OutEdgeIterator<'a> {
         let curr_id = self.current?;
         let edge = self.edges.get(curr_id)?;
         self.current = edge.next_out;
+        Some(edge)
+    }
+}
+
+/// Iterator over incoming edges of a node (follows `next_in` back-pointers).
+pub struct InEdgeIterator<'a> {
+    edges: &'a EdgePool,
+    current: Option<EdgeId>,
+}
+
+impl<'a> InEdgeIterator<'a> {
+    pub fn new(edges: &'a EdgePool, start: Option<EdgeId>) -> Self {
+        Self { edges, current: start }
+    }
+}
+
+impl<'a> Iterator for InEdgeIterator<'a> {
+    type Item = &'a GraphEdge;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let curr_id = self.current?;
+        let edge = self.edges.get(curr_id)?;
+        self.current = edge.next_in;
         Some(edge)
     }
 }
