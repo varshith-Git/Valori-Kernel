@@ -10,7 +10,7 @@
 
 <br/>
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT_OR_Apache_2.0-blue.svg)](LICENSE-MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b.svg)](https://arxiv.org/abs/2512.22280)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)](.github/workflows/ci.yml)
 [![Determinism](https://img.shields.io/badge/determinism-verified-brightgreen)](.github/workflows/multi-arch-determinism.yml)
@@ -73,7 +73,7 @@ Every byte of state is recovered from the append-only event log and verified aga
 | Forensic event replay | No | No | No | **Yes — full event log** |
 | Knowledge graph (same store) | No | Yes | No | **Yes** |
 | Embedded `no_std` deployment | No | No | No | **Yes — ARM Cortex-M4** |
-| Open source | No | Yes | Yes | **Yes — AGPL-3.0** |
+| Open source | No | Yes | Yes | **Yes — MIT OR Apache-2.0** |
 
 ---
 
@@ -427,9 +427,9 @@ python test_valoricore_integrated.py
 
 ## License & Enterprise
 
-Valori-Kernel is **AGPL-3.0**. The core is free forever.
+Valori-Kernel is dual-licensed under **MIT OR Apache-2.0**, making it completely free and permissive for enterprise embedding. The core is free forever.
 
-Commercial licensing is available for proprietary deployments, OEM embedding, and enterprise compliance packs (SOC 2, HIPAA). Priority support and SLAs are available on request.
+Our managed cloud, multi-tenant control plane, and enterprise features (SSO/RBAC) will be available as a separate commercial offering.
 
 **Contact:** varshith.gudur17@gmail.com
 
