@@ -308,25 +308,109 @@ client._db.insert([0.1] * 384, tag=42)
 hits = client._db.search([0.1] * 384, k=5, filter_tag=42)
 ```
 
-### Step 6 — Knowledge Graph
+### Step 6 — Knowledge Graph (Fluent API)
+
+Valoricore ships a high-level **fluent API** so you never have to manage raw integer IDs.
+`db.node()`, `node.link_to()`, and `db.build_document()` handle everything in one or two lines.
+
+#### One-liner node creation
 
 ```python
-from valoricore import NODE_AGENT, NODE_DOCUMENT, EDGE_BY_AGENT
+from valoricore import MemoryClient, Node
+from valoricore.kinds import NODE_DOCUMENT, NODE_CHUNK, EDGE_PARENT_OF, EDGE_REFERS_TO
 
-record_id  = client._db.insert([0.5] * 384)
-agent_node = client.create_node(kind=NODE_AGENT)
-doc_node   = client.create_node(kind=NODE_DOCUMENT, record_id=record_id)
+client = MemoryClient(path="./my_db", dim=384)
 
-client.create_edge(from_id=agent_node, to_id=doc_node, kind=EDGE_BY_AGENT)
+# Insert the embedding AND create the node in a single call — no manual ID juggling
+doc   = client.node(NODE_DOCUMENT)
+chunk = client.node(NODE_CHUNK, vector=my_embedding)  # inserts + creates, returns Node
 
-print(client.get_node(doc_node))       # {"kind": 5, "record_id": 0}
-print(client.get_edges(agent_node))    # [{"edge_id": 0, "to_node": 1, "kind": 3}]
+print(doc)    # Node(id=0, kind=5, record_id=None)
+print(chunk)  # Node(id=1, kind=6, record_id=0)
+```
 
-# BFS traversal up to depth 2
-visited_nodes = client.walk(agent_node, max_depth=2)
+#### Method-chaining with `link_to`
 
-# All record_ids reachable from a starting node
-record_ids = client.expand(agent_node, max_depth=2)
+```python
+# Create a directed edge from doc → chunk
+doc.link_to(chunk, EDGE_PARENT_OF)
+
+# Chain multiple edges in one line
+c2 = client.node(NODE_CHUNK, vector=embedding_2)
+c3 = client.node(NODE_CHUNK, vector=embedding_3)
+doc.link_to([c2, c3], EDGE_PARENT_OF)   # link to a list at once
+
+# Traverse back as Node objects
+children = doc.children(EDGE_PARENT_OF)
+# → [Node(id=1, ...), Node(id=2, ...), Node(id=3, ...)]
+```
+
+#### `build_document` context manager — the RAG pattern in 3 lines
+
+```python
+embeddings = [embed(chunk) for chunk in text_chunks]   # your embedding function
+
+with client.build_document(title="Q4 Report") as builder:
+    for emb in embeddings:
+        builder.add_chunk(emb)   # inserts vector, creates NODE_CHUNK, wires EDGE_PARENT_OF
+
+# After the block:
+doc_node   = builder.document    # root Node object
+chunk_rids = builder.record_ids  # [0, 1, 2, …]  — pass to search for RAG retrieval
+```
+
+#### Before vs After
+
+```python
+# ── BEFORE (low-level — works, but tedious) ──────────────────────────────────
+rid1   = client._db.insert(emb1)
+rid2   = client._db.insert(emb2)
+doc_id = client.create_node(kind=NODE_DOCUMENT)
+ch1    = client.create_node(kind=NODE_CHUNK, record_id=rid1)
+ch2    = client.create_node(kind=NODE_CHUNK, record_id=rid2)
+client.create_edge(from_id=doc_id, to_id=ch1, kind=EDGE_PARENT_OF)
+client.create_edge(from_id=doc_id, to_id=ch2, kind=EDGE_PARENT_OF)
+
+# ── AFTER (fluent — identical performance, far less code) ────────────────────
+doc = client.node(NODE_DOCUMENT)
+doc.link_to([
+    client.node(NODE_CHUNK, vector=emb1),
+    client.node(NODE_CHUNK, vector=emb2),
+], EDGE_PARENT_OF)
+```
+
+#### Full agent memory example
+
+```python
+from valoricore.kinds import NODE_AGENT, NODE_DOCUMENT, EDGE_BY_AGENT
+
+# Agent node (no vector — it's a logical entity)
+agent = client.node(NODE_AGENT)
+
+# Document node linked to an embedding
+doc = client.node(NODE_DOCUMENT, vector=my_embedding)
+
+# Wire the relationship
+agent.link_to(doc, EDGE_BY_AGENT)
+
+# Traversal — everything returned as Node objects
+visited = agent.walk(max_depth=2)         # [Node, Node, …]
+rids    = agent.record_ids(max_depth=2)   # [0, 1, …]  for vector lookup
+
+# Delete cascade (removes node + all edges)
+doc.delete()
+```
+
+#### Low-level API (still fully supported)
+
+```python
+# Raw integer IDs still work — the two styles mix freely
+raw_nid = client.create_node(kind=NODE_DOCUMENT)
+raw_eid = client.create_edge(from_id=raw_nid, to_id=chunk.id, kind=EDGE_PARENT_OF)
+
+# db.edge() accepts Node objects OR raw ints
+client.edge(doc, chunk, EDGE_REFERS_TO)    # Node objects
+client.edge(3, 7, EDGE_REFERS_TO)          # raw ints
 ```
 
 ### Step 7 — Metadata
@@ -662,11 +746,39 @@ except ConnectionError as e:
 | `get_state_hash()` | 64-char BLAKE3 hex digest of the entire kernel state |
 | `get_timeline()` | Chronological list of all state transitions from the event log |
 
-#### Knowledge Graph
+#### Knowledge Graph — Fluent API *(recommended)*
+| Method | Returns | Description |
+|---|---|---|
+| `node(kind, vector=None, tag=0)` | `Node` | Create a node; optionally insert a vector and link it in one call |
+| `edge(from_node, to_node, kind)` | `int` | Create an edge; accepts `Node` objects or raw integer IDs |
+| `build_document(title=None)` | `DocumentGraph` | Context manager: builds doc → chunk graph with no ID bookkeeping |
+
+**`Node` object methods**
+| Method | Returns | Description |
+|---|---|---|
+| `node.link_to(other, edge_kind)` | `self` | Create edge(s) from this node; `other` may be a `Node`, `int`, or list of either |
+| `node.link_from(other, edge_kind)` | `self` | Create edge from `other` to this node |
+| `node.children(edge_kind=None)` | `List[Node]` | Outgoing neighbours, optionally filtered by edge kind |
+| `node.walk(max_depth=2)` | `List[Node]` | BFS traversal; returns visited `Node` objects |
+| `node.record_ids(max_depth=2)` | `List[int]` | All reachable vector record IDs (for RAG retrieval) |
+| `node.delete()` | `None` | Cascade-delete node and all incident edges |
+| `int(node)` | `int` | Escape hatch to the raw integer ID |
+
+**`DocumentGraph` context manager**
+| Attribute / Method | Description |
+|---|---|
+| `builder.add_chunk(vector, tag=0, metadata=None)` | Insert vector, create `NODE_CHUNK`, wire `EDGE_PARENT_OF`; returns `Node` |
+| `builder.document` | The root `NODE_DOCUMENT` `Node` |
+| `builder.chunks` | Ordered list of chunk `Node` objects |
+| `builder.record_ids` | List of vector record IDs in insertion order |
+
+#### Knowledge Graph — Low-Level API *(still fully supported)*
 | Method | Description |
 |---|---|
-| `create_node(kind, record_id)` | Create a graph node |
-| `create_edge(from_id, to_id, kind)` | Create a directed edge |
+| `create_node(kind, record_id)` | Create a graph node; returns integer node ID |
+| `create_edge(from_id, to_id, kind)` | Create a directed edge; returns integer edge ID |
+| `delete_node(node_id)` | Cascade-delete a node and all its incident edges |
+| `delete_edge(edge_id)` | Delete a single edge |
 | `get_node(node_id)` | Fetch node kind and attached record_id |
 | `get_edges(node_id)` | Fetch all outgoing edges |
 | `walk(start_node, max_depth)` | BFS traversal; returns visited node IDs |
