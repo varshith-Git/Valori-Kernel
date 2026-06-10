@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! WAL Writer for Durable Command Logging
 //!
 //! Unified Bincode Protocol (Phase 20).
@@ -30,6 +30,8 @@ pub type WalResult<T> = Result<T, WalError>;
 pub struct WalWriter {
     file: BufWriter<File>,
     bytes_written: u64,
+    /// Stored at construction for future use (e.g. WAL validation on reopen).
+    #[allow(dead_code)]
     dim: u32,
 }
 
