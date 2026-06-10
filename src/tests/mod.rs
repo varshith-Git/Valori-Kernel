@@ -1,5 +1,5 @@
 #[cfg(test)]
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 pub mod fxp_tests;
 pub mod math_tests;
 pub mod storage_tests;
