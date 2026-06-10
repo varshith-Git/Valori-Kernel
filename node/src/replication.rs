@@ -44,10 +44,11 @@ pub async fn spawn_replication_stream(
 
                             if let LogEntry::Event(_) = &entry {
                                 if current_idx >= start_offset {
-                                    if let Ok(json) = serde_json::to_string(&entry) {
-                                        if tx.send(Ok(json + "\n")).await.is_err() {
-                                            return;
-                                        }
+                                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                    let b64 = STANDARD.encode(&entry_bytes);
+                                    let json = format!(r#"{{"b64":"{}"}}"#, b64);
+                                    if tx.send(Ok(json + "\n")).await.is_err() {
+                                        return;
                                     }
                                 }
                                 current_idx += 1;
@@ -74,10 +75,11 @@ pub async fn spawn_replication_stream(
                     }
                     recent_hashes.push_back(hash);
 
-                    if let Ok(json) = serde_json::to_string(&entry) {
-                         if tx.send(Ok(json + "\n")).await.is_err() {
-                             return;
-                         }
+                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    let b64 = STANDARD.encode(&entry_bytes);
+                    let json = format!(r#"{{"b64":"{}"}}"#, b64);
+                    if tx.send(Ok(json + "\n")).await.is_err() {
+                        return;
                     }
                 }
                 Err(_) => break,
@@ -220,22 +222,38 @@ pub async fn run_follower_loop(
                 ).await {
                     Ok(Some(Ok(chunk))) => {
                         let s = String::from_utf8_lossy(&chunk);
+                        tracing::debug!("Follower received chunk from stream: {}", s);
                         buffer.push_str(&s);
 
                         while let Some(idx) = buffer.find('\n') {
                             let line = buffer.drain(..=idx).collect::<String>();
                             let line = line.trim();
                             if line.is_empty() { continue; }
-
-                            if let Ok(LogEntry::Event(event)) =
-                                serde_json::from_str::<LogEntry>(line)
-                            {
-                                let mut engine = state.lock().await;
-                                if let Some(ref mut committer) = engine.event_committer {
-                                    if let Ok(_) = committer.commit_event(event.clone()) {
-                                        if let Err(_) = engine.apply_committed_event(&event) {
-                                            apply_failed = true;
-                                            break 'stream;
+                            
+                            #[derive(serde::Deserialize)]
+                            struct B64Message {
+                                b64: String,
+                            }
+                            
+                            if let Ok(msg) = serde_json::from_str::<B64Message>(line) {
+                                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                if let Ok(bytes) = STANDARD.decode(&msg.b64) {
+                                    if let Ok((LogEntry::Event(event), _)) = bincode::serde::decode_from_slice::<LogEntry, _>(&bytes, bincode::config::standard()) {
+                                        let mut engine = state.lock().await;
+                                        if let Some(ref mut committer) = engine.event_committer {
+                                            match committer.commit_event(event.clone()) {
+                                                Ok(_) => {
+                                                    if let Err(e) = engine.apply_committed_event(&event) {
+                                                        tracing::error!("Failed to apply committed event: {:?}", e);
+                                                        apply_failed = true;
+                                                        break 'stream;
+                                                    }
+                                                    tracing::debug!("Successfully applied event to follower index");
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!("Follower failed to commit event: {:?}", e);
+                                                }
+                                            }
                                         }
                                     }
                                 }
