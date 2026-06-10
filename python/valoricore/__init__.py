@@ -19,6 +19,7 @@ Quick-start::
 from .local import LocalClient
 from .remote import SyncRemoteClient, AsyncRemoteClient
 from .memory import MemoryClient
+from .graph import Node, DocumentGraph
 from .async_memory import AsyncMemoryClient
 from .factory import Valoricore, AsyncValoricore
 from .adapter import ValoricoreAdapter
@@ -73,6 +74,10 @@ __all__ = [
     # ── High-level clients ─────────────────────────────────────────
     "MemoryClient",
     "AsyncMemoryClient",
+
+    # ── High-level graph objects ───────────────────────────────────
+    "Node",
+    "DocumentGraph",
 
     # ── Base clients ───────────────────────────────────────────────
     "LocalClient",
