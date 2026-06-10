@@ -11,7 +11,7 @@ authors = [
 ]
 readme = "valoricore_readme.md"
 requires-python = ">=3.8"
-license = { text = "AGPL-3.0" }
+license = { text = "MIT OR Apache-2.0" }
 
 # ── Core dependencies (always installed) ──────────────────────────────────────
 dependencies = [
@@ -39,7 +39,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Topic :: Database :: Database Engines/Servers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Operating System :: POSIX :: Linux",
