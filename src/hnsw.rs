@@ -143,11 +143,6 @@ impl ValoriHNSW {
         
         for l in (q_level + 1 ..= self.max_level).rev() {
              let mut changed = true;
-             // self.get_vec requires borrowing &self. But self.vectors needs to be accessed
-             // We can use split_at_mut if we need mutable access, but we only need read.
-             // But Rust borrow rules might complain if we hold ref to vectors.
-             // Actually `self.get_vec` takes `&self`.
-             // `euclidean_distance_squared` takes slices.
              let mut curr_dist = euclidean_distance_squared(q_vec, self.get_vec(curr_node));
              
              while changed {
@@ -241,20 +236,11 @@ impl ValoriHNSW {
         
         if connections.len() > max_conn {
              let mut candidates = Vec::new();
-             // Important: src_vec needs to be extracted. get_vec uses &self.
-             // We are mutably borrowing self via add_connection (&mut self).
-             // But we need to read from vectors.
-             // Optimization: We can just index `self.vectors` directly if borrow checker allows simple splitting?
-             // No, `self.layers` is being mutated. `self.vectors` is separate field.
-             // But `self.get_vec` borrows whole `self`.
-             // We must access `vectors` directly to satisfy split borrow.
-             // `get_vec` implementation: `&self.vectors[start..]`
-             // So:
+             // Index `self.vectors` directly rather than calling `self.get_vec()`,
+             // because `get_vec` takes `&self` while we also hold `&mut self.layers`.
+             // Rust allows simultaneous borrows of distinct fields.
              let dim = self.dim;
              let src_start = src_id as usize * dim;
-             // But I can't take slice `&self.vectors[...]` and KEEP it while looping?
-             // Yes I can.
-             
              let src_vec_range = src_start .. src_start + dim;
              
              for &n_id in &connections {
