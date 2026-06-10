@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Event Commit - The Safety Wall
 
 use valori_kernel::state::kernel::KernelState;
@@ -44,20 +44,7 @@ pub struct ShadowExecutor {
 impl ShadowExecutor {
     /// Create a new shadow executor from current live state
     pub fn from_state(live: &KernelState) -> std::result::Result<Self, CommitError> {
-        use valori_kernel::snapshot::encode::encode_state;
-        use valori_kernel::snapshot::decode::decode_state;
-
-        // Allocate snapshot buffer on HEAP (not stack)
-        let mut buffer = vec![0u8; 10 * 1024 * 1024]; // 10MB heap-allocated
-        
-        let len = encode_state(live, &mut buffer)
-            .map_err(|e| CommitError::ShadowApply(e))?;
-        buffer.truncate(len);
-
-        // Decode into shadow
-        let shadow = decode_state(&buffer)
-            .map_err(|e| CommitError::ShadowApply(e))?;
-
+        let shadow = live.clone();
         Ok(Self { shadow })
     }
 
@@ -120,43 +107,31 @@ impl EventCommitter {
         // Step 1: Persist to disk FIRST (crash safety)
         let entry = crate::events::event_log::LogEntry::Event(event.clone());
         self.event_log.append(&entry)?;
-
-        // Step 2: Add to journal buffer (shadow execution space)
+        // Step 2: Add to journal buffer
         self.journal.append_buffered(event.clone());
 
-        // Step 3: Shadow execution (test the event)
-        let mut shadow = ShadowExecutor::from_state(&self.live_state)?;
-        
-        match shadow.shadow_apply(&event) {
-            Ok(_) => {
-                // Shadow apply succeeded
-            }
-            Err(e) => {
-                // Shadow apply failed → safe rollback
-                tracing::warn!("Shadow apply failed: {:?}. Rolling back buffer.", e);
-                self.journal.rollback_buffer();
-                return Ok(CommitResult::RolledBack);
-            }
-        }
-
-        // Step 4: COMMIT BOUNDARY
-        self.journal.commit_buffer();
-
-        // Step 5: Apply to live state
+        // Step 3 & 4: Execute on live state
         match self.live_state.apply_event(&event) {
             Ok(_) => {
+                // Success: Commit the buffer
+                self.journal.commit_buffer();
                 tracing::debug!("Event committed: {:?}", event.event_type());
                 self.maybe_rotate();
                 Ok(CommitResult::Committed)
             }
             Err(e) => {
-                tracing::error!(
-                    "CRITICAL: Live apply failed after shadow success: {:?}",
-                    e
-                );
+                // Failure: rollback the buffer, state is unmodified
+                tracing::warn!("Apply failed: {:?}. Rolling back buffer.", e);
+                self.journal.rollback_buffer();
                 Err(CommitError::LiveApply(e))
             }
         }
+    }
+
+    /// Explicitly flush the event log buffer to disk
+    pub fn flush_log(&mut self) -> Result<()> {
+        self.event_log.flush()?;
+        Ok(())
     }
 
     /// Rotate the log if it has exceeded the configured byte limit.
@@ -224,34 +199,22 @@ impl EventCommitter {
             self.journal.append_buffered(event.clone());
         }
 
-        // Step 3: Shadow apply ALL events
-        let mut shadow = ShadowExecutor::from_state(&self.live_state)?;
-        
+        // Step 3 & 4: Execute on live state
         for event in &events {
-            match shadow.shadow_apply(event) {
+            match self.live_state.apply_event(event) {
                 Ok(_) => continue,
                 Err(e) => {
-                    tracing::warn!(
-                        "Shadow apply failed in batch: {:?}. Rolling back {} events.",
-                        e,
-                        events.len()
-                    );
+                    tracing::warn!("Apply failed in batch: {:?}. Rolling back {} events.", e, events.len());
                     self.journal.rollback_buffer();
-                    return Ok(CommitResult::RolledBack);
+                    return Err(CommitError::LiveApply(e));
                 }
             }
         }
 
-        // Step 4: COMMIT BOUNDARY
+        // Success: Commit the buffer
         self.journal.commit_buffer();
-
-        // Step 5: Apply all to live state
-        for event in &events {
-            self.live_state.apply_event(event)
-                .map_err(CommitError::LiveApply)?;
-        }
-
         tracing::debug!("Batch committed: {} events", events.len());
+        self.maybe_rotate();
         Ok(CommitResult::Committed)
     }
 
@@ -343,7 +306,10 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_rollback_on_error() {
+    fn test_commit_rejects_invalid_event() {
+        // The simplified commit path (no shadow execution) returns Err on apply
+        // failure.  Callers use `?` so the error propagates correctly.
+        // The journal height stays at 1 because the second event was never committed.
         let dir = tempdir().unwrap();
         let log_path = dir.path().join("events.log");
 
@@ -361,15 +327,17 @@ mod tests {
         };
         committer.commit_event(event1).unwrap();
 
+        // Duplicate record ID — kernel rejects this.
         let event2 = KernelEvent::InsertRecord {
             id: RecordId(0),
             vector: FxpVector::new_zeros(16),
             metadata: None,
             tag: 0,
         };
-        
-        let result = committer.commit_event(event2).unwrap();
-        assert_eq!(result, CommitResult::RolledBack);
+
+        let result = committer.commit_event(event2);
+        assert!(result.is_err(), "duplicate ID must be rejected");
+        // Journal height is unchanged — the failed event was rolled back.
         assert_eq!(committer.journal().committed_height(), 1);
     }
 
