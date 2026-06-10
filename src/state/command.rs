@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Kernel Command enum.definitions.
 
 use crate::types::id::{RecordId, NodeId, EdgeId};
@@ -34,5 +34,8 @@ pub enum Command {
     },
     DeleteEdge {
         edge_id: EdgeId,
+    },
+    SoftDeleteRecord {
+        id: RecordId,
     },
 }
