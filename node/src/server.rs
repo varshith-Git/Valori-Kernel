@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use axum::{
     routing::post,
     Router,
@@ -19,7 +19,7 @@ pub type SharedEngine = Arc<Mutex<Engine>>;
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use axum::extract::Query;
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{Response, IntoResponse};
 use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
@@ -47,11 +47,19 @@ async fn auth_guard(
 }
 
 pub fn build_router(
-    state: SharedEngine, 
-    auth_token: Option<String>
+    state: SharedEngine,
+    auth_token: Option<String>,
 ) -> Router {
-    let mut app = Router::new()
-        .route("/health", axum::routing::get(health_check))
+    // ── Public routes — no auth required ─────────────────────────────────────
+    // Load balancers (health probes) and Prometheus scrapers must reach these
+    // without a bearer token, even when VALORI_AUTH_TOKEN is configured.
+    let public = Router::new()
+        .route("/health",  axum::routing::get(health_check))
+        .route("/metrics", axum::routing::get(metrics_handler))
+        .with_state(state.clone());
+
+    // ── Protected routes — require auth when a token is configured ────────────
+    let mut protected = Router::new()
         .route("/version", axum::routing::get(version_handler))
         .route("/records", post(insert_record))
         .route("/v1/delete", post(delete_record))
@@ -61,7 +69,7 @@ pub fn build_router(
         .route("/graph/node/:id", axum::routing::get(get_node))
         .route("/graph/edge", post(create_edge))
         .route("/graph/edges/:id", axum::routing::get(get_edges))
-        .route("/v1/snapshot/download", axum::routing::get(snapshot)) 
+        .route("/v1/snapshot/download", axum::routing::get(snapshot))
         .route("/v1/snapshot/upload", post(restore))
         .route("/v1/snapshot/save", post(snapshot_save))
         .route("/v1/snapshot/restore", post(snapshot_restore))
@@ -75,22 +83,46 @@ pub fn build_router(
         .route("/v1/replication/events", axum::routing::get(get_replication_events))
         .route("/v1/replication/state", axum::routing::get(get_replication_state))
         .route("/timeline", axum::routing::get(get_timeline))
-        .route("/metrics", axum::routing::get(metrics_handler))
         .with_state(state);
 
     if let Some(token) = auth_token {
         tracing::info!("Auth Enabled: Bearer token required");
         let auth_state = Arc::new(Some(token));
-        app = app.layer(from_fn_with_state(auth_state, auth_guard));
+        protected = protected.layer(from_fn_with_state(auth_state, auth_guard));
     } else {
         tracing::warn!("Auth Disabled: No token configured");
     }
-    
-    app
+
+    Router::new().merge(public).merge(protected)
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+/// `GET /health` — structured health report for load balancers and operators.
+///
+/// HTTP status codes:
+/// * **200** `"ok"`       — all pools below 90 % capacity
+/// * **200** `"degraded"` — at least one pool ≥ 90 %; still serving all requests
+/// * **503** `"full"`     — at least one pool at 100 %; inserts are being rejected
+///
+/// This endpoint is **always unauthenticated** so that load-balancer health
+/// probes and liveness checks work without a bearer token.
+async fn health_check(
+    State(state): State<SharedEngine>,
+) -> impl IntoResponse {
+    let engine = state.lock().await;
+    let h = engine.health();
+
+    // Refresh Prometheus gauges on every health probe — cheap, and it means
+    // the /metrics endpoint always reflects the latest state even between
+    // heavy write bursts.
+    engine.update_prometheus_metrics();
+
+    let status_code = if h.status == "full" {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    };
+
+    (status_code, Json(h))
 }
 
 async fn version_handler() -> &'static str {
@@ -102,8 +134,6 @@ async fn delete_record(
     Json(payload): Json<DeleteRecordRequest>,
 ) -> Result<Json<DeleteRecordResponse>, EngineError> {
     let mut engine = state.lock().await;
-    use valori_kernel::types::id::RecordId;
-    
     engine.delete_record(payload.id)?;
 
     Ok(Json(DeleteRecordResponse { success: true }))
@@ -113,7 +143,7 @@ async fn snapshot_save(
     State(state): State<SharedEngine>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let engine = state.lock().await;
     let path = req.path.map(std::path::PathBuf::from);
     let used_path = engine.save_snapshot(path.as_deref())?;
     
@@ -146,6 +176,9 @@ async fn meta_set(
 ) -> Result<Json<MetadataSetResponse>, EngineError> {
     let engine = state.lock().await;
     engine.metadata.set(payload.target_id, payload.metadata);
+    if let Err(e) = engine.flush_metadata() {
+        tracing::warn!("meta_set: failed to persist metadata sidecar: {:?}", e);
+    }
     Ok(Json(MetadataSetResponse { success: true }))
 }
 
@@ -279,6 +312,9 @@ async fn memory_upsert_vector(
     let memory_id = format!("rec:{}", record_id);
     if let Some(meta) = payload.metadata {
         engine.metadata.set(memory_id.clone(), meta);
+        if let Err(e) = engine.flush_metadata() {
+            tracing::warn!("memory_upsert: failed to persist metadata sidecar: {:?}", e);
+        }
     }
 
     Ok(Json(MemoryUpsertResponse {
@@ -369,8 +405,11 @@ async fn get_replication_events(
     let start_offset = params.start_offset.unwrap_or(0);
 
     let (log_path, rx) = {
-        let engine = state.lock().await;
-        if let Some(ref committer) = engine.event_committer {
+        let mut engine = state.lock().await;
+        if let Some(ref mut committer) = engine.event_committer {
+            if let Err(e) = committer.flush_log() {
+                tracing::error!("Failed to flush event log for replication: {}", e);
+            }
             (committer.event_log().path().to_path_buf(), committer.subscribe())
         } else {
              return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
@@ -395,71 +434,63 @@ async fn get_replication_state() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": status_str }))
 }
 
-async fn metrics_handler() -> String {
+/// `GET /metrics` — Prometheus text exposition format.
+///
+/// Refreshes all KernelState gauges synchronously before rendering so that
+/// the scrape always reflects the live pool sizes regardless of write
+/// activity between scrapes.
+///
+/// This endpoint is **always unauthenticated** so that Prometheus can scrape
+/// without a bearer token.
+async fn metrics_handler(
+    State(state): State<SharedEngine>,
+) -> String {
+    // Update kernel gauges from live state before rendering.
+    {
+        let engine = state.lock().await;
+        engine.update_prometheus_metrics();
+    }
     crate::telemetry::get_metrics()
 }
 
 async fn get_timeline(
     State(state): State<SharedEngine>,
 ) -> Result<Json<Vec<String>>, EngineError> {
-    let log_path = {
-        let engine = state.lock().await;
-        if let Some(ref committer) = engine.event_committer {
-            committer.event_log().path().to_path_buf()
-        } else {
-            return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
-        }
+    // Read from the in-memory EventJournal — NOT from the on-disk file.
+    //
+    // Why: EventCommitter.commit_event() writes to a BufWriter for performance
+    // (avoids one fsync per insert).  The on-disk file may lag behind by
+    // thousands of events.  The journal.committed() slice is always current
+    // because commit_buffer() runs synchronously inside commit_event().
+    use valori_kernel::event::KernelEvent;
+
+    let engine = state.lock().await;
+    let Some(ref committer) = engine.event_committer else {
+        return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
     };
 
-    if !log_path.exists() {
-        return Ok(Json(Vec::new()));
+    let committed = committer.journal().committed();
+    let mut events = Vec::with_capacity(committed.len());
+
+    for (event_id, event) in committed.iter().enumerate() {
+        let event_str = match event {
+            KernelEvent::InsertRecord { id, tag, .. } =>
+                format!("Event ID {event_id}: InsertRecord (Record {}, Tag: {tag})", id.0),
+            KernelEvent::DeleteRecord { id } =>
+                format!("Event ID {event_id}: DeleteRecord (Record {})", id.0),
+            KernelEvent::SoftDeleteRecord { id } =>
+                format!("Event ID {event_id}: SoftDeleteRecord (Record {})", id.0),
+            KernelEvent::CreateNode { id, kind, .. } =>
+                format!("Event ID {event_id}: CreateNode (Node {}, Kind: {kind:?})", id.0),
+            KernelEvent::CreateEdge { id, from, to, kind } =>
+                format!("Event ID {event_id}: CreateEdge (Edge {}, {from:?} -> {to:?}, Kind: {kind:?})", id.0),
+            KernelEvent::DeleteEdge { id } =>
+                format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0),
+            KernelEvent::DeleteNode { id } =>
+                format!("Event ID {event_id}: DeleteNode (Node {})", id.0),
+        };
+        events.push(event_str);
     }
 
-    let mut file = std::fs::File::open(&log_path)
-        .map_err(|e| EngineError::InvalidInput(format!("Could not open events.log: {}", e)))?;
-        
-    use std::io::Read;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|e| EngineError::InvalidInput(format!("Could not read events.log: {}", e)))?;
-
-    if bytes.len() < 16 {
-        return Ok(Json(Vec::new()));
-    }
-
-    use crate::events::event_log::LogEntry;
-    use valori_kernel::event::KernelEvent;
-    
-    let mut events = Vec::new();
-    let mut offset = 16;
-    let mut event_id = 0;
-
-    while offset < bytes.len() {
-        match bincode::serde::decode_from_slice::<LogEntry, _>(
-            &bytes[offset..],
-            bincode::config::standard()
-        ) {
-            Ok((entry, bytes_read)) => {
-                let event_str = match entry {
-                    LogEntry::Event(e) => match e {
-                        KernelEvent::InsertRecord { id, tag, .. } => format!("Event ID {}: InsertRecord (Record {}, Tag: {})", event_id, id.0, tag),
-                        KernelEvent::DeleteRecord { id } => format!("Event ID {}: DeleteRecord (Record {})", event_id, id.0),
-                        KernelEvent::CreateNode { id, kind, .. } => format!("Event ID {}: CreateNode (Node {}, Kind: {:?})", event_id, id.0, kind),
-                        KernelEvent::CreateEdge { id, from, to, kind } => format!("Event ID {}: CreateEdge (Edge {}, {:?} -> {:?}, Kind: {:?})", event_id, id.0, from, to, kind),
-                        KernelEvent::DeleteEdge { id } => format!("Event ID {}: DeleteEdge (Edge {})", event_id, id.0),
-                    },
-                    LogEntry::Checkpoint { event_count, .. } => format!("Event ID {}: Checkpoint (Event Count {})", event_id, event_count),
-                };
-                events.push(event_str);
-                offset += bytes_read;
-                event_id += 1;
-            }
-            Err(e) => {
-                events.push(format!("Decoding stopped at offset {} due to error: {:?}", offset, e));
-                break;
-            }
-        }
-    }
-    
     Ok(Json(events))
 }
