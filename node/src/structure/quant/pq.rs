@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use super::super::deterministic::kmeans::{deterministic_kmeans, l2_sq_q16, f32_to_q16};
 use super::Quantizer;
 use serde::{Serialize, Deserialize};
