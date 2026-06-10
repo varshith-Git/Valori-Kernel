@@ -1,7 +1,7 @@
 //! Static Record Pool.
 
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
-use crate::storage::record::Record;
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::storage::record::{Record, FLAG_SOFT_DELETED};
 use crate::types::id::RecordId;
 use crate::types::vector::FxpVector;
 use crate::error::{Result, KernelError};
@@ -54,9 +54,34 @@ impl RecordPool {
         self.records[idx].as_ref()
     }
 
-    /// Iterates over all active records in deterministic order (by index).
+    /// Marks a record as soft-deleted (tombstone).
+    /// The slot is kept so WAL replay can reconstruct the deletion, but the
+    /// record is excluded from `iter()`, searches, and `record_count`.
+    pub fn soft_delete(&mut self, id: RecordId) -> Result<()> {
+        let idx = id.0 as usize;
+        if idx >= self.records.len() {
+            return Err(KernelError::NotFound);
+        }
+        match self.records[idx].as_mut() {
+            Some(record) => {
+                record.flags |= FLAG_SOFT_DELETED;
+                Ok(())
+            }
+            None => Err(KernelError::NotFound),
+        }
+    }
+
+    /// Iterates over all **live** records (excludes hard-deleted and soft-deleted slots).
     pub fn iter(&self) -> impl Iterator<Item = &Record> {
-        self.records.iter().filter_map(|opt| opt.as_ref())
+        self.records
+            .iter()
+            .filter_map(|opt| opt.as_ref())
+            .filter(|r| r.is_active())
+    }
+
+    /// Total number of allocated slots (live + soft-deleted; excludes hard-deleted `None` gaps).
+    pub fn total_slots(&self) -> usize {
+        self.records.len()
     }
 
     pub fn len(&self) -> usize {
