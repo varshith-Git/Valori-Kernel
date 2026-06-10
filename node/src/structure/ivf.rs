@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use super::index::VectorIndex;
 use super::deterministic::kmeans::{deterministic_kmeans, l2_sq_q16, f32_to_q16};
 use serde::{Serialize, Deserialize};
@@ -87,6 +87,18 @@ impl VectorIndex for IvfIndex {
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)> {
         let q_query: Vec<i32> = query.iter().map(|&v| f32_to_q16(v)).collect();
 
+        if self.centroids.is_empty() {
+            if self.inverted_lists.is_empty() {
+                return Vec::new();
+            }
+            let mut candidates: Vec<(u32, i64)> = self.inverted_lists[0].iter()
+                .map(|(id, q_vec)| (*id, l2_sq_q16(&q_query, q_vec)))
+                .collect();
+            candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            candidates.truncate(k);
+            return candidates.into_iter().map(|(id, d)| (id, d as f32)).collect();
+        }
+
         let mut centroid_dists: Vec<(usize, i64)> = self.centroids.iter().enumerate()
             .map(|(i, c)| (i, l2_sq_q16(&q_query, c)))
             .collect();
@@ -122,7 +134,7 @@ impl VectorIndex for IvfIndex {
         }
 
         // Sort each list by ID for snapshot determinism regardless of insertion order.
-        let mut sorted_lists: Vec<Vec<(u32, &Vec<i32>)>> = self.inverted_lists.iter()
+        let sorted_lists: Vec<Vec<(u32, &Vec<i32>)>> = self.inverted_lists.iter()
             .map(|list| {
                 let mut refs: Vec<(u32, &Vec<i32>)> = list.iter().map(|(id, v)| (*id, v)).collect();
                 refs.sort_by_key(|(id, _)| *id);
