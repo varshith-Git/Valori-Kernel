@@ -4,7 +4,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 use crate::types::id::{Version, RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::types::scalar::FxpScalar;
 use crate::storage::record::Record;
 use crate::graph::node::GraphNode;
@@ -52,8 +52,8 @@ pub fn decode_state(
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    // We support V1, V2, and V3
-    if schema_ver != 1 && schema_ver != 2 && schema_ver != 3 {
+    // We support V1, V2, V3, and V4
+    if schema_ver < 1 || schema_ver > 4 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
@@ -142,9 +142,21 @@ pub fn decode_state(
             None
         };
 
-        let has_edge = read_u8(buf, &mut offset)?;
-        let first_out = if has_edge == 1 {
+        let has_out = read_u8(buf, &mut offset)?;
+        let first_out = if has_out == 1 {
             Some(EdgeId(read_u32(buf, &mut offset)?))
+        } else {
+            None
+        };
+
+        // V4: incoming edge back-pointer head (absent in V1-V3, reconstructed below)
+        let first_in = if schema_ver >= 4 {
+            let has_in = read_u8(buf, &mut offset)?;
+            if has_in == 1 {
+                Some(EdgeId(read_u32(buf, &mut offset)?))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -158,6 +170,7 @@ pub fn decode_state(
             kind,
             record,
             first_out_edge: first_out,
+            first_in_edge: first_in,
         });
     }
 
@@ -171,9 +184,21 @@ pub fn decode_state(
         let from = NodeId(read_u32(buf, &mut offset)?);
         let to = NodeId(read_u32(buf, &mut offset)?);
 
-        let has_next = read_u8(buf, &mut offset)?;
-        let next_out = if has_next == 1 {
+        let has_next_out = read_u8(buf, &mut offset)?;
+        let next_out = if has_next_out == 1 {
             Some(EdgeId(read_u32(buf, &mut offset)?))
+        } else {
+            None
+        };
+
+        // V4: incoming list back-pointer (absent in V1-V3, reconstructed below)
+        let next_in = if schema_ver >= 4 {
+            let has_next_in = read_u8(buf, &mut offset)?;
+            if has_next_in == 1 {
+                Some(EdgeId(read_u32(buf, &mut offset)?))
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -188,7 +213,31 @@ pub fn decode_state(
             from,
             to,
             next_out,
+            next_in,
         });
+    }
+
+    // V1-V3 back-compat: reconstruct incoming edge pointers from the edge list.
+    // For each edge (A → B), prepend it to B's first_in_edge list.
+    // This is O(E) but runs only once on first load of an old snapshot.
+    if schema_ver < 4 {
+        let edge_targets: alloc::vec::Vec<(EdgeId, NodeId)> = state
+            .edges
+            .edges
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .map(|e| (e.id, e.to))
+            .collect();
+
+        for (eid, to) in edge_targets {
+            let head = state.nodes.get(to).and_then(|n| n.first_in_edge);
+            if let Some(e) = state.edges.get_mut(eid) {
+                e.next_in = head;
+            }
+            if let Some(n) = state.nodes.get_mut(to) {
+                n.first_in_edge = Some(eid);
+            }
+        }
     }
 
     Ok(state)
