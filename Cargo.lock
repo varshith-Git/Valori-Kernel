@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "valori-kernel"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bincode",
  "blake3",
@@ -2894,6 +2894,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-extra",
+ "base64 0.22.1",
  "bincode",
  "blake3",
  "crc32fast",
@@ -2931,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "valoricore-ffi"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bincode",
  "blake3",
