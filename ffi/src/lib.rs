@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use pyo3::prelude::*;
 use std::sync::{Arc, Mutex};
 use valori_node::config::NodeConfig;
@@ -14,7 +14,6 @@ use hex;
 #[pyclass]
 struct ValoricoreEngine {
     inner: Arc<Mutex<Engine>>,
-    path: String,
 }
 
 #[pymethods]
@@ -41,7 +40,6 @@ impl ValoricoreEngine {
         
         Ok(ValoricoreEngine {
             inner: Arc::new(Mutex::new(engine)),
-            path,
         })
     }
 
@@ -55,7 +53,7 @@ impl ValoricoreEngine {
         }
         let fxp_vec = FxpVector { data: fxp_data };
         
-        let rid = RecordId(engine.state.record_count() as u32);
+        let rid = engine.state.next_record_id();
 
         if let Some(ref mut committer) = engine.event_committer {
              let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec, metadata: None, tag };
@@ -98,7 +96,7 @@ impl ValoricoreEngine {
     }
     
     fn save(&mut self) -> PyResult<String> {
-         let mut engine = self.inner.lock().unwrap();
+         let engine = self.inner.lock().unwrap();
          match engine.save_snapshot(None) {
              Ok(path) => Ok(path.to_string_lossy().to_string()),
              Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))
@@ -115,7 +113,7 @@ impl ValoricoreEngine {
         let k = NodeKind::from_u8(kind)
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("Invalid NodeKind: {}", kind)))?;
 
-        let next_id = valori_kernel::types::id::NodeId(engine.state.node_count() as u32);
+        let next_id = engine.state.next_node_id();
 
         if let Some(ref mut committer) = engine.event_committer {
              let event = KernelEvent::CreateNode { id: next_id, kind: k, record: rid };
@@ -132,22 +130,36 @@ impl ValoricoreEngine {
         } else {
              let node_id = engine.state.create_node(k, rid)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))?;
+             // Keep derived record→node index in sync even without event log
+             if let Some(r) = rid {
+                 engine.record_to_node.insert(r.0, node_id.0);
+             }
              Ok(node_id.0)
         }
     }
 
     fn create_edge(&self, from: u32, to: u32, kind: u8) -> PyResult<u32> {
+        // FIX (Issue 1): previously called engine.state.create_edge() directly,
+        // which bypassed the WAL / event log — edges would vanish on crash.
+        // Now routed through engine.create_edge() which commits a CreateEdge event first.
         let mut engine = self.inner.lock().unwrap();
-        use valori_kernel::types::id::NodeId;
-        use valori_kernel::types::enums::EdgeKind;
-        
-        let k = EdgeKind::from_u8(kind)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("Invalid EdgeKind: {}", kind)))?;
-        
-        let edge_id = engine.state.create_edge(NodeId(from), NodeId(to), k)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{:?}", e)))?;
-            
-        Ok(edge_id.0)
+        engine.create_edge(from, to, kind).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("CreateEdge failed: {:?}", e))
+        })
+    }
+
+    fn delete_node(&self, node_id: u32) -> PyResult<()> {
+        let mut engine = self.inner.lock().unwrap();
+        engine.delete_node(node_id).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("DeleteNode failed: {:?}", e))
+        })
+    }
+
+    fn delete_edge(&self, edge_id: u32) -> PyResult<()> {
+        let mut engine = self.inner.lock().unwrap();
+        engine.delete_edge(edge_id).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("DeleteEdge failed: {:?}", e))
+        })
     }
 
     #[pyo3(signature = (node_id))]
@@ -211,7 +223,7 @@ impl ValoricoreEngine {
             let proof_bytes = generate_proof_bytes(&fixed_values);
             let proof_hex = hex::encode(&proof_bytes);
 
-            let rid = RecordId(engine.state.record_count() as u32);
+            let rid = engine.state.next_record_id();
             let tag = tags[i];
 
             if let Some(ref mut committer) = engine.event_committer {
@@ -278,9 +290,13 @@ impl ValoricoreEngine {
         let value = serde_json::to_value(metadata)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Failed to serialize metadata: {}", e)))?;
         engine.metadata.set(key, value);
+        if let Err(e) = engine.flush_metadata() {
+            // Non-fatal: log but don't surface as Python exception.
+            eprintln!("[valoricore-ffi] set_metadata: failed to persist metadata sidecar: {:?}", e);
+        }
         Ok(())
     }
-    
+
     fn get_state_hash(&self) -> PyResult<String> {
         let engine = self.inner.lock().unwrap();
         let proof = engine.get_proof();
@@ -313,16 +329,10 @@ impl ValoricoreEngine {
     }
     
     fn soft_delete(&self, record_id: u32) -> PyResult<()> {
-        let engine = self.inner.lock().unwrap();
-        let rid = RecordId(record_id);
-        if engine.state.get_record(rid).is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("Record {} not found", record_id)
-            ));
-        }
-        let key = format!("deleted_record_{}", record_id);
-        let value = serde_json::json!({"deleted": true});
-        engine.metadata.set(key, value);
+        let mut engine = self.inner.lock().unwrap();
+        engine.soft_delete_record(record_id).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
+        })?;
         Ok(())
     }
 
@@ -354,7 +364,7 @@ impl ValoricoreEngine {
         let proof_hex = hex::encode(&proof_bytes);
 
         let mut engine = self.inner.lock().unwrap();
-        let rid = RecordId(engine.state.record_count() as u32);
+        let rid = engine.state.next_record_id();
 
         if let Some(ref mut committer) = engine.event_committer {
             let event = KernelEvent::InsertRecord {
@@ -380,55 +390,36 @@ impl ValoricoreEngine {
     }
     
     fn get_timeline(&self) -> PyResult<Vec<String>> {
-        let log_path = format!("{}/events.log", self.path);
-        if !std::path::Path::new(&log_path).exists() {
+        // Read from the in-memory journal (always current) rather than the disk
+        // file (which lags behind due to BufWriter buffering).
+        let engine = self.inner.lock().unwrap();
+        let Some(ref committer) = engine.event_committer else {
             return Ok(Vec::new());
+        };
+
+        let committed = committer.journal().committed();
+        let mut events = Vec::with_capacity(committed.len());
+
+        for (event_id, event) in committed.iter().enumerate() {
+            let event_str = match event {
+                KernelEvent::InsertRecord { id, tag, .. } =>
+                    format!("Event ID {event_id}: InsertRecord (Record {}, Tag: {tag})", id.0),
+                KernelEvent::DeleteRecord { id } =>
+                    format!("Event ID {event_id}: DeleteRecord (Record {})", id.0),
+                KernelEvent::SoftDeleteRecord { id } =>
+                    format!("Event ID {event_id}: SoftDeleteRecord (Record {})", id.0),
+                KernelEvent::CreateNode { id, kind, .. } =>
+                    format!("Event ID {event_id}: CreateNode (Node {}, Kind: {kind:?})", id.0),
+                KernelEvent::CreateEdge { id, from, to, kind } =>
+                    format!("Event ID {event_id}: CreateEdge (Edge {}, {from:?} -> {to:?}, Kind: {kind:?})", id.0),
+                KernelEvent::DeleteEdge { id } =>
+                    format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0),
+                KernelEvent::DeleteNode { id } =>
+                    format!("Event ID {event_id}: DeleteNode (Node {})", id.0),
+            };
+            events.push(event_str);
         }
 
-        let mut file = std::fs::File::open(&log_path)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("Could not open events.log: {}", e)))?;
-            
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|e| pyo3::exceptions::PyIOError::new_err(format!("Could not read events.log: {}", e)))?;
-
-        if bytes.len() < 16 {
-            return Ok(Vec::new());
-        }
-
-        use valori_node::events::event_log::LogEntry;
-        let mut events = Vec::new();
-        let mut offset = 16;
-        let mut event_id = 0;
-
-        while offset < bytes.len() {
-            match bincode::serde::decode_from_slice::<LogEntry, _>(
-                &bytes[offset..],
-                bincode::config::standard()
-            ) {
-                Ok((entry, bytes_read)) => {
-                    let event_str = match entry {
-                        LogEntry::Event(e) => match e {
-                            KernelEvent::InsertRecord { id, tag, .. } => format!("Event ID {}: InsertRecord (Record {}, Tag: {})", event_id, id.0, tag),
-                            KernelEvent::DeleteRecord { id } => format!("Event ID {}: DeleteRecord (Record {})", event_id, id.0),
-                            KernelEvent::CreateNode { id, kind, .. } => format!("Event ID {}: CreateNode (Node {}, Kind: {:?})", event_id, id.0, kind),
-                            KernelEvent::CreateEdge { id, from, to, kind } => format!("Event ID {}: CreateEdge (Edge {}, {:?} -> {:?}, Kind: {:?})", event_id, id.0, from, to, kind),
-                            KernelEvent::DeleteEdge { id } => format!("Event ID {}: DeleteEdge (Edge {})", event_id, id.0),
-                        },
-                        LogEntry::Checkpoint { event_count, .. } => format!("Event ID {}: Checkpoint (Event Count {})", event_id, event_count),
-                    };
-                    events.push(event_str);
-                    offset += bytes_read;
-                    event_id += 1;
-                }
-                Err(e) => {
-                    events.push(format!("Decoding stopped at offset {} due to error: {:?}", offset, e));
-                    break;
-                }
-            }
-        }
-        
         Ok(events)
     }
 }
