@@ -1,85 +1,58 @@
-// Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 
-// We need concrete types for Engine
-const MAX_RECORDS: usize = 16;
-const D: usize = 4;
-const MAX_NODES: usize = 16;
-const MAX_EDGES: usize = 32;
-
-type TestEngine = Engine<MAX_RECORDS, D, MAX_NODES, MAX_EDGES>;
+fn make_cfg(dim: usize) -> NodeConfig {
+    let mut cfg = NodeConfig::default();
+    cfg.dim = dim;
+    cfg.max_records = 16;
+    cfg.max_nodes = 16;
+    cfg.max_edges = 32;
+    cfg
+}
 
 #[test]
 fn test_engine_workflow() {
-    let mut cfg = NodeConfig::default();
-    cfg.max_records = MAX_RECORDS;
-    cfg.dim = D;
-    cfg.max_nodes = MAX_NODES;
-    cfg.max_edges = MAX_EDGES;
-    let mut engine = TestEngine::new(&cfg);
+    let cfg = make_cfg(4);
+    let mut engine = Engine::new(&cfg);
 
-    // 1. Insert records
-    let v1 = [1.0, 0.0, 0.0, 0.0];
-    let v2 = [0.0, 1.0, 0.0, 0.0];
-    
-    let id1 = engine.insert_record_from_f32(&v1).unwrap();
-    let id2 = engine.insert_record_from_f32(&v2).unwrap();
-    
+    let id1 = engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
+    let id2 = engine.insert_record_from_f32(&[0.0, 1.0, 0.0, 0.0]).unwrap();
+
     assert_eq!(id1, 0);
     assert_eq!(id2, 1);
-    
-    // 2. Search
-    let query = [1.0, 0.0, 0.0, 0.0];
-    let results = engine.search_l2(&query, 2).unwrap();
+
+    let results = engine.search_l2(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0].0, 0); // Exact match first
-    
-    // 3. Graph
-    let nid1 = engine.create_node_for_record(Some(id1), 0).unwrap(); // 0 = NodeKind::Record
+    assert_eq!(results[0].0, 0); // exact match first
+
+    let nid1 = engine.create_node_for_record(Some(id1), 0).unwrap();
     let nid2 = engine.create_node_for_record(Some(id2), 0).unwrap();
-    
-    let eid = engine.create_edge(nid1, nid2, 0).unwrap(); // 0 = EdgeKind::Relation
-    
+    let eid  = engine.create_edge(nid1, nid2, 0).unwrap();
     assert_eq!(eid, 0);
-    
-    // 4. Snapshot
+
     let snapshot = engine.snapshot().unwrap();
-    assert!(snapshot.len() > 0);
-    
-    // 5. Restore
-    let mut engine2 = TestEngine::new(&cfg);
+    assert!(!snapshot.is_empty());
+
+    let mut engine2 = Engine::new(&cfg);
     engine2.restore(&snapshot).unwrap();
-    
-    // Check search on restored engine
-    let results2 = engine2.search_l2(&query, 2).unwrap();
+
+    let results2 = engine2.search_l2(&[1.0, 0.0, 0.0, 0.0], 2).unwrap();
     assert_eq!(results, results2);
 }
 
 #[test]
 fn test_input_bounds_validation() {
-    let mut cfg = NodeConfig::default();
-    cfg.max_records = MAX_RECORDS;
-    cfg.dim = D;
-    cfg.max_nodes = MAX_NODES;
-    cfg.max_edges = MAX_EDGES;
-    let mut engine = TestEngine::new(&cfg);
+    let cfg = make_cfg(4);
+    let mut engine = Engine::new(&cfg);
 
-    // Safe Vector
-    let safe_vec = [100.0, -100.0, 32000.0, -32000.0];
-    assert!(engine.insert_record_from_f32(&safe_vec).is_ok());
+    // Values within the Q16.16 safe range are accepted.
+    assert!(engine.insert_record_from_f32(&[100.0, -100.0, 32000.0, -32000.0]).is_ok());
 
-    // Unsafe Positive
-    let unsafe_pos = [1.0, 1.0, 33000.0, 1.0];
-    let err = engine.insert_record_from_f32(&unsafe_pos);
-    assert!(err.is_err());
-    println!("Caught expected error: {:?}", err);
+    // Values outside the Q16.16 range must be rejected.
+    assert!(engine.insert_record_from_f32(&[1.0, 1.0, 33000.0, 1.0]).is_err());
+    assert!(engine.insert_record_from_f32(&[1.0, -33000.0, 1.0, 1.0]).is_err());
 
-    // Unsafe Negative
-    let unsafe_neg = [1.0, -33000.0, 1.0, 1.0];
-    assert!(engine.insert_record_from_f32(&unsafe_neg).is_err());
-    
-    // Unsafe Search Query
-    let err_search = engine.search_l2(&unsafe_pos, 2);
-    assert!(err_search.is_err());
+    // Out-of-range search query must also be rejected.
+    assert!(engine.search_l2(&[1.0, 1.0, 33000.0, 1.0], 2).is_err());
 }
