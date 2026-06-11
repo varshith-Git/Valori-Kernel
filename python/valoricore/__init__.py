@@ -31,7 +31,9 @@ from .exceptions import (
     ConnectionError,
     NotFoundError,
     KernelError,
+    TamperDetected,
 )
+from .verify import AnchorVerifier, TamperFinding, VerifyReport, verify_log
 from .kinds import (
     NODE_RECORD,
     NODE_CONCEPT,
@@ -100,10 +102,17 @@ __all__ = [
     # ── Exceptions ─────────────────────────────────────────────────
     "ValoricoreError",
     "IntegrityError",
+    "TamperDetected",
     "ValidationError",
     "ConnectionError",
     "NotFoundError",
     "KernelError",
+
+    # ── Verification ───────────────────────────────────────────────
+    "AnchorVerifier",
+    "TamperFinding",
+    "VerifyReport",
+    "verify_log",
 
     # ── Node / Edge kind constants ─────────────────────────────────
     "NODE_RECORD",
