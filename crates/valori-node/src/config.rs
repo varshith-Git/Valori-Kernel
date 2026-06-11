@@ -44,11 +44,45 @@ pub struct NodeConfig {
     pub snapshot_path: Option<PathBuf>,
     pub wal_path: Option<PathBuf>,
     pub event_log_path: Option<PathBuf>, // Added explicit config
+    /// Deprecated: use snapshot_every_events / snapshot_every_bytes instead.
+    /// Retained for backward compatibility; triggers a startup warning if set
+    /// without the new cadence knobs. Will be removed in Phase 3.
     pub auto_snapshot_interval_secs: Option<u64>,
-    
+
+    // ── Phase 1.8 storage policy ──────────────────────────────────────────────
+    // Env: VALORI_SNAPSHOT_EVERY_EVENTS
+    // Trigger a snapshot after this many events since the last snapshot.
+    pub snapshot_every_events: Option<u64>,
+
+    // Env: VALORI_SNAPSHOT_EVERY_BYTES (default: 64 MiB)
+    // Trigger a snapshot after this many bytes of log have been appended.
+    pub snapshot_every_bytes: Option<u64>,
+
+    // Env: VALORI_SNAPSHOT_KEEP (default: 3)
+    // Number of most recent snapshot files to retain.
+    pub snapshot_keep: Option<u32>,
+
+    // Env: VALORI_ZSTD_LEVEL (default: 3)
+    // zstd compression level applied to sealed (rotated) segment files.
+    // Implementation: Phase 1.7/1.8 (seam reads the value; compressor wired later).
+    pub zstd_compression_level: Option<i32>,
+
+    // Env: VALORI_GENESIS_REPLAY=1
+    // If true, skip snapshots and replay from genesis on startup (audit mode).
+    pub genesis_replay: bool,
+
+    // ── Phase 1.10 / 1.11 ────────────────────────────────────────────────────
+    // Env: VALORI_NODE_ID
+    // Stable numeric identity for this node. Phase 2: openraft NodeId.
+    pub node_id: Option<u32>,
+
+    // Set by --health-check CLI argument (Phase 1.11).
+    // Runs a single GET /v1/health and exits 0/1. Used by distroless Docker HEALTHCHECK.
+    pub health_check_mode: bool,
+
     // Security
     pub auth_token: Option<String>,
-    
+
     // Clustering
     pub mode: NodeMode,
 }
@@ -113,8 +147,33 @@ impl Default for NodeConfig {
             .ok().map(PathBuf::from);
             
         let auto_snapshot_interval_secs = std::env::var("VALORI_SNAPSHOT_INTERVAL")
-            .ok().and_then(|v| v.parse().ok());
-            
+            .ok().and_then(|v| v.parse::<u64>().ok());
+
+        // Warn if deprecated knob is set without the new cadence knobs.
+        // (Tracing may not be initialised yet — use eprintln so the warning
+        //  always reaches the operator regardless of log config.)
+        if auto_snapshot_interval_secs.is_some() {
+            eprintln!(
+                "WARN  valori: VALORI_SNAPSHOT_INTERVAL is deprecated. \
+                 Use VALORI_SNAPSHOT_EVERY_EVENTS and/or VALORI_SNAPSHOT_EVERY_BYTES instead. \
+                 Will be removed in Phase 3."
+            );
+        }
+
+        let snapshot_every_events = std::env::var("VALORI_SNAPSHOT_EVERY_EVENTS")
+            .ok().and_then(|v| v.parse::<u64>().ok());
+        let snapshot_every_bytes = std::env::var("VALORI_SNAPSHOT_EVERY_BYTES")
+            .ok().and_then(|v| v.parse::<u64>().ok());
+        let snapshot_keep = std::env::var("VALORI_SNAPSHOT_KEEP")
+            .ok().and_then(|v| v.parse::<u32>().ok());
+        let zstd_compression_level = std::env::var("VALORI_ZSTD_LEVEL")
+            .ok().and_then(|v| v.parse::<i32>().ok());
+        let genesis_replay = std::env::var("VALORI_GENESIS_REPLAY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let node_id = std::env::var("VALORI_NODE_ID")
+            .ok().and_then(|v| v.parse::<u32>().ok());
+
         let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
         
         // Mode
@@ -139,6 +198,13 @@ impl Default for NodeConfig {
             wal_path,
             event_log_path,
             auto_snapshot_interval_secs,
+            snapshot_every_events,
+            snapshot_every_bytes,
+            snapshot_keep,
+            zstd_compression_level,
+            genesis_replay,
+            node_id,
+            health_check_mode: false, // set by CLI arg, not env var
             auth_token,
             mode,
         }
