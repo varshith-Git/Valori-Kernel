@@ -492,6 +492,12 @@ async fn get_timeline(
                 format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0),
             KernelEvent::DeleteNode { id } =>
                 format!("Event ID {event_id}: DeleteNode (Node {})", id.0),
+            KernelEvent::InsertRecordEncrypted { id, key_id, .. } =>
+                format!("Event ID {event_id}: InsertRecordEncrypted (Record {}, key {})",
+                    id.0, key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+            KernelEvent::ShredKey { key_id } =>
+                format!("Event ID {event_id}: ShredKey (key {})",
+                    key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
         };
         events.push(event_str);
     }

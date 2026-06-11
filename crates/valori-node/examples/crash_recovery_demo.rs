@@ -25,11 +25,12 @@ fn main() {
         index_kind: IndexKind::BruteForce,
         quantization_kind: QuantizationKind::None,
         snapshot_path: Some(dir.path().join("demo.snapshot")),
-        wal_path: None, // event log supersedes WAL
+        wal_path: None,
         auto_snapshot_interval_secs: None,
         auth_token: None,
         event_log_path: Some(dir.path().join("events.log")),
         mode: valori_node::config::NodeMode::Leader,
+        ..NodeConfig::default()
     };
 
     // ── Phase 1: Insert 100 records ───────────────────────────────────────────
