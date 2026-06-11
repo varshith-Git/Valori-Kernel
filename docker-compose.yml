@@ -1,0 +1,95 @@
+# Valori 3-node cluster — Phase 1.11
+# Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+#
+# Single-leader, 3-node layout for local development and smoke-testing.
+# All three nodes run identical images; the leader is distinguished only by
+# the absence of VALORI_FOLLOWER_OF.
+#
+# Usage:
+#   docker compose up -d          # start the cluster
+#   docker compose ps              # check health
+#   docker compose logs -f node-1  # tail node-1 logs
+#   docker compose down -v         # stop and remove volumes
+#
+# Phase 2 (openraft) will replace VALORI_FOLLOWER_OF with a Raft peer list.
+
+version: "3.9"
+
+x-node-common: &node-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  environment:
+    VALORI_DIM: "128"
+    VALORI_MAX_RECORDS: "1000000"
+    VALORI_MAX_NODES: "100000"
+    VALORI_MAX_EDGES: "500000"
+    VALORI_SNAPSHOT_EVERY_EVENTS: "50000"
+    VALORI_SNAPSHOT_KEEP: "3"
+  healthcheck:
+    test: ["/usr/local/bin/valori-node", "--health-check"]
+    interval: 30s
+    timeout: 5s
+    start_period: 15s
+    retries: 3
+
+services:
+  node-1:
+    <<: *node-common
+    container_name: valori-node-1
+    ports:
+      - "3001:3000"
+    environment:
+      <<: *node-common
+      VALORI_NODE_ID: "1"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-1-data:/data
+
+  node-2:
+    <<: *node-common
+    container_name: valori-node-2
+    ports:
+      - "3002:3000"
+    environment:
+      <<: *node-common
+      VALORI_NODE_ID: "2"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_FOLLOWER_OF: "http://node-1:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-2-data:/data
+    depends_on:
+      node-1:
+        condition: service_healthy
+
+  node-3:
+    <<: *node-common
+    container_name: valori-node-3
+    ports:
+      - "3003:3000"
+    environment:
+      <<: *node-common
+      VALORI_NODE_ID: "3"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_FOLLOWER_OF: "http://node-1:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-3-data:/data
+    depends_on:
+      node-1:
+        condition: service_healthy
+
+volumes:
+  node-1-data:
+  node-2-data:
+  node-3-data:
+
+networks:
+  default:
+    name: valori-cluster
