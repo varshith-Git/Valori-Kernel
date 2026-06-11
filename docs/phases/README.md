@@ -16,7 +16,7 @@ people and sessions that built it.
 | 1.2 — valori-wire + segment format v3 | [phase-1.2-valori-wire-v3.md](phase-1.2-valori-wire-v3.md) | `b4ac53b` | ✅ done |
 | 1.3 — FxpFormat seam (configurable precision) | [phase-1.3-fxpformat-seam.md](phase-1.3-fxpformat-seam.md) | `22f600b` | ✅ done |
 | 1.4 — Collections seam | [phase-1.4-collections-seam.md](phase-1.4-collections-seam.md) | `41fe5b6` | ✅ done |
-| 1.5 — Crypto-shredding design (GDPR) | [phase-1.5-crypto-shredding.md](phase-1.5-crypto-shredding.md) | — | ✅ design merged, impl Phase 3 |
+| 1.5 — Crypto-shredding design (GDPR) | [phase-1.5-crypto-shredding.md](phase-1.5-crypto-shredding.md) | `003ce7e` | ✅ done |
 | 1.6 — Security design doc | [phase-1.6-security-model.md](phase-1.6-security-model.md) | — | ✅ design merged, impl Phase 2/3 |
 | 1.7 — Verifier hardening (limits + fuzzing) | [phase-1.7-verifier-hardening.md](phase-1.7-verifier-hardening.md) | — | 🟡 design merged, impl next |
 | 1.8 — Storage policy (snapshot cadence, zstd, disk-full) | [phase-1.8-storage-policy.md](phase-1.8-storage-policy.md) | — | 🟡 design merged, impl next |
