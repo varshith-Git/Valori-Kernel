@@ -60,10 +60,52 @@ pub const VERSION_V3: u32 = 3;
 pub const HEADER_SIZE_V2: usize = 16;
 pub const HEADER_SIZE_V3: usize = 48;
 
+// ── Phase 1.7 hardening constants (reserved; enforced in Phase 1.7) ──────────
+
+/// Maximum bytes bincode may allocate while decoding a SINGLE log entry.
+///
+/// A crafted entry can encode a Vec<u8> with a claimed length of usize::MAX;
+/// without this cap, bincode allocates immediately and causes an OOM.
+/// Applied via `bincode::config::standard().with_limit::<MAX_ENTRY_DECODE_BYTES>()`
+/// in every decode call inside valori-wire and valori-verify.
+///
+/// **Phase 1.7 — reserved constant; cfg() enforcement wired in Phase 1.7.**
+pub const MAX_ENTRY_DECODE_BYTES: u64 = 1 << 20; // 1 MiB per entry
+
+/// Hard cap on entries decoded from a single segment file.
+/// Prevents infinite loops on circular/malformed data.
+///
+/// **Phase 1.7 — reserved; enforced in valori-verify decode loop.**
+pub const MAX_ENTRIES_PER_SEGMENT: u64 = 10_000_000;
+
+/// Maximum size in bytes of the metadata blob inside a single InsertRecord event.
+/// Kept separately from MAX_ENTRY_DECODE_BYTES so that the per-field guard
+/// can produce a more specific error message than the overall limit.
+///
+/// **Phase 1.7 — reserved; enforced in decode_entry sanity check.**
+pub const METADATA_CAP: usize = 65_536; // 64 KiB
+
+/// Maximum decompressed size for a zstd-compressed segment file.
+/// Protects the verifier and the node from zstd "bombs".
+/// Override via VALORI_VERIFY_MAX_SEGMENT_MB env var (verifier only).
+///
+/// **Phase 1.7 — reserved; enforced in zstd decompression wrapper.**
+pub const MAX_SEGMENT_DECOMPRESSED_BYTES: usize = 512 * 1024 * 1024; // 512 MiB
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// Arithmetic format identifiers (hash-domain relevant — a Q8.8 log must
 /// never verify as a Q16.16 log). Only Q16.16 is implemented today; the id
 /// exists so Phase 1.3's `FxpFormat` work needs no further format bump.
 pub const FORMAT_Q16_16: u8 = 1;
+
+/// usize-typed decode limit for `bincode::config::with_limit` (const generic requires usize).
+/// Equals `MAX_ENTRY_DECODE_BYTES` — kept separate to avoid a u64→usize cast at const position.
+const DECODE_LIMIT: usize = 1 << 20; // 1 MiB
+
+/// Maximum dimension for a segment header.
+/// No real embedding is zero-dimensional or wider than 32 768 scalars.
+pub const MAX_DIM: u32 = 32_768;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
@@ -77,6 +119,10 @@ pub enum WireError {
     Decode(String),
     #[error("entry encode failed: {0}")]
     Encode(String),
+    #[error("invalid dim {0} in segment header (must be 1..={MAX_DIM})")]
+    InvalidDim(u32),
+    #[error("entry exceeds the {DECODE_LIMIT}-byte allocation limit — file is likely crafted or corrupted")]
+    DecodeLimitExceeded,
 }
 
 pub type Result<T> = core::result::Result<T, WireError>;
@@ -146,6 +192,10 @@ pub fn parse_header(bytes: &[u8]) -> Result<SegmentHeader> {
     let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let dim = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
 
+    if !(1..=MAX_DIM).contains(&dim) {
+        return Err(WireError::InvalidDim(dim));
+    }
+
     match version {
         VERSION_V2 => Ok(SegmentHeader {
             version,
@@ -203,8 +253,8 @@ pub fn encode_header_v2(dim: u32) -> [u8; HEADER_SIZE_V2] {
     bytes
 }
 
-fn cfg() -> bincode::config::Configuration {
-    bincode::config::standard()
+fn cfg() -> impl bincode::config::Config {
+    bincode::config::standard().with_limit::<DECODE_LIMIT>()
 }
 
 /// Decode one entry at `bytes[0..]` for the given segment version.
@@ -213,7 +263,13 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
     match version {
         VERSION_V2 => {
             let (e, n): (EntryV2, usize) = bincode::serde::decode_from_slice(bytes, cfg())
-                .map_err(|e| WireError::Decode(e.to_string()))?;
+                .map_err(|e| {
+                    if e.to_string().contains("LimitExceeded") || e.to_string().contains("limit") {
+                        WireError::DecodeLimitExceeded
+                    } else {
+                        WireError::Decode(e.to_string())
+                    }
+                })?;
             Ok((
                 DecodedEntry {
                     prev_hash: e.prev_hash,
@@ -226,7 +282,13 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
         }
         VERSION_V3 => {
             let (e, n): (EntryV3, usize) = bincode::serde::decode_from_slice(bytes, cfg())
-                .map_err(|e| WireError::Decode(e.to_string()))?;
+                .map_err(|e| {
+                    if e.to_string().contains("LimitExceeded") || e.to_string().contains("limit") {
+                        WireError::DecodeLimitExceeded
+                    } else {
+                        WireError::Decode(e.to_string())
+                    }
+                })?;
             Ok((
                 DecodedEntry {
                     prev_hash: e.prev_hash,
