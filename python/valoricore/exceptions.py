@@ -23,3 +23,13 @@ class KernelError(ValoricoreError):
 class NotFoundError(ValoricoreError):
     """Raised when a record, node, or edge does not exist."""
     pass
+
+class TamperDetected(IntegrityError):
+    """
+    Raised when a live node's state hash differs from an anchor, or when
+    ``verify_log(..., raise_on_tamper=True)`` finds a tampered log.
+
+    The message includes the finding summary and, where available, the
+    specific event number, byte offset, and commit timestamp of the damage.
+    """
+    pass
