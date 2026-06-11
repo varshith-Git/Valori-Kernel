@@ -37,6 +37,8 @@ use blake3;
 ///
 /// # Hash Input Structure
 /// ```text
+/// domain: "valori-state" || domain_version (u8) || format_id (u8)
+/// ↓
 /// version (u64 LE)
 /// ↓
 /// For each record (in pool order):
@@ -61,10 +63,25 @@ use blake3;
 /// ```
 ///
 /// Returns: [u8; 32] - BLAKE3 hash
+/// Version of the hash-input schema itself. Bumped whenever the structure
+/// below changes (v2 = added domain separation + tag/metadata coverage).
+/// A state hashed under one domain version can never collide with the
+/// same bytes hashed under another — hash changes are versioned, visible
+/// events, not silent drift.
+pub const STATE_HASH_DOMAIN_VERSION: u8 = 2;
+
 pub fn hash_state_blake3(
     state: &KernelState,
 ) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
+
+    // Domain separation: a Q8.8 state must never hash-collide with a
+    // Q16.16 state, and schema changes must be distinguishable.
+    hasher.update(b"valori-state");
+    hasher.update(&[
+        STATE_HASH_DOMAIN_VERSION,
+        crate::fxp::format::ACTIVE_FORMAT_ID,
+    ]);
 
     // Version
     hasher.update(&state.version.0.to_le_bytes());

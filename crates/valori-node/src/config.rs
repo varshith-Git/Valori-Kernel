@@ -87,6 +87,24 @@ impl Default for NodeConfig {
             Ok("product") => QuantizationKind::Product,
             _ => QuantizationKind::None,
         };
+
+        // Arithmetic format. Unlike other knobs this NEVER falls back
+        // silently: precision is identity-defining (different format =
+        // different hashes, different search results), so a typo or an
+        // unimplemented format must stop the process, not default away.
+        let format_name = std::env::var("VALORI_FORMAT")
+            .unwrap_or_else(|_| "q16.16".to_string());
+        match valori_kernel::fxp::format::parse_format(&format_name) {
+            Some(id) if id == valori_kernel::fxp::format::ACTIVE_FORMAT_ID => {}
+            Some(_) => panic!(
+                "VALORI_FORMAT='{format_name}' is a recognized format but this \
+                 build only implements q16.16 (see FxpFormat in valori-kernel)"
+            ),
+            None => panic!(
+                "VALORI_FORMAT='{format_name}' is not a known format \
+                 (known: q16.16, q8.8, q32.32; implemented: q16.16)"
+            ),
+        }
         
         let snapshot_path = std::env::var("VALORI_SNAPSHOT_PATH")
             .ok().map(PathBuf::from);
