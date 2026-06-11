@@ -14,3 +14,6 @@ pub mod telemetry;
 pub mod events;
 pub mod replication;
 pub mod network;
+/// Phase 1.9: Committer trait seam (skeleton present; Engine wiring in Phase 1.9).
+/// See docs/phases/phase-1.9-committer-trait.md
+pub mod commit;

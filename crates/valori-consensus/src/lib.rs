@@ -8,3 +8,8 @@
 //! This crate is intentionally empty in Phase 1 — it exists so the
 //! workspace layout, CI wiring, and feature flags are settled before any
 //! consensus code lands.
+
+/// Phase 1.9: RaftCommitter stub — compile-time proof that valori-consensus
+/// can satisfy the Committer trait once Phase 2 wires it up.
+/// See docs/phases/phase-1.9-committer-trait.md
+pub mod raft_committer;
