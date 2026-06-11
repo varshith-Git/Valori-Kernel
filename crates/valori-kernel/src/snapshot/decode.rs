@@ -52,19 +52,29 @@ pub fn decode_state(
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    // We support V1, V2, V3, and V4
-    if schema_ver < 1 || schema_ver > 4 {
+    // We support V1 through V5
+    if schema_ver < 1 || schema_ver > 5 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
     let version_val = read_u64(buf, &mut offset)?;
-    
+
     // Read 4 u32s that used to be capacities, but in V3 they are dim and lengths
     let _cap_records = read_u32(buf, &mut offset)?;
     let dim = read_u32(buf, &mut offset)?;
     let _cap_nodes = read_u32(buf, &mut offset)?;
     let _cap_edges = read_u32(buf, &mut offset)?;
-    
+
+    // V5: arithmetic format byte. Pre-V5 snapshots are implicitly Q16.16.
+    // Restoring a snapshot produced under a different format would silently
+    // corrupt every distance computation, so a mismatch is refused.
+    if schema_ver >= 5 {
+        let format_id = read_u8(buf, &mut offset)?;
+        if format_id != crate::fxp::format::ACTIVE_FORMAT_ID {
+            return Err(KernelError::InvalidOperation);
+        }
+    }
+
     let mut state = KernelState::new();
     state.version = Version(version_val);
     if dim > 0 {

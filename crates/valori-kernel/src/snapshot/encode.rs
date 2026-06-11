@@ -5,7 +5,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 4; // Bumped for back-pointer edge lists (first_in_edge / next_in)
+pub const SCHEMA_VERSION: u32 = 5; // V5: arithmetic format_id byte after the capacity block
 
 /// writes a u32 to the buffer at offset
 fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
@@ -68,6 +68,10 @@ pub fn encode_state(
     write_u32(buf, &mut offset, state.dim.unwrap_or(0) as u32)?;
     write_u32(buf, &mut offset, state.nodes.raw_nodes().len() as u32)?;
     write_u32(buf, &mut offset, state.edges.raw_edges().len() as u32)?;
+
+    // V5: arithmetic format — a snapshot is only meaningful under the
+    // format that produced it (restore refuses a mismatch).
+    write_u8(buf, &mut offset, crate::fxp::format::ACTIVE_FORMAT_ID)?;
     // Records
     let total_slots = state.records.raw_records().len() as u32;
     write_u32(buf, &mut offset, total_slots)?;
