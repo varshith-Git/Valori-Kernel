@@ -133,6 +133,7 @@ async fn delete_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<DeleteRecordRequest>,
 ) -> Result<Json<DeleteRecordResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     engine.delete_record(payload.id)?;
 
@@ -198,6 +199,7 @@ async fn insert_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<InsertRecordRequest>,
 ) -> Result<Json<InsertRecordResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     let id = engine.insert_record_from_f32(&payload.values)?;
     Ok(Json(InsertRecordResponse { id }))
@@ -207,6 +209,7 @@ async fn batch_insert(
     State(state): State<SharedEngine>,
     Json(payload): Json<BatchInsertRequest>,
 ) -> Result<Json<BatchInsertResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     let ids = engine.insert_batch(&payload.batch)?;
     Ok(Json(BatchInsertResponse { ids }))
@@ -216,6 +219,7 @@ async fn search(
     State(state): State<SharedEngine>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let engine = state.lock().await;
     let hits = engine.search_l2(&payload.query, payload.k)?;
     let results = hits.into_iter().map(|(id, score)| SearchHit { id, score }).collect();
@@ -226,6 +230,7 @@ async fn create_node(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateNodeRequest>,
 ) -> Result<Json<CreateNodeResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     let node_id = engine.create_node_for_record(payload.record_id, payload.kind)?;
     Ok(Json(CreateNodeResponse { node_id }))
@@ -235,6 +240,7 @@ async fn create_edge(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateEdgeRequest>,
 ) -> Result<Json<CreateEdgeResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     let edge_id = engine.create_edge(payload.from, payload.to, payload.kind)?;
     Ok(Json(CreateEdgeResponse { edge_id }))
@@ -297,6 +303,7 @@ async fn memory_upsert_vector(
     State(state): State<SharedEngine>,
     Json(payload): Json<MemoryUpsertVectorRequest>,
 ) -> Result<Json<MemoryUpsertResponse>, EngineError> {
+    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
     let record_id = engine.insert_record_from_f32(&payload.vector)?;
 

@@ -14,9 +14,9 @@ people and sessions that built it.
 | 1.1 — Workspace restructure | [phase-1.1-workspace-restructure.md](phase-1.1-workspace-restructure.md) | `2bd793d` | ✅ done |
 | 1.1b — Per-crate test layout + kernel fixes | [phase-1.1b-per-crate-tests.md](phase-1.1b-per-crate-tests.md) | `1db62c9` | ✅ done |
 | 1.2 — valori-wire + segment format v3 | [phase-1.2-valori-wire-v3.md](phase-1.2-valori-wire-v3.md) | `b4ac53b` | ✅ done |
-| 1.3 — FxpFormat seam (configurable precision) | — | — | ⬜ next |
-| 1.4 — Collections seam | — | — | ⬜ planned |
-| 1.5 — Crypto-shredding design (GDPR) | — | — | ⬜ planned |
+| 1.3 — FxpFormat seam (configurable precision) | [phase-1.3-fxpformat-seam.md](phase-1.3-fxpformat-seam.md) | `22f600b` | ✅ done |
+| 1.4 — Collections seam | [phase-1.4-collections-seam.md](phase-1.4-collections-seam.md) | see git log | ✅ done |
+| 1.5 — Crypto-shredding design (GDPR) | — | — | ⬜ next |
 | 1.6 — Security design doc | — | — | ⬜ planned |
 | 1.7 — Verifier hardening (limits + fuzzing) | — | — | ⬜ planned |
 | 1.8 — Storage policy (snapshot cadence, zstd, disk-full) | — | — | ⬜ planned |

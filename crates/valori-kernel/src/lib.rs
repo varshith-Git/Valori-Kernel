@@ -39,6 +39,9 @@ pub mod storage;
 pub mod verify;
 pub mod dist;
 
+#[cfg(test)]
+mod tests;
+
 
 #[allow(deprecated)]
 pub use kernel::ValoriKernel;

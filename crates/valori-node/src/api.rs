@@ -5,9 +5,35 @@ use serde::{Deserialize, Serialize};
 // Since valori-kernel is a dependency, we can use its types if they are pub.
 // Assuming valori_kernel::types::enums::* is pub.
 
+
+// ── Collections seam (multi-node roadmap Phase 1.4) ──────────────────────────
+//
+// Exactly one collection exists today. The field is accepted on every
+// data-path request NOW so that clients written today keep working
+// unchanged when multi-collection (shard-by-collection, roadmap Phase 4)
+// lands — adding the field later would be an API break for strict clients.
+
+/// Name of the single collection that exists today.
+pub const DEFAULT_COLLECTION: &str = "default";
+
+/// Validate an optionally supplied collection name.
+/// `None` means "the default collection".
+pub fn validate_collection(collection: Option<&str>) -> Result<(), crate::errors::EngineError> {
+    match collection {
+        None => Ok(()),
+        Some(c) if c == DEFAULT_COLLECTION => Ok(()),
+        Some(other) => Err(crate::errors::EngineError::InvalidInput(format!(
+            "unknown collection '{other}' — only '{DEFAULT_COLLECTION}' exists \
+             (multiple collections arrive with shard-by-collection, roadmap Phase 4)"
+        ))),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct InsertRecordRequest {
     pub values: Vec<f32>,
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -18,6 +44,8 @@ pub struct InsertRecordResponse {
 #[derive(Deserialize)]
 pub struct DeleteRecordRequest {
     pub id: u32,
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -29,6 +57,8 @@ pub struct DeleteRecordResponse {
 pub struct SearchRequest {
     pub query: Vec<f32>,
     pub k: usize,
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -60,6 +90,8 @@ pub struct CreateNodeRequest {
     // I will redefine them here for serde support if kernel ones don't have it.
     // Let's assume for now I wrap them: kind: u8 in JSON, mapped to enum.
     pub kind: u8, 
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -72,6 +104,8 @@ pub struct CreateEdgeRequest {
     pub from: u32,
     pub to: u32,
     pub kind: u8,
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,6 +134,8 @@ pub struct GetEdgesResponse {
 #[derive(Deserialize)]
 pub struct MemoryUpsertVectorRequest {
     pub vector: Vec<f32>,
+    #[serde(default)]
+    pub collection: Option<String>,
     pub attach_to_document_node: Option<u32>,
     // Reserved for future use:
     #[serde(default)]
@@ -197,6 +233,8 @@ pub struct EventProofResponse {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct BatchInsertRequest {
     pub batch: Vec<Vec<f32>>,
+    #[serde(default)]
+    pub collection: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
