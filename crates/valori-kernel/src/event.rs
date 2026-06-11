@@ -74,6 +74,28 @@ pub enum KernelEvent {
     DeleteNode {
         id: NodeId,
     },
+
+    // ── Phase 1.5 reserved variants — schema exists now so future code is
+    //   additive, not a wire-format break. apply_event() refuses both with
+    //   KernelError::NotImplemented until the encryption engine is wired in.
+
+    /// Insert a vector record whose payload has been encrypted under `key_id`.
+    /// Stored in the log forever; becomes permanently unreadable after the key
+    /// is shredded — satisfying GDPR erasure without breaking the audit chain.
+    InsertRecordEncrypted {
+        id: RecordId,
+        key_id: [u8; 16],
+        ciphertext: alloc::vec::Vec<u8>,
+        metadata_ciphertext: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
+    },
+
+    /// Destroy the key `key_id` in the vault. All records encrypted under this
+    /// key become unrecoverable. The log entry itself is permanent; the data
+    /// content is erased.
+    ShredKey {
+        key_id: [u8; 16],
+    },
 }
 
 impl KernelEvent {
@@ -87,6 +109,8 @@ impl KernelEvent {
             KernelEvent::DeleteEdge { .. } => "DeleteEdge",
             KernelEvent::SoftDeleteRecord { .. } => "SoftDeleteRecord",
             KernelEvent::DeleteNode { .. } => "DeleteNode",
+            KernelEvent::InsertRecordEncrypted { .. } => "InsertRecordEncrypted",
+            KernelEvent::ShredKey { .. } => "ShredKey",
         }
     }
 }
@@ -144,6 +168,20 @@ impl Serialize for KernelEvent {
             KernelEvent::DeleteNode { id } => {
                 let mut state = serializer.serialize_struct_variant("KernelEvent", 6, "DeleteNode", 1)?;
                 state.serialize_field("id", id)?;
+                state.end()
+            }
+            KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, metadata_ciphertext, tag } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 7, "InsertRecordEncrypted", 5)?;
+                state.serialize_field("id", id)?;
+                state.serialize_field("key_id", key_id)?;
+                state.serialize_field("ciphertext", ciphertext)?;
+                state.serialize_field("metadata_ciphertext", metadata_ciphertext)?;
+                state.serialize_field("tag", tag)?;
+                state.end()
+            }
+            KernelEvent::ShredKey { key_id } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 8, "ShredKey", 1)?;
+                state.serialize_field("key_id", key_id)?;
                 state.end()
             }
         }
@@ -212,6 +250,16 @@ impl<'de> Deserialize<'de> for KernelEvent {
              DeleteNode {
                  id: NodeId,
              },
+             InsertRecordEncrypted {
+                 id: RecordId,
+                 key_id: [u8; 16],
+                 ciphertext: alloc::vec::Vec<u8>,
+                 metadata_ciphertext: Option<alloc::vec::Vec<u8>>,
+                 tag: u64,
+             },
+             ShredKey {
+                 key_id: [u8; 16],
+             },
         }
 
         // Delegate to the Helper
@@ -225,6 +273,9 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::DeleteEdge { id } => KernelEvent::DeleteEdge { id },
             KernelEventHelper::SoftDeleteRecord { id } => KernelEvent::SoftDeleteRecord { id },
             KernelEventHelper::DeleteNode { id } => KernelEvent::DeleteNode { id },
+            KernelEventHelper::InsertRecordEncrypted { id, key_id, ciphertext, metadata_ciphertext, tag } =>
+                KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, metadata_ciphertext, tag },
+            KernelEventHelper::ShredKey { key_id } => KernelEvent::ShredKey { key_id },
         })
     }
 }

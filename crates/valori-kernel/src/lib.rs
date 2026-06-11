@@ -21,6 +21,7 @@
 
 extern crate alloc;
 pub mod config;
+pub mod crypto;
 pub mod error;
 pub mod event;
 pub mod fxp;
@@ -39,8 +40,6 @@ pub mod storage;
 pub mod verify;
 pub mod dist;
 
-#[cfg(test)]
-mod tests;
 
 
 #[allow(deprecated)]

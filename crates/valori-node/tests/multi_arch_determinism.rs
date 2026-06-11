@@ -31,6 +31,7 @@ mod determinism_tests {
             auth_token: None,
             event_log_path: None,
             mode: Default::default(),
+            ..Default::default()
         }
     }
 

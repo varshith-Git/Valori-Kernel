@@ -138,5 +138,17 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("DeleteNode").fg(Color::Red),
             format!("node_id={} (cascade-deleted incident edges)", id.0),
         ),
+
+        KernelEvent::InsertRecordEncrypted { id, key_id, .. } => (
+            Cell::new("InsertRecordEncrypted").fg(Color::Magenta),
+            format!("record_id={}  key={}", id.0,
+                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+        ),
+
+        KernelEvent::ShredKey { key_id } => (
+            Cell::new("ShredKey").fg(Color::Magenta),
+            format!("key={}  [permanently unrecoverable]",
+                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+        ),
     }
 }

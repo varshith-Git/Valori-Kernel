@@ -200,6 +200,10 @@ impl KernelState {
                 let cmd = Command::DeleteNode { node_id: *id };
                 self.apply(&cmd)?;
             }
+
+            KernelEvent::InsertRecordEncrypted { .. } | KernelEvent::ShredKey { .. } => {
+                return Err(KernelError::NotImplemented);
+            }
         }
 
         Ok(())

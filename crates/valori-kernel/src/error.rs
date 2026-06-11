@@ -37,6 +37,9 @@ pub enum KernelError {
 
     #[error("Metadata Too Large")]
     MetadataTooLarge,
+
+    #[error("Not implemented (reserved for future phase)")]
+    NotImplemented,
 }
 
 pub type Result<T> = std::result::Result<T, KernelError>;
