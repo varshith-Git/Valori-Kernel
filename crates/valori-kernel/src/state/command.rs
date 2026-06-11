@@ -38,4 +38,30 @@ pub enum Command {
     SoftDeleteRecord {
         id: RecordId,
     },
+    // -------------------------------------------------------------------------
+    // RESERVED — Phase 3 (crypto-shredding + security model).
+    // These variants DO NOT exist yet. They are documented here so that:
+    //  (a) the Command enum evolution is planned before production logs exist,
+    //  (b) implementors know exactly where the variants slot in.
+    //
+    // See docs/phases/phase-1.5-crypto-shredding.md and
+    //     docs/phases/phase-1.6-security-model.md for the full design.
+    //
+    // Phase 3 additions (append after SoftDeleteRecord — append-only policy):
+    //
+    //  InsertEncryptedRecord {
+    //      id:         RecordId,
+    //      vector:     FxpVector,   // derived from plaintext before encryption
+    //      key_id:     [u8; 16],    // opaque DEK identifier in Key Vault
+    //      nonce:      [u8; 12],    // AES-256-GCM 96-bit nonce
+    //      ciphertext: Vec<u8>,     // AES-256-GCM encrypted metadata
+    //      tag:        [u8; 16],    // AEAD authentication tag
+    //      collection: Option<String>,
+    //  }
+    //
+    //  EraseRecord {
+    //      id:         RecordId,    // sets FLAG_SHREDDED; destroys DEK via KeyVaultTrait
+    //      erased_by:  [u8; 16],    // admin key hash for audit attribution
+    //  }
+    // -------------------------------------------------------------------------
 }

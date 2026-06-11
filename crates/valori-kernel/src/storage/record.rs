@@ -9,6 +9,25 @@ use crate::types::vector::FxpVector;
 /// all search, record_count, and state-hash operations.
 pub const FLAG_SOFT_DELETED: u8 = 0x01;
 
+/// Bit-flag: record payload is encrypted (crypto-shredding envelope).
+/// When set, `metadata` contains a serialised `EncryptedPayload` struct
+/// rather than raw bytes. `vector` was derived from the plaintext before
+/// encryption and is stored unencrypted (vectors are derived, not PII).
+///
+/// **Phase 1 — reserved only.** No code reads or writes this flag yet.
+/// Implementation: Phase 3 (docs/phases/phase-1.5-crypto-shredding.md).
+pub const FLAG_ENCRYPTED: u8 = 0x02;
+
+/// Bit-flag: the DEK (Data Encryption Key) for this record has been
+/// destroyed. The ciphertext in `metadata` is permanently unrecoverable.
+/// The record slot is retained so the hash-chain and graph adjacency lists
+/// remain intact; the record is excluded from search and state-hash
+/// identically to soft-deleted records.
+///
+/// **Phase 1 — reserved only.** No code reads or writes this flag yet.
+/// Implementation: Phase 3 (docs/phases/phase-1.5-crypto-shredding.md).
+pub const FLAG_SHREDDED: u8 = 0x04;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub id: RecordId,
