@@ -51,8 +51,15 @@ impl NodePool {
         idx < self.nodes.len() && self.nodes[idx].is_some()
     }
 
+    /// Slot count — includes tombstones. IDs allocate at this index, so this
+    /// must never shrink after deletes.
     pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Number of live (non-deleted) nodes.
+    pub fn live_count(&self) -> usize {
+        self.nodes.iter().filter(|s| s.is_some()).count()
     }
 
     pub fn is_full(&self) -> bool {
@@ -105,8 +112,15 @@ impl EdgePool {
         idx < self.edges.len() && self.edges[idx].is_some()
     }
 
+    /// Slot count — includes tombstones. IDs allocate at this index, so this
+    /// must never shrink after deletes.
     pub fn len(&self) -> usize {
         self.edges.len()
+    }
+
+    /// Number of live (non-deleted) edges.
+    pub fn live_count(&self) -> usize {
+        self.edges.iter().filter(|s| s.is_some()).count()
     }
 
     pub fn is_full(&self) -> bool {

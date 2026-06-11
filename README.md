@@ -171,7 +171,7 @@ No mutation reaches the in-memory kernel without first being fsynced to the appe
 
 If the process dies at any point, recovery replays the event log. The final state hash is guaranteed to match the pre-crash hash.
 
-Durability is enforced, not assumed: every single-event append is written, flushed, and `fsync`'d before the HTTP response is sent, and a kill-test in the suite ([`node/tests/crash_durability.rs`](node/tests/crash_durability.rs)) proves that events acknowledged immediately before a `SIGKILL` survive. Batch inserts amortize to one fsync per batch.
+Durability is enforced, not assumed: every single-event append is written, flushed, and `fsync`'d before the HTTP response is sent, and a kill-test in the suite ([`node/tests/crash_durability.rs`](crates/valori-node/tests/crash_durability.rs)) proves that events acknowledged immediately before a `SIGKILL` survive. Batch inserts amortize to one fsync per batch.
 
 The log itself (format v2) is **BLAKE3 hash-chained**: every entry stores the chain head that preceded it, so an in-place edit to any historical entry breaks the chain at the very next entry — and the offline verifier reports exactly which event was altered, with its decoded contents and commit timestamp.
 
@@ -284,7 +284,7 @@ record_id, proof_hash = client._db.insert_with_proof(embedding.tolist(), tag=0)
 
 ### Audit the whole database offline: `valori-verify`
 
-A standalone ~400-line binary ([`verify/`](verify/README.md)) replays an
+A standalone ~400-line binary ([`crates/valori-verify/`](crates/valori-verify/README.md)) replays an
 `events.log` through the deterministic kernel, validates the per-entry hash
 chain, and recomputes the same BLAKE3 state hash the live server reports at
 `GET /v1/proof/state` — no server, no network, no trust required.
@@ -304,7 +304,7 @@ machine-readable forensic report (`--report findings.json`). See it in
 30 seconds:
 
 ```bash
-./verify/tamper_demo.sh
+./crates/valori-verify/tamper_demo.sh
 # generates a 2,000-event log, verifies it, flips single bytes in two
 # copies, and catches both attacks with event-level localization
 ```
@@ -413,7 +413,7 @@ cargo test -p valori-node --test graph_cascade
 
 # Build the offline verifier and run the tamper demo
 cargo build -p valori-verify --release
-./verify/tamper_demo.sh
+./crates/valori-verify/tamper_demo.sh
 
 # Benchmarks
 cargo run --release --bin bench_recall
@@ -436,11 +436,11 @@ python test_valoricore_integrated.py
 | Document | Contents |
 |---|---|
 | [Python SDK Guide](python/valoricore_readme.md) | Full SDK reference — embedders, MemoryClient, async, LangChain, LlamaIndex |
-| [Node API Reference](node/API_README.md) | HTTP endpoints, auth, env vars |
-| [FFI Internals](ffi/README.md) | Rust ↔ Python bridge, PyO3 bindings |
+| [Node API Reference](crates/valori-node/README.md) | HTTP endpoints, auth, env vars |
+| [FFI Internals](crates/valori-ffi/README.md) | Rust ↔ Python bridge, PyO3 bindings |
 | [Architecture Deep Dive](docs/architecture.md) | Kernel design, fixed-point math, state machine |
 | [Crash Recovery Case Study](docs/crash-recovery-proof.md) | Production proof with raw hashes |
-| [Offline Verifier (valori-verify)](verify/README.md) | Standalone log auditor — hash chain, tamper localization, forensic reports |
+| [Offline Verifier (valori-verify)](crates/valori-verify/README.md) | Standalone log auditor — hash chain, tamper localization, forensic reports |
 | [Verification Report](docs/verification_report.md) | Multi-arch determinism CI results |
 
 ---

@@ -17,6 +17,13 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde_json = "1"
 
+# Test-only: the binaries stay free of the server crate (that independence is
+# the audit story) — but the cross-crate wire-compat test must link both
+# sides to prove node-written bytes decode with this crate's mirror.
+[dev-dependencies]
+valori-node = { path = "../valori-node" }
+tempfile = "3"
+
 [[bin]]
 name = "valori-verify"
 path = "src/main.rs"

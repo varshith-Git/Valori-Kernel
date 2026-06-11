@@ -43,6 +43,8 @@ use blake3;
 ///   id (u32 LE)
 ///   flags (u8)
 ///   vector[0..D] (i32 LE each)
+///   tag (u64 LE)
+///   metadata length (u32 LE, None = u32::MAX) + metadata bytes
 /// ↓
 /// For each node (in pool order):
 ///   id (u32 LE)
@@ -73,6 +75,20 @@ pub fn hash_state_blake3(
         hasher.update(&[record.flags]);
         for scalar in record.vector.data.iter() {
             hasher.update(&scalar.0.to_le_bytes());
+        }
+        // Tag and metadata are state: tags drive filtered search and
+        // metadata carries per-record proofs. Leaving them out of the
+        // hash would let replicas diverge invisibly (length prefix keeps
+        // None / Some(empty) / adjacent-bytes cases unambiguous).
+        hasher.update(&record.tag.to_le_bytes());
+        match &record.metadata {
+            Some(bytes) => {
+                hasher.update(&(bytes.len() as u32).to_le_bytes());
+                hasher.update(bytes);
+            }
+            None => {
+                hasher.update(&u32::MAX.to_le_bytes());
+            }
         }
     }
 

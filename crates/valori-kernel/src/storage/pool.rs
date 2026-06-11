@@ -22,6 +22,12 @@ impl RecordPool {
         }
     }
 
+    /// The id the next insert will allocate — lets callers validate an
+    /// event's claimed id BEFORE mutating the pool.
+    pub fn next_id(&self) -> RecordId {
+        RecordId(self.records.len() as u32)
+    }
+
     /// Inserts a vector into the pool (always appends to maintain monotonic IDs).
     /// Returns the RecordId (which corresponds to the index).
     pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64) -> Result<RecordId> {
