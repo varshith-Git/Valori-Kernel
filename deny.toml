@@ -1,0 +1,81 @@
+# cargo-deny configuration
+# Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+#
+# Enforced on every PR via EmbarkStudios/cargo-deny-action.
+# See docs/phases/phase-1.10-ci-upgrades.md § D3 for rationale.
+#
+# Run locally: cargo deny check
+
+[licenses]
+# Allowed licenses for all transitive dependencies.
+# AGPL and SSPL are forbidden — they would taint binary distributions.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Zlib",
+    "OpenSSL",
+]
+deny = [
+    "AGPL-3.0",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "SSPL-1.0",
+    "GPL-2.0",
+    "GPL-3.0",
+    "GPL-2.0-only",
+    "GPL-3.0-only",
+]
+# Crates with unusual or dual license expressions — reviewed and accepted.
+exceptions = [
+    # ring uses both ISC and OpenSSL. We accept both.
+    { allow = ["ISC", "OpenSSL"], name = "ring" },
+    # unicode-ident uses Unicode-DFS-2016 which is not OSI-approved but is
+    # permissive and widely accepted in the Rust ecosystem.
+    { allow = ["Unicode-DFS-2016", "MIT"], name = "unicode-ident" },
+]
+# Crates without a SPDX license expression — require manual review.
+unlicensed = "deny"
+copyleft   = "deny"
+
+[advisories]
+# Deny crates with known security vulnerabilities.
+# Database: https://github.com/rustsec/advisory-db (updated daily)
+db-urls       = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained  = "warn"    # warn only — unmaintained ≠ insecure
+unsound       = "deny"    # deny unsound code (UB risk)
+notice        = "warn"
+
+[bans]
+# Prevent wildcard dependencies (they bypass Cargo.lock reproducibility).
+wildcards = "deny"
+# Warn on multiple versions of the same crate — indicates dependency hell.
+multiple-versions = "warn"
+# Crates that must never appear in the dependency tree.
+deny = [
+    # openssl: prefer rustls. openssl C linkage makes cross-compilation painful
+    # and the audit surface is large.
+    { name = "openssl" },
+    { name = "openssl-sys" },
+]
+# Permitted duplicates (some crates have multiple major versions in the tree).
+# Add entries here when cargo-deny reports a duplicate that is acceptable.
+# Example:
+# skip = [{ name = "some-crate", version = "1.0" }]
+skip = []
+# Allow build-only duplicates (e.g. proc-macro crates at different versions).
+skip-tree = []
+
+[sources]
+# Only allow crates from crates.io and our own workspace paths.
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
+allow-git        = []
