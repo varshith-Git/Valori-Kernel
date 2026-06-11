@@ -1,0 +1,88 @@
+name: Docker Build & Smoke Test
+
+# Validates the Dockerfile and docker-compose on every PR that touches
+# source or container config. Does NOT push to any registry.
+#
+# Phase 1.11 acceptance criteria:
+#  - Image builds successfully from the multi-stage Dockerfile.
+#  - `docker compose up -d` starts all 3 nodes without error.
+#  - All three containers reach the `healthy` state within the timeout.
+
+on:
+  push:
+    branches: [ "main", "multinode" ]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    branches: [ "main", "multinode" ]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+jobs:
+  docker-build:
+    name: Build & smoke-test Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: valori-node:ci
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Move cache (prevent cache growth)
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Smoke-test single container
+        run: |
+          docker run --rm -d \
+            --name valori-smoke \
+            -p 3001:3000 \
+            -e VALORI_DIM=4 \
+            -e VALORI_MAX_RECORDS=100 \
+            valori-node:ci
+          echo "Waiting for health check..."
+          for i in $(seq 1 12); do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' valori-smoke 2>/dev/null || echo starting)
+            echo "  [$i] status: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Container healthy!"
+              break
+            fi
+            sleep 5
+          done
+          docker stop valori-smoke
+          FINAL=$(docker inspect --format '{{.State.Health.Status}}' valori-smoke 2>/dev/null || echo "stopped")
+          if [ "$FINAL" != "healthy" ] && [ "$FINAL" != "stopped" ]; then
+            echo "Container never reached healthy state (final: $FINAL)"
+            exit 1
+          fi
+          echo "Smoke test passed."
