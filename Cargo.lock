@@ -2958,6 +2958,7 @@ dependencies = [
  "tempfile",
  "valori-kernel",
  "valori-node",
+ "valori-wire",
 ]
 
 [[package]]
@@ -3024,6 +3025,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "valori-kernel",
+ "valori-wire",
 ]
 
 [[package]]
@@ -3041,6 +3043,18 @@ dependencies = [
  "tempfile",
  "valori-kernel",
  "valori-node",
+ "valori-wire",
+]
+
+[[package]]
+name = "valori-wire"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "serde",
+ "thiserror 1.0.69",
+ "valori-kernel",
 ]
 
 [[package]]

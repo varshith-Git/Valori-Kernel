@@ -38,10 +38,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 
-#[allow(dead_code)]
-#[path = "../wire.rs"]
-mod wire;
-use wire::{chain_advance, format_utc as wire_fmt_utc, hex, parse_header, ChainedEntry, HEADER_SIZE};
+use valori_wire as wire;
+use valori_wire::{chain_advance, decode_entry, format_utc as wire_fmt_utc, hex, parse_header};
 
 #[allow(dead_code)]
 #[path = "../anchor.rs"]
@@ -105,19 +103,16 @@ fn replay_log(path: &Path) -> anyhow::Result<LogSummary> {
     let bytes = std::fs::read(path)
         .map_err(|e| anyhow::anyhow!("cannot read '{}': {e}", path.display()))?;
 
-    let _header = parse_header(&bytes)?;
+    let header = parse_header(&bytes)?;
 
-    let body = &bytes[HEADER_SIZE..];
-    let mut chain_head = [0u8; 32];
+    let body = &bytes[header.header_len..];
+    let mut chain_head = header.prev_segment_chain_head;
     let mut event_count = 0u64;
     let mut offset = 0usize;
     let mut state = KernelState::new();
 
     while offset < body.len() {
-        match bincode::serde::decode_from_slice::<ChainedEntry, _>(
-            &body[offset..],
-            bincode::config::standard(),
-        ) {
+        match decode_entry(header.version, &body[offset..]) {
             Ok((chained, n)) => {
                 offset += n;
                 // Validate chain — abort if broken.
@@ -126,10 +121,10 @@ fn replay_log(path: &Path) -> anyhow::Result<LogSummary> {
                         "chain break at entry #{} (byte offset {}) — \
                          log may have been tampered; run valori-verify for details",
                         event_count + 1,
-                        HEADER_SIZE + offset
+                        header.header_len + offset
                     );
                 }
-                chain_head = chain_advance(&chained.prev_hash, chained.wall_time_secs, &chained.entry);
+                chain_head = chain_advance(header.version, &chain_head, &chained)?;
                 if let wire::LogEntry::Event(ref event) = chained.entry {
                     // Apply to state (needed for the state hash).
                     if let Err(e) = state.apply_event(event) {

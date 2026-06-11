@@ -37,53 +37,41 @@ pub enum ReplayError {
 
 pub type Result<T> = std::result::Result<T, ReplayError>;
 
-/// Read and validate event log header
-fn read_header(file: &mut BufReader<File>, expected_dim: Option<u32>) -> Result<u32> {
-    let mut header_bytes = [0u8; 16];
-    file.read_exact(&mut header_bytes)?;
+/// Replay events from log file (any supported wire version — v2 or v3).
+pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Result<Vec<KernelEvent>> {
+    let file = File::open(path.as_ref())?;
+    let mut reader = BufReader::new(file);
 
-    let version = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
-    let dim = u32::from_le_bytes(header_bytes[4..8].try_into().unwrap());
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer)?;
 
-    if version != 2 {
-        return Err(ReplayError::InvalidHeader);
-    }
-
+    let header = valori_wire::parse_header(&buffer).map_err(|_| ReplayError::InvalidHeader)?;
     if let Some(expected) = expected_dim {
-        if dim != expected {
+        if header.dim != expected {
             return Err(ReplayError::DimensionMismatch {
-                log_dim: dim,
+                log_dim: header.dim,
                 expected_dim: expected,
             });
         }
     }
 
-    Ok(dim)
-}
-
-/// Replay events from log file
-pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Result<Vec<KernelEvent>> {
-    let file = File::open(path.as_ref())?;
-    let mut reader = BufReader::new(file);
-
-    // Validate header
-    let _log_dim = read_header(&mut reader, expected_dim)?;
-
     let mut events = Vec::new();
-    let mut buffer = Vec::new();
-    
-    reader.read_to_end(&mut buffer)?;
-
-    let mut offset = 0;
+    let mut offset = header.header_len;
+    // Recovery validates the hash chain as it replays: any in-place edit to
+    // a non-final entry breaks the next entry's prev_hash, so corruption is
+    // detected even when the damaged bytes still decode structurally.
+    let mut chain_head = header.prev_segment_chain_head;
     while offset < buffer.len() {
-        match bincode::serde::decode_from_slice::<crate::events::event_log::ChainedEntry, _>(
-            &buffer[offset..],
-            bincode::config::standard()
-        ) {
-            Ok((chained, bytes_read)) => {
+        match valori_wire::decode_entry(header.version, &buffer[offset..]) {
+            Ok((decoded, bytes_read)) => {
+                if decoded.prev_hash != chain_head {
+                    return Err(ReplayError::Corrupted { offset });
+                }
+                chain_head = valori_wire::chain_advance(header.version, &chain_head, &decoded)
+                    .map_err(|e| ReplayError::Deserialization(e.to_string()))?;
                 offset += bytes_read;
 
-                match chained.entry {
+                match decoded.entry {
                     crate::events::event_log::LogEntry::Event(event) => {
                         events.push(event);
                     },

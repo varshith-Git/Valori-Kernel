@@ -20,22 +20,20 @@ pub async fn spawn_replication_stream(
             let mut buffer = Vec::new();
 
             if let Ok(_) = reader.read_to_end(&mut buffer).await {
-                let mut offset = 0;
-                if buffer.len() >= 16 {
-                    offset = 16;
-                }
+                let (mut offset, log_version) = match valori_wire::parse_header(&buffer) {
+                    Ok(h) => (h.header_len, h.version),
+                    // Empty/invalid file → skip the file-replay phase.
+                    Err(_) => (buffer.len(), valori_wire::VERSION_V3),
+                };
 
                 let mut current_idx = 0;
 
                 while offset < buffer.len() {
-                    match bincode::serde::decode_from_slice::<crate::events::event_log::ChainedEntry, _>(
-                        &buffer[offset..],
-                        bincode::config::standard()
-                    ) {
+                    match valori_wire::decode_entry(log_version, &buffer[offset..]) {
                         Ok((chained, bytes_read)) => {
                             offset += bytes_read;
                             // Re-encode only the inner LogEntry for the wire — the
-                            // follower applies LogEntry, not ChainedEntry.
+                            // follower applies LogEntry, not the on-disk entry.
                             let entry_bytes = match bincode::serde::encode_to_vec(
                                 &chained.entry,
                                 bincode::config::standard(),

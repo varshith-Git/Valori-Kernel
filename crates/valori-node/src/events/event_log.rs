@@ -7,30 +7,29 @@
 //! - No truncation or rewriting allowed
 //! - Bincode serialization for determinism
 //!
-//! ## File layout (v2)
-//! ```text
-//! [Header: 16 bytes][ChainedEntry][ChainedEntry]...
-//! ```
-//! Header: version u32 LE (=2) | dim u32 LE | reserved u64 LE (=0)
+//! The on-disk format is defined ONCE in the `valori-wire` crate (shared
+//! with `valori-verify` and `valori-cli`). This module only owns the
+//! durability mechanics: open/restore, append+fsync, batch, rotation.
 //!
-//! Each `ChainedEntry` = bincode of `{ prev_hash: [u8;32], wall_time_secs: u64, entry: LogEntry }`.
-//!
-//! ## Hash chain
-//! `chain_hash[i] = BLAKE3(chain_hash[i-1] || bincode((wall_time_secs_i, entry_i)))`
-//! Genesis: `chain_hash[-1] = [0u8; 32]`.
-//! Any in-place edit to an entry shifts its chain hash, which breaks the
-//! `prev_hash` field of the NEXT entry — giving verifiers exact event-level
-//! tamper location.
+//! ## Versions
+//! - New files are written as **v3**: 48-byte header carrying the
+//!   arithmetic format id, the segment sequence number, and the previous
+//!   segment's final chain head (so rotated segments splice into one
+//!   continuous chain instead of restarting from zeros).
+//! - Existing **v2** files keep appending v2 entries; the first rotation
+//!   upgrades the live segment to v3 and splices the chain.
 
-use valori_kernel::event::KernelEvent;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use serde::{Serialize, Deserialize};
 
-const LOG_VERSION: u32 = 2;
+pub use valori_wire::{DecodedEntry, EntryV2, EntryV3, LogEntry, SegmentHeader};
+use valori_wire::{
+    chain_advance, decode_entry, encode_entry, encode_header_v3, parse_header,
+    FORMAT_Q16_16, VERSION_V3,
+};
 
 #[derive(Error, Debug)]
 pub enum EventLogError {
@@ -45,92 +44,12 @@ pub enum EventLogError {
 
     #[error("Dimension mismatch: expected {expected}, found {found}")]
     DimensionMismatch { expected: u32, found: u32 },
-}
 
-/// Wrapper for persisted events to include metadata/checkpoints
-/// without polluting the pure kernel event definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LogEntry {
-    Event(KernelEvent),
-    Checkpoint {
-        event_count: u64,
-        snapshot_hash: [u8; 32],
-        timestamp: u64,
-    },
-}
-
-/// On-disk wrapper (v2 wire format).
-///
-/// Stored instead of a bare `LogEntry` so that the hash chain can be
-/// verified without re-running the kernel state machine.
-///
-/// Public so log readers outside this crate (valori-cli forensics) decode
-/// the real wire format — the single definition moves to `valori-wire` in
-/// Phase 1.2 of the multi-node roadmap.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainedEntry {
-    /// BLAKE3 chain head immediately BEFORE this entry was written.
-    /// For the first entry this is `[0u8; 32]`.
-    pub prev_hash: [u8; 32],
-    /// Unix timestamp (seconds) when this entry was appended.
-    pub wall_time_secs: u64,
-    pub entry: LogEntry,
+    #[error("Wire format error: {0}")]
+    Wire(#[from] valori_wire::WireError),
 }
 
 pub type Result<T> = std::result::Result<T, EventLogError>;
-
-/// Advance the running chain head by one entry.
-/// `new_head = BLAKE3(prev_head || bincode((wall_time_secs, entry)))`
-pub(crate) fn chain_advance(head: &[u8; 32], wall_time_secs: u64, entry: &LogEntry) -> [u8; 32] {
-    let commit = bincode::serde::encode_to_vec(&(wall_time_secs, entry), bincode::config::standard())
-        .expect("LogEntry is always serialisable");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(head);
-    hasher.update(&commit);
-    *hasher.finalize().as_bytes()
-}
-
-/// Event Log File Header (16 bytes)
-#[repr(C)]
-struct EventLogHeader {
-    version: u32,
-    dim: u32,
-    reserved: u64,
-}
-
-impl EventLogHeader {
-    fn new(dim: u32) -> Self {
-        Self { version: LOG_VERSION, dim, reserved: 0 }
-    }
-
-    fn to_bytes(&self) -> [u8; 16] {
-        let mut bytes = [0u8; 16];
-        bytes[0..4].copy_from_slice(&self.version.to_le_bytes());
-        bytes[4..8].copy_from_slice(&self.dim.to_le_bytes());
-        bytes[8..16].copy_from_slice(&self.reserved.to_le_bytes());
-        bytes
-    }
-
-    fn from_bytes(bytes: &[u8; 16]) -> Self {
-        Self {
-            version: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
-            dim: u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-            reserved: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
-        }
-    }
-
-    fn validate(&self, expected_dim: Option<u32>) -> Result<()> {
-        if self.version != LOG_VERSION {
-            return Err(EventLogError::InvalidHeader);
-        }
-        if let Some(expected) = expected_dim {
-            if self.dim != expected {
-                return Err(EventLogError::DimensionMismatch { expected, found: self.dim });
-            }
-        }
-        Ok(())
-    }
-}
 
 /// Append-Only Event Log Writer
 ///
@@ -146,6 +65,10 @@ pub struct EventLogWriter {
     file: BufWriter<File>,
     event_count: u64,
     dim: u32,
+    /// Wire version of the CURRENT segment (v2 legacy or v3).
+    version: u32,
+    /// Sequence number of the current segment (0 = genesis).
+    segment_seq: u32,
     /// Running BLAKE3 chain head (reflects every durably written entry).
     chain_head: [u8; 32],
     /// Bytes written since last rotation (header not counted).
@@ -161,6 +84,16 @@ impl EventLogWriter {
         self.dim
     }
 
+    /// Wire version of the current segment.
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// Sequence number of the current segment.
+    pub fn segment_seq(&self) -> u32 {
+        self.segment_seq
+    }
+
     /// Current BLAKE3 chain head — covers every durably written entry.
     pub fn chain_head(&self) -> &[u8; 32] {
         &self.chain_head
@@ -168,10 +101,10 @@ impl EventLogWriter {
 
     /// Open or create an event log file.
     ///
-    /// If the file exists, validates the v2 header, decodes existing
-    /// `ChainedEntry` records to restore `event_count` and `chain_head`,
-    /// then opens in append mode.  If the file doesn't exist, creates it
-    /// with a fresh v2 header (requires `expected_dim`).
+    /// If the file exists (v2 or v3), validates the header, decodes existing
+    /// entries to restore `event_count` and `chain_head`, then opens in
+    /// append mode. If the file doesn't exist, creates it with a fresh v3
+    /// header (requires `expected_dim`).
     pub fn open(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let file_exists = path.exists();
@@ -185,46 +118,52 @@ impl EventLogWriter {
         let mut event_count = 0u64;
         let mut chain_head = [0u8; 32];
         let dim;
+        let version;
+        let mut segment_seq = 0u32;
 
         if file_exists {
             let mut read_file = File::open(&path)?;
-            let mut header_bytes = [0u8; 16];
-            read_file.read_exact(&mut header_bytes)?;
+            let mut buf = Vec::new();
+            read_file.read_to_end(&mut buf)?;
 
-            let header = EventLogHeader::from_bytes(&header_bytes);
-            header.validate(expected_dim)?;
+            let header = parse_header(&buf).map_err(|_| EventLogError::InvalidHeader)?;
+            if let Some(expected) = expected_dim {
+                if header.dim != expected {
+                    return Err(EventLogError::DimensionMismatch {
+                        expected,
+                        found: header.dim,
+                    });
+                }
+            }
             dim = header.dim;
+            version = header.version;
+            segment_seq = header.segment_seq;
+            // v3 segments continue the chain from the previous segment's
+            // final head (recorded in the header); v2 starts from zeros.
+            chain_head = header.prev_segment_chain_head;
 
-            let mut event_buf = Vec::new();
-            read_file.read_to_end(&mut event_buf)?;
-
-            let mut offset = 0;
-            while offset < event_buf.len() {
-                match bincode::serde::decode_from_slice::<ChainedEntry, _>(
-                    &event_buf[offset..],
-                    bincode::config::standard(),
-                ) {
-                    Ok((chained, bytes_read)) => {
-                        // Restore chain head by re-advancing through every entry.
-                        chain_head = chain_advance(
-                            &chained.prev_hash,
-                            chained.wall_time_secs,
-                            &chained.entry,
-                        );
-                        match chained.entry {
+            let mut offset = header.header_len;
+            while offset < buf.len() {
+                match decode_entry(version, &buf[offset..]) {
+                    Ok((decoded, bytes_read)) => {
+                        chain_head = chain_advance(version, &chain_head, &decoded)?;
+                        match decoded.entry {
                             LogEntry::Event(_) => event_count += 1,
                             LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
                         }
                         offset += bytes_read;
                     }
+                    // Trailing partial entry from a mid-write crash — replay
+                    // stops here; the unacknowledged tail is ignored.
                     Err(_) => break,
                 }
             }
         } else {
             let d = expected_dim.ok_or(EventLogError::InvalidHeader)?;
             dim = d;
-            let header = EventLogHeader::new(dim);
-            file.write_all(&header.to_bytes())?;
+            version = VERSION_V3;
+            let header = encode_header_v3(dim, FORMAT_Q16_16, 0, &[0u8; 32]);
+            file.write_all(&header)?;
             file.sync_all()?;
         }
 
@@ -233,6 +172,8 @@ impl EventLogWriter {
             file: BufWriter::new(file),
             event_count,
             dim,
+            version,
+            segment_seq,
             chain_head,
             bytes_written: 0,
         })
@@ -247,32 +188,49 @@ impl EventLogWriter {
         self.bytes_written = 0;
     }
 
-    /// Append an entry to the log, durably.
-    ///
-    /// Wraps the entry in a `ChainedEntry` (with current chain head and wall
-    /// clock), writes, flushes, and fsyncs before returning.  Once this
-    /// returns `Ok`, the entry survives a crash (including SIGKILL).
-    /// One fsync per call — bulk loads should use `append_batch`.
-    pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
-        let now = SystemTime::now()
+    fn now_secs() -> u64 {
+        SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_secs()
+    }
 
-        let chained = ChainedEntry {
-            prev_hash: self.chain_head,
-            wall_time_secs: now,
-            entry: entry.clone(),
-        };
+    /// Append an entry to the log, durably.
+    ///
+    /// Writes, flushes, and fsyncs before returning. Once this returns
+    /// `Ok`, the entry survives a crash (including SIGKILL).
+    /// One fsync per call — bulk loads should use `append_batch`.
+    pub fn append(&mut self, entry: &LogEntry) -> Result<()> {
+        self.append_with_request_id(entry, None)
+    }
 
-        let bytes = bincode::serde::encode_to_vec(&chained, bincode::config::standard())
-            .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+    /// Append with a client idempotency token (v3 segments only; the id is
+    /// not representable in legacy v2 segments and is dropped there).
+    /// Phase 2 Raft dedup is keyed on this id.
+    pub fn append_with_request_id(
+        &mut self,
+        entry: &LogEntry,
+        request_id: Option<[u8; 16]>,
+    ) -> Result<()> {
+        let now = Self::now_secs();
+        let request_id = if self.version == VERSION_V3 { request_id } else { None };
+
+        let bytes = encode_entry(self.version, &self.chain_head, now, request_id, entry)?;
 
         self.file.write_all(&bytes)?;
         self.file.flush()?;
         self.file.get_ref().sync_all()?;
 
-        self.chain_head = chain_advance(&chained.prev_hash, now, entry);
+        self.chain_head = chain_advance(
+            self.version,
+            &self.chain_head,
+            &DecodedEntry {
+                prev_hash: self.chain_head,
+                wall_time_secs: now,
+                request_id,
+                entry: entry.clone(),
+            },
+        )?;
         self.bytes_written += bytes.len() as u64;
 
         if let LogEntry::Event(_) = entry {
@@ -291,30 +249,30 @@ impl EventLogWriter {
 
     /// Append multiple entries with a SINGLE fsync.
     ///
-    /// All entries share one flush+fsync.  Advances the chain head for
+    /// All entries share one flush+fsync. Advances the chain head for
     /// each entry in order so chain integrity is maintained.
     pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = Self::now_secs();
 
         let mut total_bytes = 0u64;
         for entry in entries {
-            let chained = ChainedEntry {
-                prev_hash: self.chain_head,
-                wall_time_secs: now,
-                entry: entry.clone(),
-            };
-            let bytes = bincode::serde::encode_to_vec(&chained, bincode::config::standard())
-                .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+            let bytes = encode_entry(self.version, &self.chain_head, now, None, entry)?;
             total_bytes += bytes.len() as u64;
             self.file.write_all(&bytes)?;
-            self.chain_head = chain_advance(&chained.prev_hash, now, entry);
+            self.chain_head = chain_advance(
+                self.version,
+                &self.chain_head,
+                &DecodedEntry {
+                    prev_hash: self.chain_head,
+                    wall_time_secs: now,
+                    request_id: None,
+                    entry: entry.clone(),
+                },
+            )?;
         }
 
         self.file.flush()?;
@@ -335,8 +293,16 @@ impl EventLogWriter {
     }
 
     /// Rotate the event log — flush, rename current to `archive_path`,
-    /// start a fresh file with a new header and optional checkpoint entry.
-    /// Resets the chain head to the zero state for the new log segment.
+    /// start a fresh v3 segment.
+    ///
+    /// The chain does NOT reset: the new segment's header records the
+    /// closing chain head of the archived segment
+    /// (`prev_segment_chain_head`), and entries continue from it. Deleting
+    /// or substituting an archived segment breaks the splice — verifiers
+    /// can prove the full multi-segment history is intact.
+    ///
+    /// Rotation is also the v2 → v3 upgrade point: a legacy segment is
+    /// archived as-is and the new live segment is always v3.
     pub fn rotate(
         &mut self,
         archive_path: impl AsRef<Path>,
@@ -353,26 +319,28 @@ impl EventLogWriter {
             .create_new(true)
             .open(&self.path)?;
 
-        let header = EventLogHeader::new(self.dim);
-        new_file.write_all(&header.to_bytes())?;
+        // Splice: the new segment opens where the archived one closed.
+        let prev_head = self.chain_head;
+        self.segment_seq += 1;
+        self.version = VERSION_V3;
 
-        // Reset chain head for the new segment.
-        self.chain_head = [0u8; 32];
+        let header = encode_header_v3(self.dim, FORMAT_Q16_16, self.segment_seq, &prev_head);
+        new_file.write_all(&header)?;
 
         if let Some(entry) = checkpoint_entry {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let chained = ChainedEntry {
-                prev_hash: self.chain_head,
-                wall_time_secs: now,
-                entry: entry.clone(),
-            };
-            let bytes = bincode::serde::encode_to_vec(&chained, bincode::config::standard())
-                .map_err(|e| EventLogError::Serialization(e.to_string()))?;
+            let now = Self::now_secs();
+            let bytes = encode_entry(self.version, &self.chain_head, now, None, &entry)?;
             new_file.write_all(&bytes)?;
-            self.chain_head = chain_advance(&chained.prev_hash, now, &entry);
+            self.chain_head = chain_advance(
+                self.version,
+                &self.chain_head,
+                &DecodedEntry {
+                    prev_hash: self.chain_head,
+                    wall_time_secs: now,
+                    request_id: None,
+                    entry,
+                },
+            )?;
         }
 
         new_file.sync_all()?;
@@ -386,9 +354,20 @@ impl EventLogWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use valori_kernel::event::KernelEvent;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
     use tempfile::tempdir;
+    use valori_wire::chain_advance_v3;
+
+    fn event(i: u32) -> KernelEvent {
+        KernelEvent::InsertRecord {
+            id: RecordId(i),
+            vector: FxpVector::new_zeros(16),
+            metadata: None,
+            tag: 0,
+        }
+    }
 
     #[test]
     fn test_event_log_create_and_append() {
@@ -396,15 +375,10 @@ mod tests {
         let path = dir.path().join("events.log");
 
         let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
+        assert_eq!(writer.version(), valori_wire::VERSION_V3, "new files are v3");
+        assert_eq!(writer.segment_seq(), 0);
 
-        let event = KernelEvent::InsertRecord {
-            id: RecordId(1),
-            vector: FxpVector::new_zeros(16),
-            metadata: None,
-            tag: 0,
-        };
-
-        writer.append(&LogEntry::Event(event)).unwrap();
+        writer.append(&LogEntry::Event(event(1))).unwrap();
         assert_eq!(writer.event_count(), 1);
         assert_ne!(writer.chain_head(), &[0u8; 32], "chain head must advance after first append");
     }
@@ -418,13 +392,7 @@ mod tests {
         {
             let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
             for i in 0..5 {
-                let event = KernelEvent::InsertRecord {
-                    id: RecordId(i),
-                    vector: FxpVector::new_zeros(16),
-                    metadata: None,
-                    tag: 0,
-                };
-                writer.append(&LogEntry::Event(event)).unwrap();
+                writer.append(&LogEntry::Event(event(i))).unwrap();
             }
             chain_after_write = *writer.chain_head();
         }
@@ -453,41 +421,119 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_v2_file_reopens_and_appends() {
+        // A v2-era log (16-byte header + EntryV2 records) must keep working:
+        // reopen restores the chain, appends continue in v2 shape.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log");
+
+        // Hand-write a v2 file.
+        let mut head = [0u8; 32];
+        let mut bytes = valori_wire::encode_header_v2(16).to_vec();
+        for i in 0..3u32 {
+            let entry = LogEntry::Event(event(i));
+            bytes.extend(
+                valori_wire::encode_entry(valori_wire::VERSION_V2, &head, 1_000, None, &entry)
+                    .unwrap(),
+            );
+            head = valori_wire::chain_advance_v2(&head, 1_000, &entry);
+        }
+        std::fs::write(&path, &bytes).unwrap();
+
+        let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
+        assert_eq!(writer.version(), valori_wire::VERSION_V2);
+        assert_eq!(writer.event_count(), 3);
+        assert_eq!(writer.chain_head(), &head);
+
+        // Appends continue in the file's own (v2) format.
+        writer.append(&LogEntry::Event(event(3))).unwrap();
+        drop(writer);
+
+        let reopened = EventLogWriter::open(&path, Some(16)).unwrap();
+        assert_eq!(reopened.event_count(), 4, "v2 append must be replayable");
+    }
+
+    #[test]
+    fn test_rotation_splices_chain_and_upgrades_to_v3() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log");
+        let archive = dir.path().join("events.log.1");
+
+        let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
+        for i in 0..4 {
+            writer.append(&LogEntry::Event(event(i))).unwrap();
+        }
+        let head_before_rotation = *writer.chain_head();
+
+        writer
+            .rotate(
+                &archive,
+                Some(LogEntry::Checkpoint {
+                    event_count: 4,
+                    snapshot_hash: head_before_rotation,
+                    timestamp: 0,
+                }),
+            )
+            .unwrap();
+        assert_eq!(writer.segment_seq(), 1);
+        assert_ne!(
+            writer.chain_head(),
+            &[0u8; 32],
+            "chain must continue across rotation, not reset"
+        );
+
+        writer.append(&LogEntry::Event(event(4))).unwrap();
+        drop(writer);
+
+        // New segment's header must record the splice point.
+        let new_bytes = std::fs::read(&path).unwrap();
+        let header = valori_wire::parse_header(&new_bytes).unwrap();
+        assert_eq!(header.version, valori_wire::VERSION_V3);
+        assert_eq!(header.segment_seq, 1);
+        assert_eq!(
+            header.prev_segment_chain_head, head_before_rotation,
+            "header must bind the new segment to the archived one"
+        );
+
+        // Reopen restores the continued chain and the checkpointed count
+        // (4 from the checkpoint + 1 appended after rotation).
+        let reopened = EventLogWriter::open(&path, Some(16)).unwrap();
+        assert_eq!(reopened.event_count(), 5);
+        assert_eq!(reopened.segment_seq(), 1);
+    }
+
+    #[test]
     fn test_chain_head_deterministic() {
-        // The chain hash covers (wall_time_secs, entry) — so determinism is
-        // defined over identical timestamps, not across wall-clock writes.
-        // (Cross-replica equality is the STATE hash's job; the chain head is
-        // per-file integrity.) Drive chain_advance directly with pinned times.
+        // The chain hash covers (wall_time_secs, request_id, entry) — so
+        // determinism is defined over identical inputs, not across
+        // wall-clock writes. (Cross-replica equality is the STATE hash's
+        // job; the chain head is per-file integrity.)
         let build = || {
             let mut head = [0u8; 32];
             for i in 0..10u32 {
-                let event = KernelEvent::InsertRecord {
-                    id: RecordId(i),
-                    vector: FxpVector::new_zeros(4),
-                    metadata: None,
-                    tag: 0,
-                };
-                head = chain_advance(&head, 1_750_000_000 + i as u64, &LogEntry::Event(event));
+                head = chain_advance_v3(&head, 1_750_000_000 + i as u64, None, &LogEntry::Event(event(i)));
             }
             head
         };
 
         let h1 = build();
         let h2 = build();
-        assert_eq!(h1, h2, "same (time, entry) sequence must give same chain head");
+        assert_eq!(h1, h2, "same (time, request_id, entry) sequence must give same chain head");
 
         // A different timestamp for one entry must change the head.
         let mut head = [0u8; 32];
         for i in 0..10u32 {
-            let event = KernelEvent::InsertRecord {
-                id: RecordId(i),
-                vector: FxpVector::new_zeros(4),
-                metadata: None,
-                tag: 0,
-            };
             let t = if i == 5 { 999 } else { 1_750_000_000 + i as u64 };
-            head = chain_advance(&head, t, &LogEntry::Event(event));
+            head = chain_advance_v3(&head, t, None, &LogEntry::Event(event(i)));
         }
         assert_ne!(h1, head, "timestamp change must alter the chain head");
+
+        // A request id must also alter the chain.
+        let mut head = [0u8; 32];
+        for i in 0..10u32 {
+            let rid = if i == 5 { Some([7u8; 16]) } else { None };
+            head = chain_advance_v3(&head, 1_750_000_000 + i as u64, rid, &LogEntry::Event(event(i)));
+        }
+        assert_ne!(h1, head, "request id must be covered by the chain");
     }
 }

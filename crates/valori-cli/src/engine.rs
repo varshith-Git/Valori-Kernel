@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::state::kernel::KernelState;
-use valori_node::events::event_log::{ChainedEntry, LogEntry};
+use valori_node::events::event_log::LogEntry;
 
 /// Magic bytes that prefix every Valori snapshot blob.
 const SNAPSHOT_MAGIC: &[u8; 4] = b"VAL1";
@@ -78,15 +78,14 @@ impl ForensicEngine {
             return Ok(0); // Empty log — nothing to replay.
         }
 
-        let mut offset = 16usize; // Skip the 16-byte log header.
+        let header = valori_wire::parse_header(&raw)
+            .map_err(|e| anyhow::anyhow!("Invalid event log header: {e}"))?;
+        let mut offset = header.header_len;
         let mut event_index: u64 = 0;
         let mut replayed = 0;
 
         while offset < raw.len() {
-            match bincode::serde::decode_from_slice::<ChainedEntry, _>(
-                &raw[offset..],
-                bincode::config::standard(),
-            ) {
+            match valori_wire::decode_entry(header.version, &raw[offset..]) {
                 Ok((chained, bytes_read)) => {
                     offset += bytes_read;
                     match chained.entry {

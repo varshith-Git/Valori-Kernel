@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-//! Library surface of `valori-verify` — exposes the wire-format mirror so
-//! integration tests (and external auditors' tooling) can use the exact
-//! decoding logic the verifier binaries use.
+//! Library surface of `valori-verify`.
 //!
-//! The binaries (`valori-verify`, `make-demo-log`, `valori-anchor`) include
-//! these modules directly; this lib target adds no behavior of its own.
+//! The wire format lives in the `valori-wire` crate (shared with the node
+//! and the forensic CLI — one definition, no drift). Re-exported here so
+//! auditors' tooling and the integration tests reach it through this crate.
 
-pub mod wire;
+pub use valori_wire as wire;
