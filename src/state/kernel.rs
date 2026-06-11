@@ -60,6 +60,10 @@ impl KernelState {
         self.nodes.get(id)
     }
 
+    pub fn get_edge(&self, id: EdgeId) -> Option<&crate::graph::edge::GraphEdge> {
+        self.edges.get(id)
+    }
+
     pub fn outgoing_edges<'a>(&'a self, node_id: NodeId) -> Option<OutEdgeIterator<'a>> {
         self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
