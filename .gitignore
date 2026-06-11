@@ -63,3 +63,4 @@ data/
 *.ivecs
 *.tar.gz
 *.db
+graphify-out/

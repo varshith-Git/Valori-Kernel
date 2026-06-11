@@ -71,6 +71,7 @@ Every byte of state is recovered from the append-only event log and verified aga
 | Per-record cryptographic proof | No | No | No | **Yes — BLAKE3 Merkle root** |
 | Offline proof verification | No | No | No | **Yes — no server required** |
 | Forensic event replay | No | No | No | **Yes — full event log** |
+| Tamper localization | No | No | No | **Yes — hash-chained log names the exact altered event** |
 | Knowledge graph (same store) | No | Yes | No | **Yes** |
 | Embedded `no_std` deployment | No | No | No | **Yes — ARM Cortex-M4** |
 | Open source | No | Yes | Yes | **Yes — MIT OR Apache-2.0** |
@@ -170,6 +171,10 @@ No mutation reaches the in-memory kernel without first being fsynced to the appe
 
 If the process dies at any point, recovery replays the event log. The final state hash is guaranteed to match the pre-crash hash.
 
+Durability is enforced, not assumed: every single-event append is written, flushed, and `fsync`'d before the HTTP response is sent, and a kill-test in the suite ([`node/tests/crash_durability.rs`](node/tests/crash_durability.rs)) proves that events acknowledged immediately before a `SIGKILL` survive. Batch inserts amortize to one fsync per batch.
+
+The log itself (format v2) is **BLAKE3 hash-chained**: every entry stores the chain head that preceded it, so an in-place edit to any historical entry breaks the chain at the very next entry — and the offline verifier reports exactly which event was altered, with its decoded contents and commit timestamp.
+
 ### Q16.16 fixed-point — the determinism foundation
 
 All vector arithmetic uses 32-bit signed integers in Q16.16 format (16 integer bits, 16 fractional bits). Conversions from `f32` happen only at the public API boundary. Distances, centroids, codebooks, and graph weights are all pure integers.
@@ -202,6 +207,9 @@ Nodes and Edges live in the same pool as vector records. There is no second data
 - A **Node** is a named entity — document, chunk, agent, user, concept, or tool.
 - An **Edge** is a directed relationship between two nodes.
 - Both are event-sourced and covered by the global state hash.
+- Deleting a node cascades to all of its edges in **O(degree)** time — both
+  outgoing and incoming edge lists are indexed per node, so cleanup never
+  scans the full edge pool.
 
 ---
 
@@ -274,6 +282,37 @@ record_id, proof_hash = client._db.insert_with_proof(embedding.tolist(), tag=0)
 #   • survives snapshot → restore
 ```
 
+### Audit the whole database offline: `valori-verify`
+
+A standalone ~400-line binary ([`verify/`](verify/README.md)) replays an
+`events.log` through the deterministic kernel, validates the per-entry hash
+chain, and recomputes the same BLAKE3 state hash the live server reports at
+`GET /v1/proof/state` — no server, no network, no trust required.
+
+```bash
+# On the live server
+HASH=$(curl -s $VALORI_URL/v1/proof/state | ...)
+
+# Anywhere else, with a copy of the log file
+valori-verify events.log --expected-hash $HASH
+# ✅  VERIFIED — N events replayed deterministically; hash chain intact.
+```
+
+If anything was tampered with, the verifier names the exact event, decodes
+its contents, reports the commit timestamp and byte offset, and can emit a
+machine-readable forensic report (`--report findings.json`). See it in
+30 seconds:
+
+```bash
+./verify/tamper_demo.sh
+# generates a 2,000-event log, verifies it, flips single bytes in two
+# copies, and catches both attacks with event-level localization
+```
+
+This flow is validated end-to-end against a real node: 50 inserts over HTTP,
+`kill -9`, and the verifier reproduces the live server's exact state hash
+from the log file alone.
+
 ---
 
 ## Deployment Modes
@@ -289,7 +328,7 @@ cd python && pip install .
 ### HTTP Server (production cluster)
 
 ```bash
-cargo run --release -p valoricore-node
+cargo run --release -p valori-node
 # Listening on 0.0.0.0:3000
 ```
 
@@ -299,6 +338,8 @@ Key environment variables:
 |---|---|---|
 | `VALORI_DIM` | `16` | Embedding dimension |
 | `VALORI_MAX_RECORDS` | `1024` | Hard record limit; inserts return HTTP 507 when full |
+| `VALORI_MAX_NODES` | `1024` | Hard graph-node limit; node creation returns HTTP 507 when full |
+| `VALORI_MAX_EDGES` | `2048` | Hard graph-edge limit; edge creation returns HTTP 507 when full |
 | `VALORI_INDEX` | `bruteforce` | `bruteforce` · `hnsw` · `ivf` |
 | `VALORI_AUTH_TOKEN` | — | Bearer token for HTTP API |
 | `VALORI_EVENT_LOG_PATH` | — | Durable event log location |
@@ -309,13 +350,13 @@ Key environment variables:
 
 ```bash
 # Leader (default)
-cargo run --release -p valoricore-node
+cargo run --release -p valori-node
 
 # Follower — set these env vars and start a second node
 VALORI_REPLICATION_MODE=follower \
 VALORI_LEADER_URL=http://localhost:3000 \
 VALORI_HTTP_PORT=3001 \
-cargo run --release -p valoricore-node
+cargo run --release -p valori-node
 ```
 
 The follower bootstraps by downloading a snapshot, then streams the event log in real-time. State hashes are cross-checked continuously — any divergence is detected immediately. Coordination uses `tokio::sync::watch` with no shared mutable state between tasks.
@@ -342,7 +383,7 @@ Replication status at `/v1/replication/state`:
 { "status": "Synced" }   // Synced | Diverged | Healing
 ```
 
-Event log auto-rotates at **256 MiB** — the old segment is archived with a BLAKE3 checkpoint entry so historical state can always be verified.
+Event log auto-rotates at **256 MiB** — the old segment is archived with a BLAKE3 checkpoint entry so historical state can always be verified. Every entry in the log is BLAKE3 hash-chained to its predecessor (format v2), so any in-place edit is detectable and locatable offline with `valori-verify`.
 
 ---
 
@@ -359,10 +400,20 @@ cargo build --release --workspace
 cargo test --workspace
 
 # End-to-end proof and determinism tests
-cargo test -p valoricore-node --test proof_e2e_tests
+cargo test -p valori-node --test proof_e2e_tests
 
 # Replication integration tests
-cargo test -p valoricore-node --test api_replication
+cargo test -p valori-node --test api_replication
+
+# Crash durability kill-test (append → SIGKILL → verify nothing was lost)
+cargo test -p valori-node --test crash_durability
+
+# Graph cascade / reverse-edge-index tests
+cargo test -p valori-node --test graph_cascade
+
+# Build the offline verifier and run the tamper demo
+cargo build -p valori-verify --release
+./verify/tamper_demo.sh
 
 # Benchmarks
 cargo run --release --bin bench_recall
@@ -389,6 +440,7 @@ python test_valoricore_integrated.py
 | [FFI Internals](ffi/README.md) | Rust ↔ Python bridge, PyO3 bindings |
 | [Architecture Deep Dive](docs/architecture.md) | Kernel design, fixed-point math, state machine |
 | [Crash Recovery Case Study](docs/crash-recovery-proof.md) | Production proof with raw hashes |
+| [Offline Verifier (valori-verify)](verify/README.md) | Standalone log auditor — hash chain, tamper localization, forensic reports |
 | [Verification Report](docs/verification_report.md) | Multi-arch determinism CI results |
 
 ---

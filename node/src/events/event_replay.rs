@@ -45,7 +45,7 @@ fn read_header(file: &mut BufReader<File>, expected_dim: Option<u32>) -> Result<
     let version = u32::from_le_bytes(header_bytes[0..4].try_into().unwrap());
     let dim = u32::from_le_bytes(header_bytes[4..8].try_into().unwrap());
 
-    if version != 1 {
+    if version != 2 {
         return Err(ReplayError::InvalidHeader);
     }
 
@@ -76,14 +76,14 @@ pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resu
 
     let mut offset = 0;
     while offset < buffer.len() {
-        match bincode::serde::decode_from_slice::<crate::events::event_log::LogEntry, _>(
+        match bincode::serde::decode_from_slice::<crate::events::event_log::ChainedEntry, _>(
             &buffer[offset..],
             bincode::config::standard()
         ) {
-            Ok((entry, bytes_read)) => {
+            Ok((chained, bytes_read)) => {
                 offset += bytes_read;
-                
-                match entry {
+
+                match chained.entry {
                     crate::events::event_log::LogEntry::Event(event) => {
                         events.push(event);
                     },

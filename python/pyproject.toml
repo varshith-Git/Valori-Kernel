@@ -83,6 +83,11 @@ llamaindex = [
     "llama-index-core>=0.10.0",
 ]
 
+# Integrity verification (AnchorVerifier Ed25519, verify_log subprocess wrapper)
+verify = [
+    "cryptography>=38.0.0",
+]
+
 # Development & testing
 dev = [
     "pytest>=7.0.0",
@@ -95,6 +100,7 @@ dev = [
 
 # Install everything
 all = [
+    "cryptography>=38.0.0",
     "sentence-transformers>=2.2.0",
     "torch>=1.11.0",
     "openai>=1.0.0",

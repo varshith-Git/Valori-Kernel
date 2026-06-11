@@ -266,7 +266,7 @@ impl ValoriHNSW {
         if self.entry_point.is_none() {
             return Ok(Vec::new());
         }
-        
+
         let mut curr_node = self.entry_point.unwrap();
         
         // 1. Greedy Zoom to Layer 0

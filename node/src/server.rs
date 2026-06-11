@@ -456,12 +456,9 @@ async fn metrics_handler(
 async fn get_timeline(
     State(state): State<SharedEngine>,
 ) -> Result<Json<Vec<String>>, EngineError> {
-    // Read from the in-memory EventJournal — NOT from the on-disk file.
-    //
-    // Why: EventCommitter.commit_event() writes to a BufWriter for performance
-    // (avoids one fsync per insert).  The on-disk file may lag behind by
-    // thousands of events.  The journal.committed() slice is always current
-    // because commit_buffer() runs synchronously inside commit_event().
+    // Read from the in-memory EventJournal rather than re-parsing the
+    // on-disk file: the journal.committed() slice is always current because
+    // commit_buffer() runs synchronously inside commit_event().
     use valori_kernel::event::KernelEvent;
 
     let engine = state.lock().await;

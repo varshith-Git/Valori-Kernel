@@ -1,11 +1,30 @@
 [package]
 name = "valori-verify"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Standalone offline verifier for Valori event logs — replays events and proves state integrity without a server"
 
 [dependencies]
-valori-kernel = { path = "..", features = [] }
-clap = { version = "4.0", features = ["derive"] }
+valori-kernel = { path = ".." }
+# Must match the bincode version valori-node uses to WRITE the log (node/Cargo.toml).
+bincode = { version = "2.0.1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0"
+blake3 = "1.5"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde_json = "1"
+
+[[bin]]
+name = "valori-verify"
+path = "src/main.rs"
+
+[[bin]]
+name = "make-demo-log"
+path = "src/bin/make_demo_log.rs"
+
+[[bin]]
+name = "valori-anchor"
+path = "src/bin/valori_anchor.rs"

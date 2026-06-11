@@ -28,21 +28,29 @@ pub async fn spawn_replication_stream(
                 let mut current_idx = 0;
 
                 while offset < buffer.len() {
-                    match bincode::serde::decode_from_slice::<LogEntry, _>(
+                    match bincode::serde::decode_from_slice::<crate::events::event_log::ChainedEntry, _>(
                         &buffer[offset..],
                         bincode::config::standard()
                     ) {
-                        Ok((entry, bytes_read)) => {
+                        Ok((chained, bytes_read)) => {
                             offset += bytes_read;
-                            let entry_bytes = &buffer[offset-bytes_read..offset];
-                            let hash = blake3::hash(entry_bytes);
+                            // Re-encode only the inner LogEntry for the wire — the
+                            // follower applies LogEntry, not ChainedEntry.
+                            let entry_bytes = match bincode::serde::encode_to_vec(
+                                &chained.entry,
+                                bincode::config::standard(),
+                            ) {
+                                Ok(b) => b,
+                                Err(_) => break,
+                            };
+                            let hash = blake3::hash(&entry_bytes);
 
                             if recent_hashes.len() >= max_history {
                                 recent_hashes.pop_front();
                             }
                             recent_hashes.push_back(hash);
 
-                            if let LogEntry::Event(_) = &entry {
+                            if let LogEntry::Event(_) = &chained.entry {
                                 if current_idx >= start_offset {
                                     use base64::{Engine as _, engine::general_purpose::STANDARD};
                                     let b64 = STANDARD.encode(&entry_bytes);
