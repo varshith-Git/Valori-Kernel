@@ -1,0 +1,47 @@
+name: License & Security Audit (cargo-deny)
+
+# Runs on every PR and on pushes to main/multinode.
+# Blocks on: forbidden licenses, known CVEs, unsound crates, wildcard deps.
+# Warns on: unmaintained crates, duplicate versions.
+#
+# See deny.toml for the full policy (Phase 1.10).
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+on:
+  push:
+    branches: [ "main", "multinode" ]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/cargo-deny.yml"
+  pull_request:
+    branches: [ "main", "multinode" ]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "deny.toml"
+  schedule:
+    # Run daily at 06:00 UTC to catch newly published advisories.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  deny:
+    name: cargo-deny check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # deny.toml lives at the repo root.
+          manifest-path: Cargo.toml
+          # Run all checks: licenses, advisories, bans, sources.
+          command: check
+          # Fail the step on any deny-level finding; warn-level findings are
+          # printed but do not fail the job.
+          arguments: --all-features
