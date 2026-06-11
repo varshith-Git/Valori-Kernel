@@ -454,12 +454,12 @@ mod tests {
 
     #[test]
     fn test_chain_head_deterministic() {
-        let dir = tempdir().unwrap();
-        let p1 = dir.path().join("a.log");
-        let p2 = dir.path().join("b.log");
-
-        let write_n = |path: &std::path::Path| {
-            let mut w = EventLogWriter::open(path, Some(4)).unwrap();
+        // The chain hash covers (wall_time_secs, entry) — so determinism is
+        // defined over identical timestamps, not across wall-clock writes.
+        // (Cross-replica equality is the STATE hash's job; the chain head is
+        // per-file integrity.) Drive chain_advance directly with pinned times.
+        let build = || {
+            let mut head = [0u8; 32];
             for i in 0..10u32 {
                 let event = KernelEvent::InsertRecord {
                     id: RecordId(i),
@@ -467,15 +467,27 @@ mod tests {
                     metadata: None,
                     tag: 0,
                 };
-                // Use append_batch so wall_time_secs is identical (same `now` call).
-                w.append_batch(&[LogEntry::Event(event)]).unwrap();
+                head = chain_advance(&head, 1_750_000_000 + i as u64, &LogEntry::Event(event));
             }
-            *w.chain_head()
+            head
         };
 
-        // Same events → chain head should be identical.
-        let h1 = write_n(&p1);
-        let h2 = write_n(&p2);
-        assert_eq!(h1, h2);
+        let h1 = build();
+        let h2 = build();
+        assert_eq!(h1, h2, "same (time, entry) sequence must give same chain head");
+
+        // A different timestamp for one entry must change the head.
+        let mut head = [0u8; 32];
+        for i in 0..10u32 {
+            let event = KernelEvent::InsertRecord {
+                id: RecordId(i),
+                vector: FxpVector::new_zeros(4),
+                metadata: None,
+                tag: 0,
+            };
+            let t = if i == 5 { 999 } else { 1_750_000_000 + i as u64 };
+            head = chain_advance(&head, t, &LogEntry::Event(event));
+        }
+        assert_ne!(h1, head, "timestamp change must alter the chain head");
     }
 }

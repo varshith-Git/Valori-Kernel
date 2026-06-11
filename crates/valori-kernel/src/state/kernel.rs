@@ -79,16 +79,19 @@ impl KernelState {
         RecordId(self.records.raw_records().len() as u32)
     }
 
+    /// Live (non-deleted) node count. ID allocation uses slot counts and is
+    /// unaffected by deletions — see `next_node_id`.
     pub fn node_count(&self) -> usize {
-        self.nodes.len()
+        self.nodes.live_count()
     }
 
     pub fn next_node_id(&self) -> NodeId {
         NodeId(self.nodes.len() as u32)
     }
 
+    /// Live (non-deleted) edge count.
     pub fn edge_count(&self) -> usize {
-        self.edges.len()
+        self.edges.live_count()
     }
 
     pub fn next_edge_id(&self) -> EdgeId {
@@ -207,6 +210,12 @@ impl KernelState {
     pub fn apply(&mut self, cmd: &Command) -> Result<()> {
         match cmd {
             Command::InsertRecord { id, vector, metadata, tag } => {
+                // Validate the claimed id BEFORE any mutation — a rejected
+                // event must leave state untouched (replicas replay these).
+                if self.records.next_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
+
                 let d = vector.len();
                 if let Some(dim) = self.dim {
                     if d != dim {
@@ -215,7 +224,7 @@ impl KernelState {
                 } else {
                     self.dim = Some(d);
                 }
-                
+
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
                     if m.len() > MAX_METADATA_SIZE {
@@ -224,9 +233,7 @@ impl KernelState {
                 }
 
                 let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag)?;
-                if allocated_id != *id {
-                     return Err(KernelError::InvalidOperation);
-                }
+                debug_assert_eq!(allocated_id, *id);
                 <BruteForceIndex as VectorIndex>::on_insert(&mut self.index, allocated_id, vector);
             }
             Command::DeleteRecord { id } => {
@@ -234,6 +241,10 @@ impl KernelState {
                 <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, *id);
             }
             Command::CreateNode { node_id, kind, record } => {
+                // Validate the claimed id BEFORE any mutation.
+                if self.next_node_id() != *node_id {
+                    return Err(KernelError::InvalidOperation);
+                }
                 if let Some(rid) = record {
                     if self.records.get(*rid).is_none() {
                         return Err(KernelError::NotFound);
@@ -241,15 +252,17 @@ impl KernelState {
                 }
                 let node = GraphNode::new(*node_id, *kind, *record);
                 let allocated = self.nodes.insert(node)?;
-                if allocated != *node_id {
-                    return Err(KernelError::InvalidOperation);
-                }
+                debug_assert_eq!(allocated, *node_id);
             }
             Command::CreateEdge { edge_id, kind, from, to } => {
-                let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
-                if allocated != *edge_id {
+                // Validate the claimed id BEFORE any mutation — add_edge
+                // splices adjacency lists, which must not happen for a
+                // rejected event.
+                if self.next_edge_id() != *edge_id {
                     return Err(KernelError::InvalidOperation);
                 }
+                let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
+                debug_assert_eq!(allocated, *edge_id);
             }
             Command::DeleteNode { node_id } => {
                 self._delete_node(*node_id)?;
