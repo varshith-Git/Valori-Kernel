@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/valori-kernel",
+    "crates/valori-wire",
     "crates/valori-node",
     "crates/valori-ffi",
     "crates/valori-verify",
@@ -17,6 +18,7 @@ members = [
 #    only resolve when maturin builds it. Build: pip install ./python
 default-members = [
     "crates/valori-kernel",
+    "crates/valori-wire",
     "crates/valori-node",
     "crates/valori-verify",
     "crates/valori-cli",

@@ -7,6 +7,7 @@ description = "Standalone offline verifier for Valori event logs — replays eve
 
 [dependencies]
 valori-kernel = { path = "../valori-kernel" }
+valori-wire   = { path = "../valori-wire" }
 # Must match the bincode version valori-node uses to WRITE the log (node/Cargo.toml).
 bincode = { version = "2.0.1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }

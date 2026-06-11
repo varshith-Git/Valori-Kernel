@@ -4,7 +4,7 @@
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use valori_kernel::event::KernelEvent;
-use valori_node::events::event_log::{ChainedEntry, LogEntry};
+use valori_node::events::event_log::LogEntry;
 
 pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
     let bytes = std::fs::read(log_path)
@@ -33,14 +33,13 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
             Cell::new("Details").add_attribute(Attribute::Bold),
         ]);
 
-    let mut offset    = 16usize;
+    let header = valori_wire::parse_header(&bytes)
+        .map_err(|e| anyhow::anyhow!("Invalid event log header: {e}"))?;
+    let mut offset    = header.header_len;
     let mut event_num = 0u64;      // 1-based display counter
 
     while offset < bytes.len() {
-        match bincode::serde::decode_from_slice::<ChainedEntry, _>(
-            &bytes[offset..],
-            bincode::config::standard(),
-        ) {
+        match valori_wire::decode_entry(header.version, &bytes[offset..]) {
             Ok((chained, bytes_read)) => {
                 offset += bytes_read;
 

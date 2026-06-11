@@ -28,9 +28,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::state::kernel::KernelState;
 
-#[allow(dead_code)]
-mod wire;
-use wire::{chain_advance, format_utc, hex, parse_header, ChainedEntry, LogEntry, HEADER_SIZE};
+use valori_wire::{
+    chain_advance, decode_entry, format_utc, hex, parse_header, LogEntry, SegmentHeader,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -91,26 +91,25 @@ fn entry_summary(entry: &LogEntry) -> String {
     }
 }
 
-fn replay(body: &[u8], trace: bool) -> ReplayOutcome {
+fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
     let mut state = KernelState::new();
     let mut events_applied: u64 = 0;
     let mut checkpoints_seen: u64 = 0;
     let mut offset: usize = 0;
-    let mut chain_head = [0u8; 32];
+    // v3 segments continue the chain from the previous segment's final head
+    // (recorded in the header); v2 and genesis segments start from zeros.
+    let mut chain_head = header.prev_segment_chain_head;
     let mut last_entry_summary = String::from("<none>");
 
     while offset < body.len() {
-        let chained: ChainedEntry = match bincode::serde::decode_from_slice(
-            &body[offset..],
-            bincode::config::standard(),
-        ) {
+        let chained = match decode_entry(header.version, &body[offset..]) {
             Ok((ce, n)) => { offset += n; ce }
             Err(_) => {
                 return ReplayOutcome {
                     state, events_applied, checkpoints_seen, chain_head,
                     failure: Some(Failure::Decode {
                         event_no: events_applied + 1,
-                        byte_offset: HEADER_SIZE + offset,
+                        byte_offset: header.header_len + offset,
                         bytes_remaining: body.len() - offset,
                     }),
                 };
@@ -122,7 +121,7 @@ fn replay(body: &[u8], trace: bool) -> ReplayOutcome {
                 state, events_applied, checkpoints_seen, chain_head,
                 failure: Some(Failure::ChainBroken {
                     breach_at: events_applied + 1,
-                    byte_offset: HEADER_SIZE + offset,
+                    byte_offset: header.header_len + offset,
                     wall_time_secs: chained.wall_time_secs,
                     prior_entry_summary: last_entry_summary,
                     computed_chain_head: chain_head,
@@ -131,7 +130,8 @@ fn replay(body: &[u8], trace: bool) -> ReplayOutcome {
             };
         }
 
-        let new_chain_head = chain_advance(&chain_head, chained.wall_time_secs, &chained.entry);
+        let new_chain_head = chain_advance(header.version, &chain_head, &chained)
+            .expect("version already validated by parse_header");
 
         match &chained.entry {
             LogEntry::Event(event) => {
@@ -143,7 +143,7 @@ fn replay(body: &[u8], trace: bool) -> ReplayOutcome {
                         state, events_applied, checkpoints_seen, chain_head,
                         failure: Some(Failure::Apply {
                             event_no: events_applied + 1,
-                            byte_offset: HEADER_SIZE + offset,
+                            byte_offset: header.header_len + offset,
                             detail: format!("{e:?} while applying {event:?}"),
                         }),
                     };
@@ -211,8 +211,9 @@ fn build_report(
                 finding["likely_altered_entry_payload"] = serde_json::json!(prior_entry_summary);
             } else {
                 finding["note"] = serde_json::json!(
-                    "entry #1's prev_hash is not the genesis hash — its prev_hash \
-                     field was altered, or the original head of the log was removed"
+                    "entry #1's prev_hash does not match the segment's starting \
+                     chain head — its prev_hash field was altered, or the \
+                     original head of the log was removed"
                 );
             }
             finding
@@ -283,8 +284,19 @@ fn main() -> ExitCode {
     println!("valori-verify");
     println!("  log:        {}  ({:.2} KB)", args.log.display(), bytes.len() as f64 / 1024.0);
     println!("  format:     v{}, dim {}", header.version, header.dim);
+    if header.version >= valori_wire::VERSION_V3 {
+        println!(
+            "  segment:    #{}{}",
+            header.segment_seq,
+            if header.segment_seq > 0 {
+                format!("  (splices to prev head {}…)", &hex(&header.prev_segment_chain_head)[..16])
+            } else {
+                String::new()
+            }
+        );
+    }
 
-    let outcome = replay(&bytes[HEADER_SIZE..], args.trace);
+    let outcome = replay(&bytes[header.header_len..], &header, args.trace);
 
     println!("  replayed:   {} events, {} checkpoints", outcome.events_applied, outcome.checkpoints_seen);
 
@@ -299,8 +311,8 @@ fn main() -> ExitCode {
         println!();
         println!("❌  TAMPERED (chain breach at entry #{breach_at})");
         if *breach_at == 1 {
-            println!("    entry #1's prev_hash is not the genesis hash — its prev_hash field");
-            println!("    was altered, or the original head of the log was removed.");
+            println!("    entry #1's prev_hash doesn't match the segment's starting chain head —");
+            println!("    its prev_hash field was altered, or the original head of the log was removed.");
         } else {
             println!("    entry #{breach_at}'s prev_hash doesn't match — entry #{} was altered.", breach_at - 1);
             println!();

@@ -21,10 +21,9 @@ use valori_kernel::types::id::{EdgeId, NodeId, RecordId};
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
-#[allow(dead_code)]
-#[path = "../wire.rs"]
-mod wire;
-use wire::{chain_advance, encode_header, hex, ChainedEntry, LogEntry};
+use valori_wire::{
+    chain_advance_v3, encode_entry, encode_header_v3, hex, LogEntry, FORMAT_Q16_16, VERSION_V3,
+};
 
 const DIM: usize = 4;
 /// Simulated base timestamp for demo events so the output looks realistic.
@@ -102,7 +101,7 @@ fn main() -> ExitCode {
     }
     let expected = hex(&hash_state_blake3(&state));
 
-    // Write the log in v2 wire format.
+    // Write the log in the current (v3) wire format.
     let file = match std::fs::File::create(&path) {
         Ok(f) => f,
         Err(e) => {
@@ -112,7 +111,7 @@ fn main() -> ExitCode {
     };
     let mut out = std::io::BufWriter::new(file);
 
-    if let Err(e) = out.write_all(&encode_header(DIM as u32)) {
+    if let Err(e) = out.write_all(&encode_header_v3(DIM as u32, FORMAT_Q16_16, 0, &[0u8; 32])) {
         eprintln!("error: write failed: {e}");
         return ExitCode::from(2);
     }
@@ -121,12 +120,7 @@ fn main() -> ExitCode {
     for (idx, evt) in events.iter().enumerate() {
         let wall_time_secs = BASE_TIMESTAMP + idx as u64;
         let log_entry = LogEntry::Event(evt.clone());
-        let chained = ChainedEntry {
-            prev_hash: chain_head,
-            wall_time_secs,
-            entry: log_entry.clone(),
-        };
-        let bytes = match bincode::serde::encode_to_vec(&chained, bincode::config::standard()) {
+        let bytes = match encode_entry(VERSION_V3, &chain_head, wall_time_secs, None, &log_entry) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("error: encode failed: {e}");
@@ -137,7 +131,7 @@ fn main() -> ExitCode {
             eprintln!("error: write failed: {e}");
             return ExitCode::from(2);
         }
-        chain_head = chain_advance(&chained.prev_hash, wall_time_secs, &log_entry);
+        chain_head = chain_advance_v3(&chain_head, wall_time_secs, None, &log_entry);
     }
 
     if let Err(e) = out.flush() {
