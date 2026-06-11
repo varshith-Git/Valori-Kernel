@@ -39,8 +39,8 @@ comfy-table = "7.1"
 chrono      = "0.4"
 crc64fast   = "1.0"
 bincode     = { version = "2.0.1", features = ["serde"] }
-valori-node   = { path = "../../node" }
-valori-kernel = { path = "../.." }
+valori-node   = { path = "../valori-node" }
+valori-kernel = { path = "../valori-kernel" }
 serde       = { version = "1.0",   features = ["derive"] }
 serde_json  = "1.0"
 memmap2     = "0.9"

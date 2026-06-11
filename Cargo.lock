@@ -2961,6 +2961,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "valori-consensus"
+version = "0.1.0"
+
+[[package]]
 name = "valori-embedded"
 version = "0.1.0"
 dependencies = [

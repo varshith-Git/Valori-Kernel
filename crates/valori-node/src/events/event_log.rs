@@ -63,14 +63,18 @@ pub enum LogEntry {
 ///
 /// Stored instead of a bare `LogEntry` so that the hash chain can be
 /// verified without re-running the kernel state machine.
+///
+/// Public so log readers outside this crate (valori-cli forensics) decode
+/// the real wire format — the single definition moves to `valori-wire` in
+/// Phase 1.2 of the multi-node roadmap.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct ChainedEntry {
+pub struct ChainedEntry {
     /// BLAKE3 chain head immediately BEFORE this entry was written.
     /// For the first entry this is `[0u8; 32]`.
-    pub(crate) prev_hash: [u8; 32],
+    pub prev_hash: [u8; 32],
     /// Unix timestamp (seconds) when this entry was appended.
-    pub(crate) wall_time_secs: u64,
-    pub(crate) entry: LogEntry,
+    pub wall_time_secs: u64,
+    pub entry: LogEntry,
 }
 
 pub type Result<T> = std::result::Result<T, EventLogError>;
