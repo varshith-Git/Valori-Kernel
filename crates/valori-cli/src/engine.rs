@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::state::kernel::KernelState;
-use valori_node::events::event_log::LogEntry;
+use valori_node::events::event_log::{ChainedEntry, LogEntry};
 
 /// Magic bytes that prefix every Valori snapshot blob.
 const SNAPSHOT_MAGIC: &[u8; 4] = b"VAL1";
@@ -83,13 +83,13 @@ impl ForensicEngine {
         let mut replayed = 0;
 
         while offset < raw.len() {
-            match bincode::serde::decode_from_slice::<LogEntry, _>(
+            match bincode::serde::decode_from_slice::<ChainedEntry, _>(
                 &raw[offset..],
                 bincode::config::standard(),
             ) {
-                Ok((entry, bytes_read)) => {
+                Ok((chained, bytes_read)) => {
                     offset += bytes_read;
-                    match entry {
+                    match chained.entry {
                         LogEntry::Event(event) => {
                             event_index += 1;
 

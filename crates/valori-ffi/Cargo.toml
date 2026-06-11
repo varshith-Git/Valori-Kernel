@@ -8,8 +8,8 @@ name = "valoricore_ffi"
 crate-type = ["cdylib"]
 
 [dependencies]
-valori-kernel = { path = "..", features = ["std"] }
-valori-node = { path = "../node" }
+valori-kernel = { path = "../valori-kernel", features = ["std"] }
+valori-node = { path = "../valori-node" }
 pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
 serde_json = "1.0"
 hex = "0.4"

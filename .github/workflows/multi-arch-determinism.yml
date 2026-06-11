@@ -4,10 +4,8 @@ on:
   push:
     branches: [ main, develop ]
     paths:
-      - 'src/**'
-      - 'node/**'
+      - 'crates/**'
       - 'embedded/**'
-      - 'ffi/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/**'
@@ -17,10 +15,8 @@ on:
   pull_request:
     branches: [ main ]
     paths:
-      - 'src/**'
-      - 'node/**'
+      - 'crates/**'
       - 'embedded/**'
-      - 'ffi/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:  # Allow manual triggering

@@ -4,7 +4,7 @@
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use valori_kernel::event::KernelEvent;
-use valori_node::events::event_log::LogEntry;
+use valori_node::events::event_log::{ChainedEntry, LogEntry};
 
 pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
     let bytes = std::fs::read(log_path)
@@ -37,14 +37,14 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
     let mut event_num = 0u64;      // 1-based display counter
 
     while offset < bytes.len() {
-        match bincode::serde::decode_from_slice::<LogEntry, _>(
+        match bincode::serde::decode_from_slice::<ChainedEntry, _>(
             &bytes[offset..],
             bincode::config::standard(),
         ) {
-            Ok((entry, bytes_read)) => {
+            Ok((chained, bytes_read)) => {
                 offset += bytes_read;
 
-                match entry {
+                match chained.entry {
                     LogEntry::Event(event) => {
                         event_num += 1;
 

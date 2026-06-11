@@ -1,0 +1,21 @@
+[package]
+name = "valori-kernel"
+version = "0.1.11"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+blake3 = { version = "1.5", default-features = false }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde", "alloc"] }
+crc64fast = "1.0"
+thiserror = "1.0"
+byteorder = "1.5"
+memmap2 = "0.9"
+rustc-hash = "2.1.1"
+
+[features]
+std = []
+
+[dev-dependencies]
+tempfile = "3"

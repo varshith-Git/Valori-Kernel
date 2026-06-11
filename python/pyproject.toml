@@ -115,7 +115,7 @@ all = [
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "valoricore.valoricore_ffi"
-manifest-path = "../ffi/Cargo.toml"
+manifest-path = "../crates/valori-ffi/Cargo.toml"
 python-source = "."
 
 # ── Project URLs ──────────────────────────────────────────────────────────────

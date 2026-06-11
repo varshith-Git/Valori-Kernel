@@ -1,0 +1,8 @@
+[package]
+name = "valori-consensus"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Raft consensus layer for Valori cluster mode (Phase 2 — placeholder)"
+
+[dependencies]

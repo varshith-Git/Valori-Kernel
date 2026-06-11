@@ -20,7 +20,7 @@ DEMO_DIR="$(mktemp -d /tmp/valori_tamper_demo.XXXXXX)"
 LOG="$DEMO_DIR/events.log"
 trap 'rm -rf "$DEMO_DIR"' EXIT
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/target/release"
 
 echo "── building verifier ──────────────────────────────────────────"
