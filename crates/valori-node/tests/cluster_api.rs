@@ -29,6 +29,7 @@ async fn boot(node_id: u64, init: bool) -> ClusterHandle {
         members: [(node_id, ValoriNode::default())].into_iter().collect(),
         init,
         raft_log_path: None,
+        tls: None,
     };
     bootstrap_cluster(&cfg, Box::new(NullAuditSink)).await.unwrap()
 }

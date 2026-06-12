@@ -31,7 +31,7 @@ use crate::commit::RaftCommitter;
 use valori_consensus::types::{NodeId, ValoriNode};
 
 /// Parsed cluster topology.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ClusterConfig {
     pub node_id: NodeId,
     pub raft_bind: String,
@@ -43,6 +43,12 @@ pub struct ClusterConfig {
     /// redb database at this path and survive restarts (Phase 2.10).
     /// None = in-memory (tests, ephemeral deployments).
     pub raft_log_path: Option<std::path::PathBuf>,
+    /// Env: VALORI_TLS_CA / VALORI_TLS_CERT / VALORI_TLS_KEY (PEM paths)
+    /// + VALORI_TLS_DOMAIN (default "valori-cluster.internal").
+    /// All three paths set → mutual TLS on the Raft channel (Phase 2.10b).
+    /// Partially set → boot error: a half-configured TLS setup silently
+    /// running plaintext would defeat the point.
+    pub tls: Option<valori_consensus::RaftTlsConfig>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -55,6 +61,10 @@ pub enum ClusterConfigError {
     BadMemberId(String),
     #[error("this node's id {0} does not appear in VALORI_CLUSTER_MEMBERS")]
     SelfNotInMembers(NodeId),
+    #[error("TLS is partially configured ({0}) — set all of VALORI_TLS_CA, VALORI_TLS_CERT, VALORI_TLS_KEY, or none")]
+    PartialTls(String),
+    #[error("TLS file unreadable: {0}")]
+    TlsFile(String),
 }
 
 impl ClusterConfig {
@@ -79,7 +89,37 @@ impl ClusterConfig {
 
         let mut cfg = Self::parse(node_id, &raft_bind, &members, init)?;
         cfg.raft_log_path = raft_log_path;
+        cfg.tls = Self::tls_from_env()?;
         Ok(Some(cfg))
+    }
+
+    fn tls_from_env() -> Result<Option<valori_consensus::RaftTlsConfig>, ClusterConfigError> {
+        let ca = std::env::var("VALORI_TLS_CA").ok();
+        let cert = std::env::var("VALORI_TLS_CERT").ok();
+        let key = std::env::var("VALORI_TLS_KEY").ok();
+        match (ca, cert, key) {
+            (None, None, None) => Ok(None),
+            (Some(ca), Some(cert), Some(key)) => {
+                let read = |p: &str| {
+                    std::fs::read(p)
+                        .map_err(|e| ClusterConfigError::TlsFile(format!("{p}: {e}")))
+                };
+                Ok(Some(valori_consensus::RaftTlsConfig {
+                    ca_pem: read(&ca)?,
+                    cert_pem: read(&cert)?,
+                    key_pem: read(&key)?,
+                    domain: std::env::var("VALORI_TLS_DOMAIN")
+                        .unwrap_or_else(|_| "valori-cluster.internal".to_string()),
+                }))
+            }
+            (ca, cert, key) => {
+                let mut set = Vec::new();
+                if ca.is_some() { set.push("CA"); }
+                if cert.is_some() { set.push("CERT"); }
+                if key.is_some() { set.push("KEY"); }
+                Err(ClusterConfigError::PartialTls(format!("only {} set", set.join("+"))))
+            }
+        }
     }
 
     /// Pure parser — testable without environment mutation.
@@ -122,6 +162,7 @@ impl ClusterConfig {
             members: parsed,
             init,
             raft_log_path: None,
+            tls: None,
         })
     }
 }
@@ -169,24 +210,22 @@ pub async fn bootstrap_cluster(
 
     // Persistent Raft log when a path is configured (survives restarts);
     // in-memory otherwise. Both pass the same openraft compliance suite.
+    let network = match &cfg.tls {
+        Some(tls) => ValoriNetworkFactory::with_tls(tls.clone()),
+        None => ValoriNetworkFactory::default(),
+    };
+
     let raft = match &cfg.raft_log_path {
         Some(path) => {
             let store = valori_consensus::RedbLogStore::open(path)
                 .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
-            Raft::new(
-                cfg.node_id,
-                raft_config,
-                ValoriNetworkFactory,
-                store,
-                state_machine.clone(),
-            )
-            .await
+            Raft::new(cfg.node_id, raft_config, network, store, state_machine.clone()).await
         }
         None => {
             Raft::new(
                 cfg.node_id,
                 raft_config,
-                ValoriNetworkFactory,
+                network,
                 ValoriLogStore::new(),
                 state_machine.clone(),
             )
@@ -195,7 +234,12 @@ pub async fn bootstrap_cluster(
     }
     .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
 
-    let (raft_addr, server_task) = serve_raft(raft.clone(), &cfg.raft_bind).await?;
+    let (raft_addr, server_task) = match &cfg.tls {
+        Some(tls) => {
+            valori_consensus::serve_raft_tls(raft.clone(), &cfg.raft_bind, tls.clone()).await?
+        }
+        None => serve_raft(raft.clone(), &cfg.raft_bind).await?,
+    };
 
     if cfg.init {
         // Idempotent on an already-initialized cluster: openraft refuses a

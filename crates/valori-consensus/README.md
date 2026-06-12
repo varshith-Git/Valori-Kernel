@@ -23,7 +23,7 @@ never be conflated.
 | `log_store` | 2.2 | ✅ | Raft log storage (in-memory; tests + ephemeral) |
 | `log_store_redb` | 2.10a | ✅ | persistent Raft log — survives restarts (`VALORI_RAFT_LOG_PATH`) |
 | `state_machine` | 2.3 | ✅ | `KernelState` adapter + audit-sink write at apply |
-| `network` | 2.4 | ✅ | tonic/gRPC transport between peers |
+| `network` | 2.4 | ✅ | tonic/gRPC transport between peers (mTLS since 2.10b: `serve_raft_tls` + `ValoriNetworkFactory::with_tls`; wrong-CA peers refused at the handshake) |
 
 The `Committer` implementation over the Raft handle (`RaftCommitter`) lives
 in **valori-node** (`commit::raft`, Phase 2.5) — the trait is node-side and
