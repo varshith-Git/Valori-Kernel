@@ -27,10 +27,16 @@
 pub mod standalone;
 pub use standalone::StandaloneCommitter;
 
+pub mod audit;
+pub mod raft;
+pub use audit::EventLogAuditSink;
+pub use raft::RaftCommitter;
+
 use valori_kernel::event::KernelEvent;
 use thiserror::Error;
 
 /// Result of a successful commit.
+#[derive(Debug, Clone, Copy)]
 pub struct CommitReceipt {
     /// Monotonically increasing log index of the committed event.
     /// Standalone mode: EventJournal committed height.
@@ -57,6 +63,17 @@ pub enum CommitError {
 
     #[error("batch was empty — nothing to commit")]
     EmptyBatch,
+
+    // ── Phase 2.5 cluster-mode variants ──────────────────────────────────────
+    /// The replicated state machine deterministically rejected the event
+    /// (every node rejected identically; state untouched).
+    #[error("event rejected by the replicated state machine: {0}")]
+    Rejected(String),
+
+    /// This node is a follower. The HTTP layer answers 307 with the
+    /// leader's API address (Phase 2.6).
+    #[error("not the leader{}", leader_api_addr.as_deref().map(|a| format!(" — leader API at {a}")).unwrap_or_default())]
+    NotLeader { leader_api_addr: Option<String> },
 }
 
 /// The one way to mutate KernelState through the Engine.

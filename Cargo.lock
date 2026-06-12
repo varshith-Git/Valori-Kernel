@@ -3695,6 +3695,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "opendal",
+ "openraft",
  "reqwest",
  "serde",
  "serde_json",
@@ -3708,6 +3709,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "valori-consensus",
  "valori-kernel",
  "valori-wire",
 ]

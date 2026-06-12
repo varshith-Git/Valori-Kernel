@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 valori-kernel = { path = "../valori-kernel" }
 valori-wire = { path = "../valori-wire" }
+valori-consensus = { path = "../valori-consensus" }
+openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 tokio = { version = "1.0", features = ["full"] }
 axum = "0.7"
 tokio-util = { version = "0.7", features = ["io"] }
