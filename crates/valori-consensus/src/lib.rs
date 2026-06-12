@@ -20,6 +20,7 @@
 //! never be conflated.
 
 pub mod log_store;
+pub mod network;
 pub mod state_machine;
 pub mod types;
 
@@ -27,6 +28,7 @@ pub mod types;
 pub mod raft_committer;
 
 pub use log_store::ValoriLogStore;
+pub use network::{serve_raft, RaftRpcService, ValoriNetwork, ValoriNetworkFactory};
 pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
 pub use types::{
     ClientRequest, ClientResponse, NodeId, TypeConfig, ValoriNode,
