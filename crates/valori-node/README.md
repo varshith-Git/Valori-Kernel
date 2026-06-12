@@ -130,3 +130,41 @@ Used by Follower nodes to sync with the Leader.
 | `/v1/replication/wal` | `GET` | Stream the Write-Ahead Log. |
 | `/v1/replication/events` | `GET` | Stream real-time events. |
 | `/v1/replication/state` | `GET` | Check replication status (Synced/Healing). |
+
+---
+
+## 🗳️ Cluster Management (Phase 2.6 — Raft cluster mode)
+Available when the node boots in cluster mode (`VALORI_CLUSTER_MEMBERS` set).
+Membership changes are leader-only; a follower answers **403** with the
+leader's API address.
+
+| Endpoint  | Method | Purpose |
+| :---      | :---   | :---    |
+| `/v1/cluster/status` | `GET` | Leader, term, log indexes, membership (with voter flags). |
+| `/v1/cluster/health` | `GET` | 200 when this node sees a leader; 503 `no-leader` otherwise. |
+| `/v1/cluster/add-node` | `POST` | Join a node: learner catch-up, then voter promotion. |
+| `/v1/cluster/remove-node` | `POST` | Remove a voter (last-voter removal refused with 422). |
+
+**Examples:**
+```bash
+curl http://localhost:3000/v1/cluster/status
+
+# Add node 2 (its raft listener, optionally its API addr)
+curl -X POST http://localhost:3000/v1/cluster/add-node \
+  -H "Content-Type: application/json" \
+  -d '{"node_id": 2, "raft_addr": "10.0.0.2:3100", "api_addr": "10.0.0.2:3000"}'
+
+# Remove node 2
+curl -X POST http://localhost:3000/v1/cluster/remove-node \
+  -H "Content-Type: application/json" \
+  -d '{"node_id": 2}'
+```
+
+**Cluster boot environment:**
+
+| Variable | Meaning |
+| :--- | :--- |
+| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` — presence switches cluster mode on. |
+| `VALORI_NODE_ID` | This node's id (must appear in members). |
+| `VALORI_RAFT_BIND` | gRPC consensus listener (default `0.0.0.0:3100`). |
+| `VALORI_CLUSTER_INIT` | `1` on exactly one node of a brand-new cluster. |

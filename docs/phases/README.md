@@ -28,8 +28,8 @@ people and sessions that built it.
 | 2.3 — Raft state machine (kernel + audit) | [phase-2.3-raft-state-machine.md](phase-2.3-raft-state-machine.md) | see git log | ✅ done |
 | 2.4 — gRPC transport (tonic) | [phase-2.4-grpc-transport.md](phase-2.4-grpc-transport.md) | see git log | ✅ done |
 | 2.5 — RaftCommitter + cluster bootstrap | [phase-2.5-raft-committer.md](phase-2.5-raft-committer.md) | see git log | ✅ done |
-| 2.6 — Cluster management API + engine wiring | — | — | ⬜ next |
-| 2.7 — Snapshot transfer | — | — | ⬜ planned |
+| 2.6 — Cluster management API | [phase-2.6-cluster-api.md](phase-2.6-cluster-api.md) | see git log | ✅ done |
+| 2.7 — Snapshot transfer | — | — | ⬜ next |
 | 2.8 — Turmoil fault-tolerance tests | — | — | ⬜ planned |
 | 2.9 — Admin audit events in chain | — | — | ⬜ planned |
 | 2.10 — Production hardening (mTLS, persistent log, metrics) | — | — | ⬜ planned |
