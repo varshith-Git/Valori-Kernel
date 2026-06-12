@@ -250,10 +250,62 @@ pub async fn bootstrap_cluster(
         }
     }
 
+    spawn_raft_metrics_watcher(raft.clone());
+
     Ok(ClusterHandle {
         raft,
         state_machine,
         raft_addr,
         server_task,
     })
+}
+
+/// Mirror openraft's metrics watch-channel into Prometheus gauges
+/// (Phase 2.10c). The task lives as long as the Raft core: the watch
+/// stream ends when the core shuts down, and the task exits with it.
+///
+/// Exposed on the existing /metrics endpoint:
+/// - valori_raft_term, valori_raft_current_leader (0 = none),
+///   valori_raft_is_leader (0/1)
+/// - valori_raft_last_log_index, valori_raft_last_applied_index
+///   (the gap between them is replication/apply lag)
+/// - valori_raft_snapshot_index, valori_raft_purged_index
+fn spawn_raft_metrics_watcher(raft: Raft) {
+    tokio::spawn(async move {
+        let mut rx = raft.metrics();
+        loop {
+            {
+                let m = rx.borrow().clone();
+                metrics::gauge!("valori_raft_term", m.current_term as f64);
+                metrics::gauge!(
+                    "valori_raft_current_leader",
+                    m.current_leader.unwrap_or(0) as f64
+                );
+                metrics::gauge!(
+                    "valori_raft_is_leader",
+                    if m.current_leader == Some(m.id) { 1.0 } else { 0.0 }
+                );
+                metrics::gauge!(
+                    "valori_raft_last_log_index",
+                    m.last_log_index.unwrap_or(0) as f64
+                );
+                metrics::gauge!(
+                    "valori_raft_last_applied_index",
+                    m.last_applied.map_or(0, |l| l.index) as f64
+                );
+                metrics::gauge!(
+                    "valori_raft_snapshot_index",
+                    m.snapshot.map_or(0, |s| s.index) as f64
+                );
+                metrics::gauge!(
+                    "valori_raft_purged_index",
+                    m.purged.map_or(0, |p| p.index) as f64
+                );
+            }
+            if rx.changed().await.is_err() {
+                // Raft core shut down — the watch stream is closed.
+                break;
+            }
+        }
+    });
 }

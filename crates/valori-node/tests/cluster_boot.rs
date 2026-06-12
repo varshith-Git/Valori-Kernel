@@ -249,3 +249,61 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     committer.commit(insert(5)).unwrap();
     assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 6);
 }
+
+// ── Phase 2.10c: Raft metrics reach the Prometheus endpoint ──────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn raft_metrics_appear_in_prometheus_output() {
+    valori_node::telemetry::init_telemetry();
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+    };
+    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+        .await
+        .unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+
+    let mut committer = handle.committer();
+    for i in 0..3u32 {
+        committer.commit(insert(i)).unwrap();
+    }
+
+    // The watcher mirrors openraft's watch channel — give it a beat.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let rendered = loop {
+        let r = valori_node::telemetry::get_metrics();
+        if r.contains("valori_raft_is_leader 1")
+            && r.contains("valori_raft_last_applied_index")
+        {
+            break r;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "raft gauges never reached the Prometheus output:\n{r}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+
+    assert!(rendered.contains("valori_raft_term"), "{rendered}");
+    assert!(rendered.contains("valori_raft_current_leader 1"), "{rendered}");
+    // 3 writes + the initial membership/blank entries: index >= 3.
+    let applied_line = rendered
+        .lines()
+        .find(|l| l.starts_with("valori_raft_last_applied_index"))
+        .unwrap();
+    let applied: f64 = applied_line.split_whitespace().last().unwrap().parse().unwrap();
+    assert!(applied >= 3.0, "applied index gauge should cover the writes: {applied_line}");
+}
