@@ -1,0 +1,33 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//
+// Raft inter-node RPC surface (Phase 2.4).
+//
+// The payload of every message is the bincode encoding of the corresponding
+// openraft request/response type (openraft's `serde` feature). Protobuf is
+// the framing, not the schema: openraft's types evolve with the openraft
+// version, and re-modelling them field-by-field in proto would create a
+// second source of truth. The version handshake that guards mixed-version
+// clusters lands with Phase 2.10.
+//
+// Replies carry `Result<Resp, RaftError>` (bincode) — Raft-level errors are
+// data, not transport failures; gRPC status codes are reserved for actual
+// transport problems.
+
+syntax = "proto3";
+package valori.raft;
+
+message RaftRequest {
+  // bincode of the openraft request type for this RPC.
+  bytes payload = 1;
+}
+
+message RaftReply {
+  // bincode of Result<openraft response, openraft RaftError>.
+  bytes payload = 1;
+}
+
+service RaftService {
+  rpc AppendEntries(RaftRequest) returns (RaftReply);
+  rpc Vote(RaftRequest) returns (RaftReply);
+  rpc InstallSnapshot(RaftRequest) returns (RaftReply);
+}

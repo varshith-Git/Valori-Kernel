@@ -22,7 +22,7 @@ never be conflated.
 | `types` | 2.1 | ✅ | openraft type config — every generic pinned once |
 | `log_store` | 2.2 | ✅ | Raft log storage (internal, truncatable; in-memory until 2.10) |
 | `state_machine` | 2.3 | ✅ | `KernelState` adapter + audit-sink write at apply |
-| `network` | 2.4 | ⬜ | tonic/gRPC transport between peers |
+| `network` | 2.4 | ✅ | tonic/gRPC transport between peers |
 | `raft_committer` | 2.5 | stub | `Committer` impl backed by the Raft handle |
 
 ## The types (Phase 2.1)
@@ -81,6 +81,20 @@ committed entry: **dedup → kernel apply → audit record.**
   hash; install recomputes and refuses a mismatch (the V5 format alone has
   no internal checksum — found by the corruption test in this phase).
 
+## The transport (Phase 2.4)
+
+Three RPCs — `AppendEntries`, `Vote`, `InstallSnapshot` — each carrying the
+bincode encoding of the corresponding openraft type. Protobuf is the
+framing, not the schema: openraft's types stay the single source of truth.
+Replies carry `Result<Resp, RaftError>` so Raft-level errors travel as
+data; gRPC status codes mean real transport failures (and drop the channel,
+so the next RPC reconnects).
+
+- `ValoriNetworkFactory` reads each peer's `raft_addr` from the membership
+  config itself — no separate address book to drift.
+- `serve_raft(raft, addr)` binds the tonic server; `…:0` works for tests.
+- protoc is vendored (`protoc-bin-vendored`) — no system install needed.
+
 ## Testing
 
 - `tests/type_config.rs` — wire-type round-trips, serde evolution defaults,
@@ -94,6 +108,11 @@ committed entry: **dedup → kernel apply → audit record.**
 - `tests/openraft_compliance.rs` — the **official openraft storage
   compliance suite** over the log store + state machine pair. Phase 2.10's
   redb-backed store must pass this exact suite to land.
+- `tests/grpc_cluster.rs` — a **real 3-node cluster over localhost gRPC**:
+  leader election over the wire, 10 replicated writes converging to one
+  BLAKE3 hash on all three kernels, cross-cluster request-id dedup, and
+  follower writes answered with ForwardToLeader naming the leader's
+  addresses.
 - Phase 2.8 brings turmoil network-partition simulations.
 
 Run: `cargo test -p valori-consensus`
