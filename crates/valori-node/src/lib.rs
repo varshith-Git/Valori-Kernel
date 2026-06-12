@@ -20,3 +20,6 @@ pub mod commit;
 /// Phase 2.5: cluster bootstrap — standalone vs cluster is a boot-time decision.
 /// See docs/phases/phase-2.5-raft-committer.md
 pub mod cluster;
+/// Phase 2.6: cluster management HTTP API (status, health, membership).
+/// See docs/phases/phase-2.6-cluster-api.md
+pub mod cluster_api;

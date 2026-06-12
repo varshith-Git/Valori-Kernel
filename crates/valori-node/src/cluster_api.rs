@@ -1,0 +1,234 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! Cluster management API — Phase 2.6.
+//!
+//! HTTP endpoints over the [`ClusterHandle`]'s Raft handle, mounted next to
+//! the data-plane router when the node boots in cluster mode:
+//!
+//! | Method | Path | What |
+//! |---|---|---|
+//! | GET  | `/v1/cluster/status` | leader, term, indexes, membership |
+//! | GET  | `/v1/cluster/health` | 200 when this node sees a leader, 503 otherwise |
+//! | POST | `/v1/cluster/add-node` | learner-then-voter membership change |
+//! | POST | `/v1/cluster/remove-node` | voter removal |
+//!
+//! Membership changes are leader-only: a follower answers **403 with the
+//! leader's API address** so operators (and scripts) can retry against the
+//! right node. Every accepted change goes through Raft itself — the
+//! membership entry is committed like any other, so the change is durable
+//! and ordered with respect to data writes.
+//!
+//! Admin-action audit events (`NodeJoined`/`NodeLeft` in the chained log)
+//! land in Phase 2.9; these endpoints are the place they'll be emitted.
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use valori_consensus::types::{NodeId, Raft, ValoriNode};
+
+/// Shared state for the cluster endpoints.
+#[derive(Clone)]
+pub struct ClusterApiState {
+    pub raft: Arc<Raft>,
+}
+
+pub fn cluster_router(raft: Arc<Raft>) -> Router {
+    Router::new()
+        .route("/v1/cluster/status", get(status))
+        .route("/v1/cluster/health", get(health))
+        .route("/v1/cluster/add-node", post(add_node))
+        .route("/v1/cluster/remove-node", post(remove_node))
+        .with_state(ClusterApiState { raft })
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct MemberView {
+    id: NodeId,
+    raft_addr: String,
+    api_addr: String,
+    voter: bool,
+}
+
+#[derive(Serialize)]
+struct StatusView {
+    node_id: NodeId,
+    current_leader: Option<NodeId>,
+    is_leader: bool,
+    term: u64,
+    last_log_index: Option<u64>,
+    last_applied_index: Option<u64>,
+    members: Vec<MemberView>,
+}
+
+async fn status(State(state): State<ClusterApiState>) -> Json<StatusView> {
+    let m = state.raft.metrics().borrow().clone();
+
+    let voters: std::collections::BTreeSet<NodeId> =
+        m.membership_config.membership().voter_ids().collect();
+
+    let members = m
+        .membership_config
+        .nodes()
+        .map(|(id, node)| MemberView {
+            id: *id,
+            raft_addr: node.raft_addr.clone(),
+            api_addr: node.api_addr.clone(),
+            voter: voters.contains(id),
+        })
+        .collect();
+
+    Json(StatusView {
+        node_id: m.id,
+        current_leader: m.current_leader,
+        is_leader: m.current_leader == Some(m.id),
+        term: m.current_term,
+        last_log_index: m.last_log_index,
+        last_applied_index: m.last_applied.map(|l| l.index),
+        members,
+    })
+}
+
+// ── Health ────────────────────────────────────────────────────────────────────
+
+async fn health(State(state): State<ClusterApiState>) -> Response {
+    let m = state.raft.metrics().borrow().clone();
+    match m.current_leader {
+        Some(leader) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "ok", "leader": leader })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "no-leader",
+                "detail": "this node currently sees no elected leader",
+            })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Membership changes ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct AddNodeRequest {
+    node_id: NodeId,
+    raft_addr: String,
+    #[serde(default)]
+    api_addr: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveNodeRequest {
+    node_id: NodeId,
+}
+
+/// Maps a leader-only failure to 403 + the leader's API address.
+fn leadership_error<E>(raft_err: openraft::error::RaftError<NodeId, E>) -> Response
+where
+    E: std::fmt::Display,
+{
+    let body = match &raft_err {
+        openraft::error::RaftError::APIError(e) => serde_json::json!({
+            "error": "not-leader-or-rejected",
+            "detail": e.to_string(),
+        }),
+        openraft::error::RaftError::Fatal(e) => serde_json::json!({
+            "error": "raft-fatal",
+            "detail": e.to_string(),
+        }),
+    };
+    (StatusCode::FORBIDDEN, Json(body)).into_response()
+}
+
+async fn add_node(
+    State(state): State<ClusterApiState>,
+    Json(req): Json<AddNodeRequest>,
+) -> Response {
+    let node = ValoriNode {
+        raft_addr: req.raft_addr,
+        api_addr: req.api_addr,
+    };
+
+    // Step 1: add as learner — it catches up on the log (or receives a
+    // snapshot, Phase 2.7) without affecting quorum.
+    if let Err(e) = state.raft.add_learner(req.node_id, node.clone(), true).await {
+        return leadership_error(e);
+    }
+
+    // Step 2: promote to voter. The address is already registered by
+    // add_learner, so the change is expressed as the new voter-id set.
+    // `retain: false` — the node moves from learner to voter rather than
+    // being duplicated in both sets.
+    let mut voters: BTreeSet<NodeId> = state
+        .raft
+        .metrics()
+        .borrow()
+        .membership_config
+        .membership()
+        .voter_ids()
+        .collect();
+    voters.insert(req.node_id);
+
+    match state.raft.change_membership(voters, false).await {
+        Ok(resp) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "added",
+                "node_id": req.node_id,
+                "log_index": resp.log_id.index,
+            })),
+        )
+            .into_response(),
+        Err(e) => leadership_error(e),
+    }
+}
+
+async fn remove_node(
+    State(state): State<ClusterApiState>,
+    Json(req): Json<RemoveNodeRequest>,
+) -> Response {
+    let remaining: BTreeSet<NodeId> = state
+        .raft
+        .metrics()
+        .borrow()
+        .membership_config
+        .membership()
+        .voter_ids()
+        .filter(|id| *id != req.node_id)
+        .collect();
+
+    if remaining.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "cannot-remove-last-voter",
+                "detail": "removing this node would leave the cluster with no voters",
+            })),
+        )
+            .into_response();
+    }
+
+    // `retain: false`: the removed voter is dropped entirely, not demoted
+    // to a lingering learner.
+    match state.raft.change_membership(remaining, false).await {
+        Ok(resp) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "removed",
+                "node_id": req.node_id,
+                "log_index": resp.log_id.index,
+            })),
+        )
+            .into_response(),
+        Err(e) => leadership_error(e),
+    }
+}

@@ -30,7 +30,7 @@ fn main() {
         auth_token: None,
         event_log_path: Some(dir.path().join("events.log")),
         mode: valori_node::config::NodeMode::Leader,
-        ..NodeConfig::default()
+        ..Default::default()
     };
 
     // ── Phase 1: Insert 100 records ───────────────────────────────────────────
