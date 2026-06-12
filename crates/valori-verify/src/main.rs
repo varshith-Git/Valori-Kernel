@@ -88,6 +88,7 @@ fn entry_summary(entry: &LogEntry) -> String {
     match entry {
         LogEntry::Event(e) => format!("{e:?}"),
         LogEntry::Checkpoint { event_count, .. } => format!("Checkpoint {{ event_count: {event_count} }}"),
+        LogEntry::Admin(a) => a.describe(),
     }
 }
 
@@ -153,6 +154,12 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
             LogEntry::Checkpoint { event_count, .. } => {
                 if trace { eprintln!("  checkpoint (event_count = {event_count})"); }
                 checkpoints_seen += 1;
+            }
+            LogEntry::Admin(admin) => {
+                // Admin events are chain-verified like everything else but
+                // never touch kernel state — membership history rides in
+                // the same chain as the data it interleaves with.
+                if trace { eprintln!("  admin: {}", admin.describe()); }
             }
         }
 

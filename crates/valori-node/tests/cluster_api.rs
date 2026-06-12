@@ -81,7 +81,7 @@ async fn status_reports_leadership_and_membership() {
     let h = boot(1, true).await;
     wait_for_leader(&h, 1).await;
 
-    let router = cluster_router(Arc::new(h.raft.clone()));
+    let router = cluster_router(Arc::new(h.raft.clone()), None);
     let (status, body) = get_json(router, "/v1/cluster/status").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -96,7 +96,7 @@ async fn status_reports_leadership_and_membership() {
 async fn health_is_503_without_a_leader_and_200_with_one() {
     // Booted but NOT initialized: no membership, no election, no leader.
     let h = boot(1, false).await;
-    let router = cluster_router(Arc::new(h.raft.clone()));
+    let router = cluster_router(Arc::new(h.raft.clone()), None);
     let (status, body) = get_json(router.clone(), "/v1/cluster/health").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["status"], "no-leader");
@@ -139,7 +139,7 @@ async fn add_node_grows_the_cluster_and_replicates_state() {
     // Node 2 boots empty (no init — it joins, never initializes).
     let h2 = boot(2, false).await;
 
-    let router = cluster_router(Arc::new(h1.raft.clone()));
+    let router = cluster_router(Arc::new(h1.raft.clone()), None);
     let (status, body) = post_json(
         router.clone(),
         "/v1/cluster/add-node",
@@ -181,7 +181,7 @@ async fn remove_node_shrinks_the_cluster() {
     wait_for_leader(&h1, 1).await;
     let h2 = boot(2, false).await;
 
-    let router = cluster_router(Arc::new(h1.raft.clone()));
+    let router = cluster_router(Arc::new(h1.raft.clone()), None);
     let (status, _) = post_json(
         router.clone(),
         "/v1/cluster/add-node",
@@ -214,7 +214,7 @@ async fn removing_the_last_voter_is_refused() {
     let h = boot(1, true).await;
     wait_for_leader(&h, 1).await;
 
-    let router = cluster_router(Arc::new(h.raft.clone()));
+    let router = cluster_router(Arc::new(h.raft.clone()), None);
     let (status, body) = post_json(
         router,
         "/v1/cluster/remove-node",
@@ -229,7 +229,7 @@ async fn removing_the_last_voter_is_refused() {
 async fn membership_change_on_an_uninitialized_node_is_forbidden() {
     // Never initialized: not a leader, can't change membership.
     let h = boot(1, false).await;
-    let router = cluster_router(Arc::new(h.raft.clone()));
+    let router = cluster_router(Arc::new(h.raft.clone()), None);
     let (status, body) = post_json(
         router,
         "/v1/cluster/add-node",
@@ -237,4 +237,71 @@ async fn membership_change_on_an_uninitialized_node_is_forbidden() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "got: {body}");
+}
+
+// ── Phase 2.9: membership changes land in the chained audit log ──────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn membership_changes_are_chained_admin_events() {
+    use valori_node::events::event_log::EventLogWriter;
+    use valori_wire::{chain_advance, decode_entry, parse_header, AdminEvent, LogEntry};
+
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("events.log");
+    let audit = Arc::new(std::sync::Mutex::new(
+        EventLogWriter::open(&log_path, Some(4)).unwrap(),
+    ));
+
+    let h1 = boot(1, true).await;
+    wait_for_leader(&h1, 1).await;
+    let h2 = boot(2, false).await;
+
+    let router = cluster_router(Arc::new(h1.raft.clone()), Some(audit.clone()));
+
+    // Join then remove node 2 — both must be audited.
+    let (status, _) = post_json(
+        router.clone(),
+        "/v1/cluster/add-node",
+        serde_json::json!({ "node_id": 2, "raft_addr": h2.raft_addr.to_string(), "api_addr": "10.0.0.2:3000" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_json(
+        router,
+        "/v1/cluster/remove-node",
+        serde_json::json!({ "node_id": 2 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Read the log back raw and walk the chain: two admin events, in order,
+    // chain unbroken — membership history is tamper-evident like data.
+    let bytes = std::fs::read(&log_path).unwrap();
+    let header = parse_header(&bytes).unwrap();
+    let mut offset = header.header_len;
+    let mut chain_head = header.prev_segment_chain_head;
+    let mut admin_events = Vec::new();
+
+    while offset < bytes.len() {
+        let (decoded, n) = decode_entry(header.version, &bytes[offset..]).unwrap();
+        assert_eq!(decoded.prev_hash, chain_head, "chain must be unbroken");
+        chain_head = chain_advance(header.version, &chain_head, &decoded).unwrap();
+        offset += n;
+        if let LogEntry::Admin(a) = decoded.entry {
+            admin_events.push(a);
+        }
+    }
+
+    assert_eq!(admin_events.len(), 2, "join + leave both audited");
+    match &admin_events[0] {
+        AdminEvent::NodeJoined { node_id, api_addr, .. } => {
+            assert_eq!(*node_id, 2);
+            assert_eq!(api_addr, "10.0.0.2:3000");
+        }
+        other => panic!("expected NodeJoined first, got {other:?}"),
+    }
+    match &admin_events[1] {
+        AdminEvent::NodeLeft { node_id, .. } => assert_eq!(*node_id, 2),
+        other => panic!("expected NodeLeft second, got {other:?}"),
+    }
 }

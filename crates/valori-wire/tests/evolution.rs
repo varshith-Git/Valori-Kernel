@@ -69,6 +69,9 @@ fn walk(bytes: &[u8]) -> (u64, u64, [u8; 32]) {
         match e.entry {
             LogEntry::Event(_) => events += 1,
             LogEntry::Checkpoint { .. } => checkpoints += 1,
+            // Variant added in Phase 2.9 — absent from the v2/v3-era
+            // fixtures, which must keep decoding forever regardless.
+            LogEntry::Admin(_) => {}
         }
         offset += n;
     }
@@ -139,4 +142,57 @@ fn generate_fixtures() {
     }
     std::fs::write(fixture_path("segment_v3.bin"), &bytes).unwrap();
     println!("v3 final chain head: {}", hex(&head));
+}
+
+/// Phase 2.9: the Admin variant encodes, chains, and round-trips like any
+/// other entry — membership history is tamper-evident the same way data is.
+#[test]
+fn admin_events_chain_and_roundtrip() {
+    use valori_wire::{
+        chain_advance, decode_entry, encode_entry, encode_header_v3, parse_header, AdminEvent,
+        VERSION_V3,
+    };
+
+    let header = encode_header_v3(4, 1, 0, &[0u8; 32]);
+    let seg = parse_header(&header).unwrap();
+
+    let mut head = seg.prev_segment_chain_head;
+    let mut bytes = Vec::new();
+
+    let joined = LogEntry::Admin(AdminEvent::NodeJoined {
+        node_id: 2,
+        raft_addr: "10.0.0.2:3100".into(),
+        api_addr: "10.0.0.2:3000".into(),
+        authorized_by: [7u8; 16],
+    });
+    let left = LogEntry::Admin(AdminEvent::NodeLeft {
+        node_id: 2,
+        authorized_by: [7u8; 16],
+    });
+
+    for entry in [&joined, &left] {
+        let enc = encode_entry(VERSION_V3, &head, 1_700_000_000, None, entry).unwrap();
+        let (decoded, n) = decode_entry(VERSION_V3, &enc).unwrap();
+        assert_eq!(n, enc.len());
+        assert_eq!(decoded.prev_hash, head);
+        head = chain_advance(VERSION_V3, &head, &decoded).unwrap();
+        bytes.extend_from_slice(&enc);
+    }
+
+    // Walk the two-entry log: chain unbroken, variants recovered.
+    let mut offset = 0;
+    let mut walk_head = seg.prev_segment_chain_head;
+    let mut kinds = Vec::new();
+    while offset < bytes.len() {
+        let (decoded, n) = decode_entry(VERSION_V3, &bytes[offset..]).unwrap();
+        assert_eq!(decoded.prev_hash, walk_head);
+        walk_head = chain_advance(VERSION_V3, &walk_head, &decoded).unwrap();
+        offset += n;
+        if let LogEntry::Admin(a) = decoded.entry {
+            kinds.push(a.describe());
+        }
+    }
+    assert_eq!(walk_head, head);
+    assert!(kinds[0].contains("NodeJoined") && kinds[0].contains("node 2"));
+    assert!(kinds[1].contains("NodeLeft"));
 }
