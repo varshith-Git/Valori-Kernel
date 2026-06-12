@@ -23,7 +23,16 @@ people and sessions that built it.
 | 1.9 — Committer trait seam | [phase-1.9-committer-trait.md](phase-1.9-committer-trait.md) | see git log | ✅ done |
 | 1.10 — CI upgrades (multi-arch hash equality, cargo-deny) | [phase-1.10-ci-upgrades.md](phase-1.10-ci-upgrades.md) | see git log | ✅ done |
 | 1.11 — Docker + compose | [phase-1.11-docker-compose.md](phase-1.11-docker-compose.md) | see git log | ✅ done |
-| 2.x — Cluster mode (openraft) | — | — | ⬜ planned |
+| 2.1 — openraft type config | [phase-2.1-openraft-types.md](phase-2.1-openraft-types.md) | see git log | ✅ done |
+| 2.2 — Raft log store | — | — | ⬜ next |
+| 2.3 — Raft state machine (kernel + audit) | — | — | ⬜ planned |
+| 2.4 — gRPC transport (tonic) | — | — | ⬜ planned |
+| 2.5 — Engine wiring (Box\<dyn Committer\>) | — | — | ⬜ planned |
+| 2.6 — Cluster management API | — | — | ⬜ planned |
+| 2.7 — Snapshot transfer | — | — | ⬜ planned |
+| 2.8 — Turmoil fault-tolerance tests | — | — | ⬜ planned |
+| 2.9 — Admin audit events in chain | — | — | ⬜ planned |
+| 2.10 — Production hardening (mTLS, persistent log, metrics) | — | — | ⬜ planned |
 
 ## Report template
 

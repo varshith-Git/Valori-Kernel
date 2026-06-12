@@ -1,0 +1,89 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! openraft type configuration — Phase 2.1.
+//!
+//! This module pins every type parameter openraft is generic over, in one
+//! place. Everything in Phase 2.2–2.10 (log store, state machine, network,
+//! committer) is written against `TypeConfig`; changing a type here is a
+//! cluster-wide wire change and must be treated like a format bump.
+//!
+//! ## The application command: `ClientRequest`
+//!
+//! Raft replicates `ClientRequest`, not bare `KernelEvent` — the envelope
+//! carries the Phase 1.2 idempotency token so the dedup decision survives
+//! leader retries and is itself replicated (every node makes the same
+//! dedup decision deterministically).
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::io::Cursor;
+use valori_kernel::event::KernelEvent;
+
+/// Stable numeric node identity. Comes from `VALORI_NODE_ID` (Phase 1.8).
+pub type NodeId = u64;
+
+/// A cluster member as known to Raft membership config.
+///
+/// `api_addr` is the public HTTP data-plane address (axum, port 3000-ish);
+/// `raft_addr` is the internal gRPC consensus address (Phase 2.4,
+/// `VALORI_RAFT_BIND`, port 3100-ish). Both travel inside membership
+/// entries so any node can tell a client where the leader's API lives.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ValoriNode {
+    pub api_addr: String,
+    pub raft_addr: String,
+}
+
+impl fmt::Display for ValoriNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "api={} raft={}", self.api_addr, self.raft_addr)
+    }
+}
+
+/// The command Raft replicates. One kernel event plus its idempotency token.
+///
+/// EVOLUTION: this struct crosses the wire between nodes — fields are
+/// append-only with `#[serde(default)]`, same policy as valori-wire.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientRequest {
+    /// The deterministic kernel event to apply once committed.
+    pub event: KernelEvent,
+    /// Client-supplied idempotency token (Phase 1.2 schema). The state
+    /// machine drops a request whose token it has already applied, so a
+    /// leader-failover retry cannot double-apply.
+    #[serde(default)]
+    pub request_id: Option<[u8; 16]>,
+}
+
+/// What the state machine returns to the waiting client after apply.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientResponse {
+    /// Raft log index at which the event was applied.
+    pub log_index: u64,
+    /// BLAKE3 state hash after this apply — lets the client (or a proxying
+    /// follower) verify it observed the same state the leader produced.
+    pub state_hash: [u8; 32],
+    /// True when the request was recognised as a duplicate by its
+    /// `request_id` and skipped; `state_hash` is still the current hash.
+    #[serde(default)]
+    pub deduplicated: bool,
+}
+
+openraft::declare_raft_types!(
+    /// Every openraft type parameter for Valori, fixed in one place.
+    pub TypeConfig:
+        D = ClientRequest,
+        R = ClientResponse,
+        NodeId = NodeId,
+        Node = ValoriNode,
+        Entry = openraft::Entry<TypeConfig>,
+        SnapshotData = Cursor<Vec<u8>>,
+        AsyncRuntime = openraft::TokioRuntime,
+);
+
+/// Shorthands used across the crate (and by valori-node in Phase 2.5).
+pub type LogId = openraft::LogId<NodeId>;
+pub type Vote = openraft::Vote<NodeId>;
+pub type Entry = openraft::Entry<TypeConfig>;
+pub type StoredMembership = openraft::StoredMembership<NodeId, ValoriNode>;
+pub type SnapshotMeta = openraft::SnapshotMeta<NodeId, ValoriNode>;
+pub type Raft = openraft::Raft<TypeConfig>;

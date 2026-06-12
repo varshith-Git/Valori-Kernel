@@ -3,6 +3,24 @@ name = "valori-consensus"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Raft consensus layer for Valori cluster mode (Phase 2 — placeholder)"
+description = "Raft consensus layer for Valori cluster mode (Phase 2)"
 
 [dependencies]
+valori-kernel = { path = "../valori-kernel" }
+
+# openraft 0.9 — the stable line (Databend runs it in production).
+# serde feature: log entries and vote types must serialize for the wire.
+openraft = { version = "0.9", features = ["serde"] }
+
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+
+# gRPC transport (wired in Phase 2.4; declared now so the workspace
+# dependency graph is settled and cargo-deny vets the licenses early).
+tonic = "0.12"
+prost = "0.13"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+
+[dev-dependencies]
+anyhow = "1"
+serde_json = "1"
