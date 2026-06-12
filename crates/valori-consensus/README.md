@@ -23,7 +23,13 @@ never be conflated.
 | `log_store` | 2.2 | ✅ | Raft log storage (internal, truncatable; in-memory until 2.10) |
 | `state_machine` | 2.3 | ✅ | `KernelState` adapter + audit-sink write at apply |
 | `network` | 2.4 | ✅ | tonic/gRPC transport between peers |
-| `raft_committer` | 2.5 | stub | `Committer` impl backed by the Raft handle |
+
+The `Committer` implementation over the Raft handle (`RaftCommitter`) lives
+in **valori-node** (`commit::raft`, Phase 2.5) — the trait is node-side and
+valori-node depends on this crate, not the other way around. The same phase
+added `EventLogAuditSink` (node-side) plugging the chained `events.log`
+into this crate's `AuditSink` seam, and `cluster::bootstrap_cluster`
+assembling the whole stack.
 
 ## The types (Phase 2.1)
 

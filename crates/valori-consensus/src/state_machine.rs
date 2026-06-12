@@ -244,6 +244,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         log_index,
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
+                        rejected: None,
                     });
                 }
                 EntryPayload::Membership(m) => {
@@ -252,6 +253,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         log_index,
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
+                        rejected: None,
                     });
                 }
                 EntryPayload::Normal(req) => {
@@ -262,6 +264,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                 log_index,
                                 state_hash: hash_state_blake3(&inner.state),
                                 deduplicated: true,
+                                rejected: None,
                             });
                             continue;
                         }
@@ -270,10 +273,14 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     // 2. Kernel apply. Rejections are deterministic too —
                     //    every node rejects identically; state is untouched.
                     //    The entry is still consumed (last_applied advanced).
-                    let applied = inner.state.apply_event(&req.event).is_ok();
+                    let rejected = inner
+                        .state
+                        .apply_event(&req.event)
+                        .err()
+                        .map(|e| format!("{e:?}"));
 
                     // 3. Audit record + dedup memory — successful applies only.
-                    if applied {
+                    if rejected.is_none() {
                         if let Some(id) = req.request_id {
                             inner.remember_request(id);
                         }
@@ -287,6 +294,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         log_index,
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
+                        rejected,
                     });
                 }
             }

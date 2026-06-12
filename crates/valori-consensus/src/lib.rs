@@ -9,7 +9,10 @@
 //! | `log_store` | 2.2 | Raft log storage (internal, truncatable) |
 //! | `state_machine` | 2.3 | KernelState adapter + audit-log write at apply |
 //! | `network` | 2.4 | tonic/gRPC transport between peers |
-//! | [`raft_committer`] | 2.5 | `Committer` impl backed by the Raft handle |
+//!
+//! The `Committer` implementation over the Raft handle (`RaftCommitter`)
+//! lives in valori-node's `commit::raft` — the trait is node-side, and
+//! node depends on this crate (Phase 2.5).
 //!
 //! ## The one rule
 //!
@@ -23,9 +26,6 @@ pub mod log_store;
 pub mod network;
 pub mod state_machine;
 pub mod types;
-
-/// Phase 1.9 stub; becomes the real openraft-backed Committer in Phase 2.5.
-pub mod raft_committer;
 
 pub use log_store::ValoriLogStore;
 pub use network::{serve_raft, RaftRpcService, ValoriNetwork, ValoriNetworkFactory};

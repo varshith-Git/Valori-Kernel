@@ -66,6 +66,11 @@ pub struct ClientResponse {
     /// `request_id` and skipped; `state_hash` is still the current hash.
     #[serde(default)]
     pub deduplicated: bool,
+    /// `Some(reason)` when the kernel deterministically rejected the event
+    /// (bad sequential id, dimension mismatch). State is untouched; every
+    /// node rejected identically. Added in Phase 2.5 (append-only field).
+    #[serde(default)]
+    pub rejected: Option<String>,
 }
 
 openraft::declare_raft_types!(
