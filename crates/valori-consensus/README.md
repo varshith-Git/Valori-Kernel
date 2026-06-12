@@ -20,7 +20,8 @@ never be conflated.
 | Module | Phase | Status | What it is |
 |---|---|---|---|
 | `types` | 2.1 | ✅ | openraft type config — every generic pinned once |
-| `log_store` | 2.2 | ✅ | Raft log storage (internal, truncatable; in-memory until 2.10) |
+| `log_store` | 2.2 | ✅ | Raft log storage (in-memory; tests + ephemeral) |
+| `log_store_redb` | 2.10a | ✅ | persistent Raft log — survives restarts (`VALORI_RAFT_LOG_PATH`) |
 | `state_machine` | 2.3 | ✅ | `KernelState` adapter + audit-sink write at apply |
 | `network` | 2.4 | ✅ | tonic/gRPC transport between peers |
 

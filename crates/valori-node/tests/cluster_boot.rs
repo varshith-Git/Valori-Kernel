@@ -93,6 +93,7 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
             .into_iter()
             .collect(),
         init: true,
+        raft_log_path: None,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(audit)).await.unwrap();
 
@@ -144,6 +145,7 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
             .into_iter()
             .collect(),
         init: true,
+        raft_log_path: None,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
         .await
@@ -163,4 +165,84 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
         "kernel rejection must surface as Rejected, got {err:?}"
     );
     assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 0);
+}
+
+// ── Phase 2.10: crash-restart with the persistent Raft log ───────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn node_restart_recovers_state_from_the_persistent_raft_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let raft_log = dir.path().join("raft.redb");
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: Some(raft_log.clone()),
+    };
+
+    // ── Life 1: write 5 records, record the hash, then crash ─────────────────
+    let hash_before = {
+        let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+            .await
+            .unwrap();
+        handle
+            .raft
+            .wait(Some(Duration::from_secs(10)))
+            .metrics(|m| m.current_leader == Some(1), "self-elected")
+            .await
+            .unwrap();
+
+        let mut committer = handle.committer();
+        for i in 0..5u32 {
+            committer.commit(insert(i)).unwrap();
+        }
+        let hash = handle.state_machine.state_hash().await;
+
+        // Crash: stop the Raft core and the gRPC server. The kernel state
+        // (in-memory) dies with the process; only the redb file survives.
+        let _ = handle.raft.shutdown().await;
+        handle.server_task.abort();
+        hash
+    };
+
+    // ── Life 2: same redb file, fresh everything else ────────────────────────
+    // init: true is safe — openraft refuses a second initialize and the
+    // bootstrap treats that as "fine" (membership is in the log).
+    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+        .await
+        .unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "re-elected from persisted vote+membership")
+        .await
+        .unwrap();
+
+    // The state machine starts empty and is rebuilt by replaying the
+    // persisted Raft log — the kernel must converge to the pre-crash hash.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if handle.state_machine.with_state(|s| s.record_count()).await == 5 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "state machine never rebuilt from the persisted log"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        handle.state_machine.state_hash().await,
+        hash_before,
+        "post-restart replay must reproduce the exact pre-crash state hash"
+    );
+
+    // And the reborn node keeps accepting writes.
+    let mut committer = handle.committer();
+    committer.commit(insert(5)).unwrap();
+    assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 6);
 }

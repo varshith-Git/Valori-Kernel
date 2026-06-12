@@ -32,7 +32,10 @@ people and sessions that built it.
 | 2.7 — Snapshot transfer | [phase-2.7-snapshot-transfer.md](phase-2.7-snapshot-transfer.md) | see git log | ✅ done |
 | 2.8 — Fault-tolerance tests | [phase-2.8-fault-tolerance.md](phase-2.8-fault-tolerance.md) | see git log | ✅ done |
 | 2.9 — Admin audit events in chain | [phase-2.9-admin-audit-events.md](phase-2.9-admin-audit-events.md) | see git log | ✅ done |
-| 2.10 — Production hardening (mTLS, persistent log, metrics) | — | — | ⬜ next |
+| 2.10a — Persistent Raft log (redb) | [phase-2.10a-persistent-raft-log.md](phase-2.10a-persistent-raft-log.md) | see git log | ✅ done |
+| 2.10b — mTLS (rustls + cluster CA) | — | — | ⬜ next |
+| 2.10c — Metrics (Prometheus) | — | — | ⬜ planned |
+| 2.10d — Partition harness | — | — | ⬜ planned |
 
 ## Report template
 

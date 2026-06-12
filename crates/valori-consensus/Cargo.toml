@@ -19,6 +19,10 @@ thiserror = "1"
 # Snapshot payload framing (kernel V5 bytes + dedup table + meta).
 bincode = { version = "2", features = ["serde"] }
 
+# Persistent Raft log (Phase 2.10). Embedded, ACID, single-file —
+# the Raft log and vote survive process crashes.
+redb = "2"
+
 # gRPC transport (Phase 2.4).
 tonic = "0.12"
 prost = "0.13"
@@ -29,6 +33,7 @@ tracing = "0.1"
 [dev-dependencies]
 anyhow = "1"
 serde_json = "1"
+tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 
 [build-dependencies]
