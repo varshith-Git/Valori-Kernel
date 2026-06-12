@@ -1,11 +1,16 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-//! Placeholder — real consensus tests (turmoil partition simulation, cluster
-//! kill-tests, hash-equality invariants) land with Phase 2 of the multi-node
-//! roadmap. This exists so the crate participates in the test lifecycle from
-//! day one.
+//! Crate smoke test. Real consensus behaviour is covered per sub-phase:
+//! type config in `type_config.rs` (2.1); log store, state machine, network,
+//! and turmoil partition simulations land with 2.2–2.8.
 
 #[test]
-fn crate_links() {
-    // Compiling and linking against the (empty) crate is the only contract
-    // valori-consensus has in Phase 1.
+fn crate_links_and_exports_the_type_config() {
+    // The public surface every later phase builds on.
+    use valori_consensus::{ClientRequest, ClientResponse, NodeId, TypeConfig, ValoriNode};
+    fn _assert_type<T>() {}
+    _assert_type::<ClientRequest>();
+    _assert_type::<ClientResponse>();
+    _assert_type::<NodeId>();
+    _assert_type::<ValoriNode>();
+    _assert_type::<openraft::Raft<TypeConfig>>();
 }
