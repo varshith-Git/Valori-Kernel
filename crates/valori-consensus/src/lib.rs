@@ -20,12 +20,14 @@
 //! never be conflated.
 
 pub mod log_store;
+pub mod state_machine;
 pub mod types;
 
 /// Phase 1.9 stub; becomes the real openraft-backed Committer in Phase 2.5.
 pub mod raft_committer;
 
 pub use log_store::ValoriLogStore;
+pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
 pub use types::{
     ClientRequest, ClientResponse, NodeId, TypeConfig, ValoriNode,
 };
