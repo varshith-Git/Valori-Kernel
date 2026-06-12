@@ -21,7 +21,7 @@ never be conflated.
 |---|---|---|---|
 | `types` | 2.1 | ✅ | openraft type config — every generic pinned once |
 | `log_store` | 2.2 | ✅ | Raft log storage (internal, truncatable; in-memory until 2.10) |
-| `state_machine` | 2.3 | ⬜ | `KernelState` adapter + audit-log write at apply |
+| `state_machine` | 2.3 | ✅ | `KernelState` adapter + audit-sink write at apply |
 | `network` | 2.4 | ⬜ | tonic/gRPC transport between peers |
 | `raft_committer` | 2.5 | stub | `Committer` impl backed by the Raft handle |
 
@@ -64,6 +64,23 @@ Backend: in-memory `BTreeMap` behind `Arc<Mutex<…>>` (vote and log writes
 serialized, as openraft requires; reader clones share state with the store).
 Phase 2.10 swaps in `redb` for durability behind the same interface.
 
+## The state machine (Phase 2.3)
+
+`ValoriStateMachine` adapts `KernelState` to `RaftStateMachine`. Per
+committed entry: **dedup → kernel apply → audit record.**
+
+- Dedup table is part of replicated state (travels in snapshots) — every
+  node makes the same dedup decision. Only *successful* applies enter the
+  table, so a rejected event's request_id can be retried.
+- Kernel rejections are deterministic: every node rejects identically,
+  state untouched, entry still consumed.
+- The [`AuditSink`] trait is THE audit-log write point in cluster mode:
+  once per event, at apply, after quorum. valori-node plugs its chained
+  `EventLogWriter` in at Phase 2.5; tests use `MemoryAuditSink`.
+- Snapshots are **self-verifying**: the payload carries the BLAKE3 state
+  hash; install recomputes and refuses a mismatch (the V5 format alone has
+  no internal checksum — found by the corruption test in this phase).
+
 ## Testing
 
 - `tests/type_config.rs` — wire-type round-trips, serde evolution defaults,
@@ -71,9 +88,12 @@ Phase 2.10 swaps in `redb` for durability behind the same interface.
 - `tests/log_store.rs` — append/read round-trips, half-open ranges,
   truncate-then-rewrite under a new term, purge floor monotonicity,
   vote overwrite, long-lived reader clones observing later writes.
-- Phase 2.3 runs the official `openraft::testing::Suite` compliance suite
-  (it needs both the log store and the state machine).
-- Phase 2.8 brings turmoil network-partition simulations and cross-node
-  hash-equality invariants.
+- `tests/state_machine.rs` — apply pipeline, dedup across leader failover,
+  rejected-event semantics, audit ordering, snapshot round-trip with dedup
+  transfer, corruption refusal, two-node hash convergence.
+- `tests/openraft_compliance.rs` — the **official openraft storage
+  compliance suite** over the log store + state machine pair. Phase 2.10's
+  redb-backed store must pass this exact suite to land.
+- Phase 2.8 brings turmoil network-partition simulations.
 
 Run: `cargo test -p valori-consensus`

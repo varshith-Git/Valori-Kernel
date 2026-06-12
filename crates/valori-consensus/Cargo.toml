@@ -16,6 +16,8 @@ openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
+# Snapshot payload framing (kernel V5 bytes + dedup table + meta).
+bincode = { version = "2", features = ["serde"] }
 
 # gRPC transport (wired in Phase 2.4; declared now so the workspace
 # dependency graph is settled and cargo-deny vets the licenses early).

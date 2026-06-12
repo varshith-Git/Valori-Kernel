@@ -25,8 +25,8 @@ people and sessions that built it.
 | 1.11 — Docker + compose | [phase-1.11-docker-compose.md](phase-1.11-docker-compose.md) | see git log | ✅ done |
 | 2.1 — openraft type config | [phase-2.1-openraft-types.md](phase-2.1-openraft-types.md) | see git log | ✅ done |
 | 2.2 — Raft log store | [phase-2.2-raft-log-store.md](phase-2.2-raft-log-store.md) | see git log | ✅ done |
-| 2.3 — Raft state machine (kernel + audit) | — | — | ⬜ next |
-| 2.4 — gRPC transport (tonic) | — | — | ⬜ planned |
+| 2.3 — Raft state machine (kernel + audit) | [phase-2.3-raft-state-machine.md](phase-2.3-raft-state-machine.md) | see git log | ✅ done |
+| 2.4 — gRPC transport (tonic) | — | — | ⬜ next |
 | 2.5 — Engine wiring (Box\<dyn Committer\>) | — | — | ⬜ planned |
 | 2.6 — Cluster management API | — | — | ⬜ planned |
 | 2.7 — Snapshot transfer | — | — | ⬜ planned |
