@@ -30,7 +30,10 @@ pub mod types;
 
 pub use log_store::ValoriLogStore;
 pub use log_store_redb::RedbLogStore;
-pub use network::{serve_raft, RaftRpcService, ValoriNetwork, ValoriNetworkFactory};
+pub use network::{
+    serve_raft, serve_raft_tls, RaftRpcService, RaftTlsConfig, ValoriNetwork,
+    ValoriNetworkFactory,
+};
 pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
 pub use types::{
     ClientRequest, ClientResponse, NodeId, TypeConfig, ValoriNode,

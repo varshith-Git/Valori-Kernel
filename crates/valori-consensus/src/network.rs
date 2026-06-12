@@ -47,13 +47,58 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
         .map_err(|e| e.to_string())
 }
 
+// ── TLS (Phase 2.10b) ────────────────────────────────────────────────────────
+
+/// PEM material for mutual TLS on the Raft channel.
+///
+/// Both directions authenticate: the server presents `cert`/`key` and
+/// requires a client certificate signed by `ca`; the client presents its
+/// own `cert`/`key` and verifies the server against the same `ca`. A peer
+/// without a certificate from this cluster's CA is refused at the TLS
+/// handshake — it never reaches the Raft layer (the Phase 1.6 contract).
+#[derive(Clone)]
+pub struct RaftTlsConfig {
+    /// Cluster CA certificate (PEM). The single trust root for the cluster.
+    pub ca_pem: Vec<u8>,
+    /// This node's leaf certificate (PEM), signed by the cluster CA.
+    pub cert_pem: Vec<u8>,
+    /// This node's private key (PEM).
+    pub key_pem: Vec<u8>,
+    /// DNS name peers' certificates are issued for (SNI + verification).
+    /// One shared name for the whole cluster keeps cert issuance simple;
+    /// identity is the CA signature, not the hostname.
+    pub domain: String,
+}
+
+impl std::fmt::Debug for RaftTlsConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print key material — sizes and domain are enough to debug.
+        f.debug_struct("RaftTlsConfig")
+            .field("ca_pem_len", &self.ca_pem.len())
+            .field("cert_pem_len", &self.cert_pem.len())
+            .field("key_pem", &"<redacted>")
+            .field("domain", &self.domain)
+            .finish()
+    }
+}
+
 // ── Client side ───────────────────────────────────────────────────────────────
 
 /// Builds one [`ValoriNetwork`] per replication target. openraft calls
 /// `new_client` with the target's `ValoriNode` from the membership config —
 /// the address book is the membership itself, no side table to drift.
+/// With a [`RaftTlsConfig`], every outbound channel is mutually
+/// authenticated TLS.
 #[derive(Default, Clone)]
-pub struct ValoriNetworkFactory;
+pub struct ValoriNetworkFactory {
+    pub tls: Option<RaftTlsConfig>,
+}
+
+impl ValoriNetworkFactory {
+    pub fn with_tls(tls: RaftTlsConfig) -> Self {
+        Self { tls: Some(tls) }
+    }
+}
 
 impl RaftNetworkFactory<TypeConfig> for ValoriNetworkFactory {
     type Network = ValoriNetwork;
@@ -62,6 +107,7 @@ impl RaftNetworkFactory<TypeConfig> for ValoriNetworkFactory {
         ValoriNetwork {
             target,
             raft_addr: node.raft_addr.clone(),
+            tls: self.tls.clone(),
             client: None,
         }
     }
@@ -73,6 +119,7 @@ impl RaftNetworkFactory<TypeConfig> for ValoriNetworkFactory {
 pub struct ValoriNetwork {
     target: NodeId,
     raft_addr: String,
+    tls: Option<RaftTlsConfig>,
     client: Option<RaftServiceClient<Channel>>,
 }
 
@@ -81,8 +128,23 @@ impl ValoriNetwork {
         &mut self,
     ) -> Result<&mut RaftServiceClient<Channel>, RPCError<NodeId, ValoriNode, E>> {
         if self.client.is_none() {
-            let endpoint = Endpoint::from_shared(format!("http://{}", self.raft_addr))
+            let scheme = if self.tls.is_some() { "https" } else { "http" };
+            let mut endpoint = Endpoint::from_shared(format!("{scheme}://{}", self.raft_addr))
                 .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+
+            if let Some(tls) = &self.tls {
+                let client_tls = tonic::transport::ClientTlsConfig::new()
+                    .ca_certificate(tonic::transport::Certificate::from_pem(&tls.ca_pem))
+                    .identity(tonic::transport::Identity::from_pem(
+                        &tls.cert_pem,
+                        &tls.key_pem,
+                    ))
+                    .domain_name(&tls.domain);
+                endpoint = endpoint
+                    .tls_config(client_tls)
+                    .map_err(|e| RPCError::Network(NetworkError::new(&e)))?;
+            }
+
             let channel = endpoint
                 .connect()
                 .await
@@ -244,14 +306,48 @@ pub async fn serve_raft(
     raft: Raft,
     addr: &str,
 ) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
+    serve_raft_inner(raft, addr, None).await
+}
+
+/// [`serve_raft`] with mutual TLS: the server presents its identity and
+/// REQUIRES a client certificate signed by the cluster CA. A peer without
+/// one is refused at the handshake — it never reaches the Raft layer.
+pub async fn serve_raft_tls(
+    raft: Raft,
+    addr: &str,
+    tls: RaftTlsConfig,
+) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
+    serve_raft_inner(raft, addr, Some(tls)).await
+}
+
+async fn serve_raft_inner(
+    raft: Raft,
+    addr: &str,
+    tls: Option<RaftTlsConfig>,
+) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let bound = listener.local_addr()?;
 
     let service = RaftServiceServer::new(RaftRpcService::new(raft));
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
+    let mut builder = Server::builder();
+    if let Some(tls) = tls {
+        let server_tls = tonic::transport::ServerTlsConfig::new()
+            .identity(tonic::transport::Identity::from_pem(
+                &tls.cert_pem,
+                &tls.key_pem,
+            ))
+            // client_ca_root makes this MUTUAL: peers must present a cert
+            // signed by the cluster CA, not merely speak TLS.
+            .client_ca_root(tonic::transport::Certificate::from_pem(&tls.ca_pem));
+        builder = builder
+            .tls_config(server_tls)
+            .map_err(|e| std::io::Error::other(format!("server tls config: {e}")))?;
+    }
+
     let handle = tokio::spawn(async move {
-        if let Err(e) = Server::builder()
+        if let Err(e) = builder
             .add_service(service)
             .serve_with_incoming(incoming)
             .await

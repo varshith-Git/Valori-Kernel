@@ -52,7 +52,7 @@ async fn spawn_node(id: NodeId) -> TestNode {
         .unwrap(),
     );
     let sm = ValoriStateMachine::default();
-    let raft = Raft::new(id, config, ValoriNetworkFactory, ValoriLogStore::new(), sm.clone())
+    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), ValoriLogStore::new(), sm.clone())
         .await
         .unwrap();
     let (addr, server) = serve_raft(raft.clone(), "127.0.0.1:0").await.unwrap();

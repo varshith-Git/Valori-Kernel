@@ -94,6 +94,7 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
             .collect(),
         init: true,
         raft_log_path: None,
+        tls: None,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(audit)).await.unwrap();
 
@@ -146,6 +147,7 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
             .collect(),
         init: true,
         raft_log_path: None,
+        tls: None,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
         .await
@@ -182,6 +184,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
             .collect(),
         init: true,
         raft_log_path: Some(raft_log.clone()),
+        tls: None,
     };
 
     // ── Life 1: write 5 records, record the hash, then crash ─────────────────

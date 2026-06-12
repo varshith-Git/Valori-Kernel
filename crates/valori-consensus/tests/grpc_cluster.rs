@@ -39,7 +39,7 @@ async fn spawn_node(id: NodeId) -> TestNode {
     let log_store = ValoriLogStore::new();
     let sm = ValoriStateMachine::default();
 
-    let raft = Raft::new(id, config, ValoriNetworkFactory, log_store, sm.clone())
+    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), log_store, sm.clone())
         .await
         .unwrap();
 

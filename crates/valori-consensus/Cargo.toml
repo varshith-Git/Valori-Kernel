@@ -24,7 +24,8 @@ bincode = { version = "2", features = ["serde"] }
 redb = "2"
 
 # gRPC transport (Phase 2.4).
-tonic = "0.12"
+# tls feature: rustls-backed mutual TLS on the Raft channel (Phase 2.10b).
+tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time", "net"] }
 tokio-stream = { version = "0.1", features = ["net"] }
@@ -34,6 +35,8 @@ tracing = "0.1"
 anyhow = "1"
 serde_json = "1"
 tempfile = "3"
+# Test-only CA + leaf certificate generation for the mTLS tests.
+rcgen = "0.13"
 tokio = { version = "1", features = ["full"] }
 
 [build-dependencies]
