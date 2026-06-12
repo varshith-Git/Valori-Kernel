@@ -23,11 +23,13 @@
 //! never be conflated.
 
 pub mod log_store;
+pub mod log_store_redb;
 pub mod network;
 pub mod state_machine;
 pub mod types;
 
 pub use log_store::ValoriLogStore;
+pub use log_store_redb::RedbLogStore;
 pub use network::{serve_raft, RaftRpcService, ValoriNetwork, ValoriNetworkFactory};
 pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
 pub use types::{

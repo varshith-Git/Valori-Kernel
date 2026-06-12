@@ -39,6 +39,10 @@ pub struct ClusterConfig {
     /// True on the one node that runs `Raft::initialize` for a brand-new
     /// cluster. Joining an existing cluster never initializes.
     pub init: bool,
+    /// Env: VALORI_RAFT_LOG_PATH. When set, the Raft log + vote live in a
+    /// redb database at this path and survive restarts (Phase 2.10).
+    /// None = in-memory (tests, ephemeral deployments).
+    pub raft_log_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -69,8 +73,13 @@ impl ClusterConfig {
         let raft_bind =
             std::env::var("VALORI_RAFT_BIND").unwrap_or_else(|_| "0.0.0.0:3100".to_string());
         let init = std::env::var("VALORI_CLUSTER_INIT").map(|v| v == "1").unwrap_or(false);
+        let raft_log_path = std::env::var("VALORI_RAFT_LOG_PATH")
+            .ok()
+            .map(std::path::PathBuf::from);
 
-        Self::parse(node_id, &raft_bind, &members, init).map(Some)
+        let mut cfg = Self::parse(node_id, &raft_bind, &members, init)?;
+        cfg.raft_log_path = raft_log_path;
+        Ok(Some(cfg))
     }
 
     /// Pure parser — testable without environment mutation.
@@ -112,6 +121,7 @@ impl ClusterConfig {
             raft_bind: raft_bind.to_string(),
             members: parsed,
             init,
+            raft_log_path: None,
         })
     }
 }
@@ -155,17 +165,34 @@ pub async fn bootstrap_cluster(
         .map_err(|e| std::io::Error::other(format!("raft config invalid: {e}")))?,
     );
 
-    let log_store = ValoriLogStore::new();
     let state_machine = ValoriStateMachine::new(audit);
 
-    let raft = Raft::new(
-        cfg.node_id,
-        raft_config,
-        ValoriNetworkFactory,
-        log_store,
-        state_machine.clone(),
-    )
-    .await
+    // Persistent Raft log when a path is configured (survives restarts);
+    // in-memory otherwise. Both pass the same openraft compliance suite.
+    let raft = match &cfg.raft_log_path {
+        Some(path) => {
+            let store = valori_consensus::RedbLogStore::open(path)
+                .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
+            Raft::new(
+                cfg.node_id,
+                raft_config,
+                ValoriNetworkFactory,
+                store,
+                state_machine.clone(),
+            )
+            .await
+        }
+        None => {
+            Raft::new(
+                cfg.node_id,
+                raft_config,
+                ValoriNetworkFactory,
+                ValoriLogStore::new(),
+                state_machine.clone(),
+            )
+            .await
+        }
+    }
     .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
 
     let (raft_addr, server_task) = serve_raft(raft.clone(), &cfg.raft_bind).await?;
