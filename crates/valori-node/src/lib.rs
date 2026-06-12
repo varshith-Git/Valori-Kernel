@@ -23,3 +23,5 @@ pub mod cluster;
 /// Phase 2.6: cluster management HTTP API (status, health, membership).
 /// See docs/phases/phase-2.6-cluster-api.md
 pub mod cluster_api;
+/// Cluster-mode HTTP server: data plane over Raft (insert/search/health).
+pub mod cluster_server;

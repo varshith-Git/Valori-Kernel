@@ -27,6 +27,10 @@ x-node-common: &node-common
     VALORI_MAX_EDGES: "500000"
     VALORI_SNAPSHOT_EVERY_EVENTS: "50000"
     VALORI_SNAPSHOT_KEEP: "3"
+    # Raft cluster topology (Phase 2): id=raft_addr/api_addr per member.
+    VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
+    VALORI_RAFT_BIND: "0.0.0.0:3100"
+    VALORI_RAFT_LOG_PATH: /data/raft.redb
   healthcheck:
     test: ["/usr/local/bin/valori-node", "--health-check"]
     interval: 30s
@@ -43,6 +47,7 @@ services:
     environment:
       <<: *node-common
       VALORI_NODE_ID: "1"
+      VALORI_CLUSTER_INIT: "1"
       VALORI_BIND: "0.0.0.0:3000"
       VALORI_EVENT_LOG_PATH: /data/events.log
       VALORI_SNAPSHOT_PATH: /data/state.snap
@@ -58,7 +63,6 @@ services:
       <<: *node-common
       VALORI_NODE_ID: "2"
       VALORI_BIND: "0.0.0.0:3000"
-      VALORI_FOLLOWER_OF: "http://node-1:3000"
       VALORI_EVENT_LOG_PATH: /data/events.log
       VALORI_SNAPSHOT_PATH: /data/state.snap
     volumes:
@@ -76,7 +80,6 @@ services:
       <<: *node-common
       VALORI_NODE_ID: "3"
       VALORI_BIND: "0.0.0.0:3000"
-      VALORI_FOLLOWER_OF: "http://node-1:3000"
       VALORI_EVENT_LOG_PATH: /data/events.log
       VALORI_SNAPSHOT_PATH: /data/state.snap
     volumes:

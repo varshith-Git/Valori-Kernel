@@ -5,10 +5,28 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::net::TcpListener;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     // Initialize Telemetry (Logs + Metrics)
     valori_node::telemetry::init_telemetry();
+
+    // ── Boot-mode decision (Phase 2) ──────────────────────────────────────────
+    // VALORI_CLUSTER_MEMBERS present → Raft cluster mode.
+    // Absent → the standalone path below, unchanged.
+    // A malformed topology is a hard stop — silently booting standalone on a
+    // typo would be how you accidentally run two databases that each think
+    // they're the real one.
+    match valori_node::cluster::ClusterConfig::from_env() {
+        Err(e) => {
+            eprintln!("FATAL: cluster configuration invalid: {e}");
+            std::process::exit(1);
+        }
+        Ok(Some(cluster_cfg)) => {
+            run_cluster(cluster_cfg).await;
+            return;
+        }
+        Ok(None) => { /* standalone — fall through */ }
+    }
 
     let cfg = NodeConfig::default();
 
@@ -65,6 +83,66 @@ async fn main() {
     } else {
         tracing::info!("Node starting in LEADER mode.");
     }
+
+    let listener = TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+// ── Cluster mode (Phase 2) ────────────────────────────────────────────────────
+
+async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
+    use valori_node::cluster::bootstrap_cluster;
+    use valori_node::cluster_server::build_cluster_router;
+    use valori_node::commit::EventLogAuditSink;
+    use valori_node::events::event_log::EventLogWriter;
+
+    let node_cfg = NodeConfig::default();
+
+    tracing::info!(
+        node_id = cluster_cfg.node_id,
+        members = cluster_cfg.members.len(),
+        tls = cluster_cfg.tls.is_some(),
+        persistent_raft_log = cluster_cfg.raft_log_path.is_some(),
+        "Booting in CLUSTER mode"
+    );
+
+    // The audit sink: quorum-committed events land in the chained
+    // events.log, same format the standalone path and valori-verify use.
+    let (audit_sink, audit_writer): (
+        Box<dyn valori_consensus::AuditSink>,
+        Option<Arc<std::sync::Mutex<EventLogWriter>>>,
+    ) = match &node_cfg.event_log_path {
+        Some(path) => {
+            let writer = EventLogWriter::open(path, Some(node_cfg.dim as u32))
+                .unwrap_or_else(|e| {
+                    eprintln!("FATAL: cannot open audit log {path:?}: {e}");
+                    std::process::exit(1);
+                });
+            let sink = EventLogAuditSink::new(writer);
+            let handle = sink.writer();
+            (Box::new(sink), Some(handle))
+        }
+        None => {
+            tracing::warn!(
+                "VALORI_EVENT_LOG_PATH is not set — cluster running WITHOUT an \
+                 audit log. Committed events are replicated but not chained to \
+                 disk on this node."
+            );
+            (Box::new(valori_consensus::NullAuditSink), None)
+        }
+    };
+
+    let handle = bootstrap_cluster(&cluster_cfg, audit_sink)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("FATAL: cluster bootstrap failed: {e}");
+            std::process::exit(1);
+        });
+    tracing::info!("Raft listening on {}", handle.raft_addr);
+
+    let app = build_cluster_router(&handle, audit_writer);
+    let addr = node_cfg.bind_addr;
+    tracing::info!("HTTP API listening on {addr}");
 
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
