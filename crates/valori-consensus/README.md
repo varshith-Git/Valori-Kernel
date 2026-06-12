@@ -119,6 +119,9 @@ so the next RPC reconnects).
   BLAKE3 hash on all three kernels, cross-cluster request-id dedup, and
   follower writes answered with ForwardToLeader naming the leader's
   addresses.
+- `tests/snapshot_transfer.rs` — late joiners after log compaction:
+  snapshot-only catch-up (log purged), snapshot + live-tail catch-up,
+  dedup table surviving the transfer, exact hash convergence.
 - Phase 2.8 brings turmoil network-partition simulations.
 
 Run: `cargo test -p valori-consensus`
