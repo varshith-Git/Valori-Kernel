@@ -10,7 +10,9 @@ valori-kernel = { path = "../valori-kernel" }
 
 # openraft 0.9 — the stable line (Databend runs it in production).
 # serde feature: log entries and vote types must serialize for the wire.
-openraft = { version = "0.9", features = ["serde"] }
+# storage-v2: unseals the RaftLogStorage/RaftStateMachine split (the modern
+# storage API) — without it only the legacy RaftStorage trait is implementable.
+openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"

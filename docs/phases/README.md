@@ -24,8 +24,8 @@ people and sessions that built it.
 | 1.10 — CI upgrades (multi-arch hash equality, cargo-deny) | [phase-1.10-ci-upgrades.md](phase-1.10-ci-upgrades.md) | see git log | ✅ done |
 | 1.11 — Docker + compose | [phase-1.11-docker-compose.md](phase-1.11-docker-compose.md) | see git log | ✅ done |
 | 2.1 — openraft type config | [phase-2.1-openraft-types.md](phase-2.1-openraft-types.md) | see git log | ✅ done |
-| 2.2 — Raft log store | — | — | ⬜ next |
-| 2.3 — Raft state machine (kernel + audit) | — | — | ⬜ planned |
+| 2.2 — Raft log store | [phase-2.2-raft-log-store.md](phase-2.2-raft-log-store.md) | see git log | ✅ done |
+| 2.3 — Raft state machine (kernel + audit) | — | — | ⬜ next |
 | 2.4 — gRPC transport (tonic) | — | — | ⬜ planned |
 | 2.5 — Engine wiring (Box\<dyn Committer\>) | — | — | ⬜ planned |
 | 2.6 — Cluster management API | — | — | ⬜ planned |
