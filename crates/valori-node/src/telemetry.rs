@@ -38,6 +38,22 @@ pub fn init_telemetry() {
     metrics::describe_histogram!("valori_replay_duration_seconds",
         "Time spent replaying the WAL or event log on startup");
 
+    // ── Raft cluster gauges (Phase 2.10c; updated by the metrics watcher) ─────
+    metrics::describe_gauge!("valori_raft_term",
+        "Current Raft term on this node");
+    metrics::describe_gauge!("valori_raft_current_leader",
+        "Node id of the leader this node currently sees (0 = none)");
+    metrics::describe_gauge!("valori_raft_is_leader",
+        "1 when this node is the leader, else 0");
+    metrics::describe_gauge!("valori_raft_last_log_index",
+        "Highest Raft log index appended on this node");
+    metrics::describe_gauge!("valori_raft_last_applied_index",
+        "Highest Raft log index applied to the kernel; the gap to last_log_index is apply lag");
+    metrics::describe_gauge!("valori_raft_snapshot_index",
+        "Log index covered by the most recent Raft snapshot");
+    metrics::describe_gauge!("valori_raft_purged_index",
+        "Highest Raft log index removed by compaction");
+
     // ── KernelState capacity gauges (updated on /health and /metrics) ─────────
     metrics::describe_gauge!("valori_records_live",
         "Number of live (non-deleted) records in the store");

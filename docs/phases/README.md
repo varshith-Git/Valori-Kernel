@@ -34,8 +34,8 @@ people and sessions that built it.
 | 2.9 — Admin audit events in chain | [phase-2.9-admin-audit-events.md](phase-2.9-admin-audit-events.md) | see git log | ✅ done |
 | 2.10a — Persistent Raft log (redb) | [phase-2.10a-persistent-raft-log.md](phase-2.10a-persistent-raft-log.md) | see git log | ✅ done |
 | 2.10b — mTLS (rustls + cluster CA) | [phase-2.10b-mtls.md](phase-2.10b-mtls.md) | see git log | ✅ done |
-| 2.10c — Metrics (Prometheus) | — | — | ⬜ next |
-| 2.10d — Partition harness | — | — | ⬜ planned |
+| 2.10c — Metrics (Prometheus) | [phase-2.10c-raft-metrics.md](phase-2.10c-raft-metrics.md) | see git log | ✅ done |
+| 2.10d — Partition harness | — | — | ⬜ next (last Phase 2 item) |
 
 ## Report template
 
