@@ -141,6 +141,7 @@ pub fn run(
                                 LogEntry::Checkpoint { event_count: c, .. } => {
                                     event_count = c;
                                 }
+                                LogEntry::Admin(_) => {}
                             }
                         }
                         Err(e) => {

@@ -78,6 +78,11 @@ pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resu
                     crate::events::event_log::LogEntry::Checkpoint { event_count: chk_count, snapshot_hash, timestamp: _ } => {
                         tracing::info!("Found checkpoint marker: count={}, hash={:?}", chk_count, snapshot_hash);
                     }
+                    // Admin events (membership history) are chain-verified
+                    // above but never applied to kernel state.
+                    crate::events::event_log::LogEntry::Admin(admin) => {
+                        tracing::info!("Admin event in log: {}", admin.describe());
+                    }
                 }
             }
             Err(_e) => {

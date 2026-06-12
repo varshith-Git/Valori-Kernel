@@ -31,8 +31,8 @@ people and sessions that built it.
 | 2.6 — Cluster management API | [phase-2.6-cluster-api.md](phase-2.6-cluster-api.md) | see git log | ✅ done |
 | 2.7 — Snapshot transfer | [phase-2.7-snapshot-transfer.md](phase-2.7-snapshot-transfer.md) | see git log | ✅ done |
 | 2.8 — Fault-tolerance tests | [phase-2.8-fault-tolerance.md](phase-2.8-fault-tolerance.md) | see git log | ✅ done |
-| 2.9 — Admin audit events in chain | — | — | ⬜ next |
-| 2.10 — Production hardening (mTLS, persistent log, metrics) | — | — | ⬜ planned |
+| 2.9 — Admin audit events in chain | [phase-2.9-admin-audit-events.md](phase-2.9-admin-audit-events.md) | see git log | ✅ done |
+| 2.10 — Production hardening (mTLS, persistent log, metrics) | — | — | ⬜ next |
 
 ## Report template
 

@@ -30,20 +30,41 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use valori_consensus::types::{NodeId, Raft, ValoriNode};
+use valori_wire::{AdminEvent, LogEntry};
+
+use crate::events::event_log::EventLogWriter;
 
 /// Shared state for the cluster endpoints.
 #[derive(Clone)]
 pub struct ClusterApiState {
     pub raft: Arc<Raft>,
+    /// Where successful membership changes are recorded as `AdminEvent`s
+    /// in the BLAKE3 chain (Phase 2.9). `None` = no audit log configured.
+    pub audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
 }
 
-pub fn cluster_router(raft: Arc<Raft>) -> Router {
+pub fn cluster_router(
+    raft: Arc<Raft>,
+    audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
+) -> Router {
     Router::new()
         .route("/v1/cluster/status", get(status))
         .route("/v1/cluster/health", get(health))
         .route("/v1/cluster/add-node", post(add_node))
         .route("/v1/cluster/remove-node", post(remove_node))
-        .with_state(ClusterApiState { raft })
+        .with_state(ClusterApiState { raft, audit })
+}
+
+/// Record an admin action in the chained audit log. Failures are logged,
+/// not surfaced: the membership change has already committed through Raft —
+/// the source of truth — and a full audit disk must not unwind it.
+fn record_admin(state: &ClusterApiState, event: AdminEvent) {
+    if let Some(audit) = &state.audit {
+        let mut writer = audit.lock().expect("audit log mutex poisoned");
+        if let Err(e) = writer.append(&LogEntry::Admin(event.clone())) {
+            tracing::error!("failed to audit admin action {}: {e}", event.describe());
+        }
+    }
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -179,15 +200,27 @@ async fn add_node(
     voters.insert(req.node_id);
 
     match state.raft.change_membership(voters, false).await {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "added",
-                "node_id": req.node_id,
-                "log_index": resp.log_id.index,
-            })),
-        )
-            .into_response(),
+        Ok(resp) => {
+            record_admin(
+                &state,
+                AdminEvent::NodeJoined {
+                    node_id: req.node_id,
+                    raft_addr: node.raft_addr.clone(),
+                    api_addr: node.api_addr.clone(),
+                    // All-zeros until RBAC lands (Phase 3): "no auth configured".
+                    authorized_by: [0u8; 16],
+                },
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "added",
+                    "node_id": req.node_id,
+                    "log_index": resp.log_id.index,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => leadership_error(e),
     }
 }
@@ -220,15 +253,24 @@ async fn remove_node(
     // `retain: false`: the removed voter is dropped entirely, not demoted
     // to a lingering learner.
     match state.raft.change_membership(remaining, false).await {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "removed",
-                "node_id": req.node_id,
-                "log_index": resp.log_id.index,
-            })),
-        )
-            .into_response(),
+        Ok(resp) => {
+            record_admin(
+                &state,
+                AdminEvent::NodeLeft {
+                    node_id: req.node_id,
+                    authorized_by: [0u8; 16],
+                },
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "removed",
+                    "node_id": req.node_id,
+                    "log_index": resp.log_id.index,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => leadership_error(e),
     }
 }

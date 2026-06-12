@@ -138,6 +138,47 @@ pub enum LogEntry {
         snapshot_hash: [u8; 32],
         timestamp: u64,
     },
+    /// Cluster administration recorded in the SAME hash chain as data —
+    /// membership cannot change without it appearing between the data
+    /// events it interleaves with. Added Phase 2.9 (append-only variant 2).
+    Admin(AdminEvent),
+}
+
+/// Administrative actions worth auditing forever.
+///
+/// `authorized_by` is the BLAKE3 hash (first 16 bytes) of the credential
+/// that authorized the action at the time it happened — rotating the
+/// credential later does not change historical attribution. All-zeros
+/// means "no authentication configured" (pre-RBAC deployments).
+///
+/// EVOLUTION: variants append-only; the Phase 1.6 design reserves
+/// CertRotated, TenantKeyCreated/Revoked, EraseRecord, ClusterCaRotated
+/// for Phases 2.10/3 — they slot in after the last variant here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AdminEvent {
+    NodeJoined {
+        node_id: u64,
+        raft_addr: String,
+        api_addr: String,
+        authorized_by: [u8; 16],
+    },
+    NodeLeft {
+        node_id: u64,
+        authorized_by: [u8; 16],
+    },
+}
+
+impl AdminEvent {
+    pub fn describe(&self) -> String {
+        match self {
+            AdminEvent::NodeJoined { node_id, raft_addr, .. } => {
+                format!("NodeJoined {{ node {node_id} at {raft_addr} }}")
+            }
+            AdminEvent::NodeLeft { node_id, .. } => {
+                format!("NodeLeft {{ node {node_id} }}")
+            }
+        }
+    }
 }
 
 /// v2 on-disk entry (legacy — read-only since v3).

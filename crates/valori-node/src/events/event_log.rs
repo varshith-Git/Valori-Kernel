@@ -150,6 +150,8 @@ impl EventLogWriter {
                         match decoded.entry {
                             LogEntry::Event(_) => event_count += 1,
                             LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
+                            // Admin events are chained but not kernel events.
+                            LogEntry::Admin(_) => {}
                         }
                         offset += bytes_read;
                     }

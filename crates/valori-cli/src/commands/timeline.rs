@@ -73,6 +73,14 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
                         ]);
                         event_num = event_count;
                     }
+
+                    LogEntry::Admin(admin) => {
+                        table.add_row(vec![
+                            Cell::new("—"),
+                            Cell::new("Admin").fg(Color::Magenta),
+                            Cell::new(admin.describe()),
+                        ]);
+                    }
                 }
             }
             Err(e) => {

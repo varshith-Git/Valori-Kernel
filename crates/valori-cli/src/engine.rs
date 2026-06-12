@@ -109,6 +109,8 @@ impl ForensicEngine {
                             // at the time a snapshot was taken.
                             event_index = event_count;
                         }
+                        // Admin events never touch kernel state.
+                        LogEntry::Admin(_) => {}
                     }
                 }
                 Err(e) => {
