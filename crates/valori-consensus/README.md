@@ -122,6 +122,10 @@ so the next RPC reconnects).
 - `tests/snapshot_transfer.rs` — late joiners after log compaction:
   snapshot-only catch-up (log purged), snapshot + live-tail catch-up,
   dedup table surviving the transfer, exact hash convergence.
-- Phase 2.8 brings turmoil network-partition simulations.
+- `tests/fault_tolerance.rs` — process-level fault injection: leader
+  crash → re-election → writes continue; minority loss invisible to
+  writers; **majority loss stalls writes instead of forking**. True
+  partitions and crash-restart need the 2.10 harness (simulated
+  transport + persistent redb log).
 
 Run: `cargo test -p valori-consensus`
