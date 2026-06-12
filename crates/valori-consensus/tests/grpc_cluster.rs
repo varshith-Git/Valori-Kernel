@@ -191,3 +191,71 @@ async fn write_to_a_follower_is_redirected_to_the_leader() {
         "error carries the leader's addresses for the client to retry against"
     );
 }
+
+// ── The hybrid model: graph events replicate like vector events ──────────────
+//
+// Raft replicates KernelEvents, not data structures — the knowledge graph
+// (nodes, edges, cascade deletes) lives inside the same KernelState as the
+// vectors, so graph mutations ride the identical pipeline. This test pins
+// that: a vector + graph workload, including a cascading node delete,
+// converges all three kernels to one hash.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn graph_events_replicate_and_cascade_across_the_cluster() {
+    use valori_kernel::types::enums::{EdgeKind, NodeKind};
+    use valori_kernel::types::id::{EdgeId, NodeId as GNodeId};
+
+    let nodes = three_node_cluster().await;
+    let leader_id = nodes[0].raft.metrics().borrow().current_leader.unwrap();
+    let leader = &nodes[(leader_id - 1) as usize];
+
+    let req = |event: KernelEvent| ClientRequest { event, request_id: None };
+
+    // Two vectors, then a small knowledge graph over them:
+    //   doc node 0 (→ record 0), chunk node 1 (→ record 1), concept node 2
+    //   edges: 0→1 (ParentOf), 1→2 (Mentions), 2→0 (RefersTo)
+    let mut last_index = 0;
+    let events: Vec<KernelEvent> = vec![
+        insert(0).event,
+        insert(1).event,
+        KernelEvent::CreateNode { id: GNodeId(0), kind: NodeKind::Document, record: Some(RecordId(0)) },
+        KernelEvent::CreateNode { id: GNodeId(1), kind: NodeKind::Chunk, record: Some(RecordId(1)) },
+        KernelEvent::CreateNode { id: GNodeId(2), kind: NodeKind::Concept, record: None },
+        KernelEvent::CreateEdge { id: EdgeId(0), from: GNodeId(0), to: GNodeId(1), kind: EdgeKind::ParentOf },
+        KernelEvent::CreateEdge { id: EdgeId(1), from: GNodeId(1), to: GNodeId(2), kind: EdgeKind::Mentions },
+        KernelEvent::CreateEdge { id: EdgeId(2), from: GNodeId(2), to: GNodeId(0), kind: EdgeKind::RefersTo },
+        // Cascade: deleting node 1 must also remove its incident edges
+        // (0→1 and 1→2) — on EVERY node, identically.
+        KernelEvent::DeleteNode { id: GNodeId(1) },
+    ];
+    for event in events {
+        let resp = leader.raft.client_write(req(event)).await.unwrap();
+        assert!(resp.data.rejected.is_none(), "graph event rejected: {:?}", resp.data.rejected);
+        last_index = resp.data.log_index;
+    }
+
+    for node in &nodes {
+        node.raft
+            .wait(Some(Duration::from_secs(10)))
+            .applied_index_at_least(Some(last_index), "graph workload applied")
+            .await
+            .unwrap();
+    }
+
+    // Every kernel agrees on the post-cascade world:
+    // 2 records, 2 live graph nodes (0 and 2), 1 surviving edge (2→0).
+    for node in &nodes {
+        let (records, gnodes, gedges) = node
+            .sm
+            .with_state(|s| (s.record_count(), s.node_count(), s.edge_count()))
+            .await;
+        assert_eq!(records, 2);
+        assert_eq!(gnodes, 2, "node 1 cascade-deleted");
+        assert_eq!(gedges, 1, "edges 0→1 and 1→2 cascade-deleted with node 1");
+    }
+
+    let h1 = nodes[0].sm.state_hash().await;
+    assert_eq!(h1, nodes[1].sm.state_hash().await);
+    assert_eq!(h1, nodes[2].sm.state_hash().await,
+        "vectors + graph + cascade: one hash, three nodes");
+}
