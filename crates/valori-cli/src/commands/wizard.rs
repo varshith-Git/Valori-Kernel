@@ -122,6 +122,18 @@ pub async fn run() -> Result<()> {
 // ── New-cluster setup prompts ─────────────────────────────────────────────────
 
 async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
+    println!("  ── New project ────────────────────────────────");
+    println!();
+
+    // Name first — makes it clear a new project is being created.
+    let name = tokio::task::spawn_blocking(|| {
+        Input::<String>::new()
+            .with_prompt("  Project name")
+            .default("my-cluster".into())
+            .interact_text()
+    })
+    .await??;
+
     let arch = tokio::task::spawn_blocking(|| {
         Select::new()
             .with_prompt("  Architecture")
@@ -149,14 +161,6 @@ async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
     if n_nodes == 0 || n_nodes > 7 {
         anyhow::bail!("node count must be 1–7");
     }
-
-    let name = tokio::task::spawn_blocking(|| {
-        Input::<String>::new()
-            .with_prompt("  Project name (saved to ~/.valori/)")
-            .default("my-cluster".into())
-            .interact_text()
-    })
-    .await??;
 
     let base_api: u16 = 51000;
     let base_raft: u16 = 51100;
@@ -491,7 +495,7 @@ fn print_header() {
     println!();
     println!("  ╔══════════════════════════════════════╗");
     println!("  ║        Valori  Cluster  Setup        ║");
-    println!("  ║                                      ║");
+    println!("  ║    forensic vector database  v{}    ║", env!("CARGO_PKG_VERSION"));
     println!("  ╚══════════════════════════════════════╝");
     println!();
 }
