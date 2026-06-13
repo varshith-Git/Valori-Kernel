@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use valori_cli::commands::{cluster, diff, inspect, replay_query, timeline, verify};
+use valori_cli::commands::{cluster, diff, inspect, replay_query, timeline, verify, wizard};
 
 #[derive(Parser)]
 #[command(
@@ -9,15 +9,21 @@ use valori_cli::commands::{cluster, diff, inspect, replay_query, timeline, verif
     version = env!("CARGO_PKG_VERSION"),
     author  = "Varshith Gudur",
     about   = "Valori Forensic CLI — black-box flight recorder for Valori AI memory databases",
-    long_about = None,
+    long_about = "Run without arguments (or `valori setup`) to launch the interactive cluster wizard.",
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Interactive cluster setup and operations wizard (default when no command is given).
+    ///
+    /// Guides you through architecture choice, node count, and startup, then
+    /// drops into a live menu for inserts, search, and membership operations.
+    Setup,
+
     /// Inspect database files and print a status summary.
     ///
     /// Pass --dir to auto-resolve snapshot.val and events.log from a database
@@ -158,23 +164,24 @@ enum ClusterAction {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Inspect { dir, snapshot, log } => {
-            inspect::run(dir, snapshot, log)
-        }
-        Commands::Verify { snapshot } => {
-            verify::run(&snapshot)
-        }
-        Commands::Timeline { log, limit } => {
-            timeline::run(&log, limit)
-        }
-        Commands::ReplayQuery { snapshot, log, at, query, top_k } => {
+        // No subcommand or explicit `valori setup` → wizard.
+        None | Some(Commands::Setup) => wizard::run().await,
+
+        Some(Commands::Inspect { dir, snapshot, log }) => inspect::run(dir, snapshot, log),
+        Some(Commands::Verify { snapshot }) => verify::run(&snapshot),
+        Some(Commands::Timeline { log, limit }) => timeline::run(&log, limit),
+        Some(Commands::ReplayQuery { snapshot, log, at, query, top_k }) => {
             replay_query::run(&snapshot, &log, at, query, top_k)
         }
-        Commands::Cluster { action } => match action {
+        Some(Commands::Diff { snapshot, log, from, to, query, top_k }) => {
+            diff::run(&snapshot, &log, from, to, query, top_k)
+        }
+        Some(Commands::Cluster { action }) => match action {
             ClusterAction::Status { url } => cluster::status(&url),
             ClusterAction::Health { url } => cluster::health(&url),
             ClusterAction::AddNode { url, id, raft_addr, api_addr } => {
@@ -182,8 +189,5 @@ fn main() -> anyhow::Result<()> {
             }
             ClusterAction::RemoveNode { url, id } => cluster::remove_node(&url, id),
         },
-        Commands::Diff { snapshot, log, from, to, query, top_k } => {
-            diff::run(&snapshot, &log, from, to, query, top_k)
-        }
     }
 }
