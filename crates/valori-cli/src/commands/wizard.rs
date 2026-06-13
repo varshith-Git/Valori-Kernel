@@ -1,18 +1,19 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! `valori setup` — interactive cluster wizard.
 //!
-//! Guides the operator through architecture choice, node count, and cluster
-//! startup, then drops into a live operations menu (insert, search, status).
-//! All nodes run in-process on a shared tokio runtime; for production
-//! deployments use docker-compose or the `valori node` environment variables.
+//! On first run: guides through architecture, node count, cluster start.
+//! On subsequent runs: detects saved projects in `~/.valori/projects.json`
+//! and offers to resume any of them (or create a new one).
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use comfy_table::{Cell, Color, Table};
 use dialoguer::{Confirm, Input, Select};
 use indicatif::{ProgressBar, ProgressStyle};
+use serde::{Deserialize, Serialize};
 
 use valori_consensus::types::ValoriNode;
 use valori_consensus::NullAuditSink;
@@ -21,8 +22,45 @@ use valori_node::cluster_server::serve_cluster_api;
 
 use super::cluster as cluster_cmd;
 
-const BASE_API: u16 = 51000;
-const BASE_RAFT: u16 = 51100;
+// ── Persistent project config ─────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Default)]
+struct ValoriConfig {
+    projects: Vec<SavedProject>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct SavedProject {
+    name: String,
+    created_at: String,
+    n_nodes: usize,
+    base_api_port: u16,
+    base_raft_port: u16,
+}
+
+fn valori_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".valori")
+}
+
+fn load_config() -> ValoriConfig {
+    let path = valori_dir().join("projects.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or_default()
+}
+
+fn save_config(cfg: &ValoriConfig) {
+    let dir = valori_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(json) = serde_json::to_string_pretty(cfg) {
+        let _ = std::fs::write(dir.join("projects.json"), json);
+    }
+}
+
+// ── Node setup tracking ───────────────────────────────────────────────────────
 
 struct NodeSetup {
     node_id: u64,
@@ -31,15 +69,64 @@ struct NodeSetup {
     _http_task: tokio::task::JoinHandle<()>,
 }
 
+// ── Entry point ───────────────────────────────────────────────────────────────
+
 pub async fn run() -> Result<()> {
     print_header();
 
-    // ── Architecture ─────────────────────────────────────────────────────────
+    let mut config = load_config();
+
+    // ── Existing projects? ────────────────────────────────────────────────────
+    let project: SavedProject = if config.projects.is_empty() {
+        prompt_new_cluster(&mut config).await?
+    } else {
+        let mut items: Vec<String> = config
+            .projects
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}   ({} nodes · api :{}-:{} · {})",
+                    p.name,
+                    p.n_nodes,
+                    p.base_api_port,
+                    p.base_api_port + p.n_nodes as u16 - 1,
+                    p.created_at,
+                )
+            })
+            .collect();
+        items.push("Create a new cluster".to_string());
+
+        let last = items.len() - 1;
+        let choice = tokio::task::spawn_blocking(move || {
+            Select::new()
+                .with_prompt("  Existing projects — pick one or create new")
+                .items(&items)
+                .default(0)
+                .interact()
+        })
+        .await??;
+
+        if choice == last {
+            prompt_new_cluster(&mut config).await?
+        } else {
+            let p = config.projects[choice].clone();
+            println!("  Resuming project \"{}\"", p.name);
+            println!();
+            p
+        }
+    };
+
+    start_cluster(project, &mut config).await
+}
+
+// ── New-cluster setup prompts ─────────────────────────────────────────────────
+
+async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
     let arch = tokio::task::spawn_blocking(|| {
         Select::new()
             .with_prompt("  Architecture")
             .items(&[
-                "Multi-node  (Raft consensus — fault-tolerant, default)",
+                "Multi-node  (Raft consensus — fault-tolerant, recommended)",
                 "Single-node (standalone — simplest, no replication)",
             ])
             .default(0)
@@ -63,17 +150,28 @@ pub async fn run() -> Result<()> {
         anyhow::bail!("node count must be 1–7");
     }
 
-    // ── Show planned topology ────────────────────────────────────────────────
+    let name = tokio::task::spawn_blocking(|| {
+        Input::<String>::new()
+            .with_prompt("  Project name (saved to ~/.valori/)")
+            .default("my-cluster".into())
+            .interact_text()
+    })
+    .await??;
+
+    let base_api: u16 = 51000;
+    let base_raft: u16 = 51100;
+
+    // Show planned topology
     println!();
     println!("  Planned topology:");
     let mut plan = Table::new();
     plan.set_header(vec!["node", "api port", "raft port", "role"]);
     for i in 0..n_nodes {
-        let role = if i == 0 { "bootstrap (will elect leader)" } else { "voter" };
+        let role = if i == 0 { "bootstrap → leader" } else { "voter" };
         plan.add_row(vec![
             Cell::new(i + 1),
-            Cell::new(BASE_API + i as u16),
-            Cell::new(BASE_RAFT + i as u16),
+            Cell::new(base_api + i as u16),
+            Cell::new(base_raft + i as u16),
             Cell::new(role),
         ]);
     }
@@ -87,33 +185,49 @@ pub async fn run() -> Result<()> {
     })
     .await??;
     if !go {
-        println!("  Aborted.");
-        return Ok(());
+        std::process::exit(0);
     }
     println!();
 
-    // ── Build the full members map (all addresses known upfront) ─────────────
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    let project = SavedProject { name, created_at: now, n_nodes, base_api_port: base_api, base_raft_port: base_raft };
+
+    // Persist before starting (so a partial start doesn't lose the record)
+    config.projects.retain(|p| p.name != project.name);
+    config.projects.push(project.clone());
+    save_config(config);
+    println!("  Project saved to ~/.valori/projects.json");
+    println!();
+
+    Ok(project)
+}
+
+// ── Cluster start ─────────────────────────────────────────────────────────────
+
+async fn start_cluster(project: SavedProject, _config: &mut ValoriConfig) -> Result<()> {
+    let SavedProject { n_nodes, base_api_port, base_raft_port, .. } = project;
+
     let members: BTreeMap<u64, ValoriNode> = (0..n_nodes)
         .map(|i| {
             (
                 (i + 1) as u64,
                 ValoriNode {
-                    raft_addr: format!("127.0.0.1:{}", BASE_RAFT + i as u16),
-                    api_addr: format!("127.0.0.1:{}", BASE_API + i as u16),
+                    raft_addr: format!("127.0.0.1:{}", base_raft_port + i as u16),
+                    api_addr:  format!("127.0.0.1:{}", base_api_port  + i as u16),
                 },
             )
         })
         .collect();
 
-    // ── Start every node (init=false; we call initialize after all are up) ───
+    // Start all nodes (init=false; we call initialize after all gRPC servers are up)
     let mut setups: Vec<NodeSetup> = Vec::new();
     for i in 0..n_nodes {
-        let node_id = (i + 1) as u64;
-        let api_port = BASE_API + i as u16;
-        let raft_port = BASE_RAFT + i as u16;
+        let node_id  = (i + 1) as u64;
+        let api_port  = base_api_port  + i as u16;
+        let raft_port = base_raft_port + i as u16;
 
         let pb = spinner(&format!(
-            "  Starting node {}  (api=:{} raft=:{}) ...",
+            "Starting node {}  (api=:{} raft=:{})",
             node_id, api_port, raft_port
         ));
 
@@ -128,20 +242,15 @@ pub async fn run() -> Result<()> {
 
         let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink))
             .await
-            .with_context(|| format!("node {node_id} failed to start"))?;
+            .with_context(|| format!("node {node_id} failed — is port {raft_port} free?"))?;
 
         let api_bind = format!("127.0.0.1:{api_port}");
         let (_, task) = serve_cluster_api(&handle, &api_bind, None)
             .await
-            .with_context(|| {
-                format!(
-                    "port {api_port} already in use — stop other Valori processes and retry"
-                )
-            })?;
+            .with_context(|| format!("port {api_port} already in use — run `lsof -i :{api_port}` to find the process"))?;
 
         pb.finish_with_message(format!(
-            "  ✓  node {node_id}   api=http://127.0.0.1:{api_port}  raft=:{}",
-            raft_port
+            "✓  node {node_id}   http://127.0.0.1:{api_port}"
         ));
 
         setups.push(NodeSetup {
@@ -152,80 +261,44 @@ pub async fn run() -> Result<()> {
         });
     }
 
-    // ── Initialize the Raft cluster on node 1 (all gRPC servers now up) ──────
+    // Initialize Raft (all gRPC listeners are up)
     {
-        let pb = spinner("  Initializing Raft cluster ...");
+        let pb = spinner("Initializing Raft consensus");
         setups[0]
             .handle
             .raft
             .initialize(members)
             .await
             .map_err(|e| anyhow::anyhow!("cluster init failed: {e}"))?;
-        pb.finish_with_message("  ✓  Raft cluster initialized");
+        pb.finish_with_message("✓  Raft consensus initialized");
     }
 
-    // ── Wait for a leader to be elected ──────────────────────────────────────
-    let pb = spinner("  Waiting for leader election ...");
+    // Wait for leader election
+    let pb = spinner("Waiting for leader election");
     let leader_url = find_leader(&setups, Duration::from_secs(15)).await?;
     let leader_id = setups
         .iter()
         .find(|s| s.api_url == leader_url)
         .map(|s| s.node_id)
         .unwrap_or(1);
-    pb.finish_with_message(format!(
-        "  ✓  Leader: node {leader_id}  ({})",
-        leader_url
-    ));
+    pb.finish_with_message(format!("✓  Leader: node {leader_id}  ({})", leader_url));
     println!();
 
-    // ── Show live cluster status ──────────────────────────────────────────────
+    // Show live status
     cluster_cmd::status(&leader_url).ok();
 
-    // ── Operations menu ───────────────────────────────────────────────────────
+    // Operations menu
     menu_loop(leader_url, &setups).await
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-async fn find_leader(setups: &[NodeSetup], timeout: Duration) -> Result<String> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        for s in setups {
-            if let Some(lid) = s.handle.raft.metrics().borrow().current_leader {
-                if let Some(ls) = setups.iter().find(|x| x.node_id == lid) {
-                    return Ok(ls.api_url.clone());
-                }
-            }
-        }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "no leader elected within {}s — check that ports are free",
-            timeout.as_secs()
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-fn spinner(msg: &str) -> ProgressBar {
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .unwrap(),
-    );
-    pb.set_message(msg.to_string());
-    pb.enable_steady_tick(Duration::from_millis(80));
-    pb
-}
-
-// ── Menu ─────────────────────────────────────────────────────────────────────
+// ── Operations menu ───────────────────────────────────────────────────────────
 
 async fn menu_loop(leader_url: String, setups: &[NodeSetup]) -> Result<()> {
     const ITEMS: &[&str] = &[
         "Insert a vector",
         "Search  (k-nearest neighbours)",
         "Cluster status",
-        "Add an external node",
+        "Grow cluster — add a node running on another machine",
         "Exit",
     ];
 
@@ -244,10 +317,8 @@ async fn menu_loop(leader_url: String, setups: &[NodeSetup]) -> Result<()> {
         match choice {
             0 => insert_vector(&leader_url).await?,
             1 => search_vectors(setups).await?,
-            2 => {
-                cluster_cmd::status(&leader_url).ok();
-            }
-            3 => add_node_prompt(&leader_url).await?,
+            2 => { cluster_cmd::status(&leader_url).ok(); }
+            3 => add_remote_node(&leader_url).await?,
             _ => {
                 println!("  Shutting down cluster...");
                 for s in setups {
@@ -259,6 +330,8 @@ async fn menu_loop(leader_url: String, setups: &[NodeSetup]) -> Result<()> {
         }
     }
 }
+
+// ── Insert ────────────────────────────────────────────────────────────────────
 
 async fn insert_vector(leader_url: &str) -> Result<()> {
     let raw = tokio::task::spawn_blocking(|| {
@@ -273,27 +346,22 @@ async fn insert_vector(leader_url: &str) -> Result<()> {
 
     let result = tokio::task::spawn_blocking(move || {
         match ureq::post(&url).send_json(serde_json::json!({ "values": values })) {
-            Ok(r) => r
-                .into_json::<serde_json::Value>()
-                .map_err(|e| anyhow::anyhow!("bad response: {e}")),
-            Err(ureq::Error::Status(code, r)) => {
-                let b = r.into_json::<serde_json::Value>().unwrap_or_default();
-                Err(anyhow::anyhow!("HTTP {code}: {b}"))
+            Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| anyhow::anyhow!("{e}")),
+            Err(ureq::Error::Status(c, r)) => {
+                Err(anyhow::anyhow!("HTTP {c}: {}", r.into_json::<serde_json::Value>().unwrap_or_default()))
             }
-            Err(e) => Err(anyhow::anyhow!("network: {e}")),
+            Err(e) => Err(anyhow::anyhow!("{e}")),
         }
     })
     .await??;
 
-    println!(
-        "  ✅  inserted  id={}  log_index={}",
-        result["id"], result["log_index"]
-    );
+    println!("  ✅  inserted  id={}  log_index={}", result["id"], result["log_index"]);
     Ok(())
 }
 
+// ── Search ────────────────────────────────────────────────────────────────────
+
 async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
-    // Search is read-only and served on any node — use node 1 for simplicity.
     let any_url = setups.first().map(|s| s.api_url.clone()).unwrap_or_default();
 
     let (raw, k) = tokio::task::spawn_blocking(|| -> Result<(String, usize)> {
@@ -313,14 +381,11 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
 
     let body = tokio::task::spawn_blocking(move || {
         match ureq::post(&url).send_json(serde_json::json!({ "query": query, "k": k })) {
-            Ok(r) => r
-                .into_json::<serde_json::Value>()
-                .map_err(|e| anyhow::anyhow!("bad response: {e}")),
-            Err(ureq::Error::Status(code, r)) => {
-                let b = r.into_json::<serde_json::Value>().unwrap_or_default();
-                Err(anyhow::anyhow!("HTTP {code}: {b}"))
+            Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| anyhow::anyhow!("{e}")),
+            Err(ureq::Error::Status(c, r)) => {
+                Err(anyhow::anyhow!("HTTP {c}: {}", r.into_json::<serde_json::Value>().unwrap_or_default()))
             }
-            Err(e) => Err(anyhow::anyhow!("network: {e}")),
+            Err(e) => Err(anyhow::anyhow!("{e}")),
         }
     })
     .await??;
@@ -332,17 +397,8 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
             let mut t = Table::new();
             t.set_header(vec!["rank", "record id", "distance²"]);
             for (rank, h) in hits.iter().enumerate() {
-                let is_top = rank == 0;
-                let rank_cell = if is_top {
-                    Cell::new(rank + 1).fg(Color::Green)
-                } else {
-                    Cell::new(rank + 1)
-                };
-                t.add_row(vec![
-                    rank_cell,
-                    Cell::new(h["id"].to_string()),
-                    Cell::new(h["distance_sq"].to_string()),
-                ]);
+                let cell = if rank == 0 { Cell::new(rank + 1).fg(Color::Green) } else { Cell::new(rank + 1) };
+                t.add_row(vec![cell, Cell::new(h["id"].to_string()), Cell::new(h["distance_sq"].to_string())]);
             }
             println!("{t}");
         }
@@ -350,34 +406,84 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
     Ok(())
 }
 
-async fn add_node_prompt(leader_url: &str) -> Result<()> {
-    println!("  Add an external node (must already be running with its Raft server up).");
-    let (id, raft_addr, api_addr) =
-        tokio::task::spawn_blocking(|| -> Result<(u64, String, String)> {
-            let id = Input::<u64>::new()
-                .with_prompt("  New node id")
-                .interact_text()?;
-            let raft = Input::<String>::new()
-                .with_prompt("  Raft address (host:port)")
-                .interact_text()?;
-            let api = Input::<String>::new()
-                .with_prompt("  API address  (host:port, blank = none)")
-                .default(String::new())
-                .interact_text()?;
-            Ok((id, raft, api))
-        })
-        .await??;
+// ── Grow cluster ──────────────────────────────────────────────────────────────
+
+async fn add_remote_node(leader_url: &str) -> Result<()> {
+    println!("  This adds a Valori node that is ALREADY RUNNING on another machine");
+    println!("  (or another terminal). Start it first with the correct env vars,");
+    println!("  then come back here to join it.");
+    println!();
+
+    let (id, api_addr) = tokio::task::spawn_blocking(|| -> Result<(u64, String)> {
+        let id = Input::<u64>::new()
+            .with_prompt("  New node id")
+            .interact_text()?;
+        let api = Input::<String>::new()
+            .with_prompt("  New node API address (host:port, e.g. 10.0.0.4:51000)")
+            .interact_text()?;
+        Ok((id, api))
+    })
+    .await??;
+
+    // Auto-derive the Raft address: same host, port + 100
+    let raft_addr = derive_raft_addr(&api_addr);
+    let raft_addr = tokio::task::spawn_blocking(move || {
+        Input::<String>::new()
+            .with_prompt("  Raft address (auto-derived — press Enter to confirm or edit)")
+            .default(raft_addr)
+            .interact_text()
+    })
+    .await??;
 
     cluster_cmd::add_node(leader_url, id, &raft_addr, &api_addr)
 }
 
+/// Derive raft address from an API address: same host, port + 100.
+fn derive_raft_addr(api_addr: &str) -> String {
+    if let Some((host, port_str)) = api_addr.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<u16>() {
+            return format!("{}:{}", host, port + 100);
+        }
+    }
+    String::new()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async fn find_leader(setups: &[NodeSetup], timeout: Duration) -> Result<String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        for s in setups {
+            if let Some(lid) = s.handle.raft.metrics().borrow().current_leader {
+                if let Some(ls) = setups.iter().find(|x| x.node_id == lid) {
+                    return Ok(ls.api_url.clone());
+                }
+            }
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "no leader within {}s — check that ports are free",
+            timeout.as_secs()
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn spinner(msg: &str) -> ProgressBar {
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .unwrap(),
+    );
+    pb.set_message(msg.to_string());
+    pb.enable_steady_tick(Duration::from_millis(80));
+    pb
+}
+
 fn parse_floats(raw: &str) -> Result<Vec<f32>> {
     raw.split(',')
-        .map(|s| {
-            s.trim()
-                .parse::<f32>()
-                .map_err(|_| anyhow::anyhow!("'{s}' is not a float"))
-        })
+        .map(|s| s.trim().parse::<f32>().map_err(|_| anyhow::anyhow!("'{s}' is not a float")))
         .collect()
 }
 
@@ -385,7 +491,7 @@ fn print_header() {
     println!();
     println!("  ╔══════════════════════════════════════╗");
     println!("  ║        Valori  Cluster  Setup        ║");
-    println!("  ║      forensic vector database        ║");
+    println!("  ║                                      ║");
     println!("  ╚══════════════════════════════════════╝");
     println!();
 }
