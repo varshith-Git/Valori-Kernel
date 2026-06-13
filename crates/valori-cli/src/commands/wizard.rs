@@ -94,7 +94,7 @@ pub async fn run() -> Result<()> {
                 )
             })
             .collect();
-        items.push("Create a new cluster".to_string());
+        items.push("Create a new Project".to_string());
 
         let last = items.len() - 1;
         let choice = tokio::task::spawn_blocking(move || {
@@ -292,17 +292,23 @@ async fn start_cluster(project: SavedProject, _config: &mut ValoriConfig) -> Res
     cluster_cmd::status(&leader_url).ok();
 
     // Operations menu
-    menu_loop(leader_url, &setups).await
+    menu_loop(leader_url, &mut setups, base_api_port, base_raft_port).await
 }
 
 // ── Operations menu ───────────────────────────────────────────────────────────
 
-async fn menu_loop(leader_url: String, setups: &[NodeSetup]) -> Result<()> {
+async fn menu_loop(
+    mut leader_url: String,
+    setups: &mut Vec<NodeSetup>,
+    base_api_port: u16,
+    base_raft_port: u16,
+) -> Result<()> {
     const ITEMS: &[&str] = &[
         "Insert a vector",
         "Search  (k-nearest neighbours)",
         "Cluster status",
-        "Grow cluster — add a node running on another machine",
+        "Add another node  (start one more node on this machine)",
+        "Grow cluster      (join a node already running elsewhere)",
         "Exit",
     ];
 
@@ -322,10 +328,18 @@ async fn menu_loop(leader_url: String, setups: &[NodeSetup]) -> Result<()> {
             0 => insert_vector(&leader_url).await?,
             1 => search_vectors(setups).await?,
             2 => { cluster_cmd::status(&leader_url).ok(); }
-            3 => add_remote_node(&leader_url).await?,
+            3 => {
+                add_local_node(setups, base_api_port, base_raft_port).await?;
+                // Re-read leader in case it changed after membership update.
+                if let Ok(url) = find_leader(setups, Duration::from_secs(5)).await {
+                    leader_url = url;
+                }
+                cluster_cmd::status(&leader_url).ok();
+            }
+            4 => add_remote_node(&leader_url, setups).await?,
             _ => {
                 println!("  Shutting down cluster...");
-                for s in setups {
+                for s in setups.iter() {
                     s.handle.raft.shutdown().await.ok();
                 }
                 println!("  Done. Goodbye.");
@@ -410,31 +424,133 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
     Ok(())
 }
 
-// ── Grow cluster ──────────────────────────────────────────────────────────────
+// ── Add another local node ────────────────────────────────────────────────────
 
-async fn add_remote_node(leader_url: &str) -> Result<()> {
-    println!("  This adds a Valori node that is ALREADY RUNNING on another machine");
-    println!("  (or another terminal). Start it first with the correct env vars,");
-    println!("  then come back here to join it.");
+/// Start one more node in-process and join it to the running cluster.
+async fn add_local_node(
+    setups: &mut Vec<NodeSetup>,
+    base_api_port: u16,
+    base_raft_port: u16,
+) -> Result<()> {
+    let next_id = setups.iter().map(|s| s.node_id).max().unwrap_or(0) + 1;
+    let api_port  = base_api_port  + (next_id - 1) as u16;
+    let raft_port = base_raft_port + (next_id - 1) as u16;
+
+    let pb = spinner(&format!(
+        "Starting node {}  (api=:{} raft=:{})",
+        next_id, api_port, raft_port
+    ));
+
+    // Build the new node's ValoriNode descriptor.
+    let new_node = ValoriNode {
+        raft_addr: format!("127.0.0.1:{raft_port}"),
+        api_addr:  format!("127.0.0.1:{api_port}"),
+    };
+
+    // Members map for the new node's config (it needs to know all peers to connect).
+    let members: BTreeMap<u64, ValoriNode> = setups
+        .iter()
+        .map(|s| {
+            let rp = base_raft_port + (s.node_id - 1) as u16;
+            let ap = base_api_port  + (s.node_id - 1) as u16;
+            (s.node_id, ValoriNode {
+                raft_addr: format!("127.0.0.1:{rp}"),
+                api_addr:  format!("127.0.0.1:{ap}"),
+            })
+        })
+        .chain([(next_id, new_node.clone())])
+        .collect();
+
+    let cfg = ClusterConfig {
+        node_id: next_id,
+        raft_bind: format!("127.0.0.1:{raft_port}"),
+        members,
+        init: false,
+        raft_log_path: None,
+        tls: None,
+    };
+
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink))
+        .await
+        .with_context(|| format!("node {next_id} failed — is port {raft_port} free?"))?;
+
+    let api_bind = format!("127.0.0.1:{api_port}");
+    let (_, task) = serve_cluster_api(&handle, &api_bind, None)
+        .await
+        .with_context(|| format!("port {api_port} in use — run `lsof -i :{api_port}`"))?;
+
+    pb.finish_with_message(format!("✓  node {next_id} started"));
+
+    // Join: learner catch-up, then promote to voter.
+    let leader_id = setups
+        .iter()
+        .find_map(|s| s.handle.raft.metrics().borrow().current_leader)
+        .unwrap_or(1);
+
+    if let Some(leader) = setups.iter().find(|s| s.node_id == leader_id) {
+        let pb2 = spinner("Joining cluster (learner → voter)");
+
+        leader.handle.raft
+            .add_learner(next_id, new_node, true)
+            .await
+            .map_err(|e| anyhow::anyhow!("add_learner failed: {e}"))?;
+
+        let voters: std::collections::BTreeSet<u64> = setups
+            .iter()
+            .map(|s| s.node_id)
+            .chain([next_id])
+            .collect();
+        leader.handle.raft
+            .change_membership(voters, false)
+            .await
+            .map_err(|e| anyhow::anyhow!("change_membership failed: {e}"))?;
+
+        pb2.finish_with_message(format!("✓  node {next_id} joined as voter"));
+    }
+
+    setups.push(NodeSetup {
+        node_id: next_id,
+        handle,
+        api_url: format!("http://127.0.0.1:{api_port}"),
+        _http_task: task,
+    });
+
+    println!("  Cluster is now {} nodes.", setups.len());
+    Ok(())
+}
+
+// ── Join a remote node ────────────────────────────────────────────────────────
+
+async fn add_remote_node(leader_url: &str, setups: &[NodeSetup]) -> Result<()> {
+    let next_suggested = setups.iter().map(|s| s.node_id).max().unwrap_or(0) + 1;
+    println!("  This joins a Valori node that is ALREADY RUNNING on another machine.");
+    println!("  Start it there first, then enter its addresses below.");
     println!();
 
-    let (id, api_addr) = tokio::task::spawn_blocking(|| -> Result<(u64, String)> {
+    let (id, api_addr) = tokio::task::spawn_blocking(move || -> Result<(u64, String)> {
         let id = Input::<u64>::new()
             .with_prompt("  New node id")
+            .default(next_suggested)
             .interact_text()?;
-        let api = Input::<String>::new()
-            .with_prompt("  New node API address (host:port, e.g. 10.0.0.4:51000)")
-            .interact_text()?;
+        let api = loop {
+            let raw = Input::<String>::new()
+                .with_prompt("  API address of that node (host:port, e.g. 10.0.0.4:51000)")
+                .interact_text()?;
+            if raw.contains(':') {
+                break raw;
+            }
+            eprintln!("  ⚠  Must be host:port (e.g. 10.0.0.4:51000)");
+        };
         Ok((id, api))
     })
     .await??;
 
-    // Auto-derive the Raft address: same host, port + 100
-    let raft_addr = derive_raft_addr(&api_addr);
+    // Auto-derive the Raft address: same host, port + 100.
+    let raft_default = derive_raft_addr(&api_addr);
     let raft_addr = tokio::task::spawn_blocking(move || {
         Input::<String>::new()
-            .with_prompt("  Raft address (auto-derived — press Enter to confirm or edit)")
-            .default(raft_addr)
+            .with_prompt("  Raft address (auto-derived — press Enter or edit)")
+            .default(raft_default)
             .interact_text()
     })
     .await??;
