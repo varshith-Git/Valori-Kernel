@@ -54,6 +54,30 @@ struct DataPlaneState {
     insert_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// Bind a TCP port and serve the cluster data + management router on it.
+///
+/// Returns the actual bound address (useful when the caller passes port 0)
+/// and a task handle. The caller must keep the handle alive; dropping it
+/// aborts the server.
+pub async fn serve_cluster_api(
+    handle: &ClusterHandle,
+    api_bind: &str,
+    audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
+) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
+    let router = build_cluster_router(handle, audit);
+    let listener = tokio::net::TcpListener::bind(api_bind).await.map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("cannot bind API to {api_bind}: {e}"),
+        )
+    })?;
+    let addr = listener.local_addr()?;
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.ok();
+    });
+    Ok((addr, task))
+}
+
 /// The full router a cluster node serves: data plane + management plane.
 pub fn build_cluster_router(
     handle: &ClusterHandle,
