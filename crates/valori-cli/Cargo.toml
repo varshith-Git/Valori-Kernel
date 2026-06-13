@@ -45,7 +45,13 @@ valori-wire    = { path = "../valori-wire" }
 serde       = { version = "1.0",   features = ["derive"] }
 serde_json  = "1.0"
 memmap2     = "0.9"
+# Sync HTTP client for the `valori cluster` operator commands.
+ureq        = { version = "2", features = ["json"] }
 bytemuck    = "1.14"
 
 [dev-dependencies]
-tempfile = "3.24.0"
+tempfile         = "3.24.0"
+tokio            = { version = "1", features = ["full"] }
+axum             = "0.7"
+valori-consensus = { path = "../valori-consensus" }
+valori-node      = { path = "../valori-node" }

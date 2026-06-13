@@ -1,3 +1,4 @@
+pub mod cluster;
 pub mod diff;
 pub mod inspect;
 pub mod timeline;

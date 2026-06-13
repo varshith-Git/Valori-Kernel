@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use valori_cli::commands::{diff, inspect, replay_query, timeline, verify};
+use valori_cli::commands::{cluster, diff, inspect, replay_query, timeline, verify};
 
 #[derive(Parser)]
 #[command(
@@ -108,6 +108,54 @@ enum Commands {
         #[arg(long, default_value = "5")]
         top_k: usize,
     },
+
+    /// Operate a running Raft cluster (status, health, membership).
+    ///
+    /// Point --url at ANY node's HTTP API. Membership changes are
+    /// leader-only; a follower's 403 names the leader to re-point at.
+    Cluster {
+        #[command(subcommand)]
+        action: ClusterAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClusterAction {
+    /// Leadership, term, log indexes, and the member table.
+    Status {
+        /// Base URL of any cluster node, e.g. http://10.0.0.1:3000
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+    },
+    /// Exit 0 when this node sees a leader, exit 1 otherwise.
+    Health {
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+    },
+    /// Join a node: learner catch-up, then voter promotion.
+    AddNode {
+        /// Base URL of the LEADER's HTTP API.
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+        /// The new node's numeric id.
+        #[arg(long)]
+        id: u64,
+        /// The new node's Raft (gRPC) address, host:port.
+        #[arg(long)]
+        raft_addr: String,
+        /// The new node's HTTP API address, host:port.
+        #[arg(long, default_value = "")]
+        api_addr: String,
+    },
+    /// Remove a voter (removing the last voter is refused).
+    RemoveNode {
+        /// Base URL of the LEADER's HTTP API.
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+        /// The node id to remove.
+        #[arg(long)]
+        id: u64,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -126,6 +174,14 @@ fn main() -> anyhow::Result<()> {
         Commands::ReplayQuery { snapshot, log, at, query, top_k } => {
             replay_query::run(&snapshot, &log, at, query, top_k)
         }
+        Commands::Cluster { action } => match action {
+            ClusterAction::Status { url } => cluster::status(&url),
+            ClusterAction::Health { url } => cluster::health(&url),
+            ClusterAction::AddNode { url, id, raft_addr, api_addr } => {
+                cluster::add_node(&url, id, &raft_addr, &api_addr)
+            }
+            ClusterAction::RemoveNode { url, id } => cluster::remove_node(&url, id),
+        },
         Commands::Diff { snapshot, log, from, to, query, top_k } => {
             diff::run(&snapshot, &log, from, to, query, top_k)
         }

@@ -1,0 +1,85 @@
+<svg viewBox="0 0 700 790" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Valori 3-node write flow</title>
+<desc id="d">A client writes to the leader; the leader replicates over mTLS to two followers; after a majority acknowledges, every node applies the event to its in-memory kernel and appends it to its own audit log. Each node stores two files: a trimmed raft.redb and an append-only events.log.</desc>
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5F5E5A"/></marker>
+<marker id="arrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F6E56"/></marker>
+</defs>
+<rect x="0" y="0" width="700" height="790" fill="#FFFFFF"/>
+
+<rect x="280" y="16" width="140" height="46" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="350" y="36" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">client</text>
+<text x="350" y="52" text-anchor="middle" font-size="11" fill="#5F5E5A">insert vector</text>
+
+<line x1="350" y1="62" x2="350" y2="100" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
+<circle cx="318" cy="80" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="318" y="84" text-anchor="middle" font-size="11" fill="#2C2C2A">1</text>
+<text x="368" y="84" font-size="11" fill="#5F5E5A">write request</text>
+
+<rect x="200" y="100" width="300" height="278" rx="4" fill="#E1F5EE" stroke="#0F6E56"/>
+<text x="350" y="122" text-anchor="middle" font-size="13" font-weight="bold" fill="#085041">node 1 — leader</text>
+<rect x="215" y="132" width="270" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="350" y="151" text-anchor="middle" font-size="11" fill="#444441">http api · accepts writes</text>
+<rect x="215" y="170" width="270" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="350" y="189" text-anchor="middle" font-size="11" fill="#444441">raft core · proposes + counts votes</text>
+<rect x="215" y="208" width="270" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="350" y="227" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — RAM, serves search</text>
+<text x="215" y="260" font-size="11" fill="#085041">on disk:</text>
+<rect x="215" y="268" width="128" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="279" y="289" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="279" y="305" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
+<rect x="357" y="268" width="128" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="421" y="289" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
+<text x="421" y="305" text-anchor="middle" font-size="10" fill="#993C1D">append-only forever</text>
+<circle cx="186" cy="223" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="186" y="227" text-anchor="middle" font-size="11" fill="#2C2C2A">4</text>
+<circle cx="510" cy="294" r="9" fill="#FAECE7" stroke="#993C1D"/>
+<text x="510" y="298" text-anchor="middle" font-size="11" fill="#712B13">5</text>
+
+<line x1="290" y1="378" x2="185" y2="448" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<line x1="410" y1="378" x2="515" y2="448" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<line x1="205" y1="452" x2="305" y2="385" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+<line x1="495" y1="452" x2="395" y2="385" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+<circle cx="237" cy="398" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="237" y="402" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
+<circle cx="463" cy="398" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="463" y="402" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
+<text x="350" y="402" text-anchor="middle" font-size="11" fill="#0F6E56">replicate over mTLS</text>
+<circle cx="280" cy="432" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="280" y="436" text-anchor="middle" font-size="11" fill="#2C2C2A">3</text>
+<text x="350" y="436" text-anchor="middle" font-size="11" fill="#5F5E5A">acks — majority = committed</text>
+
+<rect x="20" y="452" width="310" height="278" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="175" y="474" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 2 — follower</text>
+<rect x="35" y="484" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="175" y="503" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
+<rect x="35" y="522" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="175" y="541" text-anchor="middle" font-size="11" fill="#444441">raft core · votes, stores entries</text>
+<rect x="35" y="560" width="280" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="175" y="579" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
+<text x="35" y="612" font-size="11" fill="#5F5E5A">on disk:</text>
+<rect x="35" y="620" width="133" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="101" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="101" y="657" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
+<rect x="182" y="620" width="133" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="248" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
+<text x="248" y="657" text-anchor="middle" font-size="10" fill="#993C1D">own verifiable chain</text>
+
+<rect x="370" y="452" width="310" height="278" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="525" y="474" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 3 — follower</text>
+<rect x="385" y="484" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="525" y="503" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
+<rect x="385" y="522" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="525" y="541" text-anchor="middle" font-size="11" fill="#444441">raft core · votes, stores entries</text>
+<rect x="385" y="560" width="280" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="525" y="579" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
+<text x="385" y="612" font-size="11" fill="#5F5E5A">on disk:</text>
+<rect x="385" y="620" width="133" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="451" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="451" y="657" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
+<rect x="532" y="620" width="133" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="598" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
+<text x="598" y="657" text-anchor="middle" font-size="10" fill="#993C1D">own verifiable chain</text>
+
+<text x="20" y="762" font-size="11" fill="#5F5E5A">1 write · 2 replicate (mTLS) · 3 majority acks = committed · 4 every node applies to kernel · 5 audit append at apply</text>
+</svg>
