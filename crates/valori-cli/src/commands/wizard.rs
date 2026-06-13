@@ -71,8 +71,14 @@ struct NodeSetup {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub async fn run() -> Result<()> {
+pub async fn run(bind_host: &str) -> Result<()> {
     print_header();
+
+    if bind_host == "0.0.0.0" {
+        println!("  ⚠  Binding to 0.0.0.0 — API ports will be reachable from the network.");
+        println!("     Make sure firewall/security-group rules allow ports 51000–51006.");
+        println!();
+    }
 
     let mut config = load_config();
 
@@ -116,7 +122,7 @@ pub async fn run() -> Result<()> {
         }
     };
 
-    start_cluster(project, &mut config).await
+    start_cluster(project, bind_host, &mut config).await
 }
 
 // ── New-cluster setup prompts ─────────────────────────────────────────────────
@@ -208,7 +214,7 @@ async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
 
 // ── Cluster start ─────────────────────────────────────────────────────────────
 
-async fn start_cluster(project: SavedProject, _config: &mut ValoriConfig) -> Result<()> {
+async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut ValoriConfig) -> Result<()> {
     let SavedProject { n_nodes, base_api_port, base_raft_port, .. } = project;
 
     let members: BTreeMap<u64, ValoriNode> = (0..n_nodes)
@@ -248,13 +254,13 @@ async fn start_cluster(project: SavedProject, _config: &mut ValoriConfig) -> Res
             .await
             .with_context(|| format!("node {node_id} failed — is port {raft_port} free?"))?;
 
-        let api_bind = format!("127.0.0.1:{api_port}");
+        let api_bind = format!("{bind_host}:{api_port}");
         let (_, task) = serve_cluster_api(&handle, &api_bind, None)
             .await
             .with_context(|| format!("port {api_port} already in use — run `lsof -i :{api_port}` to find the process"))?;
 
         pb.finish_with_message(format!(
-            "✓  node {node_id}   http://127.0.0.1:{api_port}"
+            "✓  node {node_id}   http://{bind_host}:{api_port}"
         ));
 
         setups.push(NodeSetup {
@@ -292,7 +298,7 @@ async fn start_cluster(project: SavedProject, _config: &mut ValoriConfig) -> Res
     cluster_cmd::status(&leader_url).ok();
 
     // Operations menu
-    menu_loop(leader_url, &mut setups, base_api_port, base_raft_port).await
+    menu_loop(leader_url, &mut setups, base_api_port, base_raft_port, bind_host).await
 }
 
 // ── Operations menu ───────────────────────────────────────────────────────────
@@ -302,6 +308,7 @@ async fn menu_loop(
     setups: &mut Vec<NodeSetup>,
     base_api_port: u16,
     base_raft_port: u16,
+    bind_host: &str,
 ) -> Result<()> {
     const ITEMS: &[&str] = &[
         "Insert a vector",
@@ -329,7 +336,7 @@ async fn menu_loop(
             1 => search_vectors(setups).await?,
             2 => { cluster_cmd::status(&leader_url).ok(); }
             3 => {
-                add_local_node(setups, base_api_port, base_raft_port).await?;
+                add_local_node(setups, base_api_port, base_raft_port, bind_host).await?;
                 // Re-read leader in case it changed after membership update.
                 if let Ok(url) = find_leader(setups, Duration::from_secs(5)).await {
                     leader_url = url;
@@ -431,6 +438,7 @@ async fn add_local_node(
     setups: &mut Vec<NodeSetup>,
     base_api_port: u16,
     base_raft_port: u16,
+    bind_host: &str,
 ) -> Result<()> {
     let next_id = setups.iter().map(|s| s.node_id).max().unwrap_or(0) + 1;
     let api_port  = base_api_port  + (next_id - 1) as u16;
@@ -474,7 +482,7 @@ async fn add_local_node(
         .await
         .with_context(|| format!("node {next_id} failed — is port {raft_port} free?"))?;
 
-    let api_bind = format!("127.0.0.1:{api_port}");
+    let api_bind = format!("{bind_host}:{api_port}");
     let (_, task) = serve_cluster_api(&handle, &api_bind, None)
         .await
         .with_context(|| format!("port {api_port} in use — run `lsof -i :{api_port}`"))?;

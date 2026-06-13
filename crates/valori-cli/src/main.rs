@@ -22,7 +22,13 @@ enum Commands {
     ///
     /// Guides you through architecture choice, node count, and startup, then
     /// drops into a live menu for inserts, search, and membership operations.
-    Setup,
+    Setup {
+        /// IP address to bind API ports to.
+        /// Use 127.0.0.1 (default) for local dev; 0.0.0.0 for servers / EC2
+        /// so external curl/clients can reach the cluster.
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+    },
 
     /// Inspect database files and print a status summary.
     ///
@@ -170,7 +176,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         // No subcommand or explicit `valori setup` → wizard.
-        None | Some(Commands::Setup) => wizard::run().await,
+        None => wizard::run("127.0.0.1").await,
+        Some(Commands::Setup { bind }) => wizard::run(&bind).await,
 
         Some(Commands::Inspect { dir, snapshot, log }) => inspect::run(dir, snapshot, log),
         Some(Commands::Verify { snapshot }) => verify::run(&snapshot),
