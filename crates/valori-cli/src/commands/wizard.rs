@@ -21,8 +21,8 @@ use valori_node::cluster_server::serve_cluster_api;
 
 use super::cluster as cluster_cmd;
 
-const BASE_API: u16 = 3000;
-const BASE_RAFT: u16 = 3100;
+const BASE_API: u16 = 51000;
+const BASE_RAFT: u16 = 51100;
 
 struct NodeSetup {
     node_id: u64,
@@ -385,7 +385,7 @@ fn print_header() {
     println!();
     println!("  ╔══════════════════════════════════════╗");
     println!("  ║        Valori  Cluster  Setup        ║");
-    println!("  ║   forensic vector database — v{}   ║", env!("CARGO_PKG_VERSION"));
+    println!("  ║      forensic vector database        ║");
     println!("  ╚══════════════════════════════════════╝");
     println!();
 }
