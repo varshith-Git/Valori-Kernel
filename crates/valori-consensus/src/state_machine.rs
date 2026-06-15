@@ -43,6 +43,7 @@ use tokio::sync::Mutex;
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
+use valori_kernel::types::id::RecordId as KRecordId;
 use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::snapshot::encode::encode_state;
 use valori_kernel::state::kernel::KernelState;
@@ -245,6 +246,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
                         rejected: None,
+                        allocated_record_id: None,
                     });
                 }
                 EntryPayload::Membership(m) => {
@@ -254,6 +256,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
                         rejected: None,
+                        allocated_record_id: None,
                     });
                 }
                 EntryPayload::Normal(req) => {
@@ -265,10 +268,22 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                 state_hash: hash_state_blake3(&inner.state),
                                 deduplicated: true,
                                 rejected: None,
+                                allocated_record_id: None,
                             });
                             continue;
                         }
                     }
+
+                    // For AutoInsertRecord the handler doesn't pre-allocate an
+                    // ID — the state machine picks `next_record_id()` here,
+                    // which is deterministic because all replicas apply entries
+                    // in the same Raft-ordered sequence.
+                    let pre_alloc_id: Option<KRecordId> =
+                        if matches!(&req.event, KernelEvent::AutoInsertRecord { .. }) {
+                            Some(inner.state.next_record_id())
+                        } else {
+                            None
+                        };
 
                     // 2. Kernel apply. Rejections are deterministic too —
                     //    every node rejects identically; state is untouched.
@@ -280,7 +295,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         .map(|e| format!("{e:?}"));
 
                     // 3. Audit record + dedup memory — successful applies only.
-                    if rejected.is_none() {
+                    let allocated_record_id = if rejected.is_none() {
                         if let Some(id) = req.request_id {
                             inner.remember_request(id);
                         }
@@ -288,13 +303,17 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                             .audit
                             .record(&req.event, req.request_id)
                             .map_err(|e| io_err(format!("audit sink write failed: {e}")))?;
-                    }
+                        pre_alloc_id.map(|r| r.0)
+                    } else {
+                        None
+                    };
 
                     replies.push(ClientResponse {
                         log_index,
                         state_hash: hash_state_blake3(&inner.state),
                         deduplicated: false,
                         rejected,
+                        allocated_record_id,
                     });
                 }
             }

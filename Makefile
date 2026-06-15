@@ -1,29 +1,41 @@
 # Valori-Kernel development shortcuts
-.PHONY: dev build watch check test clean
+.PHONY: dev build watch check test clean server cluster cluster-down stress
 
 ## Build and install the Python FFI extension (development mode)
 dev:
-	cd ffi && maturin develop --release
+	cd python && maturin develop --release
 
 ## Build a release wheel (.whl) for distribution
 build:
-	cd ffi && maturin build --release
+	cd python && maturin build --release
 
 ## Auto-rebuild on every Rust file change (requires: cargo install cargo-watch)
 watch:
-	cd ffi && cargo watch -s "maturin develop --release"
+	cd python && cargo watch -s "maturin develop --release"
 
-## Type-check all crates without full compile
+## Type-check the default workspace members without a full compile
 check:
-	cargo check -p valori-node -p valoricore-ffi
+	cargo check --workspace --exclude valori-embedded --exclude valori-ffi
 
-## Run the node as an HTTP server (Python can talk to it without FFI)
+## Run the full test suite (excludes firmware + PyO3 crates)
+test:
+	cargo test --workspace --exclude valori-embedded --exclude valori-ffi
+
+## Run a single standalone node as an HTTP server on 0.0.0.0:8080
 server:
-	cargo run --release -p valori-node -- --port 8080
+	VALORI_BIND=0.0.0.0:8080 cargo run --release -p valori-node
 
-## Run stress test
+## Bring up a 3-node Raft cluster in Docker
+cluster:
+	docker compose up -d --build
+
+## Tear the cluster down and wipe its volumes
+cluster-down:
+	docker compose down -v
+
+## Run the million-vector stress test (capped for a quick local run)
 stress:
-	.venv/bin/python3 stress_test_million.py --max-n 50000 --skip-charts
+	.venv/bin/python3 scripts/stress_test_million.py --max-n 50000 --skip-charts
 
 ## Clean build artifacts
 clean:

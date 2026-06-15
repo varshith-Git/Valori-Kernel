@@ -30,9 +30,9 @@ use serde::{Deserialize, Serialize};
 
 use valori_consensus::types::Raft;
 use valori_consensus::{ClientRequest, ValoriStateMachine};
-use valori_kernel::dist::euclidean_distance_squared;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::fxp::qformat::SCALE;
+use valori_kernel::index::SearchResult as KernelSearchResult;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
@@ -45,13 +45,6 @@ use crate::events::event_log::EventLogWriter;
 struct DataPlaneState {
     raft: Arc<Raft>,
     sm: ValoriStateMachine,
-    /// Serializes id-allocation + commit for local inserts. The kernel
-    /// assigns sequential record ids, so concurrent inserts through one
-    /// node race on the id read; each insert is a quorum round-trip
-    /// anyway, so serializing costs little and eliminates 503s under
-    /// burst load. The real fix — id allocation inside the state machine —
-    /// is a kernel event-schema change, tracked as follow-up.
-    insert_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -87,7 +80,6 @@ pub fn build_cluster_router(
     let state = DataPlaneState {
         raft: raft.clone(),
         sm: handle.state_machine.clone(),
-        insert_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     Router::new()
@@ -95,6 +87,10 @@ pub fn build_cluster_router(
         .route("/search", post(search))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        .route("/v1/delete", post(delete_record))
+        .route("/v1/soft-delete", post(soft_delete_record))
+        .route("/v1/vectors/batch_insert", post(batch_insert))
+        .route("/v1/proof/state", get(state_proof))
         .with_state(state)
         .merge(cluster_router(raft, audit))
 }
@@ -114,6 +110,40 @@ async fn health(State(state): State<DataPlaneState>) -> Response {
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "status": "no-leader" })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Shared Raft write helper ──────────────────────────────────────────────────
+
+/// Submit a `ClientRequest` to the Raft leader and map the response.
+/// Handles the ForwardToLeader redirect and generic Raft errors uniformly.
+async fn raft_write<F>(
+    raft: &Raft,
+    req: ClientRequest,
+    on_ok: F,
+) -> Response
+where
+    F: FnOnce(valori_consensus::ClientResponse) -> Response,
+{
+    match raft.client_write(req).await {
+        Ok(resp) => {
+            if let Some(reason) = &resp.data.rejected {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": reason })),
+                )
+                    .into_response();
+            }
+            on_ok(resp.data)
+        }
+        Err(openraft::error::RaftError::APIError(
+            openraft::error::ClientWriteError::ForwardToLeader(fwd),
+        )) => not_leader_response(fwd.leader_node.as_ref()),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": format!("raft write failed: {e}") })),
         )
             .into_response(),
     }
@@ -177,72 +207,35 @@ async fn insert_record(
     let vector = match to_fxp(&req.values) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response()
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response();
         }
     };
 
-    // Hold the insert lock across allocate-id + commit (see DataPlaneState).
-    // The retry loop below stays as belt-and-braces for cross-node races.
-    let _guard = state.insert_lock.lock().await;
-    for _attempt in 0..8 {
-        let rid: RecordId = state.sm.with_state(|s| s.next_record_id()).await;
-        let write = state
-            .raft
-            .client_write(ClientRequest {
-                event: KernelEvent::InsertRecord {
-                    id: rid,
-                    vector: vector.clone(),
-                    metadata: req.metadata.clone(),
-                    tag: req.tag,
-                },
-                request_id: req.request_id,
-            })
-            .await;
-
-        match write {
-            Ok(resp) => {
-                if let Some(reason) = &resp.data.rejected {
-                    if reason.contains("InvalidOperation") {
-                        continue; // id race — retry with a fresh id
-                    }
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({ "error": reason })),
-                    )
-                        .into_response();
-                }
-                return (
-                    StatusCode::OK,
-                    Json(InsertResponse {
-                        id: rid.0,
-                        log_index: resp.data.log_index,
-                        deduplicated: resp.data.deduplicated,
-                    }),
-                )
-                    .into_response();
-            }
-            Err(openraft::error::RaftError::APIError(
-                openraft::error::ClientWriteError::ForwardToLeader(fwd),
-            )) => return not_leader_response(fwd.leader_node.as_ref()),
-            Err(e) => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(serde_json::json!({ "error": format!("raft write failed: {e}") })),
-                )
-                    .into_response()
-            }
-        }
-    }
-
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({ "error": "insert id contention — retry" })),
+    // ID is assigned by the state machine at apply time (AutoInsertRecord).
+    // No per-node mutex or retry loop needed — the Raft log is the serialiser.
+    raft_write(
+        &state.raft,
+        ClientRequest {
+            event: KernelEvent::AutoInsertRecord {
+                vector,
+                metadata: req.metadata,
+                tag: req.tag,
+            },
+            request_id: req.request_id,
+        },
+        |resp| {
+            (
+                StatusCode::OK,
+                Json(InsertResponse {
+                    id: resp.allocated_record_id.unwrap_or(0),
+                    log_index: resp.log_index,
+                    deduplicated: resp.deduplicated,
+                }),
+            )
+                .into_response()
+        },
     )
-        .into_response()
+    .await
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -258,10 +251,12 @@ fn default_k() -> usize {
     10
 }
 
+// Wire-compatible with the standalone server's SearchHit { id, score }
+// (api.rs) so one SDK client speaks to both standalone and cluster nodes.
 #[derive(Serialize)]
 struct SearchHit {
     id: u32,
-    distance_sq: i64,
+    score: i64,
 }
 
 async fn search(
@@ -271,42 +266,144 @@ async fn search(
     let query = match to_fxp(&req.query) {
         Ok(v) => v,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-                .into_response()
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response();
         }
     };
-    let q: Vec<i32> = query.data.iter().map(|s| s.0).collect();
 
-    // Reads are served LOCALLY on any node — this is where the replicas'
-    // RAM pays for itself. Brute force in v1; index-backed in the Engine
-    // integration.
-    let mut hits: Vec<SearchHit> = state
+    let k = req.k.max(1);
+    // Reads are served LOCALLY — replicas' RAM pays for itself.
+    // search_l2 delegates to the kernel's BruteForceIndex, which is kept
+    // up to date by every apply (on_insert / on_delete are called inside
+    // KernelState::apply). Results arrive pre-sorted ascending by score.
+    let results: Vec<SearchHit> = state
         .sm
         .with_state(|s| {
-            let mut out = Vec::new();
-            for i in 0..s.total_record_slots() {
-                if let Some(rec) = s.get_record(RecordId(i as u32)) {
-                    if rec.flags & valori_kernel::storage::record::FLAG_SOFT_DELETED != 0 {
-                        continue;
-                    }
-                    if rec.vector.data.len() != q.len() {
-                        continue;
-                    }
-                    let v: Vec<i32> = rec.vector.data.iter().map(|s| s.0).collect();
-                    out.push(SearchHit {
-                        id: rec.id.0,
-                        distance_sq: euclidean_distance_squared(&q, &v),
-                    });
-                }
-            }
-            out
+            let mut buf = vec![KernelSearchResult::default(); k];
+            let n = s.search_l2(&query, &mut buf, None);
+            buf[..n]
+                .iter()
+                .map(|r| SearchHit {
+                    id: r.id.0,
+                    score: r.score.0 as i64,
+                })
+                .collect()
         })
         .await;
 
-    hits.sort_by_key(|h| h.distance_sq);
-    hits.truncate(req.k);
-    (StatusCode::OK, Json(serde_json::json!({ "hits": hits }))).into_response()
+    (StatusCode::OK, Json(serde_json::json!({ "results": results }))).into_response()
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct DeleteRequest {
+    id: u32,
+}
+
+async fn delete_record(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<DeleteRequest>,
+) -> Response {
+    raft_write(
+        &state.raft,
+        ClientRequest {
+            event: KernelEvent::DeleteRecord { id: RecordId(req.id) },
+            request_id: None,
+        },
+        |resp| {
+            (StatusCode::OK, Json(serde_json::json!({
+                "success": true,
+                "log_index": resp.log_index,
+            })))
+                .into_response()
+        },
+    )
+    .await
+}
+
+async fn soft_delete_record(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<DeleteRequest>,
+) -> Response {
+    raft_write(
+        &state.raft,
+        ClientRequest {
+            event: KernelEvent::SoftDeleteRecord { id: RecordId(req.id) },
+            request_id: None,
+        },
+        |resp| {
+            (StatusCode::OK, Json(serde_json::json!({
+                "success": true,
+                "log_index": resp.log_index,
+            })))
+                .into_response()
+        },
+    )
+    .await
+}
+
+// ── Batch insert ──────────────────────────────────────────────────────────────
+// Wire-compatible with the standalone server: request `{ batch: [[f32]] }`,
+// response `{ ids: [u32] }`. Any rejected vector fails the whole batch with a
+// 422 (the standalone engine is all-or-nothing too).
+
+#[derive(Deserialize)]
+struct BatchInsertRequest {
+    batch: Vec<Vec<f32>>,
+}
+
+async fn batch_insert(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<BatchInsertRequest>,
+) -> Response {
+    let mut ids = Vec::with_capacity(req.batch.len());
+
+    for values in req.batch {
+        let vector = match to_fxp(&values) {
+            Ok(v) => v,
+            Err(e) => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e })))
+                    .into_response();
+            }
+        };
+
+        match state
+            .raft
+            .client_write(ClientRequest {
+                event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
+                request_id: None,
+            })
+            .await
+        {
+            Ok(resp) => {
+                if let Some(reason) = &resp.data.rejected {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": reason })))
+                        .into_response();
+                }
+                ids.push(resp.data.allocated_record_id.unwrap_or(0));
+            }
+            Err(openraft::error::RaftError::APIError(
+                openraft::error::ClientWriteError::ForwardToLeader(fwd),
+            )) => return not_leader_response(fwd.leader_node.as_ref()),
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": format!("raft write failed: {e}") })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({ "ids": ids }))).into_response()
+}
+
+// ── State proof ───────────────────────────────────────────────────────────────
+// `final_state_hash` matches the standalone DeterministicProof field name the
+// SDK reads, so `get_state_hash()` works unchanged against a cluster node.
+
+async fn state_proof(State(state): State<DataPlaneState>) -> Response {
+    let hash = state.sm.state_hash().await;
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    (StatusCode::OK, Json(serde_json::json!({ "final_state_hash": hex }))).into_response()
 }

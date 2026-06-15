@@ -80,7 +80,8 @@ async fn insert_then_search_over_http() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let hits = body["hits"].as_array().unwrap();
+    // Wire-compatible with the standalone server: { results: [{ id, score }] }.
+    let hits = body["results"].as_array().unwrap();
     assert_eq!(hits.len(), 2);
     assert_eq!(hits[0]["id"], 1, "nearest must be (1,1): {body}");
     assert_eq!(hits[1]["id"], 0, "second nearest must be (0,0): {body}");

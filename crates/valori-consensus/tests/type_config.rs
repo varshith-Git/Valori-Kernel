@@ -59,6 +59,7 @@ fn client_response_roundtrips_and_dedup_flag_defaults_false() {
         state_hash: [9u8; 32],
         deduplicated: false,
         rejected: None,
+        allocated_record_id: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     // Strip the flag — old responses without it must still decode.

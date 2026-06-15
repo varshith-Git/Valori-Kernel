@@ -54,13 +54,28 @@ venv.bak/
 Thumbs.db
 .agent/
 *.log
-*.log
 demo_db/
+
+# Caches
+.npm-cache/
+.pytest_cache/
 
 # Ignore Data
 data/
+.data/
 *.fvecs
 *.ivecs
 *.tar.gz
 *.db
 graphify-out/
+
+# Runtime database directories (created by tests / local runs)
+valori_db/
+valoricore_test_delete_db/
+test_e2e_db/
+*_test_db/
+*_test_db_*/
+*.redb
+events.log
+state.snap
+*.val

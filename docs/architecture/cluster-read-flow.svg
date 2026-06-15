@@ -1,0 +1,76 @@
+<svg viewBox="0 0 720 560" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">Valori linearizable read (read-index protocol)</title>
+<desc id="d">A strongly-consistent read against a follower. The follower does not answer from local state immediately, because it may be behind. Instead it asks the leader for the current commit index via a read-index request. The leader confirms it is still the leader by a heartbeat round to a quorum, then returns its commit index C. The follower waits until its own applied index has caught up to at least C, then serves the search from its local kernel — now guaranteed to reflect every write committed before the read began.</desc>
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5F5E5A"/></marker>
+<marker id="arrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F6E56"/></marker>
+</defs>
+<rect x="0" y="0" width="720" height="560" fill="#FFFFFF"/>
+
+<text x="24" y="28" font-size="12" font-weight="bold" fill="#2C2C2A">Linearizable read — read-index protocol</text>
+<text x="24" y="44" font-size="10.5" fill="#5F5E5A">A follower must confirm it is current before serving. Without this step a read can miss a just-committed write.</text>
+
+<!-- client -->
+<rect x="24" y="70" width="150" height="44" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="99" y="90" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">client</text>
+<text x="99" y="105" text-anchor="middle" font-size="11" fill="#5F5E5A">search query</text>
+
+<!-- follower -->
+<rect x="270" y="60" width="180" height="180" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="360" y="82" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 2 — follower</text>
+<rect x="285" y="92" width="150" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="360" y="110" text-anchor="middle" font-size="11" fill="#444441">http api</text>
+<rect x="285" y="126" width="150" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="360" y="144" text-anchor="middle" font-size="10.5" fill="#444441">applied index = 1019</text>
+<rect x="285" y="160" width="150" height="32" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="360" y="180" text-anchor="middle" font-size="11" fill="#3C3489">kernel — local k-NN</text>
+<text x="285" y="214" font-size="10" fill="#5F5E5A">waits until applied ≥ C,</text>
+<text x="285" y="228" font-size="10" fill="#5F5E5A">then scans locally</text>
+
+<!-- leader -->
+<rect x="546" y="60" width="150" height="180" rx="4" fill="#E1F5EE" stroke="#0F6E56"/>
+<text x="621" y="82" text-anchor="middle" font-size="13" font-weight="bold" fill="#085041">node 1 — leader</text>
+<rect x="561" y="92" width="120" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="621" y="110" text-anchor="middle" font-size="11" fill="#444441">raft core</text>
+<rect x="561" y="126" width="120" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="621" y="144" text-anchor="middle" font-size="10.5" fill="#444441">commit index C = 1024</text>
+<text x="561" y="178" font-size="10" fill="#085041">confirms leadership</text>
+<text x="561" y="192" font-size="10" fill="#085041">via quorum heartbeat</text>
+<text x="561" y="206" font-size="10" fill="#085041">before answering</text>
+
+<!-- step 1: client -> follower -->
+<line x1="174" y1="92" x2="268" y2="92" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
+<circle cx="221" cy="78" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="221" y="82" text-anchor="middle" font-size="11" fill="#2C2C2A">1</text>
+
+<!-- step 2: follower -> leader read-index request -->
+<line x1="450" y1="120" x2="544" y2="120" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<circle cx="497" cy="106" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="497" y="110" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
+
+<!-- step 3: leader -> follower returns C -->
+<line x1="544" y1="148" x2="450" y2="148" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<circle cx="497" cy="166" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="497" y="170" text-anchor="middle" font-size="11" fill="#2C2C2A">3</text>
+
+<!-- step 5: follower -> client result -->
+<line x1="268" y1="200" x2="120" y2="200" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
+<line x1="99" y1="200" x2="99" y2="116" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
+<circle cx="190" cy="186" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="190" y="190" text-anchor="middle" font-size="11" fill="#2C2C2A">5</text>
+
+<!-- numbered narrative -->
+<rect x="24" y="262" width="672" height="190" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="40" y="284" font-size="11.5" font-weight="bold" fill="#2C2C2A">The protocol</text>
+<text x="40" y="306" font-size="11" fill="#2C2C2A">1 · client sends a search to any node (here a follower).</text>
+<text x="40" y="326" font-size="11" fill="#2C2C2A">2 · the follower asks the leader for its current commit index (a read-index request) — it does not answer yet.</text>
+<text x="40" y="346" font-size="11" fill="#2C2C2A">3 · the leader confirms it is still leader via a heartbeat to a quorum, then returns commit index C = 1024.</text>
+<text x="40" y="366" font-size="11" fill="#2C2C2A">4 · the follower blocks until its own applied index reaches C (1019 → 1024) — it absorbs the in-flight tail.</text>
+<text x="40" y="386" font-size="11" fill="#2C2C2A">5 · only now does it run the k-NN locally and return — the result reflects every write committed before the read.</text>
+<text x="40" y="418" font-size="10.5" font-style="italic" fill="#993C1D">Skip steps 2–4 and the follower may answer from index 1019, silently missing writes 1020–1024. That is the</text>
+<text x="40" y="433" font-size="10.5" font-style="italic" fill="#993C1D">stale-read gap: acceptable only for explicitly eventually-consistent reads, never for the strong-consistency default.</text>
+
+<text x="24" y="478" font-size="10.5" fill="#5F5E5A">Status: the read-index path is the required design for the strong-consistency default. The current build serves</text>
+<text x="24" y="493" font-size="10.5" fill="#5F5E5A">follower reads locally without it (eventually consistent); wiring openraft's read-index into the read handler is the fix.</text>
+<text x="24" y="520" font-size="10.5" fill="#5F5E5A">Cost note: one extra round trip to the leader per read. A leader read needs only the heartbeat confirmation, not the wait.</text>
+</svg>

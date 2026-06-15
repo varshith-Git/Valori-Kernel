@@ -71,6 +71,11 @@ pub struct ClientResponse {
     /// node rejected identically. Added in Phase 2.5 (append-only field).
     #[serde(default)]
     pub rejected: Option<String>,
+    /// Populated when the request used `KernelEvent::AutoInsertRecord`.
+    /// The record ID assigned by the state machine at apply time — every
+    /// replica assigned the same ID, so this is the canonical value.
+    #[serde(default)]
+    pub allocated_record_id: Option<u32>,
 }
 
 openraft::declare_raft_types!(

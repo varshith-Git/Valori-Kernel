@@ -158,5 +158,10 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             format!("key={}  [permanently unrecoverable]",
                 key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
         ),
+
+        KernelEvent::AutoInsertRecord { tag, .. } => (
+            Cell::new("AutoInsertRecord").fg(Color::Green),
+            format!("tag={tag}  (id assigned at apply)"),
+        ),
     }
 }

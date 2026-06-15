@@ -1,0 +1,81 @@
+<svg viewBox="0 0 720 600" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">The snapshot's two jobs: onboarding and audit-log rotation</title>
+<desc id="d">A single periodic snapshot of kernel state serves two purposes. Job A, onboarding: when a new node joins or a follower falls so far behind that the leader has already trimmed the Raft entries it needs, the leader ships the kernel snapshot via the InstallSnapshot RPC; the joiner installs it to jump to the snapshot index, then catches up the remaining tail through normal AppendEntries. Job B, rotation: the same snapshot point seals the current events.log segment, a fresh segment is opened for new appends, and the sealed segment is archived to cold storage so the live audit log stays bounded while the full history is preserved.</desc>
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5F5E5A"/></marker>
+<marker id="arrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F6E56"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#993C1D"/></marker>
+</defs>
+<rect x="0" y="0" width="720" height="600" fill="#FFFFFF"/>
+
+<!-- ===== Job A: onboarding via InstallSnapshot ===== -->
+<text x="24" y="28" font-size="12" font-weight="bold" fill="#2C2C2A">Job A — onboard a new or lagging node (InstallSnapshot)</text>
+<text x="24" y="44" font-size="10.5" fill="#5F5E5A">Used when the entries a node needs have already been trimmed from the leader's raft.redb.</text>
+
+<!-- leader -->
+<rect x="24" y="60" width="250" height="150" rx="4" fill="#E1F5EE" stroke="#0F6E56"/>
+<text x="149" y="82" text-anchor="middle" font-size="13" font-weight="bold" fill="#085041">node 1 — leader</text>
+<rect x="39" y="92" width="220" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="149" y="111" text-anchor="middle" font-size="11" fill="#444441">snapshot manager · kernel @ index S</text>
+<rect x="39" y="130" width="220" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="149" y="149" text-anchor="middle" font-size="11" fill="#444441">raft core · trimmed below S</text>
+<rect x="39" y="168" width="220" height="30" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="149" y="187" text-anchor="middle" font-size="11" fill="#712B13">entries S+1 … C still in log (tail)</text>
+
+<!-- joiner -->
+<rect x="446" y="60" width="250" height="150" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="571" y="82" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 4 — joining / behind</text>
+<rect x="461" y="92" width="220" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="571" y="111" text-anchor="middle" font-size="11" fill="#3C3489">a · install snapshot → jump to index S</text>
+<rect x="461" y="130" width="220" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="571" y="149" text-anchor="middle" font-size="11" fill="#444441">b · replay tail S+1 … C (AppendEntries)</text>
+<rect x="461" y="168" width="220" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="571" y="187" text-anchor="middle" font-size="11" fill="#444441">c · caught up · same hash, now votes</text>
+
+<!-- arrows A -->
+<line x1="274" y1="107" x2="444" y2="107" stroke="#0F6E56" stroke-width="1.6" marker-end="url(#arrt)"/>
+<text x="359" y="100" text-anchor="middle" font-size="10.5" fill="#0F6E56">InstallSnapshot RPC (kernel @ S)</text>
+<line x1="274" y1="183" x2="444" y2="183" stroke="#0F6E56" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrt)"/>
+<text x="359" y="176" text-anchor="middle" font-size="10.5" fill="#0F6E56">then AppendEntries for the tail</text>
+
+<line x1="24" y1="232" x2="696" y2="232" stroke="#E2E0D8" stroke-width="1"/>
+
+<!-- ===== Job B: events.log rotation ===== -->
+<text x="24" y="262" font-size="12" font-weight="bold" fill="#2C2C2A">Job B — bound the audit log (rotation)</text>
+<text x="24" y="278" font-size="10.5" fill="#5F5E5A">The same snapshot point seals events.log so the live file never grows without limit, while history is preserved.</text>
+
+<!-- sealed segment -->
+<rect x="24" y="300" width="190" height="92" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="119" y="322" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log.0001</text>
+<text x="119" y="341" text-anchor="middle" font-size="10.5" fill="#993C1D">events 1 … S</text>
+<text x="119" y="358" text-anchor="middle" font-size="10.5" fill="#993C1D">sealed · BLAKE3-chained</text>
+<text x="119" y="375" text-anchor="middle" font-size="10.5" fill="#993C1D">read-only</text>
+
+<!-- fresh segment -->
+<rect x="265" y="300" width="190" height="92" rx="4" fill="#FFFFFF" stroke="#993C1D"/>
+<text x="360" y="322" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log.0002</text>
+<text x="360" y="341" text-anchor="middle" font-size="10.5" fill="#993C1D">events S+1 …</text>
+<text x="360" y="358" text-anchor="middle" font-size="10.5" fill="#993C1D">live · append target</text>
+<text x="360" y="375" text-anchor="middle" font-size="10.5" fill="#993C1D">chains from prev seal hash</text>
+
+<!-- cold storage -->
+<rect x="506" y="300" width="190" height="92" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="601" y="322" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">cold storage</text>
+<text x="601" y="341" text-anchor="middle" font-size="10.5" fill="#5F5E5A">S3 / object store</text>
+<text x="601" y="358" text-anchor="middle" font-size="10.5" fill="#5F5E5A">full audit history,</text>
+<text x="601" y="375" text-anchor="middle" font-size="10.5" fill="#5F5E5A">verifiable offline</text>
+
+<line x1="214" y1="346" x2="263" y2="346" stroke="#993C1D" stroke-width="1.5" marker-end="url(#arrr)"/>
+<text x="239" y="338" text-anchor="middle" font-size="9.5" fill="#993C1D">seal</text>
+<line x1="214" y1="392" x2="601" y2="430" stroke="#5F5E5A" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+<text x="300" y="424" font-size="10.5" fill="#5F5E5A">archive sealed segment</text>
+
+<!-- narrative -->
+<rect x="24" y="452" width="672" height="128" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="40" y="474" font-size="11.5" font-weight="bold" fill="#2C2C2A">Rotation cycle</text>
+<text x="40" y="496" font-size="11" fill="#2C2C2A">1 · snapshot kernel state at index S (the existing periodic snapshot — no new mechanism).</text>
+<text x="40" y="516" font-size="11" fill="#2C2C2A">2 · seal events.log.0001 (events 1…S, immutable) and open events.log.0002 chaining from its final hash.</text>
+<text x="40" y="536" font-size="11" fill="#2C2C2A">3 · archive the sealed segment to cold storage. Recovery now needs only {snapshot @ S} + {live segment}.</text>
+<text x="40" y="558" font-size="10.5" font-style="italic" fill="#993C1D">Status: snapshotting exists; the seal-and-rotate trigger is the piece to wire. The chain hash carries across</text>
+<text x="40" y="573" font-size="10.5" font-style="italic" fill="#993C1D">segment boundaries, so a verifier reassembles archived + live segments into one unbroken history.</text>
+</svg>

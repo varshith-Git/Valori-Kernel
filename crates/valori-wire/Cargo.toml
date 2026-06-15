@@ -1,8 +1,8 @@
 [package]
 name = "valori-wire"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Valori event-log wire format — the single on-disk contract shared by the node (writer), the offline verifier, and the forensic CLI"
 
 # Deliberately tiny dependency set: an auditor reads this crate plus
