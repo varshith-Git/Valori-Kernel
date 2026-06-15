@@ -3846,7 +3846,7 @@ dependencies = [
 
 [[package]]
 name = "valori-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3873,7 +3873,7 @@ dependencies = [
 
 [[package]]
 name = "valori-consensus"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3896,7 +3896,7 @@ dependencies = [
 
 [[package]]
 name = "valori-embedded"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -3912,7 +3912,7 @@ dependencies = [
 
 [[package]]
 name = "valori-kernel"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -3927,7 +3927,7 @@ dependencies = [
 
 [[package]]
 name = "valori-node"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "axum-extra",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "valori-verify"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3979,7 +3979,7 @@ dependencies = [
 
 [[package]]
 name = "valori-wire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -3990,7 +3990,7 @@ dependencies = [
 
 [[package]]
 name = "valoricore-ffi"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bincode",
  "blake3",
