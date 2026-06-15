@@ -7,6 +7,17 @@ use tokio::net::TcpListener;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    // Docker HEALTHCHECK probe — connect to own TCP port, exit 0/1.
+    // Distroless images have no curl; the binary is its own health probe.
+    if std::env::args().any(|a| a == "--health-check") {
+        let bind = std::env::var("VALORI_BIND").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+        let port = bind.rsplit(':').next().unwrap_or("3000");
+        match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+            Ok(_) => std::process::exit(0),
+            Err(_) => std::process::exit(1),
+        }
+    }
+
     // Initialize Telemetry (Logs + Metrics)
     valori_node::telemetry::init_telemetry();
 

@@ -96,6 +96,16 @@ pub enum KernelEvent {
     ShredKey {
         key_id: [u8; 16],
     },
+
+    /// Insert a record with the ID assigned by the state machine at apply time.
+    /// Cluster-mode only. Using a server-assigned ID eliminates the
+    /// pre-allocation race that `InsertRecord` requires the handler to work
+    /// around with a retry loop and a per-node mutex.
+    AutoInsertRecord {
+        vector: FxpVector,
+        metadata: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
+    },
 }
 
 impl KernelEvent {
@@ -111,6 +121,7 @@ impl KernelEvent {
             KernelEvent::DeleteNode { .. } => "DeleteNode",
             KernelEvent::InsertRecordEncrypted { .. } => "InsertRecordEncrypted",
             KernelEvent::ShredKey { .. } => "ShredKey",
+            KernelEvent::AutoInsertRecord { .. } => "AutoInsertRecord",
         }
     }
 }
@@ -182,6 +193,13 @@ impl Serialize for KernelEvent {
             KernelEvent::ShredKey { key_id } => {
                 let mut state = serializer.serialize_struct_variant("KernelEvent", 8, "ShredKey", 1)?;
                 state.serialize_field("key_id", key_id)?;
+                state.end()
+            }
+            KernelEvent::AutoInsertRecord { vector, metadata, tag } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 9, "AutoInsertRecord", 3)?;
+                state.serialize_field("vector", vector)?;
+                state.serialize_field("metadata", &RawMetadata(metadata.as_ref()))?;
+                state.serialize_field("tag", tag)?;
                 state.end()
             }
         }
@@ -260,6 +278,12 @@ impl<'de> Deserialize<'de> for KernelEvent {
              ShredKey {
                  key_id: [u8; 16],
              },
+             AutoInsertRecord {
+                 vector: FxpVector,
+                 #[serde(with = "raw_metadata_serde")]
+                 metadata: Option<alloc::vec::Vec<u8>>,
+                 tag: u64,
+             },
         }
 
         // Delegate to the Helper
@@ -276,6 +300,8 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::InsertRecordEncrypted { id, key_id, ciphertext, metadata_ciphertext, tag } =>
                 KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, metadata_ciphertext, tag },
             KernelEventHelper::ShredKey { key_id } => KernelEvent::ShredKey { key_id },
+            KernelEventHelper::AutoInsertRecord { vector, metadata, tag } =>
+                KernelEvent::AutoInsertRecord { vector, metadata, tag },
         })
     }
 }

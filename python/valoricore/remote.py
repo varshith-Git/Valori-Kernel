@@ -1,19 +1,48 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+import time
 import requests
 import warnings
 from typing import List, Dict, Optional, Any, Tuple
 from .types import Vector, RecordId, NodeId, Proof
-from .exceptions import ConnectionError, ValidationError, NotFoundError
+from .exceptions import ConnectionError, ValidationError, NotFoundError, NotLeaderError
+
+
+class _Retryable(Exception):
+    """Internal marker for a transient cluster condition worth retrying."""
+    pass
+
+
+def _base_of(final_url: str, path: str) -> Optional[str]:
+    """Strip a known request path off a resolved redirect URL to recover the
+    leader's base URL (e.g. 'http://leader:3000/records' + '/records' ->
+    'http://leader:3000'). Returns None if the path doesn't match."""
+    if path and final_url.endswith(path):
+        return final_url[: -len(path)]
+    return None
+
 
 class SyncRemoteClient:
-    """Synchronous REST client for a standalone Valoricore node."""
-    
-    def __init__(self, base_url: str):
+    """Synchronous REST client for a Valoricore node — standalone or clustered.
+
+    Against a Raft cluster, point ``base_url`` at *any* node. Reads
+    (``search``, ``get_*``) are served locally on whichever node you hit;
+    writes are transparently redirected to the current leader (HTTP 307),
+    and the resolved leader is cached so subsequent writes skip the hop.
+    During a leader election the client retries with backoff before raising
+    :class:`NotLeaderError`.
+    """
+
+    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
         self._auto_snapshot_interval = None
         self._insert_count = 0
         self._snapshot_dir = "./valoricore_snapshots"
+        # Cluster resilience knobs.
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
+        # Cached leader base URL, learned from a 307 redirect. Writes prefer it.
+        self._leader_url: Optional[str] = None
 
     def _check_auto_snapshot(self, count: int = 1):
         if self._auto_snapshot_interval:
@@ -28,15 +57,51 @@ class SyncRemoteClient:
                     f.write(snap_bytes)
 
     def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
-        url = self.base_url + path
-        try:
-            resp = self.session.post(url, json=json_data, timeout=10)
-            if resp.status_code == 404:
-                raise NotFoundError(f"Resource not found: {path}")
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.RequestException as e:
-            raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
+        """POST with cluster awareness.
+
+        ``requests`` follows the leader's 307 redirect automatically (the POST
+        body and method are preserved). We additionally (a) prefer a cached
+        leader URL so the common case skips the redirect, (b) learn the leader
+        from any redirect that did occur, and (c) retry on transient 503
+        / connection errors during an election.
+        """
+        last_err: Optional[Exception] = None
+        for attempt in range(self._max_retries + 1):
+            base = self._leader_url or self.base_url
+            url = base + path
+            try:
+                resp = self.session.post(url, json=json_data, timeout=10)
+
+                # A 307 we did NOT auto-follow means the follower could not name
+                # a leader (no Location header) — election in flight.
+                if resp.status_code == 307:
+                    self._leader_url = None
+                    raise _Retryable("no leader to redirect to (307 without Location)")
+                if resp.status_code == 503:
+                    self._leader_url = None
+                    raise _Retryable("node reports no leader (503)")
+                if resp.status_code == 404:
+                    raise NotFoundError(f"Resource not found: {path}")
+                resp.raise_for_status()
+
+                # Learn the leader if requests followed a redirect to get here.
+                if resp.history:
+                    self._leader_url = _base_of(resp.url, path)
+                return resp.json()
+
+            except (_Retryable, requests.exceptions.ConnectionError) as e:
+                last_err = e
+                # A cached leader may have failed over — drop it and retry base.
+                self._leader_url = None
+                if attempt < self._max_retries:
+                    time.sleep(self._retry_backoff * (2 ** attempt))
+                    continue
+            except requests.exceptions.RequestException as e:
+                raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
+
+        raise NotLeaderError(
+            f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
+        )
 
     def insert(self, vector: Vector, tag: int = 0) -> RecordId:
         """Insert a vector record. Returns the new Record ID."""
@@ -75,7 +140,7 @@ class SyncRemoteClient:
 
     def soft_delete(self, record_id: int) -> None:
         """Mark a record as inactive without physically removing it."""
-        self._post("/v1/vectors/soft_delete", {"id": record_id})
+        self._post("/v1/soft-delete", {"id": record_id})
 
     def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}]."""
@@ -165,7 +230,34 @@ class SyncRemoteClient:
 
     def delete(self, record_id: int) -> None:
         """Permanently remove a record from the remote pool."""
-        self._post("/v1/vectors/delete", {"id": record_id})
+        self._post("/v1/delete", {"id": record_id})
+
+    # ── Cluster operations ──────────────────────────────────────────────────
+
+    def cluster_status(self) -> Dict[str, Any]:
+        """Leadership, term, and member table from the node at ``base_url``.
+
+        Works against any cluster node. Raises :class:`ConnectionError` if the
+        node isn't running in cluster mode (the endpoint 404s on standalone).
+        """
+        url = self.base_url + "/v1/cluster/status"
+        try:
+            resp = self.session.get(url, timeout=5)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode (/v1/cluster/status not found)")
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to fetch cluster status from {url}: {e}")
+
+    def cluster_health(self) -> bool:
+        """True when the node sees an elected leader (HTTP 200 on /v1/cluster/health)."""
+        url = self.base_url + "/v1/cluster/health"
+        try:
+            resp = self.session.get(url, timeout=5)
+            return resp.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
 
     def get_metadata(self, record_id: int) -> Optional[bytes]:
         """Retrieve metadata for a remote record."""
@@ -254,13 +346,19 @@ class SyncRemoteClient:
 class AsyncRemoteClient:
     """Asynchronous REST client for a standalone Valoricore node using httpx."""
     
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5):
         import httpx
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.AsyncClient(timeout=10.0)
+        # follow_redirects=True is essential for clusters: writes to a follower
+        # answer 307 + Location pointing at the leader. httpx does NOT follow
+        # redirects by default, so without this every write to a non-leader fails.
+        self.client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
         self._auto_snapshot_interval = None
         self._insert_count = 0
         self._snapshot_dir = "./valoricore_snapshots"
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff
+        self._leader_url: Optional[str] = None
 
     async def _check_auto_snapshot(self, count: int = 1):
         if self._auto_snapshot_interval:
@@ -275,15 +373,37 @@ class AsyncRemoteClient:
                     f.write(snap_bytes)
 
     async def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
-        url = self.base_url + path
-        try:
-            resp = await self.client.post(url, json=json_data)
-            if resp.status_code == 404:
-                raise NotFoundError(f"Resource not found: {path}")
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
+        import asyncio
+        import httpx
+        last_err: Optional[Exception] = None
+        for attempt in range(self._max_retries + 1):
+            base = self._leader_url or self.base_url
+            url = base + path
+            try:
+                resp = await self.client.post(url, json=json_data)
+                if resp.status_code == 307:
+                    self._leader_url = None
+                    raise _Retryable("no leader to redirect to (307 without Location)")
+                if resp.status_code == 503:
+                    self._leader_url = None
+                    raise _Retryable("node reports no leader (503)")
+                if resp.status_code == 404:
+                    raise NotFoundError(f"Resource not found: {path}")
+                resp.raise_for_status()
+                if resp.history:
+                    self._leader_url = _base_of(str(resp.url), path)
+                return resp.json()
+            except (_Retryable, httpx.ConnectError) as e:
+                last_err = e
+                self._leader_url = None
+                if attempt < self._max_retries:
+                    await asyncio.sleep(self._retry_backoff * (2 ** attempt))
+                    continue
+            except httpx.HTTPError as e:
+                raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
+        raise NotLeaderError(
+            f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
+        )
 
     async def insert(self, vector: Vector, tag: int = 0) -> RecordId:
         data = {"values": vector, "tag": tag}
@@ -319,7 +439,7 @@ class AsyncRemoteClient:
 
     async def soft_delete(self, record_id: int) -> None:
         """Mark a record as inactive without physically removing it."""
-        await self._post("/v1/vectors/soft_delete", {"id": record_id})
+        await self._post("/v1/soft-delete", {"id": record_id})
 
     async def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
         data: Dict[str, Any] = {"query": query, "k": k}
@@ -396,7 +516,32 @@ class AsyncRemoteClient:
         return list(record_ids)
 
     async def delete(self, record_id: int) -> None:
-        await self._post("/v1/vectors/delete", {"id": record_id})
+        await self._post("/v1/delete", {"id": record_id})
+
+    # ── Cluster operations ──────────────────────────────────────────────────
+
+    async def cluster_status(self) -> Dict[str, Any]:
+        """Leadership, term, and member table from the node at ``base_url``."""
+        import httpx
+        url = self.base_url + "/v1/cluster/status"
+        try:
+            resp = await self.client.get(url)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode (/v1/cluster/status not found)")
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"Failed to fetch cluster status from {url}: {e}")
+
+    async def cluster_health(self) -> bool:
+        """True when the node sees an elected leader (HTTP 200 on /v1/cluster/health)."""
+        import httpx
+        url = self.base_url + "/v1/cluster/health"
+        try:
+            resp = await self.client.get(url)
+            return resp.status_code == 200
+        except httpx.HTTPError:
+            return False
 
     async def get_metadata(self, record_id: int) -> Optional[bytes]:
         url = f"{self.base_url}/v1/memory/meta/get?key=rec:{record_id}"

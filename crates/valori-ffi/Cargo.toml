@@ -1,7 +1,8 @@
 [package]
 name = "valoricore-ffi"
-version = "0.1.11"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "valoricore_ffi"

@@ -25,6 +25,15 @@ default-members = [
     "crates/valori-consensus",
 ]
 
+# Shared package metadata — every crate inherits this with `.workspace = true`,
+# so the workspace ships one coherent version instead of seven that drift.
+[workspace.package]
+version    = "0.2.0"
+edition    = "2021"
+license    = "MIT OR Apache-2.0"
+authors    = ["Varshith Gudur"]
+repository = "https://github.com/valori-db/valori-kernel"
+
 # Firmware requires abort on panic (no unwinding support in no_std)
 # This also guarantees fail-closed behavior for the Node.
 [profile.dev]

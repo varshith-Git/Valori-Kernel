@@ -422,6 +422,8 @@ impl ValoricoreEngine {
                 KernelEvent::ShredKey { key_id } =>
                     format!("Event ID {event_id}: ShredKey (key {})",
                         key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+                KernelEvent::AutoInsertRecord { tag, .. } =>
+                    format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})"),
             };
             events.push(event_str);
         }

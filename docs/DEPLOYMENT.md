@@ -337,9 +337,15 @@ runs the IVF batch build automatically.
 
 ## 6. Replication setup
 
-Valori uses a single-leader, multi-follower replication model.  The leader
-owns all writes.  Followers are read-only replicas that can serve search and
-proof queries.
+> **Two replication models — pick one.**
+> This section describes the **legacy** single-leader log-streaming mode
+> (`VALORI_FOLLOWER_OF`), kept for simple read-replica setups. For automatic
+> leader election, quorum writes, and fault tolerance, use the **Raft cluster**
+> instead — see **[CLUSTER.md](CLUSTER.md)**. Do not mix the two on one node.
+
+Valori's legacy mode uses a single-leader, multi-follower replication model.
+The leader owns all writes.  Followers are read-only replicas that can serve
+search and proof queries.
 
 ### Leader
 
@@ -595,6 +601,8 @@ curl -H "Authorization: Bearer changeme" http://localhost:3001/v1/proof/state
 
 | Document | Contents |
 |---|---|
+| [`docs/CLUSTER.md`](CLUSTER.md) | **Raft multi-node cluster** — start, operate, grow, recover |
+| [`docs/README.md`](README.md) | Documentation index |
 | [`docs/SNAPSHOT_FORMAT.md`](SNAPSHOT_FORMAT.md) | VAL1 binary snapshot wire format |
 | [`docs/crash-recovery-proof.md`](crash-recovery-proof.md) | Production crash recovery proof (2026-01-12) |
 | [`docs/wal-replay-guarantees.md`](wal-replay-guarantees.md) | Formal durability guarantees |

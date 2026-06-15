@@ -1,85 +1,88 @@
-<svg viewBox="0 0 700 790" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<svg viewBox="0 0 720 660" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
 <title id="t">Valori 3-node write flow</title>
-<desc id="d">A client writes to the leader; the leader replicates over mTLS to two followers; after a majority acknowledges, every node applies the event to its in-memory kernel and appends it to its own audit log. Each node stores two files: a trimmed raft.redb and an append-only events.log.</desc>
+<desc id="d">A client writes to the leader. Steps 1 to 3 are network movements: the client sends the write to the leader, the leader replicates the entry to two followers over mutual TLS, and the followers acknowledge — a majority makes the entry committed. Steps 4 and 5 then happen locally and identically on every node: each applies the committed event to its in-memory kernel, then appends it to its own hash-chained events.log. Each node stores a trimmed raft.redb and an append-only events.log.</desc>
 <defs>
 <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#5F5E5A"/></marker>
 <marker id="arrt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0F6E56"/></marker>
 </defs>
-<rect x="0" y="0" width="700" height="790" fill="#FFFFFF"/>
+<rect x="0" y="0" width="720" height="660" fill="#FFFFFF"/>
 
-<rect x="280" y="16" width="140" height="46" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="350" y="36" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">client</text>
-<text x="350" y="52" text-anchor="middle" font-size="11" fill="#5F5E5A">insert vector</text>
+<!-- step rail: 1-3 are network moves, 4-5 are per-node local steps -->
+<text x="24" y="28" font-size="12" font-weight="bold" fill="#2C2C2A">Write path</text>
+<text x="24" y="44" font-size="10.5" fill="#5F5E5A">1–3 move across the network · 4–5 run locally on every node</text>
 
-<line x1="350" y1="62" x2="350" y2="100" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
-<circle cx="318" cy="80" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="318" y="84" text-anchor="middle" font-size="11" fill="#2C2C2A">1</text>
-<text x="368" y="84" font-size="11" fill="#5F5E5A">write request</text>
+<!-- client -->
+<rect x="290" y="58" width="140" height="44" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="360" y="78" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">client</text>
+<text x="360" y="93" text-anchor="middle" font-size="11" fill="#5F5E5A">insert vector</text>
 
-<rect x="200" y="100" width="300" height="278" rx="4" fill="#E1F5EE" stroke="#0F6E56"/>
-<text x="350" y="122" text-anchor="middle" font-size="13" font-weight="bold" fill="#085041">node 1 — leader</text>
-<rect x="215" y="132" width="270" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="350" y="151" text-anchor="middle" font-size="11" fill="#444441">http api · accepts writes</text>
-<rect x="215" y="170" width="270" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="350" y="189" text-anchor="middle" font-size="11" fill="#444441">raft core · proposes + counts votes</text>
-<rect x="215" y="208" width="270" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
-<text x="350" y="227" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — RAM, serves search</text>
-<text x="215" y="260" font-size="11" fill="#085041">on disk:</text>
-<rect x="215" y="268" width="128" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="279" y="289" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
-<text x="279" y="305" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
-<rect x="357" y="268" width="128" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
-<text x="421" y="289" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
-<text x="421" y="305" text-anchor="middle" font-size="10" fill="#993C1D">append-only forever</text>
-<circle cx="186" cy="223" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="186" y="227" text-anchor="middle" font-size="11" fill="#2C2C2A">4</text>
-<circle cx="510" cy="294" r="9" fill="#FAECE7" stroke="#993C1D"/>
-<text x="510" y="298" text-anchor="middle" font-size="11" fill="#712B13">5</text>
+<line x1="360" y1="102" x2="360" y2="138" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arr)"/>
+<circle cx="328" cy="120" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="328" y="124" text-anchor="middle" font-size="11" fill="#2C2C2A">1</text>
+<text x="378" y="124" font-size="11" fill="#5F5E5A">write request (a follower replies 307 → leader)</text>
 
-<line x1="290" y1="378" x2="185" y2="448" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
-<line x1="410" y1="378" x2="515" y2="448" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
-<line x1="205" y1="452" x2="305" y2="385" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
-<line x1="495" y1="452" x2="395" y2="385" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
-<circle cx="237" cy="398" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="237" y="402" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
-<circle cx="463" cy="398" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="463" y="402" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
-<text x="350" y="402" text-anchor="middle" font-size="11" fill="#0F6E56">replicate over mTLS</text>
-<circle cx="280" cy="432" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
-<text x="280" y="436" text-anchor="middle" font-size="11" fill="#2C2C2A">3</text>
-<text x="350" y="436" text-anchor="middle" font-size="11" fill="#5F5E5A">acks — majority = committed</text>
+<!-- leader -->
+<rect x="210" y="138" width="300" height="196" rx="4" fill="#E1F5EE" stroke="#0F6E56"/>
+<text x="360" y="160" text-anchor="middle" font-size="13" font-weight="bold" fill="#085041">node 1 — leader</text>
+<rect x="225" y="170" width="270" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="360" y="188" text-anchor="middle" font-size="11" fill="#444441">http api · accepts writes</text>
+<rect x="225" y="204" width="270" height="28" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="360" y="222" text-anchor="middle" font-size="11" fill="#444441">raft core · proposes + counts votes</text>
+<rect x="225" y="238" width="270" height="28" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="360" y="256" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — RAM, serves reads</text>
+<rect x="225" y="276" width="128" height="46" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="289" y="295" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="289" y="311" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
+<rect x="367" y="276" width="128" height="46" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="431" y="295" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#712B13">events.log</text>
+<text x="431" y="311" text-anchor="middle" font-size="10" fill="#993C1D">append-only</text>
 
-<rect x="20" y="452" width="310" height="278" rx="4" fill="#F8F7F3" stroke="#888780"/>
-<text x="175" y="474" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 2 — follower</text>
-<rect x="35" y="484" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="175" y="503" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
-<rect x="35" y="522" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="175" y="541" text-anchor="middle" font-size="11" fill="#444441">raft core · votes, stores entries</text>
-<rect x="35" y="560" width="280" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
-<text x="175" y="579" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
-<text x="35" y="612" font-size="11" fill="#5F5E5A">on disk:</text>
-<rect x="35" y="620" width="133" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="101" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
-<text x="101" y="657" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
-<rect x="182" y="620" width="133" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
-<text x="248" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
-<text x="248" y="657" text-anchor="middle" font-size="10" fill="#993C1D">own verifiable chain</text>
+<!-- replicate + ack between leader and followers -->
+<line x1="300" y1="334" x2="195" y2="396" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<line x1="420" y1="334" x2="525" y2="396" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrt)"/>
+<line x1="215" y1="400" x2="315" y2="340" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+<line x1="505" y1="400" x2="405" y2="340" stroke="#5F5E5A" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+<circle cx="360" cy="350" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="360" y="354" text-anchor="middle" font-size="11" fill="#2C2C2A">2</text>
+<text x="360" y="372" text-anchor="middle" font-size="11" fill="#0F6E56">replicate over mTLS</text>
+<circle cx="360" cy="392" r="9" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="360" y="396" text-anchor="middle" font-size="11" fill="#2C2C2A">3</text>
+<text x="360" y="414" text-anchor="middle" font-size="11" fill="#5F5E5A">acks — majority (2 of 3) = committed</text>
 
-<rect x="370" y="452" width="310" height="278" rx="4" fill="#F8F7F3" stroke="#888780"/>
-<text x="525" y="474" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 3 — follower</text>
-<rect x="385" y="484" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="525" y="503" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
-<rect x="385" y="522" width="280" height="30" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="525" y="541" text-anchor="middle" font-size="11" fill="#444441">raft core · votes, stores entries</text>
-<rect x="385" y="560" width="280" height="30" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
-<text x="525" y="579" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
-<text x="385" y="612" font-size="11" fill="#5F5E5A">on disk:</text>
-<rect x="385" y="620" width="133" height="52" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
-<text x="451" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C2C2A">raft.redb</text>
-<text x="451" y="657" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed, small</text>
-<rect x="532" y="620" width="133" height="52" rx="4" fill="#FAECE7" stroke="#993C1D"/>
-<text x="598" y="641" text-anchor="middle" font-size="12" font-weight="bold" fill="#712B13">events.log</text>
-<text x="598" y="657" text-anchor="middle" font-size="10" fill="#993C1D">own verifiable chain</text>
+<!-- followers -->
+<rect x="24" y="400" width="300" height="150" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="174" y="421" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 2 — follower</text>
+<rect x="39" y="431" width="270" height="26" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="174" y="448" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
+<rect x="39" y="463" width="270" height="26" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="174" y="480" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
+<rect x="39" y="497" width="128" height="44" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="103" y="516" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="103" y="531" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed</text>
+<rect x="181" y="497" width="128" height="44" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="245" y="516" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#712B13">events.log</text>
+<text x="245" y="531" text-anchor="middle" font-size="10" fill="#993C1D">own chain</text>
 
-<text x="20" y="762" font-size="11" fill="#5F5E5A">1 write · 2 replicate (mTLS) · 3 majority acks = committed · 4 every node applies to kernel · 5 audit append at apply</text>
+<rect x="396" y="400" width="300" height="150" rx="4" fill="#F8F7F3" stroke="#888780"/>
+<text x="546" y="421" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C2C2A">node 3 — follower</text>
+<rect x="411" y="431" width="270" height="26" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="546" y="448" text-anchor="middle" font-size="11" fill="#444441">http api · redirects writes, serves reads</text>
+<rect x="411" y="463" width="270" height="26" rx="4" fill="#EEEDFE" stroke="#534AB7"/>
+<text x="546" y="480" text-anchor="middle" font-size="11" fill="#3C3489">kernel state — same hash as leader</text>
+<rect x="411" y="497" width="128" height="44" rx="4" fill="#FFFFFF" stroke="#B4B2A9"/>
+<text x="475" y="516" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#2C2C2A">raft.redb</text>
+<text x="475" y="531" text-anchor="middle" font-size="10" fill="#5F5E5A">trimmed</text>
+<rect x="553" y="497" width="128" height="44" rx="4" fill="#FAECE7" stroke="#993C1D"/>
+<text x="617" y="516" text-anchor="middle" font-size="11.5" font-weight="bold" fill="#712B13">events.log</text>
+<text x="617" y="531" text-anchor="middle" font-size="10" fill="#993C1D">own chain</text>
+
+<!-- per-node local steps band: 4 apply, 5 audit -->
+<rect x="24" y="572" width="672" height="64" rx="4" fill="#F1EFE8" stroke="#5F5E5A"/>
+<text x="40" y="592" font-size="11.5" font-weight="bold" fill="#2C2C2A">Then, locally and identically on every node (deterministic kernel ⇒ identical BLAKE3 hash):</text>
+<circle cx="48" cy="616" r="9" fill="#FFFFFF" stroke="#534AB7"/>
+<text x="48" y="620" text-anchor="middle" font-size="11" fill="#3C3489">4</text>
+<text x="62" y="620" font-size="11" fill="#3C3489">apply the committed event to the in-memory kernel state</text>
+<circle cx="388" cy="616" r="9" fill="#FFFFFF" stroke="#993C1D"/>
+<text x="388" y="620" text-anchor="middle" font-size="11" fill="#712B13">5</text>
+<text x="402" y="620" font-size="11" fill="#712B13">append it to this node's hash-chained events.log (audit)</text>
 </svg>

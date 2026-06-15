@@ -1,17 +1,22 @@
-# Valori 3-node cluster — Phase 1.11
+# Valori 3-node Raft cluster
 # Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 #
-# Single-leader, 3-node layout for local development and smoke-testing.
-# All three nodes run identical images; the leader is distinguished only by
-# the absence of VALORI_FOLLOWER_OF.
+# Single-leader, 3-node Raft layout for local dev, smoke-testing, and EC2.
+# node-1 bootstraps the cluster (VALORI_CLUSTER_INIT=1); nodes 2 & 3 join
+# once node-1's TCP health check passes (HTTP port open, Raft gRPC running).
 #
 # Usage:
-#   docker compose up -d          # start the cluster
-#   docker compose ps              # check health
+#   docker compose up -d          # start cluster in background
+#   docker compose ps              # check health (healthy / starting / unhealthy)
 #   docker compose logs -f node-1  # tail node-1 logs
-#   docker compose down -v         # stop and remove volumes
+#   docker compose down -v         # stop + wipe volumes
 #
-# Phase 2 (openraft) will replace VALORI_FOLLOWER_OF with a Raft peer list.
+# From your laptop (EC2_IP = public IP of the EC2 host):
+#   curl http://EC2_IP:3001/health
+#   curl -X POST http://EC2_IP:3001/records -H 'Content-Type: application/json' \
+#        -d '{"values":[1.0,2.0,3.0]}'
+#   curl -X POST http://EC2_IP:3001/search  -H 'Content-Type: application/json' \
+#        -d '{"query":[1.0,2.0,3.0],"k":5}'
 
 version: "3.9"
 
@@ -20,7 +25,7 @@ x-node-common: &node-common
     context: .
     dockerfile: Dockerfile
   restart: unless-stopped
-  environment:
+  environment: &env-common
     VALORI_DIM: "128"
     VALORI_MAX_RECORDS: "1000000"
     VALORI_MAX_NODES: "100000"
@@ -32,10 +37,10 @@ x-node-common: &node-common
     VALORI_RAFT_BIND: "0.0.0.0:3100"
     VALORI_RAFT_LOG_PATH: /data/raft.redb
   healthcheck:
-    test: ["/usr/local/bin/valori-node", "--health-check"]
-    interval: 30s
-    timeout: 5s
-    start_period: 15s
+    test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+    interval: 15s
+    timeout: 3s
+    start_period: 20s
     retries: 3
 
 services:
@@ -45,7 +50,7 @@ services:
     ports:
       - "3001:3000"
     environment:
-      <<: *node-common
+      <<: *env-common
       VALORI_NODE_ID: "1"
       VALORI_CLUSTER_INIT: "1"
       VALORI_BIND: "0.0.0.0:3000"
@@ -60,7 +65,7 @@ services:
     ports:
       - "3002:3000"
     environment:
-      <<: *node-common
+      <<: *env-common
       VALORI_NODE_ID: "2"
       VALORI_BIND: "0.0.0.0:3000"
       VALORI_EVENT_LOG_PATH: /data/events.log
@@ -77,7 +82,7 @@ services:
     ports:
       - "3003:3000"
     environment:
-      <<: *node-common
+      <<: *env-common
       VALORI_NODE_ID: "3"
       VALORI_BIND: "0.0.0.0:3000"
       VALORI_EVENT_LOG_PATH: /data/events.log

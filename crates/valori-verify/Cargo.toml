@@ -1,8 +1,8 @@
 [package]
 name = "valori-verify"
-version = "0.2.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "Standalone offline verifier for Valori event logs — replays events and proves state integrity without a server"
 
 [dependencies]

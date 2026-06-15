@@ -24,6 +24,15 @@ class NotFoundError(ValoricoreError):
     """Raised when a record, node, or edge does not exist."""
     pass
 
+class NotLeaderError(ValoricoreError):
+    """
+    Raised when a write hits a cluster follower that cannot name the leader
+    (e.g. during an election), and the client exhausts its retries. In a
+    healthy cluster the client transparently follows the leader redirect, so
+    this surfaces only when no leader is currently elected.
+    """
+    pass
+
 class TamperDetected(IntegrityError):
     """
     Raised when a live node's state hash differs from an anchor, or when

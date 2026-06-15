@@ -30,6 +30,7 @@ from .exceptions import (
     ValidationError,
     ConnectionError,
     NotFoundError,
+    NotLeaderError,
     KernelError,
     TamperDetected,
 )
@@ -106,6 +107,7 @@ __all__ = [
     "ValidationError",
     "ConnectionError",
     "NotFoundError",
+    "NotLeaderError",
     "KernelError",
 
     # ── Verification ───────────────────────────────────────────────

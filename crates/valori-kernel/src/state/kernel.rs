@@ -201,6 +201,19 @@ impl KernelState {
                 self.apply(&cmd)?;
             }
 
+            KernelEvent::AutoInsertRecord { vector, metadata, tag } => {
+                // ID assigned here at apply time — deterministic on all replicas
+                // because the Raft log orders all entries identically.
+                let id = self.next_record_id();
+                let cmd = Command::InsertRecord {
+                    id,
+                    vector: vector.clone(),
+                    metadata: metadata.clone(),
+                    tag: *tag,
+                };
+                self.apply(&cmd)?;
+            }
+
             KernelEvent::InsertRecordEncrypted { .. } | KernelEvent::ShredKey { .. } => {
                 return Err(KernelError::NotImplemented);
             }

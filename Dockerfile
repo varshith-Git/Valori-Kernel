@@ -23,19 +23,25 @@ RUN apt-get update && \
 # Copy only Cargo manifests first; the build layer is invalidated only when
 # dependencies change, not on every source edit.
 COPY Cargo.toml Cargo.lock ./
-COPY crates/valori-kernel/Cargo.toml   crates/valori-kernel/
-COPY crates/valori-node/Cargo.toml     crates/valori-node/
-COPY crates/valori-wire/Cargo.toml     crates/valori-wire/
-COPY crates/valori-cli/Cargo.toml      crates/valori-cli/
-COPY crates/valori-verify/Cargo.toml   crates/valori-verify/
+COPY crates/valori-kernel/Cargo.toml    crates/valori-kernel/
+COPY crates/valori-node/Cargo.toml      crates/valori-node/
+COPY crates/valori-wire/Cargo.toml      crates/valori-wire/
+COPY crates/valori-cli/Cargo.toml       crates/valori-cli/
+COPY crates/valori-verify/Cargo.toml    crates/valori-verify/
 COPY crates/valori-consensus/Cargo.toml crates/valori-consensus/
+# valori-ffi and embedded are non-default workspace members but must be present
+# for workspace resolution even though valori-node never depends on them.
+COPY crates/valori-ffi/Cargo.toml       crates/valori-ffi/
+COPY embedded/Cargo.toml                embedded/
 
 # Stub src files to allow `cargo build` to populate the dep cache.
-RUN for crate in valori-kernel valori-node valori-wire valori-cli valori-verify valori-consensus; do \
+# valori-ffi / embedded stubs are inert (not in valori-node's dep graph).
+RUN for crate in valori-kernel valori-node valori-wire valori-cli valori-verify valori-consensus valori-ffi; do \
         mkdir -p crates/$crate/src && \
-        echo "fn main() {}" > crates/$crate/src/main.rs && \
-        echo "" > crates/$crate/src/lib.rs; \
-    done
+        printf 'pub fn stub() {}\n' > crates/$crate/src/lib.rs && \
+        printf 'fn main() {}\n' > crates/$crate/src/main.rs; \
+    done && \
+    mkdir -p embedded/src && printf 'fn main() {}\n' > embedded/src/main.rs
 
 RUN cargo build --release -p valori-node --locked 2>/dev/null || true
 
@@ -64,11 +70,11 @@ ENV VALORI_EVENT_LOG_PATH=/data/events.log
 ENV VALORI_SNAPSHOT_PATH=/data/state.snap
 
 EXPOSE 3000
+EXPOSE 3100
 
-# HEALTHCHECK — uses the built-in --health-check mode (Phase 1.11).
-# valori-node --health-check sends GET /v1/health and exits 0/1.
-# Distroless has no curl, so the binary is its own health probe.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Distroless has no curl; the binary probes its own TCP port and exits 0/1.
+# start_period=20s gives Raft time to elect a leader before retries count.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD ["/usr/local/bin/valori-node", "--health-check"]
 
 USER nonroot
