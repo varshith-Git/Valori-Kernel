@@ -6,6 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **`valori_raft_state_hash_match` Prometheus gauge** — a background task on
+  each cluster node periodically calls `/v1/proof/state` on every peer and
+  publishes `1` when all reachable nodes agree on the BLAKE3 state hash, `0`
+  when any peer diverges. Mismatches are also logged at `ERROR` level and
+  counted by `valori_raft_divergence_detections_total`. Configurable via
+  `VALORI_STATE_HASH_CHECK_SECS` (default 30 s; `0` disables).
+- **`GET /v1/cluster/role`** endpoint — returns `{"role":"leader"|"follower",
+  "node_id":N,"current_leader":N}` on any node. Designed for load-balancer
+  health-check routing: steer writes at the pod that answers `"leader"` to
+  avoid 307 redirect round trips on every write.
+- **Proptest event-sequence fuzz** (`crates/valori-consensus/tests/proptest_event_fuzz.rs`)
+  — 32 randomly generated insert/soft-delete/delete sequences applied through
+  a 3-node in-process cluster, asserting all nodes converge to the same BLAKE3
+  state hash after each sequence. Shrinks failing cases automatically.
+- **Helm chart** (`deploy/helm/valori/`) — production StatefulSet with
+  PersistentVolumeClaims for `events.log` and `raft.redb`, headless service
+  for stable pod DNS, client service, and configurable liveness/readiness
+  probes pointing at `/v1/cluster/health` and `/health`. Topology spread
+  anti-affinity keeps pods on separate availability zones by default.
+
+- **Automatic `events.log` rotation** on both write paths — the standalone
+  `EventCommitter` and the cluster `EventLogAuditSink` seal the live segment to
+  `events.log.NNNNNN` once it passes `VALORI_EVENT_LOG_ROTATION_BYTES` (default
+  256 MiB; `0` disables), opening a fresh segment that splices from the sealed
+  one's chain head.
+- **Multi-segment recovery** — recovery now discovers and replays every local
+  segment (sealed archives + live file) in sequence order and verifies each
+  splice point.
+
+- **Linearizable reads via the read-index protocol** (now the default read
+  consistency). The leader serves through openraft's `ensure_linearizable()`;
+  a follower fetches the leader's read index from the new
+  `GET /v1/cluster/read-index` endpoint, then waits for its own apply to catch
+  up before scanning local state. Clients can opt into a faster,
+  eventually-consistent read with `consistency: "local"` (Python SDK:
+  `search(..., consistency="local")`).
+
+### Fixed
+- Rotated logs previously recovered **only the live segment**, silently dropping
+  all pre-rotation history; recovery is now multi-segment and lossless.
+- Archive segments are named by monotonic segment sequence instead of a
+  wall-clock timestamp, so two rotations within the same second no longer
+  collide and clobber an earlier archive.
+
 ## [0.2.0] — 2026-06-13
 
 The multi-node release. Valori graduates from a single standalone node to a

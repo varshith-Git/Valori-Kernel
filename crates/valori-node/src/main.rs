@@ -129,7 +129,10 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
                     eprintln!("FATAL: cannot open audit log {path:?}: {e}");
                     std::process::exit(1);
                 });
-            let sink = EventLogAuditSink::new(writer);
+            let mut sink = EventLogAuditSink::new(writer);
+            if let Some(limit) = node_cfg.event_log_rotation_bytes {
+                sink = sink.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
+            }
             let handle = sink.writer();
             (Box::new(sink), Some(handle))
         }

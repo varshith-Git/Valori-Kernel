@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "valori.fullname" . }}
+  labels:
+    {{- include "valori.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "valori.fullname" . }}-headless
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "valori.selectorLabels" . | nindent 6 }}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        {{- include "valori.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: 60
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: valori
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.apiPort }}
+              protocol: TCP
+            - name: raft
+              containerPort: {{ .Values.raftPort }}
+              protocol: TCP
+          env:
+            # Node identity: StatefulSet ordinal → node ID (pod-0 = node 1, etc.)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: VALORI_NODE_ID
+              # Extract ordinal from pod name (e.g. "valori-2" → "3")
+              value: "$(shell echo $POD_NAME | awk -F'-' '{print $NF+1}')"
+            - name: VALORI_CLUSTER_MEMBERS
+              value: {{ include "valori.clusterMembers" . | quote }}
+            - name: VALORI_CLUSTER_INIT
+              # Only pod-0 bootstraps a brand-new cluster.
+              value: "$([ $(echo $POD_NAME | awk -F'-' '{print $NF}') = '0' ] && echo 1 || echo '')"
+            - name: VALORI_BIND
+              value: "0.0.0.0:{{ .Values.apiPort }}"
+            - name: VALORI_RAFT_BIND
+              value: "0.0.0.0:{{ .Values.raftPort }}"
+            - name: VALORI_DIM
+              value: {{ .Values.kernel.dim | quote }}
+            - name: VALORI_MAX_RECORDS
+              value: {{ .Values.kernel.maxRecords | quote }}
+            - name: VALORI_MAX_NODES
+              value: {{ .Values.kernel.maxNodes | quote }}
+            - name: VALORI_MAX_EDGES
+              value: {{ .Values.kernel.maxEdges | quote }}
+            - name: VALORI_EVENT_LOG_ROTATION_BYTES
+              value: {{ .Values.kernel.eventLogRotationBytes | quote }}
+            {{- if .Values.persistence.eventLog.enabled }}
+            - name: VALORI_EVENT_LOG_PATH
+              value: /data/events.log
+            {{- end }}
+            {{- if .Values.persistence.raftLog.enabled }}
+            - name: VALORI_RAFT_LOG_PATH
+              value: /raft/raft.redb
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: VALORI_TLS_CA
+              value: /tls/ca.crt
+            - name: VALORI_TLS_CERT
+              value: /tls/tls.crt
+            - name: VALORI_TLS_KEY
+              value: /tls/tls.key
+            - name: VALORI_TLS_DOMAIN
+              value: {{ .Values.tls.domain | quote }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: api
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: api
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.eventLog.enabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if .Values.persistence.raftLog.enabled }}
+            - name: raft
+              mountPath: /raft
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+  volumeClaimTemplates:
+    {{- if .Values.persistence.eventLog.enabled }}
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.eventLog.storageClass }}
+        storageClassName: {{ .Values.persistence.eventLog.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.eventLog.size }}
+    {{- end }}
+    {{- if .Values.persistence.raftLog.enabled }}
+    - metadata:
+        name: raft
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.persistence.raftLog.storageClass }}
+        storageClassName: {{ .Values.persistence.raftLog.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.raftLog.size }}
+    {{- end }}

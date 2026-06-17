@@ -42,6 +42,7 @@ jobs:
           manifest-path: Cargo.toml
           # Run all checks: licenses, advisories, bans, sources.
           command: check
-          # Fail the step on any deny-level finding; warn-level findings are
-          # printed but do not fail the job.
-          arguments: --all-features
+          # Note: all-features is configured in deny.toml ([graph]); we do not
+          # pass it on the CLI because cargo-deny 0.14+ rejects `--all-features`
+          # after the `check` subcommand.
+          arguments: ""

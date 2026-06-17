@@ -34,6 +34,19 @@ license    = "MIT OR Apache-2.0"
 authors    = ["Varshith Gudur"]
 repository = "https://github.com/valori-db/valori-kernel"
 
+# Internal crates carry an explicit version alongside the path so they are
+# publish-ready (crates.io requires it) and so cargo-deny's wildcard ban does
+# not flag them. Paths resolve from the workspace root. Bump the version here
+# in lockstep with [workspace.package].
+[workspace.dependencies]
+# default-features = false keeps the no_std firmware (embedded/) buildable;
+# `std` is an opt-in feature on valori-kernel, so consumers that need it (the
+# PyO3 FFI) enable `features = ["std"]` explicitly.
+valori-kernel    = { path = "crates/valori-kernel",    version = "0.2.1", default-features = false }
+valori-wire      = { path = "crates/valori-wire",      version = "0.2.1" }
+valori-consensus = { path = "crates/valori-consensus", version = "0.2.1" }
+valori-node      = { path = "crates/valori-node",      version = "0.2.1" }
+
 # Firmware requires abort on panic (no unwinding support in no_std)
 # This also guarantees fail-closed behavior for the Node.
 [profile.dev]

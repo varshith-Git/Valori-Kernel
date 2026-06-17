@@ -13,8 +13,12 @@ A cluster is an odd number of nodes (3 or 5 in practice) running Raft consensus.
 - **Writes go to the leader.** Send a write to a follower and it answers
   `307 Temporary Redirect` with the leader's address in the `Location` header.
   The Python SDK and `curl -L` follow this automatically.
-- **Reads are served locally** by any node — this is what the replicas' RAM
-  buys you. A follower answers `/search` from its own copy without a round trip.
+- **Reads are linearizable by default**, on any node. A follower establishes a
+  read index against the leader (the read-index protocol) and waits for its own
+  apply to catch up before answering, so the result reflects every write
+  committed before the read began. Pass `consistency: "local"` (SDK:
+  `search(..., consistency="local")`) to skip the round trip and read
+  immediately from the queried node — eventually consistent, but faster.
 - **A quorum (majority) must agree to commit.** A 3-node cluster tolerates 1
   node down; a 5-node cluster tolerates 2. A minority partition cannot commit
   writes (it stalls rather than forking — see [fault tolerance](#fault-tolerance)).
@@ -92,6 +96,7 @@ VALORI_RAFT_LOG_PATH=/data/raft.redb \
 | `VALORI_RAFT_BIND` | no | gRPC consensus listener. Default `0.0.0.0:3100`. |
 | `VALORI_BIND` | no | HTTP API listener. Default `0.0.0.0:3000`. |
 | `VALORI_EVENT_LOG_PATH` | recommended | Path to the BLAKE3-chained audit log. Without it the node replicates but doesn't persist the audit chain locally. |
+| `VALORI_EVENT_LOG_ROTATION_BYTES` | no | Seal the live `events.log` once it passes this many bytes (default 256 MiB; `0` disables). Sealed segments become `events.log.NNNNNN`; recovery replays them all. |
 | `VALORI_RAFT_LOG_PATH` | recommended | redb path for a persistent Raft log + vote (survives restarts). Omit for in-memory. |
 | `VALORI_TLS_CA` / `VALORI_TLS_CERT` / `VALORI_TLS_KEY` | no | All three → mutual TLS on the Raft channel. Partial → boot error. |
 | `VALORI_TLS_DOMAIN` | no | Shared cert domain name. Default `valori-cluster.internal`. |
@@ -119,6 +124,8 @@ silently starting standalone (which would be a split-brain factory).
 |---|---|---|
 | `/v1/cluster/status` | GET | Leader, term, log indexes, member table |
 | `/v1/cluster/health` | GET | `200` if a leader is elected, `503` otherwise |
+| `/v1/cluster/role` | GET | `{"role":"leader"\|"follower","node_id":N}` — for LB write routing |
+| `/v1/cluster/read-index` | GET | Leader-only: returns the read index for linearizable reads (`503` + leader id on a follower) |
 | `/v1/cluster/add-node` | POST | Add a member (learner catch-up → voter). Leader-only. |
 | `/v1/cluster/remove-node` | POST | Remove a voter. Leader-only. |
 
@@ -200,3 +207,45 @@ offline verifier — no server required:
 ```bash
 valori-verify --log /path/to/events.log
 ```
+
+## Active divergence detection
+
+Each node runs a background task (every 30 s by default, configurable via
+`VALORI_STATE_HASH_CHECK_SECS`) that calls `/v1/proof/state` on every peer and
+compares the returned BLAKE3 state hash to its own. The Prometheus gauge
+`valori_raft_state_hash_match` is `1` when all reachable peers agree, `0` when
+any peer reports a different hash. Mismatches are logged at `ERROR` level and
+counted by `valori_raft_divergence_detections_total`.
+
+In a healthy cluster this gauge should always be `1`. Wire an alert on:
+
+```promql
+valori_raft_state_hash_match == 0
+```
+
+## Load-balancer write routing
+
+To avoid 307-redirect round trips for every write, configure your load balancer
+to prefer the leader pod. Use `/v1/cluster/role` as the health-check endpoint:
+
+```bash
+# e.g. AWS Target Group health check per pod:
+# Path: /v1/cluster/role  Method: GET  Healthy threshold: 200 OK
+# Then create two target groups: one for leader-only (role=="leader" check via Lambda
+# or nginx return), and one for all-nodes reads.
+```
+
+The simplest pattern: all three pods are in the read target group; writes go
+through an nginx `lua` block or AWS Lambda that forwards to whichever pod
+returns `"role":"leader"`. The SDK fallback (307 redirect) remains the safety net.
+
+## Kubernetes (Helm)
+
+```bash
+helm install valori ./deploy/helm/valori \
+  --set replicaCount=3 \
+  --set image.tag=0.2.1
+```
+
+See [`deploy/helm/valori/values.yaml`](../deploy/helm/valori/values.yaml) for
+the full configuration reference (storage classes, resource limits, mTLS, etc.).

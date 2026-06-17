@@ -142,11 +142,26 @@ class SyncRemoteClient:
         """Mark a record as inactive without physically removing it."""
         self._post("/v1/soft-delete", {"id": record_id})
 
-    def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}]."""
+    def search(
+        self,
+        query: Vector,
+        k: int,
+        filter_tag: Optional[int] = None,
+        consistency: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
+
+        ``consistency`` applies in cluster mode: ``"linearizable"`` (the server
+        default) reflects every write committed before the read, via the
+        read-index protocol; ``"local"`` serves immediately from the queried
+        node and may lag (eventually consistent, but no leader round trip).
+        Ignored by a standalone node.
+        """
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
+        if consistency is not None:
+            data["consistency"] = consistency
         resp = self._post("/search", data)
         return resp["results"]
 
@@ -441,10 +456,19 @@ class AsyncRemoteClient:
         """Mark a record as inactive without physically removing it."""
         await self._post("/v1/soft-delete", {"id": record_id})
 
-    async def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def search(
+        self,
+        query: Vector,
+        k: int,
+        filter_tag: Optional[int] = None,
+        consistency: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local"."""
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
+        if consistency is not None:
+            data["consistency"] = consistency
         resp = await self._post("/search", data)
         return resp["results"]
 

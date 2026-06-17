@@ -44,6 +44,11 @@ pub struct NodeConfig {
     pub snapshot_path: Option<PathBuf>,
     pub wal_path: Option<PathBuf>,
     pub event_log_path: Option<PathBuf>, // Added explicit config
+
+    // Env: VALORI_EVENT_LOG_ROTATION_BYTES (default: 256 MiB in standalone, config-dependent in cluster)
+    // Trigger an audit log rotation after this many bytes.
+    pub event_log_rotation_bytes: Option<u64>,
+
     /// Deprecated: use snapshot_every_events / snapshot_every_bytes instead.
     /// Retained for backward compatibility; triggers a startup warning if set
     /// without the new cadence knobs. Will be removed in Phase 3.
@@ -186,6 +191,9 @@ impl Default for NodeConfig {
         let event_log_path = std::env::var("VALORI_EVENT_LOG_PATH")
             .ok().map(PathBuf::from);
 
+        let event_log_rotation_bytes = std::env::var("VALORI_EVENT_LOG_ROTATION_BYTES")
+            .ok().and_then(|v| v.parse::<u64>().ok());
+
         Self {
             max_records,
             dim,
@@ -197,6 +205,7 @@ impl Default for NodeConfig {
             snapshot_path,
             wal_path,
             event_log_path,
+            event_log_rotation_bytes,
             auto_snapshot_interval_secs,
             snapshot_every_events,
             snapshot_every_bytes,

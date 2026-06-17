@@ -151,14 +151,13 @@ impl EventCommitter {
             hash_state_blake3(&self.live_state)
         };
 
-        let archive_path = {
-            let stem = self.event_log.path().to_path_buf();
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            stem.with_extension(format!("log.{}", ts))
-        };
+        // Name archives by the monotonic segment sequence: a wall-clock name
+        // would collide (and silently clobber an earlier archive) when two
+        // rotations land in the same second.
+        let archive_path = self
+            .event_log
+            .path()
+            .with_extension(format!("log.{:06}", self.event_log.segment_seq()));
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

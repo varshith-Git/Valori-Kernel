@@ -168,7 +168,11 @@ impl Engine {
                  Ok(log_writer) => {
                      let journal = EventJournal::new();
                      let live_state = KernelState::new();
-                     Some(EventCommitter::new(log_writer, journal, live_state))
+                     let mut committer = EventCommitter::new(log_writer, journal, live_state);
+                     if let Some(limit) = cfg.event_log_rotation_bytes {
+                         committer = committer.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
+                     }
+                     Some(committer)
                  }
                  Err(e) => {
                      tracing::error!("Failed to open Event Log: {}", e);

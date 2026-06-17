@@ -1,0 +1,96 @@
+# Default values for a 3-node Valori cluster.
+# Override with: helm install valori ./deploy/helm/valori -f my-values.yaml
+
+replicaCount: 3
+
+image:
+  repository: valori-node
+  tag: "0.2.1"
+  pullPolicy: IfNotPresent
+
+# HTTP API port (VALORI_BIND)
+apiPort: 3000
+# Raft gRPC port (VALORI_RAFT_BIND)
+raftPort: 3100
+
+# Storage
+persistence:
+  # events.log — audit chain (highly recommended in production)
+  eventLog:
+    enabled: true
+    size: 10Gi
+    storageClass: ""        # "" = cluster default
+  # raft.redb — persistent Raft log + vote
+  raftLog:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+
+# Kernel sizing (maps to VALORI_* env vars)
+kernel:
+  dim: 128
+  maxRecords: 1000000
+  maxNodes: 1000000
+  maxEdges: 8000000
+  # Seal events.log once it reaches this size (256 MiB default, 0 = off)
+  eventLogRotationBytes: "268435456"
+
+# Mutual TLS on the Raft channel.
+# Provide a Kubernetes secret with keys: ca.crt, tls.crt, tls.key
+tls:
+  enabled: false
+  secretName: ""
+  domain: "valori-cluster.internal"
+
+# Service exposed to clients
+service:
+  type: ClusterIP
+  port: 3000
+  annotations: {}
+
+# LoadBalancer or NodePort for external access
+externalService:
+  enabled: false
+  type: LoadBalancer
+  port: 3000
+  annotations: {}
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+# Liveness/readiness probes
+probes:
+  # /v1/cluster/health → 200 when a leader is elected
+  liveness:
+    path: /v1/cluster/health
+    initialDelaySeconds: 20
+    periodSeconds: 15
+    failureThreshold: 3
+  # /v1/cluster/role → 200 always (leader or follower); use for write routing
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+
+podAnnotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  # Spread nodes across availability zones
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: valori
+          topologyKey: topology.kubernetes.io/zone

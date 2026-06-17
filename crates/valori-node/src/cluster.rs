@@ -251,6 +251,7 @@ pub async fn bootstrap_cluster(
     }
 
     spawn_raft_metrics_watcher(raft.clone());
+    spawn_state_hash_watcher(raft.clone(), state_machine.clone());
 
     Ok(ClusterHandle {
         raft,
@@ -308,4 +309,99 @@ fn spawn_raft_metrics_watcher(raft: Raft) {
             }
         }
     });
+}
+
+/// Periodically compare this node's BLAKE3 state hash against every peer's
+/// `/v1/proof/state` endpoint and publish `valori_raft_state_hash_match`
+/// (1 = all agree, 0 = any divergence detected).
+///
+/// The interval defaults to 30 s and is configurable via the env var
+/// `VALORI_STATE_HASH_CHECK_SECS` (set to `0` to disable the watcher).
+fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) {
+    let interval_secs: u64 = std::env::var("VALORI_STATE_HASH_CHECK_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    if interval_secs == 0 {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("http client");
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            interval.tick().await;
+            check_state_hash_agreement(&raft, &sm, &http).await;
+        }
+    });
+}
+
+async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: &reqwest::Client) {
+    let local_hash: String = {
+        let h = sm.state_hash().await;
+        h.iter().map(|b| format!("{b:02x}")).collect()
+    };
+
+    let peers: Vec<String> = {
+        let m = raft.metrics().borrow().clone();
+        let my_id = m.id;
+        m.membership_config
+            .nodes()
+            .filter(|(id, n)| **id != my_id && !n.api_addr.is_empty())
+            .map(|(_, n)| n.api_addr.clone())
+            .collect()
+    };
+
+    if peers.is_empty() {
+        // Single-node cluster — trivially agrees with itself.
+        metrics::gauge!("valori_raft_state_hash_match", 1.0);
+        return;
+    }
+
+    let mut all_match = true;
+    for peer_addr in &peers {
+        let url = format!("http://{peer_addr}/v1/proof/state");
+        match http.get(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                match r.json::<serde_json::Value>().await {
+                    Ok(body) => {
+                        let peer_hash = body
+                            .get("final_state_hash")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if peer_hash != local_hash {
+                            tracing::error!(
+                                peer = peer_addr,
+                                local = %local_hash,
+                                remote = peer_hash,
+                                "STATE HASH MISMATCH — replica divergence detected"
+                            );
+                            all_match = false;
+                            metrics::counter!("valori_raft_divergence_detections_total", 1);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(peer = peer_addr, err = %e, "state hash parse error");
+                        all_match = false;
+                    }
+                }
+            }
+            Ok(r) => {
+                tracing::warn!(peer = peer_addr, status = %r.status(), "state hash probe non-2xx");
+                all_match = false;
+            }
+            Err(e) => {
+                tracing::warn!(peer = peer_addr, err = %e, "state hash probe failed");
+                // Unreachable peer: we don't count this as a mismatch —
+                // that would false-positive during rolling restarts.
+            }
+        }
+    }
+    metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 });
 }

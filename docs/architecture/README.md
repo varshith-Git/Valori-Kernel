@@ -48,17 +48,18 @@ via a heartbeat to a quorum and returns `C`; the follower blocks until its own
 applied index reaches `C`, then runs the query. The result then reflects every
 write committed before the read began.
 
-- **[designed]** — this is the required path for the strong-consistency default.
-- **[wired]** today: follower reads are served **without** read-index — i.e.
-  eventually consistent. The fix is to route the read handler through
-  openraft's read-index before the local scan (leader reads need only the
-  heartbeat confirmation; follower reads also pay the catch-up wait). One extra
-  leader round trip per read is the cost.
+- **[wired]** — linearizable is the **default** read consistency. The leader
+  serves via openraft's `ensure_linearizable()`; a follower calls the leader's
+  `GET /v1/cluster/read-index`, then `wait().applied_index_at_least(C)` before
+  scanning local state. One extra leader round trip per follower read is the
+  cost (leader reads pay only the heartbeat confirmation).
+- A client may opt into a faster, eventually-consistent read with
+  `consistency: "local"` (SDK: `search(..., consistency="local")`), which skips
+  the read-index round trip and serves immediately from the queried node.
 
-This honesty matters: the write flow above is strongly consistent, but a read
-served from a lagging replica is not — until the read-index step is wired, the
-cluster offers strong writes with eventually-consistent reads, not end-to-end
-linearizability.
+With read-index wired, the cluster is end-to-end linearizable by default:
+strongly-consistent writes *and* reads, with local reads available as an
+explicit opt-in.
 
 ## 3. The snapshot's two jobs
 
@@ -76,14 +77,19 @@ implements `get_snapshot_builder` / `begin_receiving_snapshot` /
 `install_snapshot`, and the gRPC transport carries the RPC. Without this path,
 a new node could never catch up once the log it needs has been compacted.
 
-**Job B — rotation. [designed]**
-"Append-only forever" is correct for audit but unbounded on disk. The same
-snapshot point seals the current `events.log` segment, a fresh segment opens
-chaining from the sealed segment's final hash, and the sealed segment is
-archived to cold storage (S3). Recovery then needs only `{snapshot @ S}` plus
-the live segment; the BLAKE3 chain carries across segment boundaries, so a
-verifier reassembles archived + live segments into one unbroken history.
-Snapshotting already exists — the seal-and-rotate trigger is the piece to wire.
+**Job B — rotation. [wired]**
+"Append-only forever" is correct for audit but unbounded on disk. Once the live
+`events.log` passes a size threshold (`VALORI_EVENT_LOG_ROTATION_BYTES`, default
+256 MiB), it is sealed to `events.log.NNNNNN` (named by segment sequence, never
+a timestamp — so two rotations in the same second can't collide), and a fresh
+segment opens chaining from the sealed segment's final hash. Both write paths
+rotate: the standalone `EventCommitter` and the cluster `EventLogAuditSink`.
+The BLAKE3 chain carries across segment boundaries, and **recovery replays every
+local segment in sequence order**, verifying each splice — so a rotated log
+recovers losslessly (a missing or substituted archive breaks the splice and is
+caught, not silently skipped). Moving sealed segments to cold storage (S3) and
+recovering from `{snapshot @ S} + live segment` alone is the Phase-3 step;
+today the sealed segments stay local and are all replayed.
 
 ---
 
@@ -104,8 +110,20 @@ evidence — the other two machines can be gone.
 plumbing; the audit log is forever; the kernel is never modified by the
 consensus layer — its determinism is the load-bearing wall.
 
-## Not pictured (Phase 3)
+## Active divergence detection **[wired]**
 
-The cluster-wide BLAKE3 proof broadcast (`/v1/cluster/proof`) — every node
-periodically gossiping its state hash so divergence is detected actively rather
-than at audit time — is a Phase 3 addition, not part of the core data path.
+Each node runs a background watcher (default period: 30 s, env:
+`VALORI_STATE_HASH_CHECK_SECS`) that calls `/v1/proof/state` on every peer and
+compares the BLAKE3 state hash. The result is published as the Prometheus gauge
+`valori_raft_state_hash_match` (1 = all agree, 0 = any mismatch). Mismatches
+are also logged at `ERROR` and counted by
+`valori_raft_divergence_detections_total`. Alert on `valori_raft_state_hash_match == 0`.
+
+In a correct cluster this gauge is always 1. A `0` means either a genuine
+state divergence (a bug — file an issue immediately) or a transient probe
+failure during a rolling restart (unreachable peers are not counted as mismatches
+to avoid false positives; only a hash mismatch fires the gauge).
+
+The cluster-wide BLAKE3 proof *broadcast* (every node pushing its hash to every
+other node and surfacing via `/v1/cluster/proof`) and cold-storage offload of
+sealed audit segments to S3 are Phase-3 additions.

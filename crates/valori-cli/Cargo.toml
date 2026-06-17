@@ -40,9 +40,9 @@ comfy-table = "7.1"
 chrono      = "0.4"
 crc64fast   = "1.0"
 bincode     = { version = "2.0.1", features = ["serde"] }
-valori-node   = { path = "../valori-node" }
-valori-kernel = { path = "../valori-kernel" }
-valori-wire    = { path = "../valori-wire" }
+valori-node   = { workspace = true }
+valori-kernel = { workspace = true }
+valori-wire    = { workspace = true }
 serde       = { version = "1.0",   features = ["derive"] }
 serde_json  = "1.0"
 memmap2     = "0.9"
@@ -55,7 +55,7 @@ tokio            = { version = "1", features = ["full"] }
 dialoguer        = "0.11"
 indicatif        = "0.17"
 dirs             = "5"
-valori-consensus = { path = "../valori-consensus" }
+valori-consensus = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.24.0"

@@ -1,0 +1,44 @@
+# Client-facing service. Round-robins across all pods (any node serves
+# reads; the SDK follows 307 redirects for writes to the leader).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "valori.fullname" . }}
+  labels:
+    {{- include "valori.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "valori.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.service.port }}
+      targetPort: api
+      protocol: TCP
+---
+{{- if .Values.externalService.enabled }}
+# Optional external service (LoadBalancer / NodePort) for out-of-cluster access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "valori.fullname" . }}-external
+  labels:
+    {{- include "valori.labels" . | nindent 4 }}
+  {{- with .Values.externalService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.externalService.type }}
+  selector:
+    {{- include "valori.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.externalService.port }}
+      targetPort: api
+      protocol: TCP
+{{- end }}

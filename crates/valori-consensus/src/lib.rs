@@ -28,7 +28,6 @@ pub mod network;
 pub mod state_machine;
 pub mod types;
 
-#[cfg(test)]
 pub mod partition_harness;
 
 pub use log_store::ValoriLogStore;
