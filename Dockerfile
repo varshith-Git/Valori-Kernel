@@ -9,7 +9,7 @@
 # Health: docker inspect --format '{{.State.Health.Status}}' <container>
 
 # ── Stage 1: build ─────────────────────────────────────────────────────────────
-FROM rust:1.82-slim-bookworm AS builder
+FROM rust:1.85-slim-bookworm AS builder
 
 WORKDIR /build
 
