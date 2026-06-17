@@ -70,7 +70,7 @@
 <text x="40" y="418" font-size="10.5" font-style="italic" fill="#993C1D">Skip steps 2–4 and the follower may answer from index 1019, silently missing writes 1020–1024. That is the</text>
 <text x="40" y="433" font-size="10.5" font-style="italic" fill="#993C1D">stale-read gap: acceptable only for explicitly eventually-consistent reads, never for the strong-consistency default.</text>
 
-<text x="24" y="478" font-size="10.5" fill="#5F5E5A">Status: the read-index path is the required design for the strong-consistency default. The current build serves</text>
-<text x="24" y="493" font-size="10.5" fill="#5F5E5A">follower reads locally without it (eventually consistent); wiring openraft's read-index into the read handler is the fix.</text>
-<text x="24" y="520" font-size="10.5" fill="#5F5E5A">Cost note: one extra round trip to the leader per read. A leader read needs only the heartbeat confirmation, not the wait.</text>
+<text x="24" y="478" font-size="10.5" fill="#5F5E5A">Status: WIRED — linearizable is the default. Leader serves via ensure_linearizable(); a follower calls the leader's</text>
+<text x="24" y="493" font-size="10.5" fill="#5F5E5A">GET /v1/cluster/read-index, then waits for its applied index to reach C. Opt into a fast local read with consistency:"local".</text>
+<text x="24" y="520" font-size="10.5" fill="#5F5E5A">Cost note: one extra round trip to the leader per follower read. A leader read needs only the heartbeat confirmation, not the wait.</text>
 </svg>

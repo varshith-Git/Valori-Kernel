@@ -6,8 +6,8 @@ license.workspace = true
 description = "Standalone offline verifier for Valori event logs — replays events and proves state integrity without a server"
 
 [dependencies]
-valori-kernel = { path = "../valori-kernel" }
-valori-wire   = { path = "../valori-wire" }
+valori-kernel = { workspace = true }
+valori-wire   = { workspace = true }
 # Must match the bincode version valori-node uses to WRITE the log (node/Cargo.toml).
 bincode = { version = "2.0.1", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -22,7 +22,7 @@ serde_json = "1"
 # the audit story) — but the cross-crate wire-compat test must link both
 # sides to prove node-written bytes decode with this crate's mirror.
 [dev-dependencies]
-valori-node = { path = "../valori-node" }
+valori-node = { workspace = true }
 tempfile = "3"
 
 [[bin]]

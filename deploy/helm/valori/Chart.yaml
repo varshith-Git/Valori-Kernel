@@ -1,0 +1,15 @@
+apiVersion: v2
+name: valori
+description: Raft-replicated forensic vector database
+type: application
+version: 0.2.1
+appVersion: "0.2.1"
+keywords:
+  - vector-database
+  - raft
+  - forensic
+  - audit
+home: https://github.com/valori-db/valori-kernel
+maintainers:
+  - name: Varshith Gudur
+    email: gudur.varshith@sigmoidanalytics.com

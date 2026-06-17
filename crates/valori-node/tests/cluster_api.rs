@@ -307,3 +307,16 @@ async fn membership_changes_are_chained_admin_events() {
         other => panic!("expected NodeLeft second, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn role_endpoint_returns_leader_or_follower() {
+    let h = boot(1, true).await;
+    wait_for_leader(&h, 1).await;
+
+    let router = cluster_router(Arc::new(h.raft.clone()), None);
+    let (status, body) = get_json(router, "/v1/cluster/role").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["role"], "leader", "single-node cluster should be leader");
+    assert_eq!(body["node_id"], 1u64);
+}

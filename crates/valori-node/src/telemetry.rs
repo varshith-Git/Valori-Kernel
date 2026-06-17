@@ -78,6 +78,12 @@ pub fn init_telemetry() {
     metrics::describe_gauge!("valori_event_log_height",
         "Number of committed events in the event journal");
 
+    // ── Cross-replica state-hash agreement ────────────────────────────────────
+    metrics::describe_gauge!("valori_raft_state_hash_match",
+        "1 when all reachable peers agree on this node's BLAKE3 state hash, 0 on divergence");
+    metrics::describe_counter!("valori_raft_divergence_detections_total",
+        "Number of times this node detected a state-hash mismatch with any peer");
+
     // ── Liveness sentinel ─────────────────────────────────────────────────────
     // Ensure at least one gauge exists at startup before any request arrives.
     metrics::gauge!("valori_node_up", 1.0);

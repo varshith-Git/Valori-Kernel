@@ -76,6 +76,6 @@
 <text x="40" y="496" font-size="11" fill="#2C2C2A">1 · snapshot kernel state at index S (the existing periodic snapshot — no new mechanism).</text>
 <text x="40" y="516" font-size="11" fill="#2C2C2A">2 · seal events.log.0001 (events 1…S, immutable) and open events.log.0002 chaining from its final hash.</text>
 <text x="40" y="536" font-size="11" fill="#2C2C2A">3 · archive the sealed segment to cold storage. Recovery now needs only {snapshot @ S} + {live segment}.</text>
-<text x="40" y="558" font-size="10.5" font-style="italic" fill="#993C1D">Status: snapshotting exists; the seal-and-rotate trigger is the piece to wire. The chain hash carries across</text>
-<text x="40" y="573" font-size="10.5" font-style="italic" fill="#993C1D">segment boundaries, so a verifier reassembles archived + live segments into one unbroken history.</text>
+<text x="40" y="558" font-size="10.5" font-style="italic" fill="#085041">Status: WIRED — size-triggered seal-and-rotate on both write paths; recovery replays every local segment in</text>
+<text x="40" y="573" font-size="10.5" font-style="italic" fill="#085041">order and verifies each splice. Cold-storage offload (then recover from snapshot + live only) is Phase 3.</text>
 </svg>

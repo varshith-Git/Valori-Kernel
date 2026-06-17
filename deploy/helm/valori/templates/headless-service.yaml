@@ -1,0 +1,19 @@
+# Headless service — stable DNS for each pod (required by the StatefulSet).
+# Pod-0 DNS: <fullname>-0.<fullname>-headless.<namespace>.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "valori.fullname" . }}-headless
+  labels:
+    {{- include "valori.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "valori.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.apiPort }}
+      targetPort: api
+    - name: raft
+      port: {{ .Values.raftPort }}
+      targetPort: raft

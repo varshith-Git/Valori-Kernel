@@ -45,6 +45,9 @@ use crate::events::event_log::EventLogWriter;
 struct DataPlaneState {
     raft: Arc<Raft>,
     sm: ValoriStateMachine,
+    /// Reused for the follower→leader read-index round trip on linearizable
+    /// reads. Cloning a reqwest::Client is cheap and shares the connection pool.
+    http: reqwest::Client,
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -80,6 +83,7 @@ pub fn build_cluster_router(
     let state = DataPlaneState {
         raft: raft.clone(),
         sm: handle.state_machine.clone(),
+        http: reqwest::Client::new(),
     };
 
     Router::new()
@@ -240,11 +244,27 @@ async fn insert_record(
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
+/// Read consistency level for a query.
+///
+/// `Linearizable` (the default) guarantees the result reflects every write
+/// committed before the read began — via the read-index protocol. `Local`
+/// serves immediately from this node's state, which may lag the leader
+/// (eventually consistent) but skips the read-index round trip.
+#[derive(Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum Consistency {
+    #[default]
+    Linearizable,
+    Local,
+}
+
 #[derive(Deserialize)]
 struct SearchRequest {
     query: Vec<f32>,
     #[serde(default = "default_k")]
     k: usize,
+    #[serde(default)]
+    consistency: Consistency,
 }
 
 fn default_k() -> usize {
@@ -270,6 +290,14 @@ async fn search(
         }
     };
 
+    // Linearizable reads (the default) establish a read index first, so the
+    // local scan below reflects every write committed before this read began.
+    if req.consistency == Consistency::Linearizable {
+        if let Err(resp) = ensure_read_consistency(&state.raft, &state.http).await {
+            return resp;
+        }
+    }
+
     let k = req.k.max(1);
     // Reads are served LOCALLY — replicas' RAM pays for itself.
     // search_l2 delegates to the kernel's BruteForceIndex, which is kept
@@ -291,6 +319,87 @@ async fn search(
         .await;
 
     (StatusCode::OK, Json(serde_json::json!({ "results": results }))).into_response()
+}
+
+// ── Read consistency (read-index protocol) ──────────────────────────────────────
+
+fn read_unavailable(msg: String) -> Response {
+    (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": msg }))).into_response()
+}
+
+/// Block until this node may serve a linearizable read.
+///
+/// - **Leader**: `ensure_linearizable` confirms leadership via a quorum
+///   heartbeat and waits for this node's apply to reach the read index.
+/// - **Follower**: ask the leader for its read index (`/v1/cluster/read-index`),
+///   then wait until this node's applied index catches up before returning.
+///
+/// On success the caller may scan local state and the result is linearizable.
+async fn ensure_read_consistency(raft: &Raft, http: &reqwest::Client) -> Result<(), Response> {
+    // Snapshot the metrics into owned values so no watch borrow is held across
+    // an await point.
+    let m = raft.metrics().borrow().clone();
+    let my_id = m.id;
+    let leader_id = match m.current_leader {
+        Some(l) => l,
+        None => {
+            return Err(read_unavailable(
+                "no elected leader — cannot serve a linearizable read".into(),
+            ))
+        }
+    };
+
+    if leader_id == my_id {
+        // We are the leader: this confirms leadership and waits for apply.
+        return raft
+            .ensure_linearizable()
+            .await
+            .map(|_| ())
+            .map_err(|e| read_unavailable(format!("linearizable read failed on leader: {e}")));
+    }
+
+    // Follower path: fetch the leader's read index, then wait to catch up.
+    let leader_api = m
+        .membership_config
+        .nodes()
+        .find(|(id, _)| **id == leader_id)
+        .map(|(_, n)| n.api_addr.clone())
+        .filter(|a| !a.is_empty());
+    let leader_api = match leader_api {
+        Some(a) => a,
+        None => {
+            return Err(read_unavailable(
+                "leader API address unknown — cannot run the read-index protocol".into(),
+            ))
+        }
+    };
+
+    let url = format!("http://{leader_api}/v1/cluster/read-index");
+    let read_index = match http
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(v) => v.get("read_index").and_then(|x| x.as_u64()).unwrap_or(0),
+            Err(e) => return Err(read_unavailable(format!("bad read-index reply from leader: {e}"))),
+        },
+        Ok(r) => {
+            return Err(read_unavailable(format!(
+                "leader rejected read-index ({})",
+                r.status()
+            )))
+        }
+        Err(e) => return Err(read_unavailable(format!("cannot reach leader for read-index: {e}"))),
+    };
+
+    // Wait until our local apply has reached the leader's read index.
+    raft.wait(Some(std::time::Duration::from_secs(5)))
+        .applied_index_at_least(Some(read_index), "linearizable-read")
+        .await
+        .map(|_| ())
+        .map_err(|e| read_unavailable(format!("timed out catching up to read index {read_index}: {e}")))
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────

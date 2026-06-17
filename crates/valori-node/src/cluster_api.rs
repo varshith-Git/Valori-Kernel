@@ -50,6 +50,8 @@ pub fn cluster_router(
     Router::new()
         .route("/v1/cluster/status", get(status))
         .route("/v1/cluster/health", get(health))
+        .route("/v1/cluster/read-index", get(read_index))
+        .route("/v1/cluster/role", get(role))
         .route("/v1/cluster/add-node", post(add_node))
         .route("/v1/cluster/remove-node", post(remove_node))
         .with_state(ClusterApiState { raft, audit })
@@ -114,6 +116,58 @@ async fn status(State(state): State<ClusterApiState>) -> Json<StatusView> {
         last_applied_index: m.last_applied.map(|l| l.index),
         members,
     })
+}
+
+// ── Read index (linearizable reads) ─────────────────────────────────────────────
+//
+// The read-index protocol's leader half. `get_read_log_id` confirms this node
+// is still the leader (via a heartbeat round to a quorum) and returns the log
+// index a read must observe to be linearizable. A follower calls this, then
+// waits until its own applied index reaches `read_index` before serving —
+// see `ensure_read_consistency` in cluster_server.rs.
+
+async fn read_index(State(state): State<ClusterApiState>) -> Response {
+    match state.raft.get_read_log_id().await {
+        Ok((read_log_id, _applied)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "read_index": read_log_id.map(|l| l.index).unwrap_or(0),
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            // Not the leader anymore, or no quorum — name the leader we know so
+            // the caller can re-resolve and retry.
+            let leader = state.raft.metrics().borrow().current_leader;
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "cannot establish read index (not leader or no quorum)",
+                    "leader": leader,
+                    "detail": format!("{e}"),
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+// ── Role (for load-balancer leader routing) ───────────────────────────────────
+//
+// A load balancer can route POST /records to the leader by health-checking
+// this endpoint. On the leader it returns 200 + {"role":"leader"}; on a
+// follower it returns 200 + {"role":"follower"}. Both are healthy — the
+// distinction lets the LB steer writes without the SDK needing to follow
+// redirects for every request.
+
+async fn role(State(state): State<ClusterApiState>) -> Json<serde_json::Value> {
+    let m = state.raft.metrics().borrow().clone();
+    let is_leader = m.current_leader == Some(m.id);
+    Json(serde_json::json!({
+        "role": if is_leader { "leader" } else { "follower" },
+        "node_id": m.id,
+        "current_leader": m.current_leader,
+    }))
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
