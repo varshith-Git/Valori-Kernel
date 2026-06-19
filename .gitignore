@@ -79,3 +79,4 @@ test_e2e_db/
 events.log
 state.snap
 *.val
+CLAUDE.md
