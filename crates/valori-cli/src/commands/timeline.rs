@@ -163,5 +163,18 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("AutoInsertRecord").fg(Color::Green),
             format!("tag={tag}  (id assigned at apply)"),
         ),
+
+        KernelEvent::AutoCreateNode { kind, record } => {
+            let rec = record.map(|r| format!(" → record_id={}", r.0)).unwrap_or_default();
+            (
+                Cell::new("AutoCreateNode").fg(Color::Cyan),
+                format!("kind={:?}{rec}  (id assigned at apply)", kind),
+            )
+        }
+
+        KernelEvent::AutoCreateEdge { from, to, kind } => (
+            Cell::new("AutoCreateEdge").fg(Color::Cyan),
+            format!("{}→{}  kind={:?}  (id assigned at apply)", from.0, to.0, kind),
+        ),
     }
 }

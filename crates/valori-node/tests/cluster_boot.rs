@@ -208,7 +208,14 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
         // Crash: stop the Raft core and the gRPC server. The kernel state
         // (in-memory) dies with the process; only the redb file survives.
         let _ = handle.raft.shutdown().await;
-        handle.server_task.abort();
+        // Abort watcher tasks and the gRPC server, then await them so every
+        // Arc<Database> clone is dropped and the redb lock released before
+        // Life 2 tries to open the same file.
+        for t in &handle.watcher_tasks { t.abort(); }
+        let server_task = handle.server_task;
+        server_task.abort();
+        let _ = server_task.await;
+        for t in handle.watcher_tasks { let _ = t.await; }
         hash
     };
 

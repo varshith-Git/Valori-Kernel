@@ -82,7 +82,7 @@ fn snapshot_v5_roundtrip_preserves_hash() {
 #[test]
 fn snapshot_with_foreign_format_is_refused() {
     let state = KernelState::new();
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; 1 << 14]; // 16 KB — accommodates V6 namespace heads arrays (8 KB)
     let len = encode_state(&state, &mut buf).unwrap();
     buf.truncate(len);
 

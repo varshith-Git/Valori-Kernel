@@ -5,7 +5,7 @@ use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 5; // V5: arithmetic format_id byte after the capacity block
+pub const SCHEMA_VERSION: u32 = 6; // V6: namespace_id per record/node + namespace head arrays
 
 /// writes a u32 to the buffer at offset
 fn write_u32(buf: &mut [u8], offset: &mut usize, val: u32) -> Result<()> {
@@ -28,6 +28,16 @@ fn write_u8(buf: &mut [u8], offset: &mut usize, val: u8) -> Result<()> {
     }
     buf[*offset] = val;
     *offset += 1;
+    Ok(())
+}
+
+fn write_u16(buf: &mut [u8], offset: &mut usize, val: u16) -> Result<()> {
+    if *offset + 2 > buf.len() {
+        return Err(KernelError::CapacityExceeded);
+    }
+    let bytes = val.to_le_bytes();
+    buf[*offset..*offset + 2].copy_from_slice(&bytes);
+    *offset += 2;
     Ok(())
 }
 
@@ -94,6 +104,10 @@ pub fn encode_state(
                     write_u32(buf, &mut offset, 0)?;
                 }
             }
+            // V6: namespace_id + linked-list pointers
+            write_u16(buf, &mut offset, record.namespace_id)?;
+            write_u32(buf, &mut offset, record.next_in_ns)?;
+            write_u32(buf, &mut offset, record.prev_in_ns)?;
         } else {
             write_u8(buf, &mut offset, 0)?; // Absent
         }
@@ -136,6 +150,10 @@ pub fn encode_state(
                 }
                 None => write_u8(buf, &mut offset, 0)?,
             }
+            // V6: namespace_id + linked-list pointers
+            write_u16(buf, &mut offset, node.namespace_id)?;
+            write_u32(buf, &mut offset, node.next_in_ns)?;
+            write_u32(buf, &mut offset, node.prev_in_ns)?;
         }
     }
 
@@ -170,6 +188,15 @@ pub fn encode_state(
                 None => write_u8(buf, &mut offset, 0)?,
             }
         }
+    }
+
+    // V6: namespace head arrays (1024 × u32 each = 4 KB each)
+    use crate::types::id::MAX_NAMESPACES;
+    for &head in state.namespace_record_heads.iter().take(MAX_NAMESPACES) {
+        write_u32(buf, &mut offset, head)?;
+    }
+    for &head in state.namespace_node_heads.iter().take(MAX_NAMESPACES) {
+        write_u32(buf, &mut offset, head)?;
     }
 
     Ok(offset)

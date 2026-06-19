@@ -78,6 +78,15 @@ probes:
     periodSeconds: 10
     failureThreshold: 3
 
+# Periodic snapshot upload to S3.
+# Creates a Kubernetes CronJob; requires AWS credentials in a K8s Secret.
+snapshot:
+  enabled: false
+  schedule: "0 */6 * * *"    # every 6 hours; any cron syntax works
+  s3Bucket: "s3://your-valori-backups"
+  retain: "7"                 # number of snapshots to keep in S3
+  awsSecretName: ""           # K8s Secret with: aws-access-key-id, aws-secret-access-key, aws-region
+
 podAnnotations: {}
 
 nodeSelector: {}

@@ -1,0 +1,79 @@
+name: Test Count Badge
+
+# Runs on every push to main. Counts passing tests across valori-kernel and
+# valori-node, then updates a GitHub Gist that the shields.io badge reads.
+#
+# Setup (one-time):
+#   1. Create a public GitHub Gist at https://gist.github.com with a file
+#      named "valori-test-count.json" containing: {"schemaVersion":1,"label":"tests","message":"0","color":"grey"}
+#   2. Create a GitHub secret named GIST_SECRET with a token that has the
+#      "gist" scope (Settings → Secrets → Actions → New repository secret).
+#   3. Set GIST_ID below to your gist's ID (the hash in the URL).
+#   4. Update the badge URL in README.md to use your gist ID.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+env:
+  GIST_ID: "replace-with-your-gist-id"    # ← set this after creating the gist
+
+jobs:
+  count-tests:
+    name: Count passing tests & update badge
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-test-count-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run tests and capture output
+        id: run_tests
+        run: |
+          cargo test -p valori-kernel -p valori-node 2>&1 | tee test_output.txt || true
+
+      - name: Count passing tests
+        id: count
+        run: |
+          PASSING=$(grep '^test result' test_output.txt \
+            | awk '{sum += $4} END {print sum+0}')
+          echo "passing=${PASSING}" >> "$GITHUB_OUTPUT"
+          echo "Passing tests: ${PASSING}"
+
+      - name: Update Gist badge
+        if: env.GIST_ID != 'replace-with-your-gist-id'
+        uses: schneegans/dynamic-badges-action@v1.7.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: ${{ env.GIST_ID }}
+          filename: valori-test-count.json
+          label: tests
+          message: "${{ steps.count.outputs.passing }} passing"
+          color: ${{ steps.count.outputs.passing > 0 && 'brightgreen' || 'red' }}
+
+      - name: Print count (no gist configured)
+        if: env.GIST_ID == 'replace-with-your-gist-id'
+        run: |
+          echo "Gist not configured — test count: ${{ steps.count.outputs.passing }}"
+          echo "To enable the dynamic badge:"
+          echo "  1. Create a gist at https://gist.github.com"
+          echo "  2. Set GIST_ID in this workflow file"
+          echo "  3. Add GIST_SECRET to repository secrets"

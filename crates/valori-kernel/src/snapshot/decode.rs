@@ -2,9 +2,9 @@
 
 use crate::state::kernel::KernelState;
 use crate::error::{Result, KernelError};
-use crate::types::id::{Version, RecordId, NodeId, EdgeId};
-use crate::types::vector::FxpVector;
+use crate::types::id::{Version, RecordId, NodeId, EdgeId, NS_LIST_NIL};
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::types::vector::FxpVector;
 use crate::types::scalar::FxpScalar;
 use crate::storage::record::Record;
 use crate::graph::node::GraphNode;
@@ -39,6 +39,13 @@ fn read_i32(buf: &[u8], offset: &mut usize) -> Result<i32> {
     Ok(i32::from_le_bytes(bytes))
 }
 
+fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16> {
+    if *offset + 2 > buf.len() { return Err(KernelError::InvalidOperation); }
+    let bytes = buf[*offset..*offset+2].try_into().map_err(|_| KernelError::InvalidOperation)?;
+    *offset += 2;
+    Ok(u16::from_le_bytes(bytes))
+}
+
 pub fn decode_state(
     buf: &[u8],
 ) -> Result<KernelState> {
@@ -52,8 +59,8 @@ pub fn decode_state(
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    // We support V1 through V5
-    if schema_ver < 1 || schema_ver > 5 {
+    // We support V1 through V6
+    if schema_ver < 1 || schema_ver > 6 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
@@ -117,6 +124,13 @@ pub fn decode_state(
                 None
             };
 
+            // V6: namespace_id + linked-list pointers
+            let (namespace_id, next_in_ns, prev_in_ns) = if schema_ver >= 6 {
+                (read_u16(buf, &mut offset)?, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
+            } else {
+                (0u16, NS_LIST_NIL, NS_LIST_NIL)
+            };
+
             let idx = i as usize;
             if idx >= state.records.records.len() {
                 state.records.records.resize(idx + 1, None);
@@ -127,6 +141,9 @@ pub fn decode_state(
                 metadata,
                 tag,
                 flags,
+                namespace_id,
+                next_in_ns,
+                prev_in_ns,
             });
         } else {
             // Hole
@@ -175,12 +192,22 @@ pub fn decode_state(
         if idx >= state.nodes.nodes.len() {
             state.nodes.nodes.resize(idx + 1, None);
         }
+        // V6: namespace_id + linked-list pointers
+        let (node_namespace_id, node_next_in_ns, node_prev_in_ns) = if schema_ver >= 6 {
+            (read_u16(buf, &mut offset)?, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
+        } else {
+            (0u16, NS_LIST_NIL, NS_LIST_NIL)
+        };
+
         state.nodes.nodes[idx] = Some(GraphNode {
             id: NodeId(id_val),
             kind,
             record,
             first_out_edge: first_out,
             first_in_edge: first_in,
+            namespace_id: node_namespace_id,
+            next_in_ns: node_next_in_ns,
+            prev_in_ns: node_prev_in_ns,
         });
     }
 
@@ -228,8 +255,6 @@ pub fn decode_state(
     }
 
     // V1-V3 back-compat: reconstruct incoming edge pointers from the edge list.
-    // For each edge (A → B), prepend it to B's first_in_edge list.
-    // This is O(E) but runs only once on first load of an old snapshot.
     if schema_ver < 4 {
         let edge_targets: alloc::vec::Vec<(EdgeId, NodeId)> = state
             .edges
@@ -248,6 +273,21 @@ pub fn decode_state(
                 n.first_in_edge = Some(eid);
             }
         }
+    }
+
+    // V6: read explicit namespace head arrays.
+    // V1-V5: all namespace_id fields default to 0; rebuild lists from them.
+    use crate::types::id::MAX_NAMESPACES;
+    if schema_ver >= 6 {
+        for i in 0..MAX_NAMESPACES {
+            state.namespace_record_heads[i] = read_u32(buf, &mut offset)?;
+        }
+        for i in 0..MAX_NAMESPACES {
+            state.namespace_node_heads[i] = read_u32(buf, &mut offset)?;
+        }
+    } else {
+        // Reconstruct namespace lists — all records/nodes are in namespace 0
+        state.rebuild_namespace_lists();
     }
 
     Ok(state)

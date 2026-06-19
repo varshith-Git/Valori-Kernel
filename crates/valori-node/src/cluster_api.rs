@@ -54,6 +54,7 @@ pub fn cluster_router(
         .route("/v1/cluster/role", get(role))
         .route("/v1/cluster/add-node", post(add_node))
         .route("/v1/cluster/remove-node", post(remove_node))
+        .route("/v1/cluster/snapshot", post(trigger_snapshot))
         .with_state(ClusterApiState { raft, audit })
 }
 
@@ -326,5 +327,29 @@ async fn remove_node(
                 .into_response()
         }
         Err(e) => leadership_error(e),
+    }
+}
+
+// ── Snapshot trigger ──────────────────────────────────────────────────────────
+// Asks the local Raft core to build a snapshot immediately. This compacts the
+// log up to last_applied, so a freshly-joined node will receive the snapshot
+// via InstallSnapshot rather than replaying the full log. Useful for testing
+// and for admins who want to force a checkpoint before adding a new replica.
+
+async fn trigger_snapshot(State(state): State<ClusterApiState>) -> Response {
+    match state.raft.trigger().snapshot().await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "triggered" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "snapshot trigger failed",
+                "detail": format!("{e}"),
+            })),
+        )
+            .into_response(),
     }
 }

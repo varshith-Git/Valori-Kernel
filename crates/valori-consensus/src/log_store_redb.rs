@@ -56,6 +56,11 @@ fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageErro
         .map_err(io_err)
 }
 
+/// State machine metadata lives in this table alongside the log metadata.
+/// Key space is prefixed "sm_" to avoid collision with log store keys.
+pub const SM_META: TableDefinition<'static, &'static str, &'static [u8]> =
+    TableDefinition::new("sm_meta");
+
 /// redb-backed Raft log store. Cheap to clone — clones share the database.
 #[derive(Clone)]
 pub struct RedbLogStore {
@@ -72,9 +77,16 @@ impl RedbLogStore {
         {
             txn.open_table(LOGS)?;
             txn.open_table(META)?;
+            txn.open_table(SM_META)?;
         }
         txn.commit()?;
         Ok(Self { db: Arc::new(db) })
+    }
+
+    /// Shared database handle — passed to `ValoriStateMachine::with_db` so
+    /// both the log store and the state machine use the same redb file.
+    pub fn db(&self) -> Arc<Database> {
+        self.db.clone()
     }
 
     fn read_meta<T: serde::de::DeserializeOwned>(

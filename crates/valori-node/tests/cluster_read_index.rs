@@ -102,6 +102,7 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
                 metadata: None,
                 tag: 0,
             },
+            schema_version: 0,
             request_id: None,
         })
         .await

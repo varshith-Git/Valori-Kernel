@@ -39,6 +39,17 @@ impl fmt::Display for ValoriNode {
     }
 }
 
+/// The schema version this node writes into every `ClientRequest`.
+///
+/// Bump this constant when a new `KernelEvent` variant or any field change
+/// would make the entry uninterpretable to an older node.  The state machine
+/// refuses entries whose `schema_version` exceeds this value.
+///
+/// Rolling-upgrade window: a cluster may mix nodes at `CURRENT_SCHEMA_VERSION`
+/// and `CURRENT_SCHEMA_VERSION - 1` simultaneously. Once all nodes are
+/// upgraded, the older version drops out of the window.
+pub const CURRENT_SCHEMA_VERSION: u8 = 0;
+
 /// The command Raft replicates. One kernel event plus its idempotency token.
 ///
 /// EVOLUTION: this struct crosses the wire between nodes — fields are
@@ -52,6 +63,13 @@ pub struct ClientRequest {
     /// leader-failover retry cannot double-apply.
     #[serde(default)]
     pub request_id: Option<[u8; 16]>,
+    /// Schema version written by the leader at proposal time (Phase 3.2).
+    /// Nodes running an older schema version that receive an entry with a
+    /// higher version refuse to apply it and log an error — halting
+    /// replication until the operator upgrades the node.
+    /// Old nodes that pre-date this field decode it as 0 (`#[serde(default)]`).
+    #[serde(default)]
+    pub schema_version: u8,
 }
 
 /// What the state machine returns to the waiting client after apply.
@@ -76,6 +94,12 @@ pub struct ClientResponse {
     /// replica assigned the same ID, so this is the canonical value.
     #[serde(default)]
     pub allocated_record_id: Option<u32>,
+    /// Populated when the request used `KernelEvent::AutoCreateNode`.
+    #[serde(default)]
+    pub allocated_node_id: Option<u32>,
+    /// Populated when the request used `KernelEvent::AutoCreateEdge`.
+    #[serde(default)]
+    pub allocated_edge_id: Option<u32>,
 }
 
 openraft::declare_raft_types!(

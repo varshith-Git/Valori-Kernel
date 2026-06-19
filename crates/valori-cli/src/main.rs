@@ -168,6 +168,21 @@ enum ClusterAction {
         #[arg(long)]
         id: u64,
     },
+    /// Guided rolling upgrade — drain, upgrade, rejoin each node in turn.
+    ///
+    /// Point --url at any cluster node. The command prints a step-by-step plan,
+    /// then walks through each node interactively: it tells you which node to
+    /// stop, waits for you to upgrade the binary and restart it, then polls
+    /// until the node is healthy before moving to the next one. The current
+    /// leader is always upgraded last to minimise write disruption.
+    Upgrade {
+        /// Base URL of any cluster node, e.g. http://10.0.0.1:3000
+        #[arg(long, default_value = "http://127.0.0.1:3000")]
+        url: String,
+        /// The target version string shown in the step instructions, e.g. 0.3.0
+        #[arg(long)]
+        target_version: String,
+    },
 }
 
 #[tokio::main]
@@ -195,6 +210,9 @@ async fn main() -> anyhow::Result<()> {
                 cluster::add_node(&url, id, &raft_addr, &api_addr)
             }
             ClusterAction::RemoveNode { url, id } => cluster::remove_node(&url, id),
+            ClusterAction::Upgrade { url, target_version } => {
+                cluster::upgrade(&url, &target_version)
+            }
         },
     }
 }

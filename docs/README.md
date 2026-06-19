@@ -55,6 +55,14 @@ by what you're doing — running a cluster, integrating the SDK, or auditing a l
 | [memory_protocol_v0.md](memory_protocol_v0.md) | Memory protocol (legacy) |
 | [adapter-improvements.md](adapter-improvements.md) | Embedding-adapter notes |
 
+## Operations & security
+
+| Doc | What it covers |
+|---|---|
+| [THREAT_MODEL.md](THREAT_MODEL.md) | What Valori protects against, what it doesn't, keyed BLAKE3 MAC analysis |
+| [CAPACITY.md](CAPACITY.md) | Vectors/GB by dimension, RAM/1 M vectors, node sizing, WAL growth rates |
+| [DR.md](DR.md) | Snapshot-to-S3, full cluster restore, cross-region active-passive, verification checklist |
+
 ## Internals
 
 | Doc | What it covers |

@@ -11,7 +11,7 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valoricore-Kernel/ci.yml?style=flat-square&label=CI)](https://github.com/varshith-Git/Valoricore-Kernel/actions)
 [![Determinism](https://img.shields.io/badge/determinism-multi--arch%20verified-brightgreen?style=flat-square)](.github/workflows/multi-arch-determinism.yml)
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b?style=flat-square)](https://arxiv.org/abs/2512.22280)
-[![Tests](https://img.shields.io/badge/tests-271%20passing-brightgreen?style=flat-square)](#building-from-source)
+[![Tests](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valori-Kernel/test-count.yml?label=tests&style=flat-square)](https://github.com/varshith-Git/Valori-Kernel/actions/workflows/test-count.yml)
 
 *Q16.16 fixed-point arithmetic · BLAKE3 hash-chained audit log · openraft consensus · offline verifiable proofs*
 
@@ -127,7 +127,7 @@ Valori is the **memory layer** of your AI stack — the place where embedding ve
 | **Embedded** | `no_std` / `no_alloc` kernel — validated on ARM Cortex-M4 @ 168 MHz |
 | **Observability** | Prometheus metrics at `/metrics` (`valori_raft_*`, commit latency, replay duration) |
 | **CLI** | `valori inspect`, `verify`, `timeline`, `replay-query`, `diff`, `cluster` |
-| **Tests** | 271 tests passing — unit, integration, openraft compliance suite, proptest fuzz |
+| **Tests** | Unit, integration, openraft compliance suite, proptest fuzz — count auto-updated by CI |
 
 ### Coming in Phase 3
 
@@ -635,9 +635,14 @@ valori cluster add-node --url http://10.0.0.1:3000 \
   --api-addr  10.0.0.4:3000
 
 valori cluster remove-node --url http://10.0.0.1:3000 --id 4
+
+# Rolling upgrade — drains and restarts nodes one at a time, leader last.
+valori cluster upgrade --url http://10.0.0.1:3000 --target-version 0.3.0
 ```
 
 `add-node` does the two-step openraft dance: adds as learner (catch-up without affecting quorum), then promotes to voter. The new node must already be running.
+
+`upgrade` is interactive: it prints the upgrade plan (non-leaders first, leader last), waits for the operator to cycle each node, and polls `/health` before moving to the next. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the rolling-window rules and schema version policy.
 
 ---
 
@@ -916,16 +921,44 @@ cargo run --release --bin bench_persistence
 
 | Capability | Pinecone | Weaviate | Qdrant | **Valori** |
 |---|---|---|---|---|
-| Crash recovery | Claimed | Claimed | Claimed | **Mathematically proven** |
-| Cross-hardware bit-identical results | No | No | No | **Yes — Q16.16 fixed-point** |
+| Crash recovery | Claimed¹ | Claimed² | Claimed³ | **Mathematically proven** |
+| Cross-hardware bit-identical results | No⁴ | No⁴ | No⁴ | **Yes — Q16.16 fixed-point** |
 | Per-record cryptographic proof | No | No | No | **Yes — BLAKE3 Merkle root** |
 | Offline proof verification | No | No | No | **Yes — no server required** |
 | Tamper localization | No | No | No | **Yes — exact event + byte offset** |
 | Full forensic event replay | No | No | No | **Yes — audit log is the canonical truth** |
 | Knowledge graph (same store) | No | Yes | No | **Yes** |
-| Linearizable cluster reads | No | No | Yes | **Yes — read-index protocol** |
+| Linearizable cluster reads | No⁵ | No⁶ | Yes | **Yes — read-index protocol** |
 | Embedded `no_std` deployment | No | No | No | **Yes — ARM Cortex-M4** |
 | Open source | No | Yes | Yes | **Yes — MIT OR Apache-2.0** |
+
+**Sources for "No" cells:**
+
+¹ Pinecone does not publish a crash-recovery proof or WAL specification. Their
+  [architecture docs](https://docs.pinecone.io/guides/get-started/overview)
+  describe eventual consistency without mathematical guarantees.
+
+² Weaviate uses RocksDB for persistence; crash recovery is WAL-based but the
+  exact recovery guarantee is not formally specified in their
+  [storage documentation](https://weaviate.io/developers/weaviate/concepts/storage).
+
+³ Qdrant's [on-disk storage](https://qdrant.tech/documentation/concepts/storage/)
+  is WAL-backed, but replay correctness depends on float32 arithmetic, which is
+  non-deterministic across platforms (see ⁴).
+
+⁴ All three use float32 (IEEE 754 single precision). Float32 addition is
+  non-associative: result depends on summation order, which varies by SIMD
+  width (SSE2 vs AVX-512 vs NEON). The same vectors produce different distances
+  on different hardware. See `benchmarks/RESULTS.md §3` for a measured example
+  showing 100% of 276 scores differing at the bit level across four summation
+  orders, with ranking flips on near-equal pairs.
+
+⁵ Pinecone's read consistency is documented as
+  [eventually consistent](https://docs.pinecone.io/guides/data/query-data) —
+  freshly written vectors may not appear in queries immediately.
+
+⁶ Weaviate's [replication](https://weaviate.io/developers/weaviate/concepts/replication-architecture)
+  is leaderless (quorum reads) — not linearizable by the Herlihy definition.
 
 ---
 
@@ -938,7 +971,7 @@ cd Valoricore-Kernel
 # Build all default crates
 cargo build --release --workspace
 
-# Run all 271 tests
+# Run all tests
 cargo test --workspace
 
 # Targeted test suites
@@ -986,13 +1019,25 @@ cargo install maturin                  # for Python FFI only
 
 ---
 
+## Documentation
+
+| | |
+|---|---|
+| [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Security model — what Valori protects against, keyed BLAKE3 MAC analysis |
+| [docs/CAPACITY.md](docs/CAPACITY.md) | Capacity planning — vectors/GB, RAM per 1M vectors, WAL growth, S3 costs |
+| [docs/DR.md](docs/DR.md) | DR runbook — snapshot-to-S3, full cluster restore, cross-region active-passive |
+| [docs/CLUSTER.md](docs/CLUSTER.md) | Cluster operations — setup wizard, endpoints, grow/recover |
+| [docs/README.md](docs/README.md) | Full documentation index |
+
+---
+
 ## Research
 
-**Paper:** [Deterministic Memory: A Substrate for Verifiable AI Agents](https://arxiv.org/abs/2512.22280)
+**Paper:** [Valori: A Deterministic Memory Substrate for AI Systems](https://arxiv.org/abs/2512.22280)
 
 ```bibtex
-@article{valori2025deterministic,
-  title   = {Deterministic Memory: A Substrate for Verifiable AI Agents},
+@article{gudur2025valori,
+  title   = {Valori: A Deterministic Memory Substrate for AI Systems},
   author  = {Gudur, Varshith},
   journal = {arXiv preprint arXiv:2512.22280},
   year    = {2025}
@@ -1007,7 +1052,7 @@ Valori is dual-licensed under **MIT OR Apache-2.0** — completely free and perm
 
 Managed cloud, multi-tenant control plane, and enterprise features (SSO, RBAC, per-tenant encryption) will be available as a separate commercial offering.
 
-**Contact:** gudur.varshith@sigmoidanalytics.com
+**Contact:** varshith.gudur17@gmail.com
 
 ---
 

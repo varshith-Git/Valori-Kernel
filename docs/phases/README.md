@@ -37,6 +37,8 @@ people and sessions that built it.
 | 2.10c — Metrics (Prometheus) | [phase-2.10c-raft-metrics.md](phase-2.10c-raft-metrics.md) | see git log | ✅ done |
 | 2.10d — Partition harness | — | — | ⬜ planned (last Phase 2 item) |
 | 2.11 — Boot dispatch + cluster data plane v1 | [phase-2.11-cluster-boot-dispatch.md](phase-2.11-cluster-boot-dispatch.md) | see git log | ✅ done |
+| 3.1 — S3 object store (snapshot offload + WAL archival) | [phase-3.1-s3-object-store.md](phase-3.1-s3-object-store.md) | `multinode` | ✅ done |
+| 3.2 — Rolling upgrades (zero-downtime version migration) | [phase-3.2-rolling-upgrades.md](phase-3.2-rolling-upgrades.md) | `multinode` | ✅ done |
 
 ## Report template
 

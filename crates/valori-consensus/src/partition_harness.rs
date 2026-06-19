@@ -314,6 +314,7 @@ pub async fn insert_vector(
                 tag: 0,
             },
             request_id: None,
+            schema_version: 0,
         })
         .await
         .expect("client_write failed");

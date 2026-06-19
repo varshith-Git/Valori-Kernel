@@ -1,105 +1,155 @@
-# Valori Node API Reference
+# valori-node
 
-This document lists all available endpoints, their methods, purposes, and example usage.
+HTTP API server and orchestration layer for Valori. Runs in standalone mode
+or as a member of a Raft cluster (`VALORI_CLUSTER_MEMBERS`).
 
 ## Base URL
+
 - **Local**: `http://localhost:3000`
 - **Production**: `https://<your-app>.koyeb.app`
 
 ---
 
-## 🚀 Core & System
+## Core & System
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/health` | `GET`  | Check if server is running. |
-| `/version`| `GET`  | Check server version. |
-| `/metrics`| `GET`  | Prometheus metrics for observability. |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | `GET` | Liveness probe. |
+| `/version` | `GET` | Server version string. |
+| `/metrics` | `GET` | Prometheus metrics. |
 
-**Examples:**
 ```bash
 curl http://localhost:3000/health
 curl http://localhost:3000/version
-curl http://localhost:3000/metrics
 ```
 
 ---
 
-## 🧠 Memory Protocol (Recommended for Agents)
-These are the high-level endpoints for AI Agents (Orchestrators).
+## Collections (Multi-tenancy)
 
-| Endpoint  | Method | Purpose | Payload |
-| :---      | :---   | :---    | :---    |
-| `/v1/memory/upsert_vector` | `POST` | Insert vector + metadata + graph nodes. | `{"vector": [...], "metadata": {...}}` |
-| `/v1/memory/search_vector` | `POST` | Search for similar vectors. | `{"query_vector": [...], "k": 5}` |
-| `/v1/memory/meta/get` | `GET` | Retrieve metadata by ID. | Query Param: `?target_id=rec:0` |
-| `/v1/memory/meta/set` | `POST` | Update metadata for existing ID. | `{"target_id": "rec:0", "metadata": {...}}` |
+Valori supports up to **1 024 named collections** (namespaces). Every data
+endpoint accepts an optional `"collection"` field. Omitting it (or setting it
+to `"default"`) targets the always-present default collection.
 
+Records in non-default collections are **fully isolated** — they never appear
+in default-collection searches and vice versa.
 
-**Examples:**
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/namespaces` | `POST` | Create a collection (idempotent). |
+| `/v1/namespaces` | `GET` | List all collections and their numeric IDs. |
+| `/v1/namespaces/:name` | `DELETE` | Drop a collection and all its records. |
+
+### Create a collection
+
 ```bash
-# Insert (Upsert)
-curl -X POST http://localhost:3000/v1/memory/upsert_vector \
+curl -X POST http://localhost:3000/v1/namespaces \
   -H "Content-Type: application/json" \
-  -d '{"vector": [0.1, 0.2, ...], "metadata": {"role": "memory"}}'
-
-# Search
-curl -X POST http://localhost:3000/v1/memory/search_vector \
-  -H "Content-Type: application/json" \
-  -d '{"query_vector": [0.1, 0.2, ...], "k": 1}'
-
-# Get Metadata
-curl "http://localhost:3000/v1/memory/meta/get?target_id=rec:0"
-
-# Update Metadata (without re-inserting vector)
-curl -X POST http://localhost:3000/v1/memory/meta/set \
-  -H "Content-Type: application/json" \
-  -d '{"target_id": "rec:0", "metadata": {"status": "updated"}}'
+  -d '{"name": "tenant-acme"}'
+# → {"name":"tenant-acme","id":1,"created":true}
+# Second call with the same name → {"created":false,"id":1} (idempotent)
 ```
 
+### List collections
+
+```bash
+curl http://localhost:3000/v1/namespaces
+# → {"collections":[{"name":"default","id":0},{"name":"tenant-acme","id":1}]}
+```
+
+### Drop a collection
+
+```bash
+curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
+# → 204 No Content
+# Dropping "default" → 400 Bad Request
+```
 
 ---
 
-## ⚡ Low-Level Kernel Operations
-Direct access to the vector engine and graph primitives.
+## Vector Operations
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/records` | `POST` | Insert raw vector (no metadata). |
-| `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors at once. |
-| `/v1/delete` | `POST` | **Soft Delete** a record by ID. |
-| `/search` | `POST` | Raw vector search (returns IDs/Scores only). |
-| `/graph/node` | `POST` | Create a standalone graph node. |
-| `/graph/edge` | `POST` | Create an edge between nodes. |
+All endpoints accept an optional `"collection"` field. If the named collection
+does not exist the request is rejected with `400 Bad Request`.
 
-**Examples:**
+| Endpoint | Method | Description |
+|---|---|---|
+| `/records` | `POST` | Insert a single vector. |
+| `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors in one call. |
+| `/search` | `POST` | K-nearest-neighbour search. |
+| `/v1/delete` | `POST` | Soft-delete a record by ID. |
+
+### Insert into a collection
+
 ```bash
-# Delete Record 0
-curl -X POST http://localhost:3000/v1/delete \
+curl -X POST http://localhost:3000/records \
   -H "Content-Type: application/json" \
-  -d '{"id": 0}'
+  -d '{"values": [0.1, 0.2, 0.3, 0.4], "collection": "tenant-acme"}'
+# → {"id": 0}
+```
 
-# Batch Insert
+### Batch insert
+
+```bash
 curl -X POST http://localhost:3000/v1/vectors/batch_insert \
   -H "Content-Type: application/json" \
-  -d '{"batch": [[0.1, ...], [0.2, ...]]}'
+  -d '{"batch": [[0.1,0.2,0.3,0.4],[0.5,0.6,0.7,0.8]], "collection": "tenant-acme"}'
+# → {"ids": [0, 1]}
+```
+
+### Search within a collection
+
+```bash
+# Scoped to tenant-acme — default-namespace records are excluded.
+curl -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5, "collection": "tenant-acme"}'
+# → {"results":[{"id":0,"score":0.0}]}
+
+# Search the default collection (no "collection" field needed).
+curl -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5}'
 ```
 
 ---
 
-## 📸 Snapshots & Recovery
-Manage disk persistence manually (if S3/WAL is not used).
+## Memory Protocol (Recommended for AI agents)
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/v1/snapshot/save` | `POST` | Save in-memory state to disk. |
-| `/v1/snapshot/restore` | `POST` | Load state from disk file. |
-| `/v1/snapshot/download` | `GET` | Download full snapshot as binary. |
-| `/v1/snapshot/upload` | `POST` | Upload binary snapshot to restore state. |
+High-level endpoints that combine vector storage with graph metadata.
 
-**Examples:**
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/memory/upsert_vector` | `POST` | Insert vector + metadata + graph nodes. |
+| `/v1/memory/search_vector` | `POST` | Search for similar vectors. |
+| `/v1/memory/meta/get` | `GET` | Retrieve metadata by ID. |
+| `/v1/memory/meta/set` | `POST` | Update metadata for an existing ID. |
+
 ```bash
-# Save Snapshot
+curl -X POST http://localhost:3000/v1/memory/upsert_vector \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4], "metadata": {"role": "assistant-memory"}}'
+
+curl -X POST http://localhost:3000/v1/memory/search_vector \
+  -H "Content-Type: application/json" \
+  -d '{"query_vector": [0.1, 0.2, 0.3, 0.4], "k": 3}'
+```
+
+---
+
+## Snapshots & Recovery
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/snapshot/save` | `POST` | Persist in-memory state to disk. |
+| `/v1/snapshot/restore` | `POST` | Restore state from a disk file. |
+| `/v1/snapshot/download` | `GET` | Download the snapshot as raw bytes. |
+| `/v1/snapshot/upload` | `POST` | Upload a snapshot binary to restore state. |
+
+Snapshots include the full namespace registry — collection names, IDs, and all
+records survive a round-trip.
+
+```bash
 curl -X POST http://localhost:3000/v1/snapshot/save \
   -H "Content-Type: application/json" \
   -d '{"path": "./backup.snap"}'
@@ -107,64 +157,96 @@ curl -X POST http://localhost:3000/v1/snapshot/save \
 
 ---
 
-## 🛡️ Proofs & Audit
-Deterministic verification features.
+## Proofs & Audit
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/v1/proof/state` | `GET` | Get cryptographic hash of current state. |
-| `/v1/proof/event-log` | `GET` | Get hash of the immutable event log. |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/proof/state` | `GET` | BLAKE3 hash of the current engine state (hex). |
+| `/v1/proof/event-log` | `GET` | BLAKE3 hash of the immutable event log (hex). |
 
-**Examples:**
 ```bash
 curl http://localhost:3000/v1/proof/state
+# → {"final_state_hash":"a3f2..."}
 ```
 
 ---
 
-## 🔄 Replication
-Used by Follower nodes to sync with the Leader.
+## Cluster Management
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/v1/replication/wal` | `GET` | Stream the Write-Ahead Log. |
-| `/v1/replication/events` | `GET` | Stream real-time events. |
-| `/v1/replication/state` | `GET` | Check replication status (Synced/Healing). |
-
----
-
-## 🗳️ Cluster Management (Phase 2.6 — Raft cluster mode)
 Available when the node boots in cluster mode (`VALORI_CLUSTER_MEMBERS` set).
-Membership changes are leader-only; a follower answers **403** with the
-leader's API address.
+Write requests are leader-only; a follower answers **403** with the leader's
+API address.
 
-| Endpoint  | Method | Purpose |
-| :---      | :---   | :---    |
-| `/v1/cluster/status` | `GET` | Leader, term, log indexes, membership (with voter flags). |
-| `/v1/cluster/health` | `GET` | 200 when this node sees a leader; 503 `no-leader` otherwise. |
-| `/v1/cluster/add-node` | `POST` | Join a node: learner catch-up, then voter promotion. |
-| `/v1/cluster/remove-node` | `POST` | Remove a voter (last-voter removal refused with 422). |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/cluster/status` | `GET` | Leader, term, log indices, membership. |
+| `/v1/cluster/health` | `GET` | `200` when a leader is visible; `503` otherwise. |
+| `/v1/cluster/role` | `GET` | This node's current Raft role (`Leader`/`Follower`/`Candidate`). |
+| `/v1/cluster/add-node` | `POST` | Join a node (learner catch-up → voter promotion). |
+| `/v1/cluster/remove-node` | `POST` | Remove a voter (last-voter removal refused with `422`). |
 
-**Examples:**
 ```bash
 curl http://localhost:3000/v1/cluster/status
 
-# Add node 2 (its raft listener, optionally its API addr)
 curl -X POST http://localhost:3000/v1/cluster/add-node \
   -H "Content-Type: application/json" \
   -d '{"node_id": 2, "raft_addr": "10.0.0.2:3100", "api_addr": "10.0.0.2:3000"}'
 
-# Remove node 2
 curl -X POST http://localhost:3000/v1/cluster/remove-node \
   -H "Content-Type: application/json" \
   -d '{"node_id": 2}'
 ```
 
-**Cluster boot environment:**
+### Cluster environment variables
 
-| Variable | Meaning |
-| :--- | :--- |
-| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` — presence switches cluster mode on. |
-| `VALORI_NODE_ID` | This node's id (must appear in members). |
+| Variable | Description |
+|---|---|
+| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` — presence activates cluster mode. |
+| `VALORI_NODE_ID` | This node's ID (must appear in `VALORI_CLUSTER_MEMBERS`). |
 | `VALORI_RAFT_BIND` | gRPC consensus listener (default `0.0.0.0:3100`). |
-| `VALORI_CLUSTER_INIT` | `1` on exactly one node of a brand-new cluster. |
+| `VALORI_CLUSTER_INIT` | Set to `1` on exactly one node of a brand-new cluster. |
+| `VALORI_RAFT_LOG_PATH` | Path to the `redb` file for the persistent Raft log. When set, the state machine shares this database so `last_applied` and snapshots survive restarts without replaying audit events. |
+
+---
+
+## Python SDK
+
+```python
+from valoricore.remote import ValoriClient
+
+client = ValoriClient("http://localhost:3000")
+
+# Create a collection
+client.create_collection("tenant-acme")
+
+# Insert into a named collection
+record_id = client.insert([0.1, 0.2, 0.3, 0.4], collection="tenant-acme")
+
+# Batch insert
+ids = client.insert_batch([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]],
+                          collection="tenant-acme")
+
+# Scoped search
+results = client.search([0.1, 0.2, 0.3, 0.4], k=5, collection="tenant-acme")
+
+# List and drop
+collections = client.list_collections()   # [{"name": "default", "id": 0}, ...]
+client.drop_collection("tenant-acme")
+```
+
+---
+
+## Testing
+
+```bash
+cargo test -p valori-node
+```
+
+Key test suites:
+
+| Suite | What it covers |
+|---|---|
+| `tests/collections.rs` | 16 tests: collection CRUD, namespace isolation, snapshot persistence, error paths. |
+| `tests/cluster_boot.rs` | Single-node Raft boot, restart recovery from redb log, state-hash watcher teardown. |
+| `tests/replication.rs` | Leader→follower snapshot push, `LeaderProof` hex-format verification. |
+| `tests/api.rs` | All HTTP endpoints, status codes, and response shapes. |

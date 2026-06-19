@@ -5,6 +5,7 @@
 
 use valori_consensus::types::{
     ClientRequest, ClientResponse, Entry, LogId, NodeId, TypeConfig, ValoriNode, Vote,
+    CURRENT_SCHEMA_VERSION,
 };
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -31,6 +32,7 @@ fn client_request_roundtrips_through_serde_json() {
     let req = ClientRequest {
         event: sample_event(),
         request_id: Some(REQ_ID),
+        schema_version: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: ClientRequest = serde_json::from_str(&json).unwrap();
@@ -45,6 +47,7 @@ fn client_request_without_request_id_decodes_with_default() {
     let json = serde_json::to_string(&ClientRequest {
         event: KernelEvent::DeleteRecord { id: RecordId(3) },
         request_id: None,
+        schema_version: 0,
     })
     .unwrap();
     let stripped = json.replace(",\"request_id\":null", "");
@@ -60,6 +63,8 @@ fn client_response_roundtrips_and_dedup_flag_defaults_false() {
         deduplicated: false,
         rejected: None,
         allocated_record_id: None,
+        allocated_node_id: None,
+        allocated_edge_id: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     // Strip the flag — old responses without it must still decode.
@@ -96,6 +101,7 @@ fn raft_log_entry_for_a_kernel_event_roundtrips() {
         payload: openraft::EntryPayload::Normal(ClientRequest {
             event: sample_event(),
             request_id: Some(REQ_ID),
+            schema_version: 0,
         }),
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -117,6 +123,45 @@ fn vote_serializes_for_persistence() {
     let json = serde_json::to_string(&vote).unwrap();
     let back: Vote = serde_json::from_str(&json).unwrap();
     assert_eq!(back, vote);
+}
+
+// ── Schema version (Phase 3.2) ────────────────────────────────────────────────
+
+#[test]
+fn schema_version_field_roundtrips() {
+    let req = ClientRequest {
+        event: sample_event(),
+        request_id: None,
+        schema_version: CURRENT_SCHEMA_VERSION,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    let back: ClientRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.schema_version, CURRENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn schema_version_defaults_to_zero_when_field_absent() {
+    // Old nodes that pre-date Phase 3.2 never wrote schema_version.
+    // They must decode without error and the field must default to 0.
+    let req = ClientRequest {
+        event: KernelEvent::DeleteRecord { id: RecordId(99) },
+        request_id: None,
+        schema_version: 0,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    // Strip the schema_version field entirely to simulate an old peer.
+    let stripped = json
+        .replace(",\"schema_version\":0", "")
+        .replace("\"schema_version\":0,", "");
+    let back: ClientRequest = serde_json::from_str(&stripped).unwrap();
+    assert_eq!(back.schema_version, 0, "missing schema_version must default to 0");
+}
+
+#[test]
+fn current_schema_version_is_zero() {
+    // This test encodes the current contract. When you bump CURRENT_SCHEMA_VERSION,
+    // update this assertion AND add a compatibility-matrix entry in docs/COMPATIBILITY.md.
+    assert_eq!(CURRENT_SCHEMA_VERSION, 0);
 }
 
 #[test]

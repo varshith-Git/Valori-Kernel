@@ -108,7 +108,7 @@ fn truncated_snapshot_is_rejected() {
 #[test]
 fn empty_state_roundtrips() {
     let state = KernelState::new();
-    let mut buf = vec![0u8; 4096];
+    let mut buf = vec![0u8; 1 << 14]; // 16 KB — accommodates V6 namespace heads (8 KB)
     let len = encode_state(&state, &mut buf).unwrap();
     buf.truncate(len);
     let restored = decode_state(&buf).unwrap();

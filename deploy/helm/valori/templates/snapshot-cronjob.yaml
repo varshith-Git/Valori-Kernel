@@ -1,0 +1,83 @@
+{{- if .Values.snapshot.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "valori.fullname" . }}-snapshot
+  labels:
+    {{- include "valori.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.snapshot.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "valori.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: snapshot
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: snapshot
+              image: amazon/aws-cli:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+                  SNAP_FILE="/tmp/valori_${TIMESTAMP}.snap"
+
+                  echo "Downloading snapshot from ${VALORI_URL}..."
+                  curl -sf "${VALORI_URL}/v1/snapshot/download" -o "${SNAP_FILE}"
+
+                  STATE_HASH=$(curl -sf "${VALORI_URL}/v1/proof/state" \
+                    | python3 -c "import sys,json; print(json.load(sys.stdin)['final_state_hash'])")
+                  echo "${STATE_HASH}" > "${SNAP_FILE}.hash"
+
+                  echo "Uploading to ${S3_BUCKET}/snapshots/${TIMESTAMP}.snap ..."
+                  aws s3 cp "${SNAP_FILE}"       "${S3_BUCKET}/snapshots/${TIMESTAMP}.snap"
+                  aws s3 cp "${SNAP_FILE}.hash"  "${S3_BUCKET}/snapshots/${TIMESTAMP}.hash"
+
+                  echo "Pruning old snapshots (keeping last ${SNAPSHOT_RETAIN})..."
+                  aws s3 ls "${S3_BUCKET}/snapshots/" \
+                    | awk '{print $4}' | grep '\.snap$' | sort \
+                    | head -n "-${SNAPSHOT_RETAIN}" \
+                    | xargs -r -I{} aws s3 rm "${S3_BUCKET}/snapshots/{}"
+
+                  echo "Done. Hash: ${STATE_HASH}"
+                  rm -f "${SNAP_FILE}" "${SNAP_FILE}.hash"
+              env:
+                - name: VALORI_URL
+                  value: "http://{{ include "valori.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.apiPort }}"
+                - name: S3_BUCKET
+                  value: {{ .Values.snapshot.s3Bucket | quote }}
+                - name: SNAPSHOT_RETAIN
+                  value: {{ .Values.snapshot.retain | quote }}
+                {{- if .Values.snapshot.awsSecretName }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.snapshot.awsSecretName }}
+                      key: aws-access-key-id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.snapshot.awsSecretName }}
+                      key: aws-secret-access-key
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.snapshot.awsSecretName }}
+                      key: aws-region
+                {{- end }}
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+{{- end }}

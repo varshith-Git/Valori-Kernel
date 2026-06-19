@@ -106,6 +106,21 @@ pub enum KernelEvent {
         metadata: Option<alloc::vec::Vec<u8>>,
         tag: u64,
     },
+
+    /// Create a graph node with an ID assigned at apply time (cluster-mode).
+    /// Analogous to `AutoInsertRecord` — every replica calls `next_node_id()`
+    /// in the same Raft-ordered sequence and arrives at the same ID.
+    AutoCreateNode {
+        kind: NodeKind,
+        record: Option<RecordId>,
+    },
+
+    /// Create a graph edge with an ID assigned at apply time (cluster-mode).
+    AutoCreateEdge {
+        from: NodeId,
+        to: NodeId,
+        kind: EdgeKind,
+    },
 }
 
 impl KernelEvent {
@@ -122,6 +137,8 @@ impl KernelEvent {
             KernelEvent::InsertRecordEncrypted { .. } => "InsertRecordEncrypted",
             KernelEvent::ShredKey { .. } => "ShredKey",
             KernelEvent::AutoInsertRecord { .. } => "AutoInsertRecord",
+            KernelEvent::AutoCreateNode { .. } => "AutoCreateNode",
+            KernelEvent::AutoCreateEdge { .. } => "AutoCreateEdge",
         }
     }
 }
@@ -200,6 +217,19 @@ impl Serialize for KernelEvent {
                 state.serialize_field("vector", vector)?;
                 state.serialize_field("metadata", &RawMetadata(metadata.as_ref()))?;
                 state.serialize_field("tag", tag)?;
+                state.end()
+            }
+            KernelEvent::AutoCreateNode { kind, record } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 10, "AutoCreateNode", 2)?;
+                state.serialize_field("kind", kind)?;
+                state.serialize_field("record", record)?;
+                state.end()
+            }
+            KernelEvent::AutoCreateEdge { from, to, kind } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 11, "AutoCreateEdge", 3)?;
+                state.serialize_field("from", from)?;
+                state.serialize_field("to", to)?;
+                state.serialize_field("kind", kind)?;
                 state.end()
             }
         }
@@ -284,6 +314,15 @@ impl<'de> Deserialize<'de> for KernelEvent {
                  metadata: Option<alloc::vec::Vec<u8>>,
                  tag: u64,
              },
+             AutoCreateNode {
+                 kind: NodeKind,
+                 record: Option<RecordId>,
+             },
+             AutoCreateEdge {
+                 from: NodeId,
+                 to: NodeId,
+                 kind: EdgeKind,
+             },
         }
 
         // Delegate to the Helper
@@ -302,6 +341,10 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::ShredKey { key_id } => KernelEvent::ShredKey { key_id },
             KernelEventHelper::AutoInsertRecord { vector, metadata, tag } =>
                 KernelEvent::AutoInsertRecord { vector, metadata, tag },
+            KernelEventHelper::AutoCreateNode { kind, record } =>
+                KernelEvent::AutoCreateNode { kind, record },
+            KernelEventHelper::AutoCreateEdge { from, to, kind } =>
+                KernelEvent::AutoCreateEdge { from, to, kind },
         })
     }
 }

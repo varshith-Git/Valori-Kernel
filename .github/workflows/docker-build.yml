@@ -69,20 +69,54 @@ jobs:
             -e VALORI_DIM=4 \
             -e VALORI_MAX_RECORDS=100 \
             valori-node:ci
+
+          # Wait up to 100 s (20 × 5 s) for the container to reach healthy.
+          # Track result in a variable — never inspect after docker stop, because
+          # the 15 s health-check interval means a check can fire during the stop
+          # grace period, find the server shutting down, and mark the container
+          # "unhealthy". That is not a failure; it's the stop sequence.
           echo "Waiting for health check..."
-          for i in $(seq 1 12); do
-            STATUS=$(docker inspect --format '{{.State.Health.Status}}' valori-smoke 2>/dev/null || echo starting)
+          REACHED_HEALTHY=false
+          for i in $(seq 1 20); do
+            STATUS=$(docker inspect --format '{{.State.Health.Status}}' valori-smoke 2>/dev/null || echo "gone")
             echo "  [$i] status: $STATUS"
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Container healthy!"
-              break
-            fi
+            case "$STATUS" in
+              healthy)
+                REACHED_HEALTHY=true
+                break
+                ;;
+              gone)
+                echo "Container exited unexpectedly before becoming healthy."
+                exit 1
+                ;;
+              unhealthy)
+                echo "Container health check failed."
+                docker logs valori-smoke 2>/dev/null || true
+                docker stop -t 0 valori-smoke 2>/dev/null || true
+                exit 1
+                ;;
+            esac
             sleep 5
           done
-          docker stop valori-smoke
-          FINAL=$(docker inspect --format '{{.State.Health.Status}}' valori-smoke 2>/dev/null || echo "stopped")
-          if [ "$FINAL" != "healthy" ] && [ "$FINAL" != "stopped" ]; then
-            echo "Container never reached healthy state (final: $FINAL)"
+
+          if [ "$REACHED_HEALTHY" != "true" ]; then
+            echo "Container never reached healthy state after 100 s."
+            docker logs valori-smoke 2>/dev/null || true
+            docker stop -t 0 valori-smoke 2>/dev/null || true
             exit 1
           fi
+
+          # Quick functional check: hit /health over the forwarded port.
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/health || echo "000")
+          echo "GET /health → HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "/health returned $HTTP — expected 200."
+            docker logs valori-smoke 2>/dev/null || true
+            docker stop -t 0 valori-smoke 2>/dev/null || true
+            exit 1
+          fi
+
+          # Stop with a 0-second grace period so no stray health-check fires
+          # during shutdown and leaves the container in "unhealthy" state.
+          docker stop -t 0 valori-smoke 2>/dev/null || true
           echo "Smoke test passed."

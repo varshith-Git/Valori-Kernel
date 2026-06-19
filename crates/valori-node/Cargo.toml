@@ -29,7 +29,8 @@ metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
 futures = "0.3.31"
 tokio-stream = "0.1.17"
-opendal = { version = "0.55.0", features = ["services-s3"] }
+opendal = { version = "0.55.0", features = ["services-s3", "services-fs"] }
+bytes = "1.0"
 tap = "1.0.1"
 base64 = "0.22.1"
 

@@ -23,6 +23,7 @@ The Valori CLI reads these files directly and gives you five commands:
 | `timeline` | What changed, and in what order? |
 | `replay-query` | What did the database look like at event #N? What would a search return then? |
 | `diff` | What changed between event #A and event #B? Did any search results shift? |
+| `cluster upgrade` | Step-by-step guided rolling upgrade for a live Raft cluster. |
 
 Think of it as `git log` + `git diff` for your AI memory database.
 
@@ -223,6 +224,25 @@ Semantic Diff  ·  top-5
 │ 99        │ - Left top-K   │ was rank 5     │
 └───────────┴────────────────┴────────────────┘
 ```
+
+---
+
+### `valori cluster upgrade`
+
+Interactive guided rolling upgrade for a live Raft cluster. Point `--url` at any
+node's HTTP API; the CLI discovers the full topology, sorts nodes non-leaders
+first and leader last, then walks you through each one step-by-step.
+
+```bash
+valori cluster upgrade --url http://10.0.0.1:3000 --target-version 0.3.0
+```
+
+The CLI polls `/health` every 2 s (up to 120 s) after each node restart before
+moving to the next. For the leader step it additionally waits for a new election
+to complete. No process management — it trusts your deployment tooling.
+
+See [`docs/COMPATIBILITY.md`](../../docs/COMPATIBILITY.md) for the rolling-window
+rules, schema version policy, and coexistence matrix.
 
 ---
 

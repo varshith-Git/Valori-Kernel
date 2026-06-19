@@ -93,6 +93,29 @@ services:
       node-1:
         condition: service_healthy
 
+  # Optional: snapshot every 6 hours to S3.
+  # Disabled by default — set VALORI_SNAPSHOT_S3_BUCKET and AWS credentials to enable.
+  # snapshot-cron:
+  #   image: amazon/aws-cli:latest
+  #   restart: unless-stopped
+  #   entrypoint: >
+  #     /bin/sh -c 'while true; do
+  #       TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ);
+  #       curl -sf http://node-1:3000/v1/snapshot/download -o /tmp/snap.bin;
+  #       HASH=$(curl -sf http://node-1:3000/v1/proof/state | python3 -c "import sys,json;print(json.load(sys.stdin)[\"final_state_hash\"])");
+  #       aws s3 cp /tmp/snap.bin "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.snap";
+  #       echo "$$HASH" | aws s3 cp - "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.hash";
+  #       sleep 21600;
+  #     done'
+  #   environment:
+  #     VALORI_SNAPSHOT_S3_BUCKET: "s3://your-valori-backups/snapshots"
+  #     AWS_ACCESS_KEY_ID: ""
+  #     AWS_SECRET_ACCESS_KEY: ""
+  #     AWS_DEFAULT_REGION: "us-east-1"
+  #   depends_on:
+  #     node-1:
+  #       condition: service_healthy
+
 volumes:
   node-1-data:
   node-2-data:

@@ -3980,6 +3980,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "blake3",
+ "bytes",
  "crc32fast",
  "futures",
  "headers",

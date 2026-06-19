@@ -51,17 +51,28 @@ COPY . .
 RUN touch crates/*/src/*.rs && \
     cargo build --release -p valori-node --locked
 
+# Create an empty /data directory owned by the nonroot UID (65532) so Docker
+# initializes named volumes with the correct ownership on first mount.
+# The nonroot user in distroless/cc-debian12 is UID/GID 65532.
+RUN mkdir -p /data && chown 65532:65532 /data
+
 # ── Stage 2: runtime (distroless) ─────────────────────────────────────────────
 # gcr.io/distroless/cc-debian12 provides the C runtime (libc, libgcc) needed
 # by Rust binaries compiled against the system glibc. No shell, no apt, no
 # package manager — attack surface is minimal.
 FROM gcr.io/distroless/cc-debian12:nonroot
 
-# Data directory — mount a volume here for persistent storage.
-VOLUME ["/data"]
-
 # Copy the compiled binary.
 COPY --from=builder /build/target/release/valori-node /usr/local/bin/valori-node
+
+# Copy the pre-owned data directory BEFORE the VOLUME declaration.
+# Docker initializes new named volumes from the image directory — including
+# ownership. Changes made after VOLUME are discarded from the image layer,
+# so the COPY must come first.
+COPY --from=builder --chown=65532:65532 /data /data
+
+# Data directory — mount a volume here for persistent storage.
+VOLUME ["/data"]
 
 # Environment defaults — override at runtime via -e or compose env:.
 ENV VALORI_BIND=0.0.0.0:3000

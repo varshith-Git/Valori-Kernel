@@ -83,6 +83,7 @@ async fn run_ops(ops: Vec<Op>) {
                             id: RecordId(id),
                         },
                         request_id: None,
+                        schema_version: 0,
                     })
                     .await
                     .ok(); // ignore not-found — id may be already deleted
@@ -99,6 +100,7 @@ async fn run_ops(ops: Vec<Op>) {
                             id: RecordId(id),
                         },
                         request_id: None,
+                        schema_version: 0,
                     })
                     .await
                     .ok();

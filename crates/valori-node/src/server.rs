@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use axum::{
-    routing::post,
+    routing::{post, delete},
     Router,
-    extract::State,
+    extract::{State, Path as AxumPath},
     Json,
     body::Body,
 };
@@ -83,6 +83,14 @@ pub fn build_router(
         .route("/v1/replication/events", axum::routing::get(get_replication_events))
         .route("/v1/replication/state", axum::routing::get(get_replication_state))
         .route("/timeline", axum::routing::get(get_timeline))
+        .route("/v1/namespaces", post(create_collection_handler).get(list_collections_handler))
+        .route("/v1/namespaces/:name", delete(drop_collection_handler))
+        // Phase 3.1: object-store endpoints
+        .route("/v1/storage/snapshots", axum::routing::get(list_remote_snapshots))
+        .route("/v1/storage/snapshots/upload", post(upload_snapshot_to_store))
+        .route("/v1/storage/snapshots/restore", post(restore_from_store))
+        .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
+        .route("/v1/storage/wal/archive", post(archive_wal_segment))
         .with_state(state);
 
     if let Some(token) = auth_token {
@@ -133,8 +141,8 @@ async fn delete_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<DeleteRecordRequest>,
 ) -> Result<Json<DeleteRecordResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
+    engine.resolve_collection(payload.collection.as_deref())?;
     engine.delete_record(payload.id)?;
 
     Ok(Json(DeleteRecordResponse { success: true }))
@@ -199,9 +207,9 @@ async fn insert_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<InsertRecordRequest>,
 ) -> Result<Json<InsertRecordResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
-    let id = engine.insert_record_from_f32(&payload.values)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let id = engine.insert_record_from_f32_ns(&payload.values, ns)?;
     Ok(Json(InsertRecordResponse { id }))
 }
 
@@ -209,9 +217,9 @@ async fn batch_insert(
     State(state): State<SharedEngine>,
     Json(payload): Json<BatchInsertRequest>,
 ) -> Result<Json<BatchInsertResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
-    let ids = engine.insert_batch(&payload.batch)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let ids = engine.insert_batch_ns(&payload.batch, ns)?;
     Ok(Json(BatchInsertResponse { ids }))
 }
 
@@ -219,9 +227,13 @@ async fn search(
     State(state): State<SharedEngine>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let engine = state.lock().await;
-    let hits = engine.search_l2(&payload.query, payload.k)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let hits = if ns == 0 {
+        engine.search_l2(&payload.query, payload.k)?
+    } else {
+        engine.search_l2_ns(&payload.query, payload.k, ns)?
+    };
     let results = hits.into_iter().map(|(id, score)| SearchHit { id, score }).collect();
     Ok(Json(SearchResponse { results }))
 }
@@ -230,8 +242,8 @@ async fn create_node(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateNodeRequest>,
 ) -> Result<Json<CreateNodeResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
+    engine.resolve_collection(payload.collection.as_deref())?;
     let node_id = engine.create_node_for_record(payload.record_id, payload.kind)?;
     Ok(Json(CreateNodeResponse { node_id }))
 }
@@ -240,8 +252,8 @@ async fn create_edge(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateEdgeRequest>,
 ) -> Result<Json<CreateEdgeResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
+    engine.resolve_collection(payload.collection.as_deref())?;
     let edge_id = engine.create_edge(payload.from, payload.to, payload.kind)?;
     Ok(Json(CreateEdgeResponse { edge_id }))
 }
@@ -303,9 +315,9 @@ async fn memory_upsert_vector(
     State(state): State<SharedEngine>,
     Json(payload): Json<MemoryUpsertVectorRequest>,
 ) -> Result<Json<MemoryUpsertResponse>, EngineError> {
-    validate_collection(payload.collection.as_deref())?;
     let mut engine = state.lock().await;
-    let record_id = engine.insert_record_from_f32(&payload.vector)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let record_id = engine.insert_record_from_f32_ns(&payload.vector, ns)?;
 
     let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
         existing
@@ -358,9 +370,13 @@ async fn memory_search_vector(
 
 async fn get_proof(
     State(state): State<SharedEngine>,
-) -> Result<Json<valori_kernel::proof::DeterministicProof>, EngineError> {
+) -> impl IntoResponse {
     let engine = state.lock().await;
-    Ok(Json(engine.get_proof()))
+    let proof = engine.get_proof();
+    // Encode all 32 bytes as lowercase hex — same wire format as the cluster's
+    // state_proof handler so external clients see an identical response shape.
+    let hex: String = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+    Json(serde_json::json!({ "final_state_hash": hex }))
 }
 
 async fn get_event_proof(
@@ -371,16 +387,25 @@ async fn get_event_proof(
     if let Some(ref committer) = engine.event_committer {
         let proof = engine.get_proof();
         let committed_height = committer.journal().committed_height();
-        
+
+        // Hash the actual event-log file with BLAKE3 (full 32 bytes → 64 hex chars).
+        // Previously this was incorrectly set to the final_state_hash value, and both
+        // hashes were truncated to 16 bytes then formatted without zero-padding,
+        // yielding ≤32 hex chars instead of the correct 64.
+        let event_log_path = committer.event_log().path().to_path_buf();
+        let event_log_hash_bytes =
+            crate::events::event_proof::compute_event_log_hash(&event_log_path)
+                .unwrap_or([0u8; 32]);
+
         let response = EventProofResponse {
             kernel_version: 1,
-            event_log_hash: format!("{:x}", u128::from_le_bytes(proof.final_state_hash[..16].try_into().unwrap())),
-            final_state_hash: format!("{:x}", u128::from_le_bytes(proof.final_state_hash[..16].try_into().unwrap())),
+            event_log_hash: event_log_hash_bytes.iter().map(|b| format!("{b:02x}")).collect(),
+            final_state_hash: proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect(),
             snapshot_hash: None,
             event_count: committed_height,
             committed_height,
         };
-        
+
         Ok(Json(response))
     } else {
         Err(EngineError::InvalidInput("Event log not enabled".to_string()))
@@ -500,9 +525,277 @@ async fn get_timeline(
                     key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
             KernelEvent::AutoInsertRecord { tag, .. } =>
                 format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})"),
+            KernelEvent::AutoCreateNode { kind, .. } =>
+                format!("Event ID {event_id}: AutoCreateNode (Kind: {kind:?})"),
+            KernelEvent::AutoCreateEdge { from, to, kind } =>
+                format!("Event ID {event_id}: AutoCreateEdge ({} → {}, Kind: {kind:?})", from.0, to.0),
         };
         events.push(event_str);
     }
 
     Ok(Json(events))
+}
+
+// ── Collection (namespace) management endpoints ───────────────────────────────
+
+async fn create_collection_handler(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<CreateCollectionRequest>,
+) -> Result<Json<CreateCollectionResponse>, EngineError> {
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
+    }
+    let mut engine = state.lock().await;
+    let already_exists = engine.namespaces.map.contains_key(&name) || name == "default";
+    let id = engine.create_collection(&name)?;
+    Ok(Json(CreateCollectionResponse {
+        name,
+        id,
+        created: !already_exists,
+    }))
+}
+
+async fn list_collections_handler(
+    State(state): State<SharedEngine>,
+) -> Json<ListCollectionsResponse> {
+    let engine = state.lock().await;
+    let collections = engine
+        .list_collections()
+        .into_iter()
+        .map(|(name, id)| CollectionInfo { name, id })
+        .collect();
+    Json(ListCollectionsResponse { collections })
+}
+
+async fn drop_collection_handler(
+    State(state): State<SharedEngine>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<axum::http::StatusCode, EngineError> {
+    let mut engine = state.lock().await;
+    engine.drop_collection(&name)?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+// ── Phase 3.1: object-store handlers ─────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct StorageSnapshotUploadResponse {
+    key: String,
+    state_hash: String,
+    size_bytes: usize,
+    pruned: usize,
+}
+
+#[derive(serde::Serialize)]
+struct ListRemoteSnapshotsResponse {
+    snapshots: Vec<crate::object_store::SnapshotEntry>,
+    count: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct RestoreFromStoreRequest {
+    /// Object key returned by a previous upload or list call.
+    key: String,
+}
+
+#[derive(serde::Serialize)]
+struct RestoreFromStoreResponse {
+    key: String,
+    state_hash: String,
+    size_bytes: usize,
+}
+
+#[derive(serde::Serialize)]
+struct ListRemoteWalResponse {
+    segments: Vec<crate::object_store::WalEntry>,
+    count: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct ArchiveWalRequest {
+    /// Absolute path on this node's local filesystem to the sealed segment.
+    path: String,
+}
+
+#[derive(serde::Serialize)]
+struct ArchiveWalResponse {
+    key: String,
+    size_bytes: u64,
+}
+
+/// `GET /v1/storage/snapshots` — list snapshots in the object store.
+async fn list_remote_snapshots(
+    State(state): State<SharedEngine>,
+) -> Result<Json<ListRemoteSnapshotsResponse>, EngineError> {
+    let object_store = {
+        let engine = state.lock().await;
+        engine.object_store.clone()
+    };
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+    let snapshots = os.list_snapshots().await.map_err(|e| {
+        EngineError::InvalidInput(format!("object store list failed: {e}"))
+    })?;
+    let count = snapshots.len();
+    Ok(Json(ListRemoteSnapshotsResponse { snapshots, count }))
+}
+
+/// `POST /v1/storage/snapshots/upload` — snapshot current state and push to object store.
+///
+/// Automatically prunes old snapshots according to `VALORI_OBJECT_STORE_KEEP` (default 7).
+async fn upload_snapshot_to_store(
+    State(state): State<SharedEngine>,
+) -> Result<Json<StorageSnapshotUploadResponse>, EngineError> {
+    // Capture snapshot data and object store handle while holding the lock,
+    // then release before any async I/O so we don't hold the mutex across awaits.
+    let (snap_bytes, state_hash, object_store, keep) = {
+        let engine = state.lock().await;
+        let snap = engine.snapshot()?;
+        let proof = engine.get_proof();
+        let hash = proof
+            .final_state_hash
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let os = engine.object_store.clone();
+        let keep = engine.object_store_keep as usize;
+        (snap, hash, os, keep)
+    };
+
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+
+    let size_bytes = snap_bytes.len();
+    let key = os
+        .upload_snapshot(&snap_bytes, &state_hash)
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("upload failed: {e}")))?;
+
+    let pruned = os
+        .prune_snapshots(keep)
+        .await
+        .unwrap_or(0);
+
+    Ok(Json(StorageSnapshotUploadResponse {
+        key,
+        state_hash,
+        size_bytes,
+        pruned,
+    }))
+}
+
+/// `POST /v1/storage/snapshots/restore` — pull a snapshot from the object store and restore.
+///
+/// Body: `{ "key": "snapshots/00000001750000000_abc12345.snap" }`
+async fn restore_from_store(
+    State(state): State<SharedEngine>,
+    Json(req): Json<RestoreFromStoreRequest>,
+) -> Result<Json<RestoreFromStoreResponse>, EngineError> {
+    let object_store = {
+        let engine = state.lock().await;
+        engine.object_store.clone()
+    };
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+
+    let data = os
+        .download_snapshot(&req.key)
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("download failed: {e}")))?;
+    let size_bytes = data.len();
+
+    {
+        let mut engine = state.lock().await;
+        engine.restore(&data)?;
+    }
+
+    // Compute hash of the just-restored state.
+    let state_hash = {
+        let engine = state.lock().await;
+        engine
+            .get_proof()
+            .final_state_hash
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+
+    tracing::info!(
+        key = %req.key,
+        state_hash = %state_hash,
+        "restored from object store"
+    );
+    Ok(Json(RestoreFromStoreResponse {
+        key: req.key,
+        state_hash,
+        size_bytes,
+    }))
+}
+
+/// `GET /v1/storage/wal` — list archived WAL segments in the object store.
+async fn list_remote_wal(
+    State(state): State<SharedEngine>,
+) -> Result<Json<ListRemoteWalResponse>, EngineError> {
+    let object_store = {
+        let engine = state.lock().await;
+        engine.object_store.clone()
+    };
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+    let segments = os.list_wal_segments().await.map_err(|e| {
+        EngineError::InvalidInput(format!("object store list failed: {e}"))
+    })?;
+    let count = segments.len();
+    Ok(Json(ListRemoteWalResponse { segments, count }))
+}
+
+/// `POST /v1/storage/wal/archive` — archive a sealed WAL segment to the object store.
+///
+/// Body: `{ "path": "/data/events.log.000001" }`
+///
+/// The segment must already be sealed (rotated away from the live log path).
+/// Auto-archival on rotation is wired in Phase 3.2.
+async fn archive_wal_segment(
+    State(state): State<SharedEngine>,
+    Json(req): Json<ArchiveWalRequest>,
+) -> Result<Json<ArchiveWalResponse>, EngineError> {
+    let object_store = {
+        let engine = state.lock().await;
+        engine.object_store.clone()
+    };
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+
+    let local_path = std::path::Path::new(&req.path);
+    if !local_path.exists() {
+        return Err(EngineError::InvalidInput(format!(
+            "segment not found: {}",
+            req.path
+        )));
+    }
+    let size_bytes = std::fs::metadata(local_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let key = os
+        .archive_wal_segment(local_path)
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("archive failed: {e}")))?;
+
+    Ok(Json(ArchiveWalResponse { key, size_bytes }))
 }

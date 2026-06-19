@@ -26,6 +26,7 @@ use valori_kernel::error::KernelError;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 // ── Health response types ─────────────────────────────────────────────────────
 
@@ -75,6 +76,68 @@ pub enum RecoveryMode {
     Fresh,
 }
 
+/// Namespace registry: maps collection name → NamespaceId (u16).
+///
+/// "default" is always id 0 and is never stored in the map (hardcoded).
+/// All other names are allocated sequentially starting at 1.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct NamespaceRegistry {
+    pub map: HashMap<String, u16>,
+    pub next_id: u16,
+}
+
+impl NamespaceRegistry {
+    pub fn new() -> Self {
+        Self { map: HashMap::new(), next_id: 1 }
+    }
+
+    /// Resolve a collection name to a NamespaceId.
+    /// Returns `Some(0)` for `None` or `"default"`, `Some(id)` for registered names,
+    /// `None` for unknown names.
+    pub fn resolve(&self, name: Option<&str>) -> Option<u16> {
+        match name {
+            None | Some("default") => Some(0),
+            Some(n) => self.map.get(n).copied(),
+        }
+    }
+
+    /// Create a collection; idempotent — returns existing id if already registered.
+    /// Returns error if `MAX_NAMESPACES` (1024) would be exceeded or name is "default".
+    pub fn create(&mut self, name: &str) -> Result<u16, EngineError> {
+        if name == "default" {
+            return Ok(0);
+        }
+        if let Some(&id) = self.map.get(name) {
+            return Ok(id);
+        }
+        if self.next_id as usize >= valori_kernel::types::id::MAX_NAMESPACES {
+            return Err(EngineError::InvalidInput(format!(
+                "namespace limit reached ({} max)", valori_kernel::types::id::MAX_NAMESPACES
+            )));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.map.insert(name.to_string(), id);
+        Ok(id)
+    }
+
+    /// Drop a collection by name. Returns its former id, or None if not found.
+    /// "default" (id 0) cannot be dropped.
+    pub fn drop_collection(&mut self, name: &str) -> Option<u16> {
+        if name == "default" { return None; }
+        self.map.remove(name)
+    }
+
+    /// All collections including the implicit "default".
+    pub fn list(&self) -> Vec<(String, u16)> {
+        let mut out = vec![("default".to_string(), 0u16)];
+        let mut rest: Vec<_> = self.map.iter().map(|(k, &v)| (k.clone(), v)).collect();
+        rest.sort_by_key(|&(_, id)| id);
+        out.extend(rest);
+        out
+    }
+}
+
 /// The Node Engine orchestrates state, persistence, and indexing.
 pub struct Engine {
     pub state: KernelState,
@@ -112,6 +175,16 @@ pub struct Engine {
     /// Enables O(1) auto-cascade: deleting a vector automatically removes its graph node.
     /// Not persisted — rebuilt from the node pool on restore.
     pub record_to_node: HashMap<u32, u32>,
+
+    /// Collection (namespace) registry — maps names to NamespaceIds.
+    pub namespaces: NamespaceRegistry,
+
+    /// Phase 3.1: object-store backend for snapshot offload and WAL archival.
+    /// `None` when `VALORI_OBJECT_STORE_URL` is not set.
+    pub object_store: Option<Arc<crate::object_store::ObjectStoreBackend>>,
+
+    /// Number of snapshots to keep in the object store after pruning.
+    pub object_store_keep: u32,
 }
 
 impl Engine {
@@ -206,6 +279,9 @@ impl Engine {
             event_committer,
             record_to_node: HashMap::new(),
             metadata_path,
+            namespaces: NamespaceRegistry::new(),
+            object_store: crate::object_store::ObjectStoreBackend::from_env(),
+            object_store_keep: cfg.object_store_keep,
         }
     }
 
@@ -352,11 +428,12 @@ impl Engine {
         }
     }
 
-    // FFI Entry point for inserting a single record from f32
+    /// Insert into the default namespace (backward-compat entry point).
     pub fn insert_record_from_f32(&mut self, values: &[f32]) -> Result<u32, EngineError> {
-        // ── Capacity guard ─────────────────────────────────────────────────────
-        // Enforced hard limit: reject inserts once the record pool is full.
-        // Returns HTTP 507 Insufficient Storage via EngineError → IntoResponse.
+        self.insert_record_from_f32_ns(values, valori_kernel::types::id::DEFAULT_NS.0)
+    }
+
+    pub fn insert_record_from_f32_ns(&mut self, values: &[f32], namespace_id: u16) -> Result<u32, EngineError> {
         if self.state.record_count() >= self.max_records {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
@@ -380,15 +457,16 @@ impl Engine {
 
         if let Some(ref mut committer) = self.event_committer {
             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event(&event)?;
+            self.apply_committed_event_ns(&event, namespace_id)?;
         } else {
             let (rid, vector) = if let valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } = &event {
                 (*id, vector.clone())
             } else {
                 unreachable!()
             };
-            
+
             let cmd = Command::InsertRecord {
+                namespace_id,
                 id: rid,
                 vector,
                 metadata: None,
@@ -398,13 +476,19 @@ impl Engine {
                 writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             }
             self.state.apply(&cmd)?;
-            self.index.insert(rid.0, values);
+            if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
+                self.index.insert(rid.0, values);
+            }
         }
 
         Ok(rid.0)
     }
 
     pub fn insert_batch(&mut self, batch: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
+        self.insert_batch_ns(batch, valori_kernel::types::id::DEFAULT_NS.0)
+    }
+
+    pub fn insert_batch_ns(&mut self, batch: &[Vec<f32>], namespace_id: u16) -> Result<Vec<u32>, EngineError> {
         // ── Capacity guard ─────────────────────────────────────────────────────
         // Reject the entire batch atomically if it would overflow the record
         // pool.  This prevents partial writes: either the whole batch fits, or
@@ -438,13 +522,13 @@ impl Engine {
 
             committer.commit_batch(events.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             for event in &events {
-                self.apply_committed_event(event)?;
+                self.apply_committed_event_ns(event, namespace_id)?;
             }
             Ok(ids)
         } else {
             let mut ids = Vec::with_capacity(batch.len());
             for values in batch {
-                ids.push(self.insert_record_from_f32(values)?);
+                ids.push(self.insert_record_from_f32_ns(values, namespace_id)?);
             }
             Ok(ids)
         }
@@ -457,6 +541,48 @@ impl Engine {
             }
         }
         Ok(self.index.search(query, k))
+    }
+
+    // ── Collection / namespace management ────────────────────────────────────
+
+    /// Resolve an optional collection name to a kernel NamespaceId.
+    /// Returns an error for unknown names.
+    pub fn resolve_collection(&self, name: Option<&str>) -> Result<u16, EngineError> {
+        self.namespaces.resolve(name).ok_or_else(|| {
+            EngineError::InvalidInput(format!(
+                "unknown collection '{}' — create it first with POST /v1/namespaces",
+                name.unwrap_or("default")
+            ))
+        })
+    }
+
+    /// Create a new collection. Idempotent — returns existing id if already present.
+    pub fn create_collection(&mut self, name: &str) -> Result<u16, EngineError> {
+        let id = self.namespaces.create(name)?;
+        // Tell the kernel about the namespace (no-op if already exists).
+        let cmd = valori_kernel::state::command::Command::CreateNamespace { namespace_id: id };
+        self.state.apply(&cmd)?;
+        Ok(id)
+    }
+
+    /// Drop a collection and all its records/nodes.
+    pub fn drop_collection(&mut self, name: &str) -> Result<(), EngineError> {
+        if name == "default" {
+            return Err(EngineError::InvalidInput(
+                "the 'default' collection cannot be dropped".into(),
+            ));
+        }
+        let id = self.namespaces.drop_collection(name).ok_or_else(|| {
+            EngineError::InvalidInput(format!("collection '{name}' not found"))
+        })?;
+        let cmd = valori_kernel::state::command::Command::DropNamespace { namespace_id: id };
+        self.state.apply(&cmd)?;
+        Ok(())
+    }
+
+    /// List all collections with their ids.
+    pub fn list_collections(&self) -> Vec<(String, u16)> {
+        self.namespaces.list()
     }
 
     pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
@@ -491,6 +617,13 @@ impl Engine {
         let i_buf = self.index.snapshot().map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         buffer.extend_from_slice(&(i_buf.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&i_buf);
+
+        // Namespace registry section (magic tag "NSRG" + u32 len + JSON bytes).
+        let ns_json = serde_json::to_vec(&self.namespaces)
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        buffer.extend_from_slice(b"NSRG");
+        buffer.extend_from_slice(&(ns_json.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&ns_json);
 
         Ok(buffer)
     }
@@ -555,8 +688,29 @@ impl Engine {
         } else {
              None
         };
+        offset += i_len;
 
-        self.restore_from_components(k_data, m_data, i_data)
+        // Namespace registry section (optional — older snapshots lack it).
+        let ns_registry: Option<NamespaceRegistry> = if offset + 4 <= data.len()
+            && &data[offset..offset + 4] == b"NSRG"
+        {
+            offset += 4;
+            let ns_len = u32::from_le_bytes(
+                data[offset..offset + 4].try_into()
+                    .map_err(|_| EngineError::InvalidInput("Failed to read ns_len".into()))?,
+            ) as usize;
+            offset += 4;
+            if offset + ns_len > data.len() {
+                return Err(EngineError::InvalidInput("Truncated snapshot: ns_data out of bounds".into()));
+            }
+            let ns_json = &data[offset..offset + ns_len];
+            Some(serde_json::from_slice(ns_json)
+                .map_err(|e| EngineError::InvalidInput(format!("ns registry decode: {e}")))?)
+        } else {
+            None
+        };
+
+        self.restore_from_components(k_data, m_data, i_data, ns_registry)
     }
 
     /// Soft-delete a record: mark it as a tombstone and remove it from the search index.
@@ -675,7 +829,7 @@ impl Engine {
              committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              self.apply_committed_event(&event)?;
          } else {
-             let cmd = Command::CreateNode { node_id, kind, record };
+             let cmd = Command::CreateNode { namespace_id: valori_kernel::types::id::DEFAULT_NS.0, node_id, kind, record };
              if let Some(ref mut writer) = self.wal_writer {
                  writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              }
@@ -777,6 +931,74 @@ impl Engine {
         Ok(())
     }
 
+    /// Like `apply_committed_event` but routes the event into a specific namespace.
+    pub fn apply_committed_event_ns(&mut self, event: &valori_kernel::event::KernelEvent, namespace_id: u16) -> Result<(), EngineError> {
+        use valori_kernel::event::KernelEvent;
+
+        match event {
+            KernelEvent::DeleteNode { id } => {
+                if let Some(node) = self.state.get_node(*id) {
+                    if let Some(rid) = node.record {
+                        self.record_to_node.remove(&rid.0);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.state.apply_event_ns(event, namespace_id)?;
+
+        match event {
+            KernelEvent::InsertRecord { id, vector, .. } => {
+                // Non-default namespaces are searched via the kernel's intrusive
+                // linked list (search_l2_ns); they must NOT enter the global index.
+                if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
+                    let mut vals = Vec::with_capacity(vector.data.len());
+                    for fxp in &vector.data {
+                        vals.push(fxp.0 as f32 / SCALE as f32);
+                    }
+                    self.index.insert(id.0, &vals);
+                }
+            }
+            KernelEvent::DeleteRecord { id } => { self.index.delete(id.0); }
+            KernelEvent::SoftDeleteRecord { id } => { self.index.delete(id.0); }
+            KernelEvent::CreateNode { id, record, .. } => {
+                if let Some(rid) = record {
+                    self.record_to_node.insert(rid.0, id.0);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Add a namespace-scoped search method.
+    pub fn search_l2_ns(&self, query: &[f32], k: usize, namespace_id: u16) -> Result<Vec<(u32, f32)>, EngineError> {
+        use valori_kernel::index::SearchResult;
+        use valori_kernel::types::scalar::FxpScalar;
+        use valori_kernel::types::vector::FxpVector;
+
+        for &v in query {
+            if v > 32767.99 || v < -32768.0 {
+                return Err(EngineError::InvalidInput("Query vector values must be between -32768.0 and 32767.99".to_string()));
+            }
+        }
+
+        let fxp_data: Vec<FxpScalar> = query.iter()
+            .map(|&v| FxpScalar((v * SCALE as f32) as i32))
+            .collect();
+        let fxp_query = FxpVector { data: fxp_data };
+
+        let mut results = vec![SearchResult::default(); k];
+        let found = self.state.search_l2_ns(&fxp_query, &mut results, namespace_id);
+
+        Ok(results[..found].iter().map(|r| {
+            let score = r.score.0 as f32 / (SCALE as f32 * SCALE as f32);
+            (r.id.0, score)
+        }).collect())
+    }
+
     /// Trigger a full index build from the current kernel state.
     ///
     /// Unlike `rebuild_index()`, which reconstructs the index by inserting each
@@ -790,6 +1012,9 @@ impl Engine {
         for i in 0..total_slots {
             if let Some(record) = self.state.get_record(RecordId(i as u32)) {
                 if !record.is_active() { continue; }
+                // Non-default namespace records are found via the kernel's
+                // intrusive linked list (search_l2_ns); skip the global index.
+                if record.namespace_id != valori_kernel::types::id::DEFAULT_NS.0 { continue; }
                 let vals: Vec<f32> = record.vector.data.iter()
                     .map(|fxp| fxp.0 as f32 / SCALE as f32)
                     .collect();
@@ -914,7 +1139,7 @@ impl Engine {
         RecoveryMode::Fresh
     }
 
-    fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>) -> Result<(), EngineError> {
+    fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>, ns_registry: Option<NamespaceRegistry>) -> Result<(), EngineError> {
         self.state = decode_state(k_data)?;
 
         if !m_data.is_empty() {
@@ -933,6 +1158,10 @@ impl Engine {
 
         // Always rebuild the derived record→node map after any restore
         self.rebuild_record_to_node();
+
+        if let Some(reg) = ns_registry {
+            self.namespaces = reg;
+        }
         Ok(())
     }
 }
