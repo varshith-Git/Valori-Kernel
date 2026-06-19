@@ -104,6 +104,7 @@ fn insert(id: u32) -> ClientRequest {
             tag: id as u64,
         },
         request_id: None,
+        schema_version: 0,
     }
 }
 

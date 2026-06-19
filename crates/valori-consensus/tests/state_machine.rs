@@ -7,7 +7,7 @@ use openraft::storage::RaftStateMachine;
 use openraft::testing::log_id;
 use openraft::{EntryPayload, RaftSnapshotBuilder};
 
-use valori_consensus::types::{ClientRequest, Entry, NodeId};
+use valori_consensus::types::{ClientRequest, Entry, NodeId, CURRENT_SCHEMA_VERSION};
 use valori_consensus::{MemoryAuditSink, ValoriStateMachine};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -25,7 +25,7 @@ fn insert_event(id: u32) -> KernelEvent {
 fn normal(term: u64, node: NodeId, index: u64, event: KernelEvent, rid: Option<[u8; 16]>) -> Entry {
     Entry {
         log_id: log_id(term, node, index),
-        payload: EntryPayload::Normal(ClientRequest { event, request_id: rid }),
+        payload: EntryPayload::Normal(ClientRequest { event, request_id: rid, schema_version: 0 }),
     }
 }
 
@@ -225,8 +225,10 @@ async fn corrupted_snapshot_payload_is_refused_and_state_kept() {
 
     let snapshot = sm.get_snapshot_builder().await.build_snapshot().await.unwrap();
     let mut bytes = snapshot.snapshot.into_inner();
-    let mid = bytes.len() / 2;
-    bytes[mid] ^= 0xFF;
+    // Corrupt the very last byte: bincode encodes state_hash (32 bytes) at the
+    // tail of the payload, so the last byte is always inside the hash field
+    // regardless of kernel format version. This guarantees the hash check fires.
+    *bytes.last_mut().unwrap() ^= 0xFF;
 
     let result = sm
         .install_snapshot(&snapshot.meta, Box::new(std::io::Cursor::new(bytes)))
@@ -271,5 +273,47 @@ async fn two_nodes_applying_the_same_entries_converge_to_the_same_hash() {
         a.state_hash().await,
         b.state_hash().await,
         "the SMR invariant: same committed entries → same state hash"
+    );
+}
+
+// ── Schema version gate (Phase 3.2) ──────────────────────────────────────────
+
+fn versioned(term: u64, node: NodeId, index: u64, event: KernelEvent, version: u8) -> Entry {
+    Entry {
+        log_id: log_id(term, node, index),
+        payload: EntryPayload::Normal(ClientRequest {
+            event,
+            request_id: None,
+            schema_version: version,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn apply_accepts_current_schema_version() {
+    let mut sm = ValoriStateMachine::default();
+    let result = sm
+        .apply(vec![versioned(1, 1, 1, insert_event(0), CURRENT_SCHEMA_VERSION)])
+        .await;
+    assert!(result.is_ok(), "current schema version must be accepted");
+    assert_eq!(sm.with_state(|s| s.record_count()).await, 1);
+}
+
+#[tokio::test]
+async fn apply_rejects_unknown_schema_version() {
+    let mut sm = ValoriStateMachine::default();
+    let future_version = CURRENT_SCHEMA_VERSION.saturating_add(1);
+    let result = sm
+        .apply(vec![versioned(1, 1, 1, insert_event(0), future_version)])
+        .await;
+    assert!(
+        result.is_err(),
+        "a schema version newer than CURRENT_SCHEMA_VERSION must be refused"
+    );
+    // State must be untouched — the node did not apply a partially understood entry.
+    assert_eq!(
+        sm.with_state(|s| s.record_count()).await,
+        0,
+        "kernel state must be unchanged after a schema-version rejection"
     );
 }

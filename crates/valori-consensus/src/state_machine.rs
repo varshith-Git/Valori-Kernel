@@ -38,8 +38,11 @@ use openraft::{
     EntryPayload, LogId, RaftSnapshotBuilder, SnapshotMeta, StorageError, StorageIOError,
     StoredMembership,
 };
+use redb::Database;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+
+use crate::log_store_redb::SM_META;
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
@@ -48,7 +51,7 @@ use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::snapshot::encode::encode_state;
 use valori_kernel::state::kernel::KernelState;
 
-use crate::types::{ClientResponse, Entry, NodeId, TypeConfig, ValoriNode};
+use crate::types::{ClientResponse, Entry, NodeId, TypeConfig, ValoriNode, CURRENT_SCHEMA_VERSION};
 
 /// Where committed events are recorded for auditing.
 ///
@@ -110,6 +113,13 @@ impl AuditSink for MemoryAuditSink {
 /// a deliberate trade against unbounded memory. Phase 2.10 revisits.
 const MAX_DEDUP_ENTRIES: usize = 65_536;
 
+// Keys within the SM_META table (prefixed "sm_" to avoid collisions with
+// log-store keys in the same redb file).
+const KEY_SM_LAST_APPLIED: &str = "sm_last_applied";
+const KEY_SM_MEMBERSHIP: &str = "sm_membership";
+const KEY_SM_SNAPSHOT_META: &str = "sm_snapshot_meta";
+const KEY_SM_SNAPSHOT_DATA: &str = "sm_snapshot_data";
+
 /// What travels inside a Raft snapshot, beyond openraft's own meta.
 #[derive(Serialize, Deserialize)]
 struct SnapshotPayload {
@@ -134,6 +144,16 @@ struct StateMachineInner {
     current_snapshot: Option<(SnapshotMeta<NodeId, ValoriNode>, Vec<u8>)>,
     audit: Box<dyn AuditSink>,
     snapshot_seq: u64,
+    /// Set when a redb database is shared with the log store. Persists
+    /// `last_applied`, `membership`, and snapshot data across restarts so
+    /// openraft does not replay already-applied log entries through the
+    /// AuditSink, which would produce duplicate `events.log` writes.
+    db: Option<Arc<Database>>,
+    /// When set, log entries up to and including this index are being replayed
+    /// (catching up after restart). Audit writes are suppressed for these
+    /// entries to prevent duplicate `events.log` lines — the entries were
+    /// already written to audit before the restart.
+    replay_until: Option<u64>,
 }
 
 impl StateMachineInner {
@@ -146,6 +166,47 @@ impl StateMachineInner {
                 }
             }
         }
+    }
+
+    fn persist_applied(&self) -> Result<(), StorageError<NodeId>> {
+        let db = match &self.db {
+            Some(db) => db,
+            None => return Ok(()),
+        };
+        let last_applied_bytes = sm_encode(&self.last_applied)?;
+        let membership_bytes = sm_encode(&self.membership)?;
+        let txn = db.begin_write().map_err(|e| io_err(format!("sm persist begin_write: {e}")))?;
+        {
+            let mut table = txn.open_table(SM_META).map_err(|e| io_err(format!("sm_meta open: {e}")))?;
+            table.insert(KEY_SM_LAST_APPLIED, last_applied_bytes.as_slice())
+                .map_err(|e| io_err(format!("sm_meta insert last_applied: {e}")))?;
+            table.insert(KEY_SM_MEMBERSHIP, membership_bytes.as_slice())
+                .map_err(|e| io_err(format!("sm_meta insert membership: {e}")))?;
+        }
+        txn.commit().map_err(|e| io_err(format!("sm persist commit: {e}")))?;
+        Ok(())
+    }
+
+    fn persist_snapshot(&self) -> Result<(), StorageError<NodeId>> {
+        let db = match &self.db {
+            Some(db) => db,
+            None => return Ok(()),
+        };
+        let (meta, data) = match &self.current_snapshot {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let meta_bytes = sm_encode(meta)?;
+        let txn = db.begin_write().map_err(|e| io_err(format!("sm snapshot begin_write: {e}")))?;
+        {
+            let mut table = txn.open_table(SM_META).map_err(|e| io_err(format!("sm_meta open: {e}")))?;
+            table.insert(KEY_SM_SNAPSHOT_META, meta_bytes.as_slice())
+                .map_err(|e| io_err(format!("sm_meta insert snapshot_meta: {e}")))?;
+            table.insert(KEY_SM_SNAPSHOT_DATA, data.as_slice())
+                .map_err(|e| io_err(format!("sm_meta insert snapshot_data: {e}")))?;
+        }
+        txn.commit().map_err(|e| io_err(format!("sm snapshot commit: {e}")))?;
+        Ok(())
     }
 
     fn encode_kernel(&self) -> Result<Vec<u8>, StorageError<NodeId>> {
@@ -169,6 +230,17 @@ fn io_err(msg: String) -> StorageError<NodeId> {
     StorageError::IO {
         source: StorageIOError::write(&std::io::Error::other(msg)),
     }
+}
+
+fn sm_encode<T: serde::Serialize>(v: &T) -> Result<Vec<u8>, StorageError<NodeId>> {
+    bincode::serde::encode_to_vec(v, bincode::config::standard())
+        .map_err(|e| io_err(format!("sm encode: {e}")))
+}
+
+fn sm_decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError<NodeId>> {
+    bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+        .map(|(v, _)| v)
+        .map_err(|e| io_err(format!("sm decode: {e}")))
 }
 
 fn hex(bytes: &[u8; 32]) -> String {
@@ -200,8 +272,119 @@ impl ValoriStateMachine {
                 current_snapshot: None,
                 audit,
                 snapshot_seq: 0,
+                db: None,
+                replay_until: None,
             })),
         }
+    }
+
+    /// Construct a state machine backed by a shared redb database.
+    ///
+    /// Called instead of [`Self::new`] when `VALORI_RAFT_LOG_PATH` is set.
+    /// Reads previously persisted `last_applied`, `membership`, and snapshot
+    /// from the `sm_meta` table so openraft resumes from where it left off
+    /// rather than replaying every committed entry through the AuditSink.
+    pub fn with_db(
+        audit: Box<dyn AuditSink>,
+        db: Arc<Database>,
+    ) -> Result<Self, StorageError<NodeId>> {
+        // Read persisted state machine metadata.
+        let txn = db.begin_read().map_err(|e| io_err(format!("sm_meta read txn: {e}")))?;
+        let table = txn.open_table(SM_META).map_err(|e| io_err(format!("sm_meta open: {e}")))?;
+
+        // The highest log index we applied before shutdown. Entries up to this
+        // index have already been written to the audit log — replaying them
+        // through the AuditSink would produce duplicates.
+        let persisted_last_applied: Option<LogId<NodeId>> =
+            match table.get(KEY_SM_LAST_APPLIED).map_err(|e| io_err(format!("sm_meta get: {e}")))? {
+                Some(v) => sm_decode(v.value())?,
+                None => None,
+            };
+
+        let membership: StoredMembership<NodeId, ValoriNode> =
+            match table.get(KEY_SM_MEMBERSHIP).map_err(|e| io_err(format!("sm_meta get: {e}")))? {
+                Some(v) => sm_decode(v.value())?,
+                None => StoredMembership::default(),
+            };
+
+        // Restore kernel state from the persisted snapshot if one exists.
+        let snapshot: Option<(SnapshotMeta<NodeId, ValoriNode>, Vec<u8>)> = match (
+            table.get(KEY_SM_SNAPSHOT_META).map_err(|e| io_err(format!("sm_meta get: {e}")))?,
+            table.get(KEY_SM_SNAPSHOT_DATA).map_err(|e| io_err(format!("sm_meta get: {e}")))?,
+        ) {
+            (Some(meta_v), Some(data_v)) => {
+                let meta: SnapshotMeta<NodeId, ValoriNode> = sm_decode(meta_v.value())?;
+                Some((meta, data_v.value().to_vec()))
+            }
+            _ => None,
+        };
+        drop(table);
+        drop(txn);
+
+        // replay_until: suppress audit writes for any entry at or below this
+        // index, since those entries were already audited before the restart.
+        // Cleared lazily in apply() once we advance past it.
+        let replay_until: Option<u64> = persisted_last_applied.map(|l| l.index);
+
+        // Determine the correct `last_applied` to report to openraft and the
+        // in-memory state to start with:
+        //
+        // • Snapshot exists: restore state from the snapshot and tell openraft
+        //   we're at `snapshot.last_log_id`. Entries from `snapshot.last_log_id + 1`
+        //   up to `persisted_last_applied` will be replayed by openraft to bring
+        //   the state back to where it was. Audit writes are suppressed for those
+        //   entries because `replay_until = persisted_last_applied`.
+        //
+        // • No snapshot: start with empty state and tell openraft `last_applied = None`.
+        //   Openraft replays ALL committed entries from the Raft log (or, if the log
+        //   was compacted, requests a snapshot from the leader). Either way the state
+        //   is rebuilt correctly. Audit writes are suppressed for entries up to
+        //   `persisted_last_applied`, preventing duplicates.
+        let (state, dedup_set, dedup_order, current_snapshot, last_applied) = match snapshot {
+            Some((meta, bytes)) => {
+                let (payload, _): (SnapshotPayload, usize) =
+                    bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
+                        .map_err(|e| io_err(format!("persisted snapshot decode: {e}")))?;
+                let state = decode_state(&payload.kernel)
+                    .map_err(|e| io_err(format!("persisted snapshot kernel decode: {e:?}")))?;
+                let actual = hash_state_blake3(&state);
+                if actual != payload.state_hash {
+                    return Err(io_err(format!(
+                        "persisted snapshot state-hash mismatch: stored {} vs decoded {} — refusing restore",
+                        hex(&payload.state_hash),
+                        hex(&actual),
+                    )));
+                }
+                let dedup_set: HashSet<[u8; 16]> = payload.dedup.iter().copied().collect();
+                let dedup_order: VecDeque<[u8; 16]> = payload.dedup.into();
+                // Use the snapshot's own last_log_id, NOT the separately persisted
+                // last_applied. Openraft will replay snapshot.last_log_id+1 onward.
+                let last_applied = meta.last_log_id;
+                (state, dedup_set, dedup_order, Some((meta, bytes)), last_applied)
+            }
+            None => {
+                // No snapshot: start from scratch. Returning last_applied=None
+                // tells openraft to replay the full committed log so the
+                // in-memory KernelState is rebuilt from real entries rather than
+                // being left empty with a stale last_applied pointer.
+                (KernelState::new(), HashSet::new(), VecDeque::new(), None, None)
+            }
+        };
+
+        Ok(Self {
+            inner: Arc::new(Mutex::new(StateMachineInner {
+                state,
+                last_applied,
+                membership,
+                dedup_set,
+                dedup_order,
+                current_snapshot,
+                audit,
+                snapshot_seq: 0,
+                db: Some(db),
+                replay_until,
+            })),
+        })
     }
 
     /// Current BLAKE3 state hash — the cross-node equality invariant.
@@ -247,6 +430,8 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         deduplicated: false,
                         rejected: None,
                         allocated_record_id: None,
+                        allocated_node_id: None,
+                        allocated_edge_id: None,
                     });
                 }
                 EntryPayload::Membership(m) => {
@@ -257,9 +442,22 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         deduplicated: false,
                         rejected: None,
                         allocated_record_id: None,
+                        allocated_node_id: None,
+                        allocated_edge_id: None,
                     });
                 }
                 EntryPayload::Normal(req) => {
+                    // Version gate — refuse entries from a newer leader this
+                    // node doesn't understand. Returning StorageError halts
+                    // replication; the operator must upgrade the node binary.
+                    if req.schema_version > CURRENT_SCHEMA_VERSION {
+                        return Err(io_err(format!(
+                            "log index {log_index}: entry schema version {} exceeds this node's max \
+                             ({CURRENT_SCHEMA_VERSION}) — upgrade this node to resume replication",
+                            req.schema_version
+                        )));
+                    }
+
                     // 1. Dedup — replicated decision, identical on all nodes.
                     if let Some(id) = req.request_id {
                         if inner.dedup_set.contains(&id) {
@@ -269,18 +467,32 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                 deduplicated: true,
                                 rejected: None,
                                 allocated_record_id: None,
+                                allocated_node_id: None,
+                                allocated_edge_id: None,
                             });
                             continue;
                         }
                     }
 
-                    // For AutoInsertRecord the handler doesn't pre-allocate an
-                    // ID — the state machine picks `next_record_id()` here,
-                    // which is deterministic because all replicas apply entries
-                    // in the same Raft-ordered sequence.
+                    // For Auto* events the handler doesn't pre-allocate an
+                    // ID — the state machine picks the next ID here, which is
+                    // deterministic because all replicas apply entries in the
+                    // same Raft-ordered sequence.
                     let pre_alloc_id: Option<KRecordId> =
                         if matches!(&req.event, KernelEvent::AutoInsertRecord { .. }) {
                             Some(inner.state.next_record_id())
+                        } else {
+                            None
+                        };
+                    let pre_alloc_node_id: Option<u32> =
+                        if matches!(&req.event, KernelEvent::AutoCreateNode { .. }) {
+                            Some(inner.state.next_node_id().0)
+                        } else {
+                            None
+                        };
+                    let pre_alloc_edge_id: Option<u32> =
+                        if matches!(&req.event, KernelEvent::AutoCreateEdge { .. }) {
+                            Some(inner.state.next_edge_id().0)
                         } else {
                             None
                         };
@@ -295,18 +507,34 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         .map(|e| format!("{e:?}"));
 
                     // 3. Audit record + dedup memory — successful applies only.
-                    let allocated_record_id = if rejected.is_none() {
-                        if let Some(id) = req.request_id {
-                            inner.remember_request(id);
-                        }
-                        inner
-                            .audit
-                            .record(&req.event, req.request_id)
-                            .map_err(|e| io_err(format!("audit sink write failed: {e}")))?;
-                        pre_alloc_id.map(|r| r.0)
-                    } else {
-                        None
-                    };
+                    // During replay (log_index <= replay_until), the entry was
+                    // already written to the audit log before the restart, so
+                    // we skip the write to prevent duplicates. Dedup memory IS
+                    // rebuilt during replay so future request_id dedup is correct.
+                    let in_replay = inner.replay_until.map(|t| log_index <= t).unwrap_or(false);
+                    // Clear replay mode once we advance past the target index.
+                    if !in_replay {
+                        inner.replay_until = None;
+                    }
+                    let (allocated_record_id, allocated_node_id, allocated_edge_id) =
+                        if rejected.is_none() {
+                            if let Some(id) = req.request_id {
+                                inner.remember_request(id);
+                            }
+                            if !in_replay {
+                                inner
+                                    .audit
+                                    .record(&req.event, req.request_id)
+                                    .map_err(|e| io_err(format!("audit sink write failed: {e}")))?;
+                            }
+                            (
+                                pre_alloc_id.map(|r| r.0),
+                                pre_alloc_node_id,
+                                pre_alloc_edge_id,
+                            )
+                        } else {
+                            (None, None, None)
+                        };
 
                     replies.push(ClientResponse {
                         log_index,
@@ -314,10 +542,15 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         deduplicated: false,
                         rejected,
                         allocated_record_id,
+                        allocated_node_id,
+                        allocated_edge_id,
                     });
                 }
             }
         }
+        // Persist last_applied + membership once per batch so a restarted node
+        // does not replay already-applied entries through the AuditSink.
+        inner.persist_applied()?;
         Ok(replies)
     }
 
@@ -364,6 +597,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
         inner.dedup_set = payload.dedup.iter().copied().collect();
         inner.dedup_order = payload.dedup.into();
         inner.current_snapshot = Some((meta.clone(), bytes));
+        inner.persist_snapshot()?;
         Ok(())
     }
 
@@ -401,6 +635,7 @@ impl RaftSnapshotBuilder<TypeConfig> for ValoriStateMachine {
             ),
         };
         inner.current_snapshot = Some((meta.clone(), bytes.clone()));
+        inner.persist_snapshot()?;
 
         Ok(Snapshot {
             meta,

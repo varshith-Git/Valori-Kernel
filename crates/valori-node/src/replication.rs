@@ -147,8 +147,10 @@ pub async fn run_follower_loop(
 
             let (local_hash, local_height) = {
                 let engine = state_checker.lock().await;
+                let h = engine.get_proof().final_state_hash;
+                let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
                 (
-                    engine.get_proof().final_state_hash,
+                    hex,
                     engine.event_committer
                         .as_ref()
                         .map(|c| c.journal().committed_height())

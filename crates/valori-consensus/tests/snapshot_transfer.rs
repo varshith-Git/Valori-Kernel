@@ -66,6 +66,7 @@ fn insert(id: u32, rid: Option<[u8; 16]>) -> ClientRequest {
             tag: id as u64,
         },
         request_id: rid,
+        schema_version: 0,
     }
 }
 

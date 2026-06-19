@@ -90,6 +90,16 @@ pub struct NodeConfig {
 
     // Clustering
     pub mode: NodeMode,
+
+    // ── Phase 3.1: object store ───────────────────────────────────────────────
+    // Env: VALORI_OBJECT_STORE_URL
+    // s3://bucket/prefix  or  file:///local/path
+    // Absent = object store disabled (local-only mode).
+    pub object_store_url: Option<String>,
+
+    // Env: VALORI_OBJECT_STORE_KEEP (default: 7)
+    // Number of snapshots to retain in the object store after pruning.
+    pub object_store_keep: u32,
 }
 
 impl Default for NodeConfig {
@@ -180,7 +190,12 @@ impl Default for NodeConfig {
             .ok().and_then(|v| v.parse::<u32>().ok());
 
         let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
-        
+
+        let object_store_url = std::env::var("VALORI_OBJECT_STORE_URL").ok();
+        let object_store_keep = std::env::var("VALORI_OBJECT_STORE_KEEP")
+            .ok().and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(7);
+
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
             NodeMode::Follower { leader_url: url }
@@ -216,6 +231,8 @@ impl Default for NodeConfig {
             health_check_mode: false, // set by CLI arg, not env var
             auth_token,
             mode,
+            object_store_url,
+            object_store_keep,
         }
     }
 }

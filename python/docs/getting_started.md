@@ -159,4 +159,47 @@ print(f"Graph traversal yielded record IDs: {related_ids}")
 ```
 
 ---
+
+## 6. Collections (Multi-tenancy)
+
+Every data endpoint accepts an optional `collection` parameter. Records in
+different collections are fully isolated — a search scoped to `"tenant-acme"`
+never returns records from `"tenant-beta"` or the default collection.
+
+This works identically in standalone mode and across a Raft cluster.
+
+```python
+from valoricore import SyncRemoteClient
+
+client = SyncRemoteClient("http://localhost:3000")
+
+# Create a collection (idempotent)
+result = client.create_collection("tenant-acme")
+print(result)   # {"name": "tenant-acme", "id": 1, "created": True}
+
+# List all collections
+print(client.list_collections())
+# [{"name": "default", "id": 0}, {"name": "tenant-acme", "id": 1}]
+
+# Insert into a specific collection
+rid = client.insert([0.1, 0.2, 0.3, 0.4], collection="tenant-acme")
+
+# Batch insert
+ids = client.insert_batch([[0.1]*4, [0.2]*4], collection="tenant-acme")
+
+# Search — only records from "tenant-acme" are considered
+hits = client.search([0.1, 0.2, 0.3, 0.4], k=5, collection="tenant-acme")
+
+# Default search — never includes "tenant-acme" records
+default_hits = client.search([0.1, 0.2, 0.3, 0.4], k=5)
+
+# Drop the collection and all its records
+client.drop_collection("tenant-acme")
+# client.drop_collection("default")  # raises ValueError — protected
+```
+
+For a full multi-node walkthrough, see
+[examples/cluster_quickstart.py](../../examples/cluster_quickstart.py).
+
+---
 **Next Steps**: Check out the [API Reference](api_reference.md) for full method signatures and configuration options.

@@ -135,7 +135,7 @@ mod tests {
         let path = dir.path().join("test_append.wal");
         let mut writer = WalWriter::open(&path, 16).unwrap();
         
-        let cmd = Command::InsertRecord {
+        let cmd = Command::InsertRecord { namespace_id: 0,
             id: RecordId(1),
             vector: FxpVector::new_zeros(16),
             metadata: None,

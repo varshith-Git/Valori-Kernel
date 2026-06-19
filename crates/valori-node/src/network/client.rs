@@ -22,6 +22,13 @@ const INITIAL_BACKOFF_MS: u64 = 500;
 /// Hard ceiling on backoff duration (ms).
 const MAX_BACKOFF_MS: u64 = 8_000;
 
+/// Minimal proof response matching the `/v1/proof/state` wire format.
+/// The endpoint returns `{"final_state_hash": "<64-char hex>"}`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct LeaderProof {
+    pub final_state_hash: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LeaderClient {
     base_url: String,
@@ -53,8 +60,10 @@ impl LeaderClient {
         ms.min(MAX_BACKOFF_MS)
     }
 
-    /// Fetch the leader's current deterministic proof, retrying on transient errors.
-    pub async fn get_proof(&self) -> Result<valori_kernel::proof::DeterministicProof, EngineError> {
+    /// Fetch the leader's current state hash (hex-encoded), retrying on transient errors.
+    ///
+    /// The `/v1/proof/state` endpoint returns `{"final_state_hash": "<64-char hex>"}`.
+    pub async fn get_proof(&self) -> Result<LeaderProof, EngineError> {
         let url = format!("{}/v1/proof/state", self.base_url);
         let mut last_err = EngineError::Network("unreachable".into());
 
@@ -67,11 +76,10 @@ impl LeaderClient {
 
             match self.client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp.json().await
+                    return resp.json::<LeaderProof>().await
                         .map_err(|e| EngineError::Network(e.to_string()));
                 }
                 Ok(resp) => {
-                    // Non-transient HTTP error (4xx) — don't retry.
                     let status = resp.status();
                     if status.is_client_error() {
                         return Err(EngineError::Network(

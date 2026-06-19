@@ -1,16 +1,16 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Valoricore-v0.1.11-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
+<img src="https://img.shields.io/badge/Valoricore-v0.2.1-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
 
 # Valoricore
 
 ### The Official Python SDK for **Valori-Kernel**
 
-*Deterministic Vector Memory · Cryptographic Audit Trails · Hybrid Knowledge Graphs*
+*AI Memory That Is Cryptographically Auditable — By Design*
 
 <br/>
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE-MIT)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![Rust Core](https://img.shields.io/badge/core-Rust%20%2Fno__std-orange.svg)](https://www.rust-lang.org/)
 [![PyPI](https://img.shields.io/pypi/v/valoricore.svg)](https://pypi.org/project/valoricore/)
@@ -20,23 +20,53 @@
 
 ---
 
-`valoricore` is the official Python SDK for [**Valori-Kernel**](https://github.com/varshith-Git/Valori-Kernel) — a `no_std` Rust engine that unifies **Vector Memory** and **Knowledge Graphs** into a single, cryptographically auditable memory space.
+`valoricore` is the official Python SDK for [**Valori-Kernel**](https://github.com/varshith-Git/Valori-Kernel) — a `no_std` Rust engine that makes AI memory **reproducible and provable**.
 
-Every insert, search, and graph edge is backed by **Q16.16 fixed-point arithmetic**, producing bit-identical results across x86, ARM, and RISC-V. The global state is always summarised in a single **BLAKE3 Merkle root** you can store, compare, and prove.
+Standard vector databases use floating-point arithmetic, which produces different search results on different CPUs. When a regulator or auditor asks you to replay an AI decision, you cannot guarantee the replay produces the same result on different hardware — or even on the same hardware after a library upgrade.
+
+Valori fixes this by unifying **Vector Memory** and **Knowledge Graphs** using **Q16.16 fixed-point arithmetic**, producing bit-identical results across x86, ARM, and RISC-V. Every insert is recorded in a BLAKE3-chained event log. The entire state is summarised in a single **Merkle root hash** you can store, compare, and prove — without touching the database.
+
+**The core use case:** any system where the AI's memory must be reproducible, tamper-evident, and independently verifiable. Finance, legal tech, autonomous systems, or any regulated environment where "trust, but verify" is a legal requirement — not an aspiration.
 
 ---
 
-## What Makes Valoricore Different?
+## Why Replace Your Current Vector DB?
 
-| Feature | Valoricore | Chroma / FAISS / Pinecone |
-|---|---|---|
-| **Results across hardware** | Bit-identical (Q16.16 fixed-point) | Float drift |
-| **Cryptographic state proof** | BLAKE3 Merkle root per operation | None |
-| **Hybrid Vector + Graph** | Native, same memory space | Graph is a separate system |
-| **Offline proof verification** | No DB connection required | N/A |
-| **Snapshot / replay** | Byte-exact restore | Partial / format-specific |
-| **`no_std` embeddable core** | Runs on ARM Cortex-M4 | Heap-heavy |
-| **Air-gapped deployment** | Local FFI, no cloud required | Varies |
+| Feature | Valoricore | Chroma / FAISS / Pinecone | Business Value |
+|---|---|---|---|
+| **Results across hardware** | Bit-identical (Q16.16) | Float drift | Pass cross-platform audits; replay any AI decision with guaranteed identical output |
+| **Cryptographic state proof** | BLAKE3 Merkle root per insert | None | Prove exactly what data the AI saw at any point in time |
+| **Hybrid Vector + Graph** | Native, same memory space | Separate systems | Build GraphRAG pipelines without managing a second database |
+| **Offline proof verification** | No DB connection required | N/A | Auditors can verify AI decisions without accessing production |
+| **Snapshot / replay** | Byte-exact restore | Partial / format-specific | Disaster recovery that is provably correct, not just "probably fine" |
+| **`no_std` embeddable core** | Runs on ARM Cortex-M4 | Heap-heavy | Deploy AI memory to edge devices, browsers, and air-gapped systems |
+| **Multi-tenant collections** | Up to 1 024 isolated namespaces | Tag filtering only | True tenant isolation with zero cross-contamination risk |
+
+---
+
+## For Compliance & Audit Teams
+
+Valori is not a black box. Every state change is written to a BLAKE3-chained append-only event log. An auditor or compliance officer can independently verify what data an AI system saw — without accessing the production database, without trusting the server, and without re-running the model.
+
+```python
+from valoricore import ingest_embedding, generate_proof, verify_embedding
+
+# Step 1 — AI system ingests a vector in production and stores the proof
+vector      = [0.142, 0.897, 0.334, 0.561]   # e.g. an embedding of a document
+fixed_vals  = ingest_embedding(vector)         # convert to deterministic Q16.16
+proof_hex   = generate_proof(fixed_vals)       # BLAKE3 Merkle node — store this
+
+print(f"Proof: {proof_hex}")
+# → "a3f2c1d9..." (64-char hex)
+
+# Step 2 — Auditor verifies it independently, months later, on any machine
+is_valid = verify_embedding(floats=vector, claimed_hash=proof_hex)
+print(f"Verified: {is_valid}")   # True — math doesn't lie
+```
+
+The proof is computed entirely in Rust (via the embedded FFI) with no network calls. It is deterministic because the underlying arithmetic is fixed-point — no floating-point rounding, no hardware-dependent results.
+
+**What the state hash proves:** that the database contained exactly these records, in exactly this order, at the time the hash was recorded. Any tampering — insert, delete, or reorder — produces a different hash.
 
 ---
 
@@ -76,23 +106,53 @@ pip install "valoricore[pdf]"
 
 ## Quick Start
 
-### Interactive Colab Notebooks
-Test Valoricore in your browser with zero local setup:
-- [**End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) — Determinism, Knowledge Graph, Crypto Proofs
-- [**LangChain Integration**](https://colab.research.google.com/drive/1HezK4l-Hbc6AdHxJNLwSqAgzr8WaKhiq#scrollTo=Hxcyq4OkN0MO)
-- [**LlamaIndex Integration**](https://colab.research.google.com/drive/1Q72ANZxBm1fthNpgVW-FftS8sZz6uCr3#scrollTo=XHFOODSTVE6N)
+```bash
+pip install "valoricore[local]"
+```
 
-### 1 · Embedded Local Engine (no server required)
+### The Audit Proof in 10 Lines
 
 ```python
 from valoricore import MemoryClient
 from valoricore.embeddings import SentenceTransformerEmbedder
 
-embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")   # dim=384
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+client   = MemoryClient(path="./my_valori_db")
 
-client = MemoryClient(path="./my_valori_db")
+# Insert a document — chunked, embedded, and stored in the Knowledge Graph
+client.add_document(
+    text  = "Loan approved for application #A-20241107 at 14:32 UTC.",
+    embed = embedder,
+    title = "Decision Log",
+)
 
-# Add a document — chunks, embeds, and links in the Knowledge Graph automatically
+# Semantic search
+hits = client.semantic_search("loan approval decisions", embed=embedder, k=3)
+
+# Every insert changes this hash deterministically.
+# Run this on Apple Silicon, Intel, or ARM: the output is identical.
+print(f"State hash: {client.get_state_hash()}")
+# → e3b0c44298fc1c149afb...  (64-char BLAKE3 hex — the same on every machine)
+```
+
+This hash is your cryptographic receipt. Store it in a database, a blockchain, or an audit log. Anyone holding this hash and the original data can verify the state independently — no network connection, no trust in the server required.
+
+### Interactive Colab Notebooks
+
+Test Valoricore in your browser with zero local setup:
+- [**End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) — Determinism, Knowledge Graph, Crypto Proofs
+- [**LangChain Integration**](https://colab.research.google.com/drive/1HezK4l-Hbc6AdHxJNLwSqAgzr8WaKhiq#scrollTo=Hxcyq4OkN0MO)
+- [**LlamaIndex Integration**](https://colab.research.google.com/drive/1Q72ANZxBm1fthNpgVW-FftS8sZz6uCr3#scrollTo=XHFOODSTVE6N)
+
+### 1 · Embedded Local Engine (full example)
+
+```python
+from valoricore import MemoryClient
+from valoricore.embeddings import SentenceTransformerEmbedder
+
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+client   = MemoryClient(path="./my_valori_db")
+
 result = client.add_document(
     text  = "Valoricore is a deterministic Rust kernel that unifies "
             "vector memory and knowledge graphs.",
@@ -102,30 +162,50 @@ result = client.add_document(
 print(f"Document Node ID : {result['document_node_id']}")
 print(f"Chunk count      : {result['chunk_count']}")
 
-# Semantic search
 hits = client.semantic_search("What does Valoricore unify?", embed=embedder, k=3)
 for h in hits:
     print(f"  id={h['id']}  score={h['score']}")
 
-# Cryptographic state proof
 print(f"State hash: {client.get_state_hash()}")
 ```
 
 ### 2 · Remote / Cluster Mode
 
+Point `remote` at any node in the cluster. Writes are transparently redirected to
+the current leader (HTTP 307); the resolved leader is cached so subsequent writes
+skip the extra hop. During a leader election the client retries with exponential
+backoff before raising `NotLeaderError`.
+
 ```python
-from valoricore import MemoryClient
+from valoricore import MemoryClient, SyncRemoteClient
 from valoricore.embeddings import OpenAIEmbedder
 
 embedder = OpenAIEmbedder()
 
-# Identical API — only the constructor changes
+# MemoryClient — high-level, same API as local embedded
 client = MemoryClient(remote="http://my-valori-node:3000")
-
 result = client.add_document(text="Remote deployment with full audit trail.", embed=embedder)
-snap = client.snapshot()
-with open("backup.snap", "wb") as f:
-    f.write(snap)
+
+# SyncRemoteClient — lower-level, direct access to all endpoints
+from valoricore import SyncRemoteClient, NotLeaderError
+
+node = SyncRemoteClient("http://my-valori-node:3000", max_retries=5, retry_backoff=0.3)
+
+# Check cluster health before writing
+if not node.cluster_health():
+    raise RuntimeError("no leader elected yet")
+
+status = node.cluster_status()
+print(f"Leader: node {status['leader']}  Term: {status['term']}")
+
+# Insert — redirects to the leader automatically
+record_id = node.insert([0.1, 0.2, 0.3, 0.4])
+
+# Linearizable read: reflects every write committed before this read (default in cluster mode)
+hits = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="linearizable")
+
+# Eventually-consistent read: answered immediately from the local node (no leader round-trip)
+hits_local = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="local")
 ```
 
 ### 3 · Async API (FastAPI / asyncio)
@@ -148,6 +228,99 @@ async def main():
         print(f"State: {state}")
 
 asyncio.run(main())
+```
+
+---
+
+## Collections (Multi-tenancy)
+
+Valori supports up to **1 024 named collections** (namespaces). Every data
+operation accepts an optional `collection` parameter. The `"default"` collection
+always exists and cannot be dropped.
+
+Records in different collections are **fully isolated** — a search scoped to
+`"tenant-acme"` never returns records from `"tenant-beta"` or the default
+collection, and vice versa.
+
+```python
+from valoricore import SyncRemoteClient
+
+client = SyncRemoteClient("http://localhost:3000")
+
+# ── Create ────────────────────────────────────────────────────────────────────
+result = client.create_collection("tenant-acme")
+# {"name": "tenant-acme", "id": 1, "created": True}
+
+# Idempotent — same name returns the existing ID
+result2 = client.create_collection("tenant-acme")
+# {"name": "tenant-acme", "id": 1, "created": False}
+
+# ── List ──────────────────────────────────────────────────────────────────────
+collections = client.list_collections()
+# [{"name": "default", "id": 0}, {"name": "tenant-acme", "id": 1}]
+
+# ── Scoped insert ─────────────────────────────────────────────────────────────
+rid_a = client.insert([0.1, 0.2, 0.3, 0.4], collection="tenant-acme")
+rid_b = client.insert([0.5, 0.6, 0.7, 0.8])   # lands in "default"
+
+batch_ids = client.insert_batch(
+    [[0.1, 0.2, 0.3, 0.4], [0.9, 0.8, 0.7, 0.6]],
+    collection="tenant-acme",
+)
+
+# ── Scoped search ─────────────────────────────────────────────────────────────
+# Only "tenant-acme" records are considered.
+hits = client.search([0.1, 0.2, 0.3, 0.4], k=5, collection="tenant-acme")
+
+# Default search — never includes "tenant-acme" records.
+default_hits = client.search([0.1, 0.2, 0.3, 0.4], k=5)
+
+# ── Drop ──────────────────────────────────────────────────────────────────────
+client.drop_collection("tenant-acme")   # 204, removes all scoped records
+# client.drop_collection("default")    # raises ValueError — default is protected
+```
+
+Collections work identically in async mode:
+
+```python
+from valoricore import AsyncRemoteClient
+import asyncio
+
+async def main():
+    client = AsyncRemoteClient("http://localhost:3000")
+
+    await client.create_collection("tenant-async")
+    ids = await client.insert_batch([[0.1]*4, [0.2]*4], collection="tenant-async")
+    hits = await client.search([0.1]*4, k=5, collection="tenant-async")
+    await client.drop_collection("tenant-async")
+    await client.close()
+
+asyncio.run(main())
+```
+
+### Collections in a cluster
+
+Collections are managed through the **leader** exactly like writes. Point the
+client at any node; the SDK follows the redirect automatically.
+
+```python
+from valoricore import SyncRemoteClient
+
+# Any node — redirects to leader for writes
+node = SyncRemoteClient("http://cluster-node-1:3000")
+
+# Create the collection (leader-only, 307-redirect handled automatically)
+node.create_collection("tenant-acme")
+
+# Insert through any node in the cluster
+for url in ["http://cluster-node-1:3000", "http://cluster-node-2:3000"]:
+    c = SyncRemoteClient(url)
+    c.insert([0.1, 0.2, 0.3, 0.4], collection="tenant-acme")
+
+# Search on any node — linearizable consistency ensures it reflects all writes
+hits = node.search([0.1, 0.2, 0.3, 0.4], k=5,
+                   collection="tenant-acme",
+                   consistency="linearizable")
 ```
 
 ---
@@ -705,6 +878,18 @@ except ConnectionError as e:
 | `VALORI_AUTH_TOKEN` | *(none)* | Bearer token for HTTP API |
 | `VALORI_FOLLOWER_OF` | *(none)* | Leader URL (enables follower mode) |
 
+### Environment variables (cluster mode)
+
+Set these to boot a node as a Raft cluster member instead of standalone.
+
+| Variable | Description |
+|---|---|
+| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` — presence activates cluster mode. Example: `1=10.0.0.1:3100/10.0.0.1:3000,2=10.0.0.2:3100/10.0.0.2:3000` |
+| `VALORI_NODE_ID` | This node's integer ID (must appear in `VALORI_CLUSTER_MEMBERS`). |
+| `VALORI_RAFT_BIND` | gRPC consensus listener address (default `0.0.0.0:3100`). |
+| `VALORI_CLUSTER_INIT` | Set to `1` on exactly one node of a brand-new cluster to bootstrap it. |
+| `VALORI_RAFT_LOG_PATH` | Path to the `redb` file for the persistent Raft log. When set, the state machine also persists `last_applied` and the latest snapshot so audit events are never replayed after a restart. |
+
 ---
 
 ## API Reference
@@ -784,6 +969,36 @@ except ConnectionError as e:
 | `walk(start_node, max_depth)` | BFS traversal; returns visited node IDs |
 | `expand(start_node, max_depth)` | BFS traversal; returns reachable record IDs |
 
+### `SyncRemoteClient` / `AsyncRemoteClient`
+
+These clients expose the full API surface when talking to a running node over HTTP.
+`SyncRemoteClient` uses `requests`; `AsyncRemoteClient` uses `httpx` and must be
+`await`ed. Both are cluster-aware (automatic leader redirect, retry with backoff).
+
+#### Collections
+
+| Method | Returns | Description |
+|---|---|---|
+| `create_collection(name)` | `{"name", "id", "created"}` | Create a namespace. Idempotent. |
+| `list_collections()` | `[{"name", "id"}, …]` | List all namespaces. |
+| `drop_collection(name)` | `None` | Drop a namespace and all its records. Raises `ValueError` for `"default"`. |
+
+All data methods accept `collection: str = "default"`:
+
+| Method | Collection-aware parameter |
+|---|---|
+| `insert(vector, tag, collection)` | ✅ |
+| `insert_batch(batch, collection)` | ✅ |
+| `search(query, k, filter_tag, consistency, collection)` | ✅ (also accepts `consistency="linearizable"\|"local"`) |
+
+#### Cluster
+
+| Method | Returns | Description |
+|---|---|---|
+| `cluster_status()` | `dict` | Leader node ID, term, log indices, membership table. |
+| `cluster_health()` | `bool` | `True` when a leader is visible; `False` during election. |
+| `get_state_hash()` | `str` | 64-char BLAKE3 hex digest of the current kernel state. |
+
 ---
 
 ## Module-Level Cryptographic Helpers
@@ -802,6 +1017,6 @@ These functions are implemented in Rust (via PyO3) and work offline — no runni
 
 ## License
 
-AGPL-3.0 — see [LICENSE](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE).
+MIT OR Apache-2.0 — see [LICENSE-MIT](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE-MIT).
 
-Commercial licensing available for proprietary deployments. Contact: varshith.gudur17@gmail.com
+You may use Valoricore in proprietary, commercial, and on-premise deployments without any copyleft obligations. For enterprise support, SLA agreements, or custom deployment assistance, contact: varshith.gudur17@gmail.com

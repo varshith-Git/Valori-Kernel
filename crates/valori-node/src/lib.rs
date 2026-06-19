@@ -25,3 +25,5 @@ pub mod cluster;
 pub mod cluster_api;
 /// Cluster-mode HTTP server: data plane over Raft (insert/search/health).
 pub mod cluster_server;
+/// Phase 3.1: S3 / object-store backend for snapshot offload and WAL archival.
+pub mod object_store;

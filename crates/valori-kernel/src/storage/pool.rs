@@ -30,9 +30,11 @@ impl RecordPool {
 
     /// Inserts a vector into the pool (always appends to maintain monotonic IDs).
     /// Returns the RecordId (which corresponds to the index).
-    pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64) -> Result<RecordId> {
+    /// `namespace_id` is stored on the record; linked-list pointers are managed
+    /// by `KernelState.apply()` after the pool returns the allocated ID.
+    pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64, namespace_id: u16) -> Result<RecordId> {
         let id = RecordId(self.records.len() as u32);
-        self.records.push(Some(Record::new(id, vector, metadata, tag)));
+        self.records.push(Some(Record::new(id, vector, metadata, tag, namespace_id)));
         Ok(id)
     }
 

@@ -6,8 +6,83 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 3.2 — Rolling Upgrades)
+- **`schema_version` field on `ClientRequest`** (`valori-consensus`) — the
+  leader stamps `CURRENT_SCHEMA_VERSION` (currently `0`) on every proposal. Old
+  nodes decode the field as `0` via `#[serde(default)]`.
+- **`CURRENT_SCHEMA_VERSION: u8 = 0`** constant (`valori-consensus::types`) —
+  single source of truth for the cluster wire version. Bump when a new
+  `KernelEvent` variant or breaking field change requires newer followers.
+- **Schema version gate in `ValoriStateMachine::apply()`** — followers reject
+  entries with `schema_version > CURRENT_SCHEMA_VERSION` with `StorageError`
+  (halts replication on that node; cluster continues through remaining quorum).
+  State and audit log are untouched on rejection.
+- **`valori cluster upgrade --url … --target-version …`** CLI command — interactive
+  guided rolling upgrade: discovers topology, upgrades non-leaders first then
+  leader, polls `/health` after each restart, waits for re-election before
+  declaring the leader step complete.
+- **`docs/COMPATIBILITY.md`** — schema version history, rolling-window rules,
+  coexistence matrix, and the procedure for bumping `CURRENT_SCHEMA_VERSION`.
+
+### Fixed (Phase 3.2)
+- `corrupted_snapshot_payload_is_refused_and_state_kept` snapshot corruption
+  test was flipping byte `bytes.len() / 2` which, for V6 snapshots (8318 bytes),
+  lands in the namespace sentinel region not covered by `hash_state_blake3`.
+  Fixed to corrupt `bytes.last_mut()` (last byte of the `state_hash` tail),
+  which always triggers the hash mismatch check regardless of format version.
+
+---
+
+## [0.2.1] — 2026-06-19
+
 ### Added
-- **`valori_raft_state_hash_match` Prometheus gauge** — a background task on
+- **Multi-tenant collections** — up to 1 024 named namespaces per node.
+  `POST /v1/namespaces`, `GET /v1/namespaces`, `DELETE /v1/namespaces/:name`.
+  All data endpoints accept an optional `"collection"` field. Records are
+  isolated at the kernel level via intrusive per-namespace linked lists enforced
+  at three independent points (event-commit, WAL replay, `build_index`).
+- **`AutoCreateNode` / `AutoCreateEdge` kernel events** — graph mutations with
+  IDs assigned at apply time for deterministic cluster-mode graph operations.
+- **Persistent Raft state machine** — when `VALORI_RAFT_LOG_PATH` is set, the
+  state machine shares the redb file and persists `last_applied`, membership,
+  and the latest snapshot, preventing duplicate audit-log writes on restart.
+- **Replay suppression** — `replay_until` suppresses already-written audit
+  entries when openraft replays committed log entries after a restart.
+- **`GET /v1/cluster/role`** — current node's Raft role for load-balancer routing.
+- **`state_hash_match` Prometheus gauge** — cluster-wide hash-convergence metric.
+- **Snapshot V6 format** — per-record `namespace_id` + linked-list pointers,
+  2 × 1 024 × 4 = 8 KB namespace heads arrays, and a backward-compatible NSRG
+  section (namespace registry as JSON, detected by `"NSRG"` magic tag).
+- **Python SDK collection API** — `create_collection`, `list_collections`,
+  `drop_collection` on both `SyncRemoteClient` and `AsyncRemoteClient`;
+  `collection` parameter on all data methods; `consistency` parameter on search.
+- **Threat model** (`docs/THREAT_MODEL.md`).
+- **Capacity planning** (`docs/CAPACITY.md`).
+- **DR & multi-region runbook** (`docs/DR.md`).
+- **Multi-arch hash benchmark** (`benchmarks/multi_arch_hash.py`).
+- **Q16.16 precision benchmark** (`benchmarks/q16_precision.py`).
+- **Helm snapshot CronJob** (`deploy/helm/valori/templates/snapshot-cronjob.yaml`).
+- **CI test-count workflow** (`.github/workflows/test-count.yml`).
+
+### Fixed
+- `LeaderClient::get_proof()` wire-format mismatch — server returns
+  `{"final_state_hash":"<hex>"}` but client expected `[u8; 32]`. Added
+  `LeaderProof { final_state_hash: String }` and updated hex comparison in replication.
+- Snapshot buffer too small for V6 in `format.rs` and `snapshot_roundtrip.rs`
+  (4 KB → 16 KB).
+- `spawn_state_hash_watcher` held `Arc<Database>` indefinitely, blocking redb
+  file re-open on restart. Now returns `JoinHandle`, stored in `ClusterHandle`,
+  aborted and awaited before shutdown.
+- arXiv paper title corrected from *"Deterministic Memory: A Substrate for
+  Verifiable AI Agents"* to *"Valori: A Deterministic Memory Substrate for
+  AI Systems"* in README and BibTeX.
+- Hardcoded test count badge (271) replaced with CI-driven workflow badge.
+- Python SDK version badge corrected from v0.1.11 to v0.2.1.
+- Apply-vs-audit ordering invariant now explicitly documented with crash-window
+  analysis in `valori-consensus/README.md`.
+- Comparison table "No" cells now cite competitor documentation.
+
+### `valori_raft_state_hash_match` Prometheus gauge — a background task on
   each cluster node periodically calls `/v1/proof/state` on every peer and
   publishes `1` when all reachable nodes agree on the BLAKE3 state hash, `0`
   when any peer diverges. Mismatches are also logged at `ERROR` level and

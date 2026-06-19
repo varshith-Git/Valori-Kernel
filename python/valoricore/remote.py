@@ -103,25 +103,34 @@ class SyncRemoteClient:
             f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
         )
 
-    def insert(self, vector: Vector, tag: int = 0) -> RecordId:
-        """Insert a vector record. Returns the new Record ID."""
-        data = {"values": vector, "tag": tag}
+    def insert(self, vector: Vector, tag: int = 0, collection: str = "default") -> RecordId:
+        """Insert a vector record. Returns the new Record ID.
+
+        ``collection`` routes the record into a named namespace.  Create
+        collections first with ``create_collection(name)``; the default
+        collection always exists.
+        """
+        data: Dict[str, Any] = {"values": vector, "tag": tag}
+        if collection != "default":
+            data["collection"] = collection
         resp = self._post("/records", data)
         self._check_auto_snapshot(1)
         return resp["id"]
 
-    def insert_with_proof(self, vector: Vector, tag: int = 0) -> Tuple[RecordId, Proof]:
+    def insert_with_proof(self, vector: Vector, tag: int = 0, collection: str = "default") -> Tuple[RecordId, Proof]:
         """Insert a vector and return (id, proof_bytes)."""
         import valoricore
         fixed_vals = valoricore.ingest_embedding(vector)
         proof_hex = valoricore.generate_proof(fixed_vals)
         proof_bytes = bytes.fromhex(proof_hex)
-        rid = self.insert(vector, tag=tag)
+        rid = self.insert(vector, tag=tag, collection=collection)
         return (rid, proof_bytes)
 
-    def insert_batch(self, batch: List[Vector]) -> List[RecordId]:
+    def insert_batch(self, batch: List[Vector], collection: str = "default") -> List[RecordId]:
         """Insert a batch of vectors. Returns list of new Record IDs."""
-        data = {"batch": batch}
+        data: Dict[str, Any] = {"batch": batch}
+        if collection != "default":
+            data["collection"] = collection
         resp = self._post("/v1/vectors/batch_insert", data)
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
@@ -148,9 +157,11 @@ class SyncRemoteClient:
         k: int,
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
+        collection: str = "default",
     ) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
 
+        ``collection`` scopes the search to a specific namespace.
         ``consistency`` applies in cluster mode: ``"linearizable"`` (the server
         default) reflects every write committed before the read, via the
         read-index protocol; ``"local"`` serves immediately from the queried
@@ -162,6 +173,8 @@ class SyncRemoteClient:
             data["filter_tag"] = filter_tag
         if consistency is not None:
             data["consistency"] = consistency
+        if collection != "default":
+            data["collection"] = collection
         resp = self._post("/search", data)
         return resp["results"]
 
@@ -204,6 +217,43 @@ class SyncRemoteClient:
     def neighbors(self, node_id: int) -> List[int]:
         """Return immediate neighbor node IDs for a given node."""
         return [e["to_node"] for e in self.get_edges(node_id)]
+
+    # ── Collection (namespace) management ─────────────────────────────────────
+
+    def create_collection(self, name: str) -> Dict[str, Any]:
+        """Create a new collection (namespace).  Idempotent — returns existing
+        id if the collection was already created.
+
+        Returns: ``{"name": str, "id": int, "created": bool}``
+        """
+        return self._post("/v1/namespaces", {"name": name})
+
+    def list_collections(self) -> List[Dict[str, Any]]:
+        """List all collections.
+
+        Returns: list of ``{"name": str, "id": int}``
+        """
+        url = self.base_url + "/v1/namespaces"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json().get("collections", [])
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list collections: {e}")
+
+    def drop_collection(self, name: str) -> None:
+        """Drop a collection and all its records/nodes.
+
+        Raises ``ValueError`` if the collection does not exist or is "default".
+        """
+        url = self.base_url + f"/v1/namespaces/{name}"
+        try:
+            resp = self.session.delete(url, timeout=5)
+            if resp.status_code == 400:
+                raise ValueError(resp.json().get("error", resp.text))
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
     def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         """
@@ -420,22 +470,26 @@ class AsyncRemoteClient:
             f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
         )
 
-    async def insert(self, vector: Vector, tag: int = 0) -> RecordId:
-        data = {"values": vector, "tag": tag}
+    async def insert(self, vector: Vector, tag: int = 0, collection: str = "default") -> RecordId:
+        data: Dict[str, Any] = {"values": vector, "tag": tag}
+        if collection != "default":
+            data["collection"] = collection
         resp = await self._post("/records", data)
         await self._check_auto_snapshot(1)
         return resp["id"]
 
-    async def insert_with_proof(self, vector: Vector, tag: int = 0) -> Tuple[RecordId, Proof]:
+    async def insert_with_proof(self, vector: Vector, tag: int = 0, collection: str = "default") -> Tuple[RecordId, Proof]:
         import valoricore
         fixed_vals = valoricore.ingest_embedding(vector)
         proof_hex = valoricore.generate_proof(fixed_vals)
         proof_bytes = bytes.fromhex(proof_hex)
-        rid = await self.insert(vector, tag=tag)
+        rid = await self.insert(vector, tag=tag, collection=collection)
         return (rid, proof_bytes)
 
-    async def insert_batch(self, batch: List[Vector]) -> List[RecordId]:
-        data = {"batch": batch}
+    async def insert_batch(self, batch: List[Vector], collection: str = "default") -> List[RecordId]:
+        data: Dict[str, Any] = {"batch": batch}
+        if collection != "default":
+            data["collection"] = collection
         resp = await self._post("/v1/vectors/batch_insert", data)
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
@@ -462,6 +516,7 @@ class AsyncRemoteClient:
         k: int,
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
+        collection: str = "default",
     ) -> List[Dict[str, Any]]:
         """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local"."""
         data: Dict[str, Any] = {"query": query, "k": k}
@@ -469,6 +524,8 @@ class AsyncRemoteClient:
             data["filter_tag"] = filter_tag
         if consistency is not None:
             data["consistency"] = consistency
+        if collection != "default":
+            data["collection"] = collection
         resp = await self._post("/search", data)
         return resp["results"]
 
@@ -481,6 +538,31 @@ class AsyncRemoteClient:
         data = {"from": from_id, "to": to_id, "kind": kind}
         resp = await self._post("/graph/edge", data)
         return resp["edge_id"]
+
+    async def create_collection(self, name: str) -> Dict[str, Any]:
+        """Create a new collection (namespace). Idempotent."""
+        return await self._post("/v1/namespaces", {"name": name})
+
+    async def list_collections(self) -> List[Dict[str, Any]]:
+        """List all collections."""
+        url = self.base_url + "/v1/namespaces"
+        try:
+            resp = await self.client.get(url)
+            resp.raise_for_status()
+            return resp.json().get("collections", [])
+        except Exception as e:
+            raise ConnectionError(f"Failed to list collections: {e}")
+
+    async def drop_collection(self, name: str) -> None:
+        """Drop a collection and all its records/nodes."""
+        url = self.base_url + f"/v1/namespaces/{name}"
+        try:
+            resp = await self.client.delete(url)
+            if resp.status_code == 400:
+                raise ValueError(resp.json().get("error", resp.text))
+            resp.raise_for_status()
+        except Exception as e:
+            raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
     async def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
         url = self.base_url + f"/graph/node/{node_id}"

@@ -6,25 +6,27 @@ use serde::{Deserialize, Serialize};
 // Assuming valori_kernel::types::enums::* is pub.
 
 
-// ── Collections seam (multi-node roadmap Phase 1.4) ──────────────────────────
+// ── Collections / namespace seam ─────────────────────────────────────────────
 //
-// Exactly one collection exists today. The field is accepted on every
-// data-path request NOW so that clients written today keep working
-// unchanged when multi-collection (shard-by-collection, roadmap Phase 4)
-// lands — adding the field later would be an API break for strict clients.
+// The API accepts a `collection` string on every data-path request.
+// Phase 4 wires this to a live NamespaceRegistry; today the only registered
+// collection is "default" (NamespaceId 0).  Any other name returns 400 so
+// clients get a clear error rather than silently landing in the wrong bucket.
 
-/// Name of the single collection that exists today.
+pub use valori_kernel::types::id::{NamespaceId, DEFAULT_NS};
+
+/// Name of the default (always-existing) collection.
 pub const DEFAULT_COLLECTION: &str = "default";
 
-/// Validate an optionally supplied collection name.
-/// `None` means "the default collection".
+// `resolve_namespace` is intentionally removed — server handlers call
+// `engine.resolve_collection(name)` directly so the live registry is consulted.
+
+/// Backward-compat alias used by handlers that only need validation.
 pub fn validate_collection(collection: Option<&str>) -> Result<(), crate::errors::EngineError> {
     match collection {
-        None => Ok(()),
-        Some(c) if c == DEFAULT_COLLECTION => Ok(()),
+        None | Some("default") => Ok(()),
         Some(other) => Err(crate::errors::EngineError::InvalidInput(format!(
-            "unknown collection '{other}' — only '{DEFAULT_COLLECTION}' exists \
-             (multiple collections arrive with shard-by-collection, roadmap Phase 4)"
+            "unknown collection '{other}' — use POST /v1/namespaces to create it"
         ))),
     }
 }
@@ -240,4 +242,29 @@ pub struct BatchInsertRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BatchInsertResponse {
     pub ids: Vec<u32>,
+}
+
+// ── Collection (namespace) management ────────────────────────────────────────
+
+#[derive(Deserialize, Debug)]
+pub struct CreateCollectionRequest {
+    pub name: String,
+}
+
+#[derive(Serialize, Debug)]
+pub struct CollectionInfo {
+    pub name: String,
+    pub id: u16,
+}
+
+#[derive(Serialize, Debug)]
+pub struct CreateCollectionResponse {
+    pub name: String,
+    pub id: u16,
+    pub created: bool,
+}
+
+#[derive(Serialize, Debug)]
+pub struct ListCollectionsResponse {
+    pub collections: Vec<CollectionInfo>,
 }

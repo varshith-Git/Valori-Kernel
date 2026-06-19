@@ -137,7 +137,7 @@ mod tests {
         
         {
             let mut writer = WalWriter::open(&path, 16).unwrap();
-            let cmd = Command::InsertRecord {
+            let cmd = Command::InsertRecord { namespace_id: 0,
                 id: RecordId(1),
                 vector: FxpVector::new_zeros(16),
                 metadata: None,

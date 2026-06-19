@@ -8,10 +8,20 @@ Built in direct response to the 2026-06-12 review (Mayur, Rahul). Three asks, th
 | "Prioritize difficult multi-statement questions" (aligned decision) | 6 single-hop controls vs 6 cross-document multi-statement questions, gold-labeled |
 | "Show me a concrete example where float error causes a wrong result, not minor variance" (Mayur) | Section 3 of RESULTS.md — a ranking flip caused purely by summation order |
 
-## Run it
+## Benchmark scripts
+
+| Script | What it measures | Run it |
+|---|---|---|
+| [`run_benchmark.py`](run_benchmark.py) | Three-arm RAG quality (float32 vs Q16.16 vs Q16.16+graph) | `python3 benchmarks/run_benchmark.py` |
+| [`multi_arch_hash.py`](multi_arch_hash.py) | Identical BLAKE3 state hash across CPU architectures | `python3 benchmarks/multi_arch_hash.py --url http://localhost:3000` |
+| [`q16_precision.py`](q16_precision.py) | Recall@10 of Q16.16 vs float32 ground truth at 384/768/1536/3072 dims | `python3 benchmarks/q16_precision.py --dim 384 [--st] [--openai]` |
 
 ```bash
-python3 benchmarks/run_benchmark.py     # from repo root; writes benchmarks/RESULTS.md
+# Quick start — run all three against a local node (dim=384)
+docker run --rm -d -p 3000:3000 -e VALORI_DIM=384 -e VALORI_MAX_RECORDS=2000 valori-node:latest
+python3 benchmarks/run_benchmark.py
+python3 benchmarks/multi_arch_hash.py
+python3 benchmarks/q16_precision.py --dim 384
 ```
 
 No network needed. Model: `all-MiniLM-L6-v2` (same as the meeting demo), 384-dim, local.

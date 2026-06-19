@@ -24,7 +24,7 @@
 use openraft::error::RaftError;
 use tokio::runtime::Handle;
 
-use valori_consensus::types::Raft;
+use valori_consensus::types::{Raft, CURRENT_SCHEMA_VERSION};
 use valori_consensus::{ClientRequest, ValoriStateMachine};
 use valori_kernel::event::KernelEvent;
 
@@ -62,6 +62,7 @@ impl RaftCommitter {
         let request = ClientRequest {
             event,
             request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
         };
 
         let result = self.block_on(self.raft.client_write(request));

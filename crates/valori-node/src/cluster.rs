@@ -174,6 +174,9 @@ pub struct ClusterHandle {
     /// Address the gRPC server actually bound (raft_bind may be `…:0`).
     pub raft_addr: std::net::SocketAddr,
     pub server_task: tokio::task::JoinHandle<()>,
+    /// Background watcher tasks (state-hash poller, etc.) that must be
+    /// aborted before the database file can be re-opened on restart.
+    pub watcher_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl ClusterHandle {
@@ -206,33 +209,45 @@ pub async fn bootstrap_cluster(
         .map_err(|e| std::io::Error::other(format!("raft config invalid: {e}")))?,
     );
 
-    let state_machine = ValoriStateMachine::new(audit);
-
     // Persistent Raft log when a path is configured (survives restarts);
     // in-memory otherwise. Both pass the same openraft compliance suite.
+    //
+    // When a redb path is given, the state machine shares the same database
+    // handle so last_applied, membership, and the latest snapshot are
+    // persisted in the sm_meta table. On restart the state machine reads them
+    // back and openraft resumes from where it left off, preventing already-
+    // applied entries from being replayed through the AuditSink a second time.
     let network = match &cfg.tls {
         Some(tls) => ValoriNetworkFactory::with_tls(tls.clone()),
         None => ValoriNetworkFactory::default(),
     };
 
-    let raft = match &cfg.raft_log_path {
+    let (state_machine, raft) = match &cfg.raft_log_path {
         Some(path) => {
             let store = valori_consensus::RedbLogStore::open(path)
                 .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
-            Raft::new(cfg.node_id, raft_config, network, store, state_machine.clone()).await
+            let db = store.db();
+            let sm = ValoriStateMachine::with_db(audit, db)
+                .map_err(|e| std::io::Error::other(format!("state machine restore failed: {e}")))?;
+            let raft = Raft::new(cfg.node_id, raft_config, network, store, sm.clone())
+                .await
+                .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
+            (sm, raft)
         }
         None => {
-            Raft::new(
+            let sm = ValoriStateMachine::new(audit);
+            let raft = Raft::new(
                 cfg.node_id,
                 raft_config,
                 network,
                 ValoriLogStore::new(),
-                state_machine.clone(),
+                sm.clone(),
             )
             .await
+            .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
+            (sm, raft)
         }
-    }
-    .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
+    };
 
     let (raft_addr, server_task) = match &cfg.tls {
         Some(tls) => {
@@ -251,13 +266,14 @@ pub async fn bootstrap_cluster(
     }
 
     spawn_raft_metrics_watcher(raft.clone());
-    spawn_state_hash_watcher(raft.clone(), state_machine.clone());
+    let state_hash_watcher = spawn_state_hash_watcher(raft.clone(), state_machine.clone());
 
     Ok(ClusterHandle {
         raft,
         state_machine,
         raft_addr,
         server_task,
+        watcher_tasks: vec![state_hash_watcher],
     })
 }
 
@@ -317,13 +333,13 @@ fn spawn_raft_metrics_watcher(raft: Raft) {
 ///
 /// The interval defaults to 30 s and is configurable via the env var
 /// `VALORI_STATE_HASH_CHECK_SECS` (set to `0` to disable the watcher).
-fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) {
+fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) -> tokio::task::JoinHandle<()> {
     let interval_secs: u64 = std::env::var("VALORI_STATE_HASH_CHECK_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
     if interval_secs == 0 {
-        return;
+        return tokio::spawn(async {});
     }
 
     tokio::spawn(async move {
@@ -339,7 +355,7 @@ fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) {
             interval.tick().await;
             check_state_hash_agreement(&raft, &sm, &http).await;
         }
-    });
+    })
 }
 
 async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: &reqwest::Client) {
