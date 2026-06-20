@@ -80,3 +80,6 @@ events.log
 state.snap
 *.val
 CLAUDE.md
+
+# UI (Next.js) — un-ignore what Python rules above would catch
+!ui/src/lib/
