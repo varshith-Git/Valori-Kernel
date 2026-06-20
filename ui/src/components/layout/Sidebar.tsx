@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useProjects } from "@/lib/hooks/useProjects";
+import { useCluster } from "@/lib/hooks/useCluster";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 
 const GLOBAL_NAV = [
@@ -17,6 +18,7 @@ export function Sidebar() {
   const path = usePathname();
   const router = useRouter();
   const { projects, create, isLoading } = useProjects();
+  const { isStandalone } = useCluster();
   const [createOpen, setCreateOpen] = useState(false);
 
   const handleCreate = async (name: string) => {
@@ -52,6 +54,21 @@ export function Sidebar() {
               {n.label}
             </Link>
           ))}
+          {/* Cluster link — shown when not standalone (auto-detected) */}
+          {!isStandalone && (
+            <Link
+              href="/cluster"
+              className={cn(
+                "flex items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
+                path === "/cluster"
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
+              )}
+            >
+              <span className="w-4 text-center font-mono text-xs opacity-70">⬡</span>
+              Cluster
+            </Link>
+          )}
         </nav>
 
         {/* Divider */}
