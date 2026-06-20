@@ -15,7 +15,7 @@ name: Publish Docker Image
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "multinode"]
     tags: ["v*"]
     paths:
       - "Dockerfile"
@@ -26,7 +26,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/valori-kernel/valori-node
+  IMAGE_NAME: varshith-git/valori-kernel/valori-node
 
 jobs:
   publish:
@@ -39,6 +39,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
