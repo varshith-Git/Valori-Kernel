@@ -1,0 +1,80 @@
+name: Publish Docker Image
+
+# Builds and pushes valori-node to GitHub Container Registry (ghcr.io).
+#
+# Triggers:
+#   - Push to main → publishes ghcr.io/.../valori-node:main  (rolling dev build)
+#   - Tag v*        → publishes ghcr.io/.../valori-node:1.2.3 + :latest
+#
+# Pull after publish:
+#   docker pull ghcr.io/varshith-git/valori-kernel/valori-node:latest
+#
+# No secrets required — GITHUB_TOKEN is granted package:write by default
+# for public repos. For private repos, enable "Read and write" in
+# Settings → Actions → Workflow permissions.
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+    paths:
+      - "Dockerfile"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/valori-kernel/valori-node
+
+jobs:
+  publish:
+    name: Build & push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generates tags:
+      #   branch push → :main
+      #   tag v1.2.3  → :1.2.3, :1.2, :1, :latest
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "Published ${{ steps.meta.outputs.tags }}"

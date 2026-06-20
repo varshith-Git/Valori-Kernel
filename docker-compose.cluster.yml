@@ -1,0 +1,125 @@
+# Valori — 3-node Raft cluster
+# Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+#
+# Single-leader, 3-node Raft layout. node-1 bootstraps the cluster
+# (VALORI_CLUSTER_INIT=1); nodes 2 & 3 join once node-1 is healthy.
+#
+# For a single node: docker compose up -d   (uses docker-compose.yml)
+#
+# Usage:
+#   docker compose -f docker-compose.cluster.yml up -d
+#   docker compose -f docker-compose.cluster.yml ps
+#   docker compose -f docker-compose.cluster.yml logs -f node-1
+#   docker compose -f docker-compose.cluster.yml down -v
+#
+#   curl http://localhost:3001/health
+#   curl http://localhost:3001/v1/cluster/status
+
+version: "3.9"
+
+x-node-common: &node-common
+  image: ghcr.io/varshith-git/valori-kernel/valori-node:latest
+  # Build locally if no published image is available yet:
+  # build:
+  #   context: .
+  #   dockerfile: Dockerfile
+  restart: unless-stopped
+  environment: &env-common
+    VALORI_DIM: "128"
+    VALORI_MAX_RECORDS: "1000000"
+    VALORI_MAX_NODES: "100000"
+    VALORI_MAX_EDGES: "500000"
+    VALORI_SNAPSHOT_EVERY_EVENTS: "50000"
+    VALORI_SNAPSHOT_KEEP: "3"
+    # Raft cluster topology (Phase 2): id=raft_addr/api_addr per member.
+    VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
+    VALORI_RAFT_BIND: "0.0.0.0:3100"
+    VALORI_RAFT_LOG_PATH: /data/raft.redb
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+    interval: 15s
+    timeout: 3s
+    start_period: 20s
+    retries: 3
+
+services:
+  node-1:
+    <<: *node-common
+    container_name: valori-node-1
+    ports:
+      - "3001:3000"
+    environment:
+      <<: *env-common
+      VALORI_NODE_ID: "1"
+      VALORI_CLUSTER_INIT: "1"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-1-data:/data
+
+  node-2:
+    <<: *node-common
+    container_name: valori-node-2
+    ports:
+      - "3002:3000"
+    environment:
+      <<: *env-common
+      VALORI_NODE_ID: "2"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-2-data:/data
+    depends_on:
+      node-1:
+        condition: service_healthy
+
+  node-3:
+    <<: *node-common
+    container_name: valori-node-3
+    ports:
+      - "3003:3000"
+    environment:
+      <<: *env-common
+      VALORI_NODE_ID: "3"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - node-3-data:/data
+    depends_on:
+      node-1:
+        condition: service_healthy
+
+  # Optional: snapshot every 6 hours to S3.
+  # Disabled by default — set VALORI_SNAPSHOT_S3_BUCKET and AWS credentials to enable.
+  # snapshot-cron:
+  #   image: amazon/aws-cli:latest
+  #   restart: unless-stopped
+  #   entrypoint: >
+  #     /bin/sh -c 'while true; do
+  #       TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ);
+  #       curl -sf http://node-1:3000/v1/snapshot/download -o /tmp/snap.bin;
+  #       HASH=$(curl -sf http://node-1:3000/v1/proof/state | python3 -c "import sys,json;print(json.load(sys.stdin)[\"final_state_hash\"])");
+  #       aws s3 cp /tmp/snap.bin "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.snap";
+  #       echo "$$HASH" | aws s3 cp - "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.hash";
+  #       sleep 21600;
+  #     done'
+  #   environment:
+  #     VALORI_SNAPSHOT_S3_BUCKET: "s3://your-valori-backups/snapshots"
+  #     AWS_ACCESS_KEY_ID: ""
+  #     AWS_SECRET_ACCESS_KEY: ""
+  #     AWS_DEFAULT_REGION: "us-east-1"
+  #   depends_on:
+  #     node-1:
+  #       condition: service_healthy
+
+volumes:
+  node-1-data:
+  node-2-data:
+  node-3-data:
+
+networks:
+  default:
+    name: valori-cluster

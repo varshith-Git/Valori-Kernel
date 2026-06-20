@@ -1,126 +1,75 @@
-# Valori 3-node Raft cluster
+# Valori — single-node deployment
 # Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 #
-# Single-leader, 3-node Raft layout for local dev, smoke-testing, and EC2.
-# node-1 bootstraps the cluster (VALORI_CLUSTER_INIT=1); nodes 2 & 3 join
-# once node-1's TCP health check passes (HTTP port open, Raft gRPC running).
+# This is the default compose file: one container, one volume, one command.
+# For a 3-node Raft cluster use: docker compose -f docker-compose.cluster.yml up -d
 #
-# Usage:
-#   docker compose up -d          # start cluster in background
-#   docker compose ps              # check health (healthy / starting / unhealthy)
-#   docker compose logs -f node-1  # tail node-1 logs
-#   docker compose down -v         # stop + wipe volumes
+# Quick start:
+#   docker compose up -d
+#   curl http://localhost:3000/health
 #
-# From your laptop (EC2_IP = public IP of the EC2 host):
-#   curl http://EC2_IP:3001/health
-#   curl -X POST http://EC2_IP:3001/records -H 'Content-Type: application/json' \
-#        -d '{"values":[1.0,2.0,3.0]}'
-#   curl -X POST http://EC2_IP:3001/search  -H 'Content-Type: application/json' \
-#        -d '{"query":[1.0,2.0,3.0],"k":5}'
+# Python:
+#   pip install valoricore
+#   from valoricore.remote import SyncRemoteClient
+#   db = SyncRemoteClient("http://localhost:3000")
+#   db.insert([0.1, 0.2, 0.3])
+#   print(db.get_proof())
+#
+# Upgrading to a cluster later:
+#   1. docker compose exec valori curl -X POST http://localhost:3000/v1/snapshot
+#   2. docker compose down
+#   3. Copy the named volume 'valori-data' to node-1's volume in docker-compose.cluster.yml
+#      (docker run --rm -v valori-data:/src -v valori-cluster-node-1-data:/dst alpine cp -a /src/. /dst/)
+#   4. docker compose -f docker-compose.cluster.yml up -d
+#      Node-1 recovers from the snapshot; nodes 2+3 receive it via Raft snapshot transfer.
 
 version: "3.9"
 
-x-node-common: &node-common
-  build:
-    context: .
-    dockerfile: Dockerfile
-  restart: unless-stopped
-  environment: &env-common
-    VALORI_DIM: "128"
-    VALORI_MAX_RECORDS: "1000000"
-    VALORI_MAX_NODES: "100000"
-    VALORI_MAX_EDGES: "500000"
-    VALORI_SNAPSHOT_EVERY_EVENTS: "50000"
-    VALORI_SNAPSHOT_KEEP: "3"
-    # Raft cluster topology (Phase 2): id=raft_addr/api_addr per member.
-    VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
-    VALORI_RAFT_BIND: "0.0.0.0:3100"
-    VALORI_RAFT_LOG_PATH: /data/raft.redb
-  healthcheck:
-    test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
-    interval: 15s
-    timeout: 3s
-    start_period: 20s
-    retries: 3
-
 services:
-  node-1:
-    <<: *node-common
-    container_name: valori-node-1
+  valori:
+    image: ghcr.io/varshith-git/valori-kernel/valori-node:latest
+    # Build locally if no published image is available yet:
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    container_name: valori
+    restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "3000:3000"
     environment:
-      <<: *env-common
-      VALORI_NODE_ID: "1"
-      VALORI_CLUSTER_INIT: "1"
+      # ── Core ──────────────────────────────────────────────────────────────
+      VALORI_DIM: "1536"          # Match your embedding model dimension.
+                                   # Cannot be changed after first insert.
+      VALORI_MAX_RECORDS: "1000000"
+      VALORI_MAX_NODES:   "100000"
+      VALORI_MAX_EDGES:   "500000"
       VALORI_BIND: "0.0.0.0:3000"
-      VALORI_EVENT_LOG_PATH: /data/events.log
-      VALORI_SNAPSHOT_PATH: /data/state.snap
-    volumes:
-      - node-1-data:/data
 
-  node-2:
-    <<: *node-common
-    container_name: valori-node-2
-    ports:
-      - "3002:3000"
-    environment:
-      <<: *env-common
-      VALORI_NODE_ID: "2"
-      VALORI_BIND: "0.0.0.0:3000"
+      # ── Persistence ───────────────────────────────────────────────────────
       VALORI_EVENT_LOG_PATH: /data/events.log
-      VALORI_SNAPSHOT_PATH: /data/state.snap
-    volumes:
-      - node-2-data:/data
-    depends_on:
-      node-1:
-        condition: service_healthy
+      VALORI_SNAPSHOT_PATH:  /data/state.snap
+      VALORI_SNAPSHOT_EVERY_EVENTS: "10000"   # snapshot cadence
+      VALORI_SNAPSHOT_KEEP: "3"               # keep last N snapshots
 
-  node-3:
-    <<: *node-common
-    container_name: valori-node-3
-    ports:
-      - "3003:3000"
-    environment:
-      <<: *env-common
-      VALORI_NODE_ID: "3"
-      VALORI_BIND: "0.0.0.0:3000"
-      VALORI_EVENT_LOG_PATH: /data/events.log
-      VALORI_SNAPSHOT_PATH: /data/state.snap
-    volumes:
-      - node-3-data:/data
-    depends_on:
-      node-1:
-        condition: service_healthy
+      # ── Auth (optional) ───────────────────────────────────────────────────
+      # VALORI_AUTH_TOKEN: "change-me"        # uncomment to require Bearer token
 
-  # Optional: snapshot every 6 hours to S3.
-  # Disabled by default — set VALORI_SNAPSHOT_S3_BUCKET and AWS credentials to enable.
-  # snapshot-cron:
-  #   image: amazon/aws-cli:latest
-  #   restart: unless-stopped
-  #   entrypoint: >
-  #     /bin/sh -c 'while true; do
-  #       TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ);
-  #       curl -sf http://node-1:3000/v1/snapshot/download -o /tmp/snap.bin;
-  #       HASH=$(curl -sf http://node-1:3000/v1/proof/state | python3 -c "import sys,json;print(json.load(sys.stdin)[\"final_state_hash\"])");
-  #       aws s3 cp /tmp/snap.bin "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.snap";
-  #       echo "$$HASH" | aws s3 cp - "$$VALORI_SNAPSHOT_S3_BUCKET/$$TIMESTAMP.hash";
-  #       sleep 21600;
-  #     done'
-  #   environment:
-  #     VALORI_SNAPSHOT_S3_BUCKET: "s3://your-valori-backups/snapshots"
-  #     AWS_ACCESS_KEY_ID: ""
-  #     AWS_SECRET_ACCESS_KEY: ""
-  #     AWS_DEFAULT_REGION: "us-east-1"
-  #   depends_on:
-  #     node-1:
-  #       condition: service_healthy
+      # ── Object store backup (optional, requires S3 credentials) ───────────
+      # VALORI_OBJECT_STORE_URL: "s3://your-bucket/valori"
+      # VALORI_OBJECT_STORE_REGION: "us-east-1"
+      # AWS_ACCESS_KEY_ID: ""
+      # AWS_SECRET_ACCESS_KEY: ""
+
+    volumes:
+      - valori-data:/data
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
 
 volumes:
-  node-1-data:
-  node-2-data:
-  node-3-data:
-
-networks:
-  default:
-    name: valori-cluster
+  valori-data:
+    driver: local
