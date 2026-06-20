@@ -6,6 +6,7 @@ use axum::{
     Json,
     body::Body,
 };
+use tower_http::cors::{CorsLayer, Any};
 use tokio_util::io::ReaderStream;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -46,9 +47,31 @@ async fn auth_guard(
     Ok(next.run(req).await)
 }
 
+fn make_cors_layer(origin: &Option<String>) -> Option<CorsLayer> {
+    let origin = origin.as_deref()?;
+    let layer = if origin == "*" {
+        CorsLayer::permissive()
+    } else {
+        let hv: axum::http::HeaderValue = origin
+            .parse()
+            .expect("VALORI_CORS_ORIGIN is not a valid HTTP header value");
+        CorsLayer::new()
+            .allow_origin(hv)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers(Any)
+    };
+    Some(layer)
+}
+
 pub fn build_router(
     state: SharedEngine,
     auth_token: Option<String>,
+    cors_origin: Option<String>,
 ) -> Router {
     // ── Public routes — no auth required ─────────────────────────────────────
     // Load balancers (health probes) and Prometheus scrapers must reach these
@@ -101,7 +124,12 @@ pub fn build_router(
         tracing::warn!("Auth Disabled: No token configured");
     }
 
-    Router::new().merge(public).merge(protected)
+    let mut router = Router::new().merge(public).merge(protected);
+    if let Some(cors) = make_cors_layer(&cors_origin) {
+        tracing::info!("CORS enabled: origin = {:?}", cors_origin);
+        router = router.layer(cors);
+    }
+    router
 }
 
 /// `GET /health` — structured health report for load balancers and operators.

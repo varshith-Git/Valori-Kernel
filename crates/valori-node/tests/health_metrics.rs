@@ -192,7 +192,7 @@ fn make_shared(cfg: &NodeConfig) -> SharedEngine {
 #[tokio::test]
 async fn test_http_health_returns_200_when_ok() {
     let shared = make_shared(&tiny_cfg(100));
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
 
     let resp = app
         .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -220,7 +220,7 @@ async fn test_http_health_returns_503_when_full() {
             engine.insert_record_from_f32(&v).unwrap();
         }
     }
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
 
     let resp = app
         .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -239,7 +239,7 @@ async fn test_http_health_returns_503_when_full() {
 async fn test_http_health_accessible_without_auth_token() {
     // Build router with a token set — /health must still be reachable without it.
     let shared = make_shared(&tiny_cfg(100));
-    let app = build_router(shared, Some("super-secret".to_string()));
+    let app = build_router(shared, Some("super-secret".to_string()), None);
 
     let resp = app
         .oneshot(
@@ -260,7 +260,7 @@ async fn test_http_health_accessible_without_auth_token() {
 async fn test_http_protected_route_blocked_without_auth() {
     // Confirm that a protected endpoint (e.g. /version) IS blocked when auth is set.
     let shared = make_shared(&tiny_cfg(100));
-    let app = build_router(shared, Some("super-secret".to_string()));
+    let app = build_router(shared, Some("super-secret".to_string()), None);
 
     let resp = app
         .oneshot(Request::builder().uri("/version").body(Body::empty()).unwrap())
@@ -275,7 +275,7 @@ async fn test_http_protected_route_blocked_without_auth() {
 async fn test_http_metrics_accessible_without_auth_token() {
     // /metrics must be reachable by Prometheus without a bearer token.
     let shared = make_shared(&tiny_cfg(100));
-    let app = build_router(shared, Some("super-secret".to_string()));
+    let app = build_router(shared, Some("super-secret".to_string()), None);
 
     let resp = app
         .oneshot(
@@ -299,7 +299,7 @@ async fn test_http_metrics_accessible_without_auth_token() {
 #[tokio::test]
 async fn test_http_metrics_returns_200_with_body() {
     let shared = make_shared(&tiny_cfg(100));
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
 
     let resp = app
         .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
@@ -327,7 +327,7 @@ async fn test_http_insert_returns_507_when_full() {
             engine.insert_record_from_f32(&v).unwrap();
         }
     }
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
 
     let payload = serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0] });
     let resp = app

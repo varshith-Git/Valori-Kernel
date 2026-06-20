@@ -100,6 +100,12 @@ pub struct NodeConfig {
     // Env: VALORI_OBJECT_STORE_KEEP (default: 7)
     // Number of snapshots to retain in the object store after pruning.
     pub object_store_keep: u32,
+
+    // Env: VALORI_CORS_ORIGIN
+    // Absent = no CORS headers (API-only, no browser access).
+    // "*"    = permissive (all origins allowed — dev only).
+    // "https://app.example.com" = single origin (production).
+    pub cors_origin: Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -196,6 +202,8 @@ impl Default for NodeConfig {
             .ok().and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(7);
 
+        let cors_origin = std::env::var("VALORI_CORS_ORIGIN").ok();
+
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
             NodeMode::Follower { leader_url: url }
@@ -233,6 +241,7 @@ impl Default for NodeConfig {
             mode,
             object_store_url,
             object_store_keep,
+            cors_origin,
         }
     }
 }
