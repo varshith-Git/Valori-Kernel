@@ -24,13 +24,22 @@ export interface Collection {
   record_count?: number;
 }
 
+export interface PoolStats {
+  live: number;
+  slots_used: number;
+  capacity: number;
+  fill_pct: number;
+}
+
 export interface HealthResponse {
-  status: "ok" | "degraded" | "error";
-  node_id?: number;
-  role?: "leader" | "follower" | "candidate";
-  record_count?: number;
-  pool_used?: number;
-  pool_cap?: number;
+  status: "ok" | "degraded" | "full";
+  version?: string;
+  dim?: number;
+  index?: string;
+  records?: PoolStats;
+  nodes?: PoolStats;
+  edges?: PoolStats;
+  event_log_height?: number;
 }
 
 export interface ClusterNode {
