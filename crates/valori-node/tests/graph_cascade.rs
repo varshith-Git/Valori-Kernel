@@ -33,7 +33,7 @@ fn bare_cfg() -> NodeConfig {
 
 /// Create a bare node (no record) and return its NodeId.
 fn add_node(engine: &mut Engine) -> u32 {
-    engine.create_node_for_record(None, 0).unwrap()
+    engine.create_node_for_record(None, 0, 0).unwrap()
 }
 
 /// Return true when the edge slot is occupied.

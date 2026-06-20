@@ -119,6 +119,7 @@ pub struct CreateEdgeResponse {
 pub struct GetNodeResponse {
     pub kind: u8,
     pub record_id: Option<u32>,
+    pub namespace_id: u16,
 }
 
 #[derive(Serialize)]
@@ -158,6 +159,27 @@ pub struct MemoryUpsertResponse {
 pub struct MemorySearchVectorRequest {
     pub query_vector: Vec<f32>,
     pub k: usize,
+    #[serde(default)]
+    pub collection: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct NodeInfo {
+    pub node_id: u32,
+    pub kind: u8,
+    pub record_id: Option<u32>,
+    pub namespace_id: u16,
+}
+
+#[derive(Serialize)]
+pub struct ListNodesResponse {
+    pub nodes: Vec<NodeInfo>,
+    pub count: usize,
+}
+
+#[derive(Serialize)]
+pub struct DeleteNodeResponse {
+    pub success: bool,
 }
 
 #[derive(Serialize)]
