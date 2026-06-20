@@ -26,6 +26,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use tower_http::cors::{CorsLayer, Any};
 use serde::{Deserialize, Serialize};
 
 use axum::extract::Path;
@@ -78,6 +79,27 @@ pub async fn serve_cluster_api(
     Ok((addr, task))
 }
 
+fn make_cors_layer() -> Option<CorsLayer> {
+    let origin = std::env::var("VALORI_CORS_ORIGIN").ok()?;
+    let layer = if origin == "*" {
+        CorsLayer::permissive()
+    } else {
+        let hv: axum::http::HeaderValue = origin
+            .parse()
+            .expect("VALORI_CORS_ORIGIN is not a valid HTTP header value");
+        CorsLayer::new()
+            .allow_origin(hv)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers(Any)
+    };
+    Some(layer)
+}
+
 /// The full router a cluster node serves: data plane + management plane.
 pub fn build_cluster_router(
     handle: &ClusterHandle,
@@ -94,7 +116,7 @@ pub fn build_cluster_router(
         event_log_path,
     };
 
-    Router::new()
+    let mut router = Router::new()
         .route("/records", post(insert_record))
         .route("/search", post(search))
         .route("/health", get(health))
@@ -110,7 +132,11 @@ pub fn build_cluster_router(
         .route("/graph/edge", post(create_graph_edge))
         .route("/graph/edges/:id", get(get_graph_edges))
         .with_state(state)
-        .merge(cluster_router(raft, audit))
+        .merge(cluster_router(raft, audit));
+    if let Some(cors) = make_cors_layer() {
+        router = router.layer(cors);
+    }
+    router
 }
 
 async fn metrics() -> String {

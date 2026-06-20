@@ -79,7 +79,7 @@ async fn main() {
         });
     }
 
-    let app = build_router(shared_state.clone(), cfg.auth_token.clone());
+    let app = build_router(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone());
 
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);

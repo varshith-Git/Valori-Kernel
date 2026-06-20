@@ -29,7 +29,7 @@ async fn test_batch_ingest_success() {
 
     let engine = Engine::new(&config);
     let shared_state = Arc::new(Mutex::new(engine));
-    let app = build_router(shared_state, None);
+    let app = build_router(shared_state, None, None);
 
     let batch = vec![vec![0.1; DIM], vec![0.2; DIM], vec![0.3; DIM]];
     let req = Request::builder()

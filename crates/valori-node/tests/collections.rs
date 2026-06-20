@@ -61,17 +61,17 @@ async fn post_json(
     uri: &str,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
     http(app, Method::POST, uri, Some(body)).await
 }
 
 async fn get_json(shared: SharedEngine, uri: &str) -> (StatusCode, serde_json::Value) {
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
     http(app, Method::GET, uri, None).await
 }
 
 async fn delete_req(shared: SharedEngine, uri: &str) -> StatusCode {
-    let app = build_router(shared, None);
+    let app = build_router(shared, None, None);
     http(app, Method::DELETE, uri, None).await.0
 }
 
