@@ -41,7 +41,7 @@ async fn test_replication_bootstrap() {
         engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
     }
 
-    let leader_app = build_router(leader_state.clone(), None);
+    let leader_app = build_router(leader_state.clone(), None, None);
     let leader_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let leader_addr = leader_listener.local_addr().unwrap();
     let leader_url = format!("http://{}", leader_addr);

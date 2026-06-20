@@ -26,8 +26,8 @@ fn test_engine_workflow() {
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].0, 0); // exact match first
 
-    let nid1 = engine.create_node_for_record(Some(id1), 0).unwrap();
-    let nid2 = engine.create_node_for_record(Some(id2), 0).unwrap();
+    let nid1 = engine.create_node_for_record(Some(id1), 0, 0).unwrap();
+    let nid2 = engine.create_node_for_record(Some(id2), 0, 0).unwrap();
     let eid  = engine.create_edge(nid1, nid2, 0).unwrap();
     assert_eq!(eid, 0);
 

@@ -808,7 +808,7 @@ impl Engine {
         Ok(())
     }
 
-    pub fn create_node_for_record(&mut self, record_id: Option<u32>, kind: u8) -> Result<u32, EngineError> {
+    pub fn create_node_for_record(&mut self, record_id: Option<u32>, kind: u8, namespace_id: u16) -> Result<u32, EngineError> {
          // ── Capacity guard ────────────────────────────────────────────────────
          if self.state.node_count() >= self.max_nodes {
              return Err(EngineError::Kernel(KernelError::CapacityExceeded));
@@ -827,9 +827,9 @@ impl Engine {
 
          if let Some(ref mut committer) = self.event_committer {
              committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             self.apply_committed_event(&event)?;
+             self.apply_committed_event_ns(&event, namespace_id)?;
          } else {
-             let cmd = Command::CreateNode { namespace_id: valori_kernel::types::id::DEFAULT_NS.0, node_id, kind, record };
+             let cmd = Command::CreateNode { namespace_id, node_id, kind, record };
              if let Some(ref mut writer) = self.wal_writer {
                  writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              }
@@ -840,6 +840,15 @@ impl Engine {
              }
          }
          Ok(node_id.0)
+    }
+
+    /// Return all live graph nodes belonging to `namespace_id`.
+    /// Walks `iter_nodes()` — O(total nodes). Acceptable for typical graph sizes.
+    pub fn nodes_in_ns(&self, namespace_id: u16) -> Vec<(u32, u8, Option<u32>)> {
+        self.state.iter_nodes()
+            .filter(|n| n.namespace_id == namespace_id)
+            .map(|n| (n.id.0, n.kind as u8, n.record.map(|r| r.0)))
+            .collect()
     }
 
     pub fn create_edge(&mut self, from: u32, to: u32, kind: u8) -> Result<u32, EngineError> {

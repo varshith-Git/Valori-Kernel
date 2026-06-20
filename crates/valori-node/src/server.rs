@@ -89,7 +89,8 @@ pub fn build_router(
         .route("/v1/vectors/batch_insert", post(batch_insert))
         .route("/search", post(search))
         .route("/graph/node", post(create_node))
-        .route("/graph/node/:id", axum::routing::get(get_node))
+        .route("/graph/node/:id", axum::routing::get(get_node).delete(delete_node))
+        .route("/graph/nodes", axum::routing::get(list_nodes))
         .route("/graph/edge", post(create_edge))
         .route("/graph/edges/:id", axum::routing::get(get_edges))
         .route("/v1/snapshot/download", axum::routing::get(snapshot))
@@ -271,8 +272,8 @@ async fn create_node(
     Json(payload): Json<CreateNodeRequest>,
 ) -> Result<Json<CreateNodeResponse>, EngineError> {
     let mut engine = state.lock().await;
-    engine.resolve_collection(payload.collection.as_deref())?;
-    let node_id = engine.create_node_for_record(payload.record_id, payload.kind)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let node_id = engine.create_node_for_record(payload.record_id, payload.kind, ns)?;
     Ok(Json(CreateNodeResponse { node_id }))
 }
 
@@ -293,14 +294,42 @@ async fn get_node(
     let engine = state.lock().await;
     use valori_kernel::types::id::NodeId;
     match engine.state.get_node(NodeId(id)) {
-        Some(node) => {
-            Ok(Json(GetNodeResponse {
-                kind: node.kind as u8,
-                record_id: node.record.map(|r| r.0),
-            }))
-        },
+        Some(node) => Ok(Json(GetNodeResponse {
+            kind: node.kind as u8,
+            record_id: node.record.map(|r| r.0),
+            namespace_id: node.namespace_id,
+        })),
         None => Err(EngineError::Kernel(valori_kernel::error::KernelError::NotFound)),
     }
+}
+
+async fn delete_node(
+    State(state): State<SharedEngine>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+) -> Result<Json<DeleteNodeResponse>, EngineError> {
+    let mut engine = state.lock().await;
+    engine.delete_node(id)?;
+    Ok(Json(DeleteNodeResponse { success: true }))
+}
+
+#[derive(serde::Deserialize)]
+struct ListNodesQuery {
+    collection: Option<String>,
+}
+
+async fn list_nodes(
+    State(state): State<SharedEngine>,
+    Query(q): Query<ListNodesQuery>,
+) -> Result<Json<ListNodesResponse>, EngineError> {
+    let engine = state.lock().await;
+    let ns = engine.resolve_collection(q.collection.as_deref())?;
+    let raw = engine.nodes_in_ns(ns);
+    let nodes = raw
+        .into_iter()
+        .map(|(node_id, kind, record_id)| NodeInfo { node_id, kind, record_id, namespace_id: ns })
+        .collect::<Vec<_>>();
+    let count = nodes.len();
+    Ok(Json(ListNodesResponse { nodes, count }))
 }
 
 async fn get_edges(
@@ -350,10 +379,10 @@ async fn memory_upsert_vector(
     let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
         existing
     } else {
-        engine.create_node_for_record(None, NodeKind::Document as u8)?
+        engine.create_node_for_record(None, NodeKind::Document as u8, ns)?
     };
 
-    let chunk_node_id = engine.create_node_for_record(Some(record_id), NodeKind::Chunk as u8)?;
+    let chunk_node_id = engine.create_node_for_record(Some(record_id), NodeKind::Chunk as u8, ns)?;
     engine.create_edge(doc_node_id, chunk_node_id, EdgeKind::ParentOf as u8)?;
 
     let memory_id = format!("rec:{}", record_id);
@@ -377,7 +406,8 @@ async fn memory_search_vector(
     Json(payload): Json<MemorySearchVectorRequest>,
 ) -> Result<Json<MemorySearchResponse>, EngineError> {
     let engine = state.lock().await;
-    let hits = engine.search_l2(&payload.query_vector, payload.k)?;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
 
     let results = hits
         .into_iter()
