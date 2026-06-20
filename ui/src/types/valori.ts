@@ -8,8 +8,8 @@ export interface ProofResponse {
 }
 
 export interface SearchResult {
-  id: string;
-  distance: number;
+  id: number;
+  score: number;
   collection?: string;
 }
 

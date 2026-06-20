@@ -75,7 +75,7 @@ export class ValoriClient implements IValoriClient {
       ...(req.collection ? { collection: req.collection } : {}),
       ...(req.consistency ? { consistency: req.consistency } : {}),
     };
-    const raw = await this.post<{ results: Array<{ id: string; distance: number }> }>(
+    const raw = await this.post<{ results: Array<{ id: number; score: number }> }>(
       "/search",
       payload
     );
