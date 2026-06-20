@@ -15,8 +15,6 @@
 #   curl http://localhost:3001/health
 #   curl http://localhost:3001/v1/cluster/status
 
-version: "3.9"
-
 x-node-common: &node-common
   image: ghcr.io/varshith-git/valori-kernel/valori-node:latest
   # Build locally if no published image is available yet:

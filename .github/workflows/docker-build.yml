@@ -125,11 +125,17 @@ jobs:
 
       - name: Smoke-test single-node docker-compose.yml
         run: |
-          # Override image to use the locally-built CI image; no registry pull needed.
-          VALORI_NODE_IMAGE=valori-node:ci \
+          # Use a Compose override to swap the ghcr.io image for the locally
+          # built CI image. The override is written inline — no extra file to maintain.
+          cat > /tmp/ci-image-override.yml << 'EOF'
+          services:
+            valori:
+              image: valori-node:ci
+          EOF
+
           docker compose \
             -f docker-compose.yml \
-            --env-file /dev/null \
+            -f /tmp/ci-image-override.yml \
             up -d
 
           # Wait up to 60 s for the single node to become healthy.
@@ -145,5 +151,5 @@ jobs:
           echo "GET /health → HTTP $HTTP"
           [ "$HTTP" = "200" ] || { echo "Expected 200"; exit 1; }
 
-          docker compose -f docker-compose.yml down -v
+          docker compose -f docker-compose.yml -f /tmp/ci-image-override.yml down -v
           echo "Single-node compose smoke test passed."

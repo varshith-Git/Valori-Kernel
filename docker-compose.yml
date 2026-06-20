@@ -23,8 +23,6 @@
 #   4. docker compose -f docker-compose.cluster.yml up -d
 #      Node-1 recovers from the snapshot; nodes 2+3 receive it via Raft snapshot transfer.
 
-version: "3.9"
-
 services:
   valori:
     image: ghcr.io/varshith-git/valori-kernel/valori-node:latest
