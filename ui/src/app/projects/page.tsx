@@ -2,23 +2,25 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useProjectGroups } from "@/lib/hooks/useCollections";
 import { useProjects } from "@/lib/hooks/useProjects";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 
 export default function ProjectsPage() {
   const router = useRouter();
-  const { projects, isLoading, create, drop } = useProjects();
+  const { groups, isLoading } = useProjectGroups();
+  const { create, drop } = useProjects();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-4 max-w-4xl">
+      <div className="flex flex-col gap-4 max-w-5xl">
         <div className="h-7 w-32 animate-pulse rounded bg-zinc-800" />
         <div className="grid grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-24 animate-pulse rounded-xl bg-zinc-800" />
+            <div key={i} className="h-28 animate-pulse rounded-xl bg-zinc-800" />
           ))}
         </div>
       </div>
@@ -27,12 +29,13 @@ export default function ProjectsPage() {
 
   return (
     <>
-      <div className="flex flex-col gap-6 max-w-4xl">
+      <div className="flex flex-col gap-6 max-w-5xl">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-white">Projects</h1>
             <p className="mt-1 text-sm text-zinc-500">
-              Each project is an isolated vector store (Valori namespace)
+              Each project groups collections. Collections are stored as{" "}
+              <code className="font-mono text-zinc-400">project--collection</code> namespaces in Valori.
             </p>
           </div>
           <button
@@ -43,11 +46,11 @@ export default function ProjectsPage() {
           </button>
         </div>
 
-        {projects.length === 0 ? (
+        {groups.length === 0 ? (
           <div className="rounded-xl border border-dashed border-zinc-800 py-16 text-center">
             <p className="text-sm text-zinc-500">No projects yet.</p>
             <p className="mt-1 text-xs text-zinc-600">
-              Create one to start storing vectors.
+              Create a project, then add collections inside it.
             </p>
             <button
               onClick={() => setCreateOpen(true)}
@@ -58,12 +61,16 @@ export default function ProjectsPage() {
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-4">
-            {projects.map((name) => (
+            {groups.map((g) => (
               <ProjectCard
-                key={name}
-                name={name}
-                onClick={() => router.push(`/projects/${encodeURIComponent(name)}`)}
-                onDelete={() => setDeleteTarget(name)}
+                key={g.project}
+                project={g.project}
+                collectionCount={g.collections.length}
+                isBare={g.isBare}
+                onClick={() =>
+                  router.push(`/projects/${encodeURIComponent(g.project)}`)
+                }
+                onDelete={() => setDeleteTarget(g.project)}
               />
             ))}
             <button
@@ -79,7 +86,11 @@ export default function ProjectsPage() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={create}
+        onCreate={async (name: string) => {
+          // Projects are implicit — we just navigate to the new project page
+          // where the user will create the first collection.
+          router.push(`/projects/${encodeURIComponent(name)}`);
+        }}
       />
 
       {deleteTarget && (
@@ -87,7 +98,21 @@ export default function ProjectsPage() {
           name={deleteTarget}
           open={true}
           onClose={() => setDeleteTarget(null)}
-          onDelete={() => drop(deleteTarget)}
+          onDelete={async () => {
+            // Drop all collections belonging to this project
+            // (namespaces starting with `{project}--`)
+            // For bare projects, drop the namespace itself.
+            const group = groups.find((g) => g.project === deleteTarget);
+            if (!group) return;
+            if (group.isBare) {
+              await drop(deleteTarget);
+            } else {
+              for (const col of group.collections) {
+                await drop(`${deleteTarget}--${col}`);
+              }
+            }
+            setDeleteTarget(null);
+          }}
         />
       )}
     </>
@@ -95,30 +120,56 @@ export default function ProjectsPage() {
 }
 
 function ProjectCard({
-  name,
+  project,
+  collectionCount,
+  isBare,
   onClick,
   onDelete,
 }: {
-  name: string;
+  project: string;
+  collectionCount: number;
+  isBare: boolean;
   onClick: () => void;
   onDelete: () => void;
 }) {
   return (
     <div
-      className="group relative rounded-xl border border-zinc-800 bg-zinc-900 p-5 cursor-pointer hover:border-zinc-600 transition-colors"
+      className="group relative rounded-xl border border-zinc-800 bg-zinc-900 p-5 cursor-pointer hover:border-zinc-700 transition-colors"
       onClick={onClick}
     >
       <div className="flex items-start justify-between">
-        <span className="text-base">📁</span>
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-600 font-mono text-sm">⬡</span>
+          {isBare && (
+            <span className="text-[10px] text-zinc-600 border border-zinc-800 rounded px-1.5 py-0.5">
+              legacy
+            </span>
+          )}
+        </div>
         <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="opacity-0 group-hover:opacity-100 text-xs text-zinc-600 hover:text-red-400 transition-all px-1"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="opacity-0 group-hover:opacity-100 text-xs text-zinc-600 hover:text-red-400 transition-all"
         >
           delete
         </button>
       </div>
-      <p className="mt-2 font-medium text-white text-sm truncate">{name}</p>
-      <p className="mt-0.5 text-xs text-zinc-500">Click to open</p>
+
+      <p className="mt-3 font-medium text-white text-base truncate">{project}</p>
+
+      <div className="mt-2 flex items-center gap-1.5">
+        <span className="text-xs text-zinc-500">
+          {isBare ? (
+            "bare namespace"
+          ) : collectionCount === 0 ? (
+            <span className="text-zinc-600">no collections</span>
+          ) : (
+            `${collectionCount} collection${collectionCount !== 1 ? "s" : ""}`
+          )}
+        </span>
+      </div>
     </div>
   );
 }
