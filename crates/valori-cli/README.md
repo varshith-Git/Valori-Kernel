@@ -14,9 +14,9 @@ my_valori_db/
   events.log      ← every state change, in order, forever
 ```
 
-The Valori CLI reads these files directly and gives you five commands:
+The Valori CLI reads these files directly and gives you forensic commands — plus a live import tool for migrating from other vector stores.
 
-| Command | What it answers |
+| Command | What it answers / does |
 |---|---|
 | `inspect` | Are my database files healthy? How many records, nodes, and edges exist? |
 | `verify` | Is my snapshot file structurally valid and uncorrupted? |
@@ -24,6 +24,8 @@ The Valori CLI reads these files directly and gives you five commands:
 | `replay-query` | What did the database look like at event #N? What would a search return then? |
 | `diff` | What changed between event #A and event #B? Did any search results shift? |
 | `cluster upgrade` | Step-by-step guided rolling upgrade for a live Raft cluster. |
+| `import qdrant` | Migrate a Qdrant collection into Valori (resumable, dim-validated). |
+| `import jsonl` | Import from a JSONL file (streaming, alias-aware fields). |
 
 Think of it as `git log` + `git diff` for your AI memory database.
 
@@ -224,6 +226,67 @@ Semantic Diff  ·  top-5
 │ 99        │ - Left top-K   │ was rank 5     │
 └───────────┴────────────────┴────────────────┘
 ```
+
+---
+
+### `valori import qdrant`
+
+Migrates a Qdrant collection into a running Valori node. Validates that the
+source dimension matches the target node's `VALORI_DIM` before writing a single
+byte. Resumable — a `.valori-import-qdrant-<collection>.json` sidecar tracks
+the last Qdrant scroll cursor so interrupted imports can continue.
+
+```bash
+valori import qdrant \
+  --url http://localhost:6333 \
+  --collection my-vectors \
+  --target-url http://localhost:3000 \
+  --target-collection my-vectors
+```
+
+```bash
+# Resume an interrupted import
+valori import qdrant \
+  --url http://qdrant-prod:6333 \
+  --collection embeddings \
+  --target-url http://valori-prod:3000 \
+  --target-collection embeddings \
+  --batch-size 500 \
+  --resume
+```
+
+If the source and target dimensions differ, the command aborts with:
+```
+Dimension mismatch: Qdrant source has dim=1536 but Valori node is configured
+with dim=384. Restart Valori with VALORI_DIM=1536 before importing.
+```
+
+---
+
+### `valori import jsonl`
+
+Imports from a JSONL file (one JSON object per line). Compatible with any tool
+that can export to JSONL — LangChain, LlamaIndex, custom export scripts, etc.
+
+**Field names accepted:**
+- Vector: `vector` (or alias `embedding`, `values`)
+- Metadata: `metadata` (or alias `text`, `content`, `payload`)
+- Tag: `tag` (u64, optional — defaults to 0)
+
+```bash
+valori import jsonl vectors.jsonl \
+  --target-url http://localhost:3000 \
+  --target-collection tenant-acme \
+  --batch-size 200
+```
+
+Example JSONL line:
+```json
+{"vector": [0.12, -0.34, 0.56, 0.78], "metadata": "Customer support ticket #1234", "tag": 0}
+```
+
+Lines with wrong-dimension vectors or parse errors are skipped with a warning;
+the rest of the file continues importing.
 
 ---
 

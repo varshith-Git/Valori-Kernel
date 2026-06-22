@@ -218,3 +218,5 @@ cargo test -p valori-consensus
 | `tests/grpc_cluster.rs` | Real 3-node cluster: election, 10 replicated writes, cross-cluster dedup, ForwardToLeader. |
 | `tests/snapshot_transfer.rs` | Late-joiner catch-up: snapshot-only, snapshot + live-tail, hash convergence. |
 | `tests/fault_tolerance.rs` | Leader crash → re-election, minority loss, majority loss stalls writes. |
+| `tests/partition_scenarios.rs` | Asymmetric partition, BLAKE3 hash frozen during isolation + converges on heal, isolated-node cannot fork chain. |
+| `src/partition_harness.rs` (internal) | `PartitionTable`, `make_cluster`, helpers; 4 in-module tests: 3-node consensus, leader isolation, partition-heal convergence, minority-cannot-commit. |

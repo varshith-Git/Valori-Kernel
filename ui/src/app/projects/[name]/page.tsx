@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useState, useEffect } from "react";
 import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CollectionList } from "@/components/collections/CollectionList";
@@ -19,31 +19,31 @@ export default function ProjectPage({
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-zinc-500">
-        <Link href="/projects" className="hover:text-zinc-300 transition-colors">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Link href="/projects" className="hover:text-accent-foreground transition-colors">
           Projects
         </Link>
         <span>/</span>
-        <span className="text-white font-medium">{project}</span>
+        <span className="text-foreground font-medium">{project}</span>
       </div>
 
       <Tabs defaultValue="collections">
-        <TabsList className="bg-zinc-900 border border-zinc-800">
+        <TabsList className="bg-card border border-border">
           <TabsTrigger
             value="collections"
-            className="data-[state=active]:bg-zinc-700 data-[state=active]:text-white text-zinc-400"
+            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
           >
             Collections
           </TabsTrigger>
           <TabsTrigger
             value="metrics"
-            className="data-[state=active]:bg-zinc-700 data-[state=active]:text-white text-zinc-400"
+            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
           >
             Metrics
           </TabsTrigger>
           <TabsTrigger
             value="settings"
-            className="data-[state=active]:bg-zinc-700 data-[state=active]:text-white text-zinc-400"
+            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
           >
             Settings
           </TabsTrigger>
@@ -109,7 +109,7 @@ function MetricsTab({ project }: { project: string }) {
       </div>
 
       <div>
-        <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3">
           Request activity
         </h3>
         <div className="grid grid-cols-3 gap-4">
@@ -124,12 +124,12 @@ function MetricsTab({ project }: { project: string }) {
       </div>
 
       <div>
-        <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-3">
+        <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-3">
           Node health
         </h3>
         <div className="grid grid-cols-2 gap-4">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600">Status</p>
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Status</p>
             <div className="mt-2 flex items-center gap-2">
               <span
                 className={`h-2 w-2 rounded-full ${online ? "bg-emerald-400" : "bg-red-400 animate-pulse"}`}
@@ -139,9 +139,9 @@ function MetricsTab({ project }: { project: string }) {
               </span>
             </div>
           </div>
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
-            <p className="text-[10px] uppercase tracking-widest text-zinc-600">State Hash</p>
-            <code className="mt-2 block text-xs font-mono text-zinc-400 truncate">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground">State Hash</p>
+            <code className="mt-2 block text-xs font-mono text-muted-foreground truncate">
               {hash ? `${hash.slice(0, 32)}…` : "—"}
             </code>
           </div>
@@ -153,42 +153,49 @@ function MetricsTab({ project }: { project: string }) {
 
 function SettingsTab({ project }: { project: string }) {
   const { dim, online } = useHealth();
-  const [tokenVisible, setTokenVisible] = useState(false);
+  const [serverConfig, setServerConfig] = useState<{ api_url: string; auth_configured: boolean } | null>(null);
+  const [embedCfg, setEmbedCfg] = useState<{ provider: string; model: string } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/config").then(r => r.ok ? r.json() : null).then(d => {
+      if (d) setServerConfig(d);
+    }).catch(() => {});
+    try {
+      const raw = localStorage.getItem("valori:embedding_config");
+      if (raw) {
+        const c = JSON.parse(raw);
+        setEmbedCfg({ provider: c.provider ?? "—", model: c.model ?? "—" });
+      }
+    } catch {}
+  }, []);
 
   return (
     <div className="flex flex-col gap-6 max-w-xl">
       <Section title="Connection">
-        <SettingRow label="Backend URL" value="http://localhost:3000" mono copyable />
+        <SettingRow label="Backend URL" value={serverConfig?.api_url ?? "…"} mono copyable />
         <SettingRow
           label="Status"
           value={online ? "Connected" : "Unreachable"}
           highlight={online ? "green" : "red"}
         />
-      </Section>
-
-      <Section title="Token / Auth">
-        <div className="px-4 py-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-zinc-300">Bearer token</p>
-              <p className="text-xs text-zinc-600">
-                Set via <code className="font-mono">VALORI_AUTH_TOKEN</code> env var on the backend
-              </p>
-            </div>
-            <button
-              onClick={() => setTokenVisible((v) => !v)}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-            >
-              {tokenVisible ? "Hide" : "Show"}
-            </button>
+        <div className="px-4 py-3 flex items-center justify-between">
+          <div>
+            <p className="text-sm text-accent-foreground">Authentication</p>
+            <p className="text-xs text-muted-foreground">
+              {serverConfig
+                ? serverConfig.auth_configured
+                  ? "VALORI_AUTH_TOKEN is set on the server"
+                  : "No auth token — open access"
+                : "…"}
+            </p>
           </div>
-          {tokenVisible && (
-            <div className="rounded-lg bg-zinc-950 border border-zinc-800 px-3 py-2">
-              <code className="text-xs font-mono text-zinc-400">
-                (configured server-side only — not exposed to browser)
-              </code>
-            </div>
-          )}
+          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+            serverConfig?.auth_configured
+              ? "border-emerald-800 bg-emerald-950/40 text-emerald-400"
+              : "border-input bg-accent text-muted-foreground"
+          }`}>
+            {serverConfig?.auth_configured ? "secured" : "open"}
+          </span>
         </div>
       </Section>
 
@@ -200,28 +207,30 @@ function SettingsTab({ project }: { project: string }) {
 
       <Section title="Embedding (text search)">
         <div className="px-4 py-4 flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <p className="text-sm text-zinc-300">OpenAI-compatible endpoint</p>
-            <span className="text-[10px] rounded px-1.5 py-0.5 bg-zinc-800 text-zinc-500 border border-zinc-700">
-              coming soon
-            </span>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-accent-foreground">Active embedding model</p>
+              <p className="text-xs text-muted-foreground">
+                Shared across all projects — configure in{" "}
+                <Link href="/settings" className="text-accent-foreground hover:underline">
+                  Settings
+                </Link>
+              </p>
+            </div>
+            {embedCfg && (
+              <span className="text-xs font-mono px-2 py-0.5 rounded border border-input bg-accent text-muted-foreground">
+                {embedCfg.provider}/{embedCfg.model}
+              </span>
+            )}
           </div>
-          <p className="text-xs text-zinc-600">
-            Configure an embedding API to enable Text and Hybrid search modes. Pre-computed
-            vectors can be used today via Semantic mode.
-          </p>
-          <div className="flex flex-col gap-2 opacity-50 pointer-events-none">
-            <input
-              disabled
-              placeholder="https://api.openai.com/v1/embeddings"
-              className="w-full rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs px-3 py-2"
-            />
-            <input
-              disabled
-              placeholder="sk-… (API key)"
-              className="w-full rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs px-3 py-2"
-            />
-          </div>
+          {!embedCfg && (
+            <p className="text-xs text-amber-500">
+              No embedding model configured.{" "}
+              <Link href="/settings" className="text-accent-foreground hover:underline">
+                Configure in Settings →
+              </Link>
+            </p>
+          )}
         </div>
       </Section>
     </div>
@@ -231,8 +240,8 @@ function SettingsTab({ project }: { project: string }) {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-widest">{title}</h3>
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 divide-y divide-zinc-800">
+      <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-widest">{title}</h3>
+      <div className="rounded-xl border border-border bg-card divide-y divide-border">
         {children}
       </div>
     </div>
@@ -264,8 +273,8 @@ function SettingRow({
   return (
     <div className="flex items-center justify-between px-4 py-3">
       <div>
-        <p className="text-sm text-zinc-300">{label}</p>
-        {sub && <p className="text-xs text-zinc-600">{sub}</p>}
+        <p className="text-sm text-accent-foreground">{label}</p>
+        {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
       </div>
       <div className="flex items-center gap-2">
         <span
@@ -274,7 +283,7 @@ function SettingRow({
               ? "text-emerald-400"
               : highlight === "red"
               ? "text-red-400"
-              : "text-zinc-400"
+              : "text-muted-foreground"
           }`}
         >
           {value}
@@ -282,7 +291,7 @@ function SettingRow({
         {copyable && (
           <button
             onClick={copy}
-            className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
+            className="text-[10px] text-muted-foreground hover:text-muted-foreground transition-colors"
           >
             {copied ? "✓" : "copy"}
           </button>
@@ -304,13 +313,13 @@ function MetricCard({
   warn?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-4">
-      <p className="text-[10px] uppercase tracking-widest text-zinc-600">{label}</p>
-      <p className={`mt-1.5 font-mono text-xl font-semibold ${warn ? "text-amber-400" : "text-white"}`}>
+    <div className="rounded-xl border border-border bg-card px-4 py-4">
+      <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
+      <p className={`mt-1.5 font-mono text-xl font-semibold ${warn ? "text-amber-400" : "text-foreground"}`}>
         {value}
       </p>
       {sub && (
-        <p className={`mt-0.5 text-xs ${warn ? "text-amber-600" : "text-zinc-600"}`}>{sub}</p>
+        <p className={`mt-0.5 text-xs ${warn ? "text-amber-600" : "text-muted-foreground"}`}>{sub}</p>
       )}
     </div>
   );

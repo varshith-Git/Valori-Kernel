@@ -2,7 +2,7 @@
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 use tokio::time::{sleep, Duration};
 
@@ -27,10 +27,10 @@ async fn test_replication_cluster() {
     };
 
     let leader_engine = Engine::new(&leader_config);
-    let leader_state = Arc::new(Mutex::new(leader_engine));
+    let leader_state = Arc::new(RwLock::new(leader_engine));
 
     {
-        let mut engine = leader_state.lock().await;
+        let mut engine = leader_state.write().await;
         assert!(engine.event_committer.is_some(), "Leader must have event committer");
         let id0 = engine.insert_record_from_f32(&vec![0.1; 4]).unwrap();
         assert_eq!(id0, 0);
@@ -59,7 +59,7 @@ async fn test_replication_cluster() {
     };
 
     let follower_engine = Engine::new(&follower_config);
-    let follower_state = Arc::new(Mutex::new(follower_engine));
+    let follower_state = Arc::new(RwLock::new(follower_engine));
 
     let f_state = follower_state.clone();
     let f_url = leader_url.clone();
@@ -71,7 +71,7 @@ async fn test_replication_cluster() {
     let mut hits = vec![];
     for _ in 0..50 { // wait up to 5 seconds
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let engine = follower_state.lock().await;
+        let engine = follower_state.read().await;
         hits = engine.search_l2(&vec![0.1; 4], 1).unwrap();
         if !hits.is_empty() && hits[0].0 == 0 {
             break;
@@ -82,7 +82,7 @@ async fn test_replication_cluster() {
 
     // ── 4. Verify live replication ─────────────────────────────────────────────
     {
-        let mut engine = leader_state.lock().await;
+        let mut engine = leader_state.write().await;
         let id1 = engine.insert_record_from_f32(&vec![0.2; 4]).unwrap();
         assert_eq!(id1, 1);
     }
@@ -90,7 +90,7 @@ async fn test_replication_cluster() {
     let mut hits = vec![];
     for _ in 0..50 { // wait up to 5 seconds
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let engine = follower_state.lock().await;
+        let engine = follower_state.read().await;
         hits = engine.search_l2(&vec![0.2; 4], 1).unwrap();
         if !hits.is_empty() && hits[0].0 == 1 {
             break;

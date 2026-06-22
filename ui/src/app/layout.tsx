@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { ConnectionBadge } from "@/components/layout/ConnectionBadge";
+import { ThemeProvider } from "@/lib/theme";
+import { Toaster } from "@/components/ui/Toaster";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,20 +26,26 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      /* Start in dark — the inline script below immediately corrects to the
+         stored preference before first paint, preventing flash of wrong theme. */
       className={`${geistSans.variable} ${geistMono.variable} h-full dark antialiased`}
     >
-      <body className="flex h-full bg-zinc-950 text-zinc-100">
-        <Sidebar />
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Top bar */}
-          <header className="flex h-12 items-center justify-between border-b border-zinc-800 px-6">
-            <span className="text-xs text-zinc-500 font-mono">
-              deterministic · tamper-evident · Q16.16
-            </span>
-            <ConnectionBadge />
-          </header>
-          <main className="flex-1 overflow-auto px-6 py-6">{children}</main>
-        </div>
+      <head>
+        {/* FOUC prevention: runs synchronously before CSS is parsed.
+            Reads localStorage and applies the correct class before React hydrates. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('valori-theme');var d=t||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.classList.remove('dark','light');document.documentElement.classList.add(d);}catch(e){}})();`,
+          }}
+        />
+      </head>
+      <body className="flex h-full bg-background text-foreground">
+        <ThemeProvider>
+          <Sidebar />
+          {/* No top header — full vertical space for content */}
+          <main className="flex-1 overflow-auto px-7 py-7">{children}</main>
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );

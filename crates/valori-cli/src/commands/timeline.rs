@@ -176,5 +176,11 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("AutoCreateEdge").fg(Color::Cyan),
             format!("{}→{}  kind={:?}  (id assigned at apply)", from.0, to.0, kind),
         ),
+
+        KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, tag, .. } => (
+            Cell::new("AutoInsertRecordEncrypted").fg(Color::Magenta),
+            format!("ns={namespace_id} key={}  tag={tag}  (id assigned at apply)",
+                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+        ),
     }
 }

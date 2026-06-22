@@ -122,25 +122,33 @@ Valori is the **memory layer** of your AI stack — the place where embedding ve
 | **Cluster** | Interactive setup wizard (`valori setup`) |
 | **Cluster** | Helm chart (`deploy/helm/valori/`) — StatefulSet + PVCs |
 | **SDK** | Python: `SyncRemoteClient`, `AsyncRemoteClient`, `MemoryClient` |
-| **SDK** | Leader-redirect caching, retry/backoff, `NotLeaderError` |
+| **SDK** | `ClusterClient` / `AsyncClusterClient` — round-robin reads, leader-routed writes, 307-redirect self-heal |
+| **SDK** | Leader-redirect caching, retry/backoff, per-write UUID idempotency keys |
 | **SDK** | LangChain + LlamaIndex integration |
+| **SDK** | API key management: `create_key()`, `list_keys()`, `revoke_key()` |
+| **Agent memory** | `valori-mcp` — Model Context Protocol server; plug Valori into Claude Desktop or any agent as long-term memory |
+| **Agent memory** | Verifiable recall — `memory_recall` returns a BLAKE3 **receipt** binding the result set to the committed state hash; recomputable offline by any client |
+| **GraphRAG** | `POST /v1/graphrag` — K nearest vectors **+** the connected subgraph in one call, one consistent snapshot; no Neo4j+vector-DB two-system stack |
+| **GraphRAG** | `memory_graph_recall` MCP tool — GraphRAG with a receipt binding both the hits and the returned subgraph |
+| **Multi-tenancy** | Named collections (namespaces) — up to 1 024 per node, fully isolated vector search |
+| **Multi-tenancy** | Per-tenant API keys (`/v1/keys`) — `read_only`, `read_write`, `admin` scopes; BLAKE3-hashed token store |
+| **Point-in-time** | `search(query, as_of="2026-01-01T00:00:00Z")` or `as_of_log_index=N` — replays event log to target point |
+| **Migration** | `valori import qdrant` — scroll API, dim-validated, resumable, per-record idempotency |
+| **Migration** | `valori import jsonl` — streaming JSONL ingestion with alias-aware field names |
 | **Embedded** | `no_std` / `no_alloc` kernel — validated on ARM Cortex-M4 @ 168 MHz |
 | **Observability** | Prometheus metrics at `/metrics` (`valori_raft_*`, commit latency, replay duration) |
-| **CLI** | `valori inspect`, `verify`, `timeline`, `replay-query`, `diff`, `cluster` |
+| **CLI** | `valori inspect`, `verify`, `timeline`, `replay-query`, `diff`, `cluster`, `import` |
 | **Tests** | Unit, integration, openraft compliance suite, proptest fuzz — count auto-updated by CI |
 
-### Coming in Phase 3
+### Coming in Phase 3 (remaining)
 
 | Feature | What it unlocks |
 |---|---|
-| **S3 cold storage** | Sealed segments offloaded to S3/GCS; recovery needs only snapshot + live segment on disk |
-| **Point-in-time reads** | `search(query, as_of=1234)` — replay to any log index or timestamp |
-| **Rolling upgrades** | Zero-downtime version migration; protocol version envelope in wire format |
-| **Per-tenant API keys + encryption** | AES-256-GCM at rest; crypto-shredding (delete key = delete tenant in O(1)) |
-| **`valori-import`** | Ingest from Qdrant, Pinecone, CSV, Parquet into a live cluster |
+| **Crypto-shredding (3.6)** | Per-record AES-256-GCM; DEK destruction = GDPR erasure in O(1) |
+| **Write-throughput CI gates (3.8)** | PR fails if p99 insert latency regresses > 15% vs `main` baseline |
+| **Terraform modules (3.9)** | AWS / Azure one-command deployments |
+| **Signed releases + SBOM (3.10)** | Cosign signatures, CycloneDX SBOM, SLSA Level 2 provenance |
 | **BLAKE3 proof broadcast** | Nodes push state hashes to each other; quorum proof at `/v1/cluster/proof` |
-| **Terraform modules** | AWS / GCP / Azure one-command deployments |
-| **Signed releases + SBOM** | Cosign signatures, CycloneDX SBOM, SLSA Level 2 provenance |
 
 ---
 
@@ -255,6 +263,35 @@ VALORI_RAFT_LOG_PATH=/data/raft.redb \
 
 # Nodes 2 and 3 — same env, VALORI_NODE_ID=2/3, NO VALORI_CLUSTER_INIT
 ```
+
+### Option 7 — Agent memory via MCP (Claude Desktop / any agent)
+
+Give an agent verifiable long-term memory. `valori-mcp` is a Model Context
+Protocol server that fronts a running node; `memory_recall` returns a BLAKE3
+**receipt** proving exactly what was recalled against the committed state.
+
+```bash
+cargo build -p valori-node -p valori-mcp
+
+# 1. start a node (event log on → receipts carry an event-log hash)
+VALORI_DIM=8 VALORI_EVENT_LOG_PATH=./data/events.log valori-node &
+
+# 2. point the MCP server at it
+VALORI_URL=http://localhost:3000 valori-mcp
+```
+
+Wire it into Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{ "mcpServers": { "valori": {
+  "command": "valori-mcp",
+  "env": { "VALORI_URL": "http://localhost:3000" }
+} } }
+```
+
+Runnable demo with cross-language receipt verification:
+`python3 examples/mcp_agent_memory.py`. Details in
+[`crates/valori-mcp/README.md`](crates/valori-mcp/README.md).
 
 ---
 
@@ -495,30 +532,44 @@ Deleting `events.log.000001` from the archive makes `events.log.000002` fail the
 
 ## Python SDK
 
-### Remote cluster client
+### Single-node remote client
 
 ```python
 from valoricore import SyncRemoteClient
 
-# Point at any node — the SDK follows leader redirects automatically
+# Point at any node — the SDK follows 307 leader-redirects automatically
 db = SyncRemoteClient(
     "http://10.0.0.1:3000",
     max_retries    = 5,
     retry_backoff  = 0.2,   # seconds
 )
 
-# Insert
+# Insert (UUID idempotency key auto-generated; safe to retry on connection reset)
 record_id = db.insert([0.1, 0.2, 0.3, ...])
 
 # Batch insert
 ids = db.batch_insert([[0.1, ...], [0.2, ...]])
 
+# Named collections (multi-tenancy)
+db.create_collection("tenant-acme")
+db.insert([0.1, 0.2, ...], collection="tenant-acme")
+hits = db.search([0.1, 0.2, ...], k=5, collection="tenant-acme")
+
 # Search (linearizable by default)
 hits = db.search([0.1, 0.2, ...], k=10)
 # → [{"id": 0, "score": 0.997}, {"id": 7, "score": 0.841}, ...]
 
-# Fast local search (eventually consistent)
+# Point-in-time search (as-of reads) — requires VALORI_EVENT_LOG_PATH on server
+hits = db.search([0.1, 0.2, ...], k=5, as_of="2026-01-01T00:00:00Z")
+hits = db.search([0.1, 0.2, ...], k=5, as_of_log_index=500)
+# → {"results": [...], "as_of_state_hash": "a3f2...", "as_of_log_index": 500}
+
+# Fast local search (eventually consistent, no leader round-trip)
 hits = db.search([0.1, ...], k=10, consistency="local")
+
+# GraphRAG — K nearest vectors + the connected subgraph, in one call
+g = db.graphrag([0.1, 0.2, ...], k=5, depth=2)
+# → {"hits": [...], "seed_nodes": [...], "subgraph": {"nodes": [...], "edges": [...]}}
 
 # Cluster health
 print(db.cluster_status())
@@ -526,6 +577,56 @@ print(db.cluster_status())
 
 # Cryptographic state proof
 print(db.get_state_hash())  # same 64-char hex on all three nodes
+```
+
+### Multi-node cluster client (Phase 3.3)
+
+```python
+from valoricore import ClusterClient
+
+# All three node URLs — client discovers the leader automatically via 307
+cluster = ClusterClient([
+    "http://10.0.0.1:3000",
+    "http://10.0.0.2:3000",
+    "http://10.0.0.3:3000",
+])
+
+# Writes go to the leader; idempotency key ensures exactly-once on retry
+rid = cluster.insert([0.1, 0.2, ...], collection="tenant-acme")
+
+# Round-robin reads across all nodes (high throughput, eventually consistent)
+hits = cluster.search([0.1, 0.2, ...], k=5, consistency="local")
+
+# Linearizable reads go to the leader (default)
+hits = cluster.search([0.1, 0.2, ...], k=5, consistency="linearizable")
+
+# Cluster inspection
+print(cluster.leader_url())       # → "http://10.0.0.2:3000"
+print(cluster.get_cluster_role()) # → "leader" or "follower"
+print(cluster.cluster_health())   # → True / False
+```
+
+### API Key management (Phase 3.5)
+
+```python
+from valoricore import SyncRemoteClient
+
+admin = SyncRemoteClient("http://localhost:3000", token="<admin-token>")
+
+# Create a scoped key
+key = admin.create_key(scope="read_write", description="acme pipeline")
+print(key["token"])   # vk_<64 hex> — shown ONCE, store it now
+print(key["id"])      # key_a3f2...
+
+# List keys (token masked)
+keys = admin.list_keys()
+
+# Revoke a key
+admin.revoke_key(key["id"])
+
+# Use the new key
+tenant_client = SyncRemoteClient("http://localhost:3000", token=key["token"])
+tenant_client.insert([0.1, 0.2, ...], collection="tenant-acme")
 ```
 
 ### Async client
@@ -643,6 +744,65 @@ valori cluster upgrade --url http://10.0.0.1:3000 --target-version 0.3.0
 `add-node` does the two-step openraft dance: adds as learner (catch-up without affecting quorum), then promotes to voter. The new node must already be running.
 
 `upgrade` is interactive: it prints the upgrade plan (non-leaders first, leader last), waits for the operator to cycle each node, and polls `/health` before moving to the next. See [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md) for the rolling-window rules and schema version policy.
+
+### Migrate from another vector database (Phase 3.7)
+
+The `valori import` command imports into a **running** Valori node. It validates
+that the source dimension matches the target's `VALORI_DIM` before writing
+anything — a mismatch aborts with the exact env var to set and retry.
+
+**From Qdrant:**
+
+```bash
+# Start Valori with the right dimension first
+VALORI_DIM=384 VALORI_EVENT_LOG_PATH=./events.log valori-node
+
+# Import — dim-checked, cursor-resumable, progress bar
+valori import qdrant \
+  --url http://localhost:6333 \
+  --collection my-embeddings \
+  --target-url http://localhost:3000 \
+  --target-collection my-embeddings \
+  --batch-size 500
+
+# If the run was interrupted, pick up where it left off
+valori import qdrant \
+  --url http://localhost:6333 \
+  --collection my-embeddings \
+  --target-url http://localhost:3000 \
+  --target-collection my-embeddings \
+  --resume
+```
+
+**From JSONL (universal format):**
+
+```bash
+# Line format: {"vector": [...], "metadata": "...", "tag": 0}
+# Aliases: "embedding"/"values" for vector, "text"/"content"/"payload" for metadata
+valori import jsonl ./my-vectors.jsonl \
+  --target-url http://localhost:3000 \
+  --target-collection tenant-acme
+```
+
+On completion, the final BLAKE3 state hash is printed — import provenance is in
+the audit chain from the first inserted record.
+
+**Dimension migration workflow** (changing embedding model — e.g. 384-dim → 1536-dim):
+
+```bash
+# 1. Create a new Valori instance (or collection) with the new dimension
+VALORI_DIM=1536 valori-node --port 3001
+
+# 2. Re-embed your corpus with the new model and export to JSONL
+python3 reembed.py --model text-embedding-3-small --out new-embeddings.jsonl
+
+# 3. Import the re-embedded data
+valori import jsonl new-embeddings.jsonl \
+  --target-url http://localhost:3001 \
+  --target-collection my-embeddings
+
+# 4. Swap at the application layer
+```
 
 ---
 
@@ -793,19 +953,40 @@ Configure with: `VALORI_S3_BUCKET`, `VALORI_S3_PREFIX`, `VALORI_S3_ENDPOINT` (fo
 
 ### Data plane (any node; writes redirect to leader)
 
+| Method | Route | Body / params | Purpose |
+|---|---|---|---|
+| `POST` | `/records` | `{"values":[…], "collection":"…", "request_id":[…]}` | Insert a vector → `{"id": N}` |
+| `POST` | `/v1/vectors/batch_insert` | `{"batch":[[…],…], "collection":"…"}` | Insert many → `{"ids": [...]}` |
+| `POST` | `/search` | `{"query":[…], "k":5, "collection":"…", "as_of":"ISO8601", "consistency":"local"}` | k-NN search |
+| `POST` | `/v1/delete` | `{"id": N}` | Hard-delete a record |
+| `POST` | `/v1/soft-delete` | `{"id": N}` | Tombstone (soft-delete) a record |
+| `POST` | `/graph/node` | `{"kind":"…", "record_id":N}` | Create a graph node |
+| `POST` | `/graph/edge` | `{"from":N, "to":N, "kind":"…"}` | Create an edge |
+| `GET`  | `/v1/proof/state` | — | BLAKE3 state root hex |
+| `GET`  | `/v1/timeline` | `?from=ISO8601&to=ISO8601` | Structured event timeline |
+| `GET`  | `/health` | — | `{"status":"ok","dim":N}` |
+| `GET`  | `/metrics` | — | Prometheus exposition |
+| `GET`  | `/version` | — | `{"version":"0.2.1"}` |
+
+### Collections / multi-tenancy (`/v1/namespaces/*`)
+
 | Method | Route | Purpose |
 |---|---|---|
-| `POST` | `/records` | Insert a vector → `{"id": N}` |
-| `POST` | `/v1/vectors/batch_insert` | Insert many → `{"ids": [...]}` |
-| `POST` | `/search` | k-NN search → `{"results": [{"id", "score"}]}` |
-| `POST` | `/v1/delete` | Hard-delete a record by id |
-| `POST` | `/v1/soft-delete` | Tombstone (soft-delete) a record |
-| `POST` | `/graph/node` | Create a graph node |
-| `POST` | `/graph/edge` | Create an edge between nodes |
-| `GET`  | `/v1/proof/state` | `{"final_state_hash": [...]}` — BLAKE3 state root |
-| `GET`  | `/health` | `{"status": "ok"}` |
-| `GET`  | `/metrics` | Prometheus exposition |
-| `GET`  | `/version` | `{"version": "0.2.1"}` |
+| `POST`   | `/v1/namespaces` | Create collection `{"name":"…"}` — idempotent |
+| `GET`    | `/v1/namespaces` | List all collections + numeric IDs |
+| `DELETE` | `/v1/namespaces/:name` | Drop collection and all its records |
+
+### API Key management (`/v1/keys/*`) — Phase 3.5
+
+Requires an admin-scope credential (`VALORI_AUTH_TOKEN` or an admin API key).
+
+| Method | Route | Scope required | Purpose |
+|---|---|---|---|
+| `POST`   | `/v1/keys` | admin | Create a key. Body: `{"scope":"read_write","description":"…"}` → token shown once |
+| `GET`    | `/v1/keys` | admin | List keys (masked — prefix + metadata, no raw token) |
+| `DELETE` | `/v1/keys/:id` | admin | Revoke a key immediately |
+
+Three scope tiers: `read_only` (GET + search only) < `read_write` (insert, delete, collections) < `admin` (keys, snapshots, cluster ops).
 
 ### Cluster management plane (`/v1/cluster/*`)
 
@@ -835,13 +1016,14 @@ Configure with: `VALORI_S3_BUCKET`, `VALORI_S3_PREFIX`, `VALORI_S3_ENDPOINT` (fo
 
 | Variable | Default | Description |
 |---|---|---|
-| `VALORI_DIM` | `16` | Embedding dimension |
+| `VALORI_DIM` | `16` | Embedding dimension — **fixed at startup; must match your model** |
 | `VALORI_INDEX` | `bruteforce` | `bruteforce` · `hnsw` · `ivf` |
 | `VALORI_BIND` | `127.0.0.1:3000` | HTTP listener |
-| `VALORI_EVENT_LOG_PATH` | — | Append-only audit log path |
+| `VALORI_EVENT_LOG_PATH` | — | Append-only audit log path. Required for point-in-time reads. |
 | `VALORI_EVENT_LOG_ROTATION_BYTES` | `268435456` (256 MiB) | Seal live segment after this many bytes (`0` disables) |
 | `VALORI_SNAPSHOT_PATH` | — | Snapshot file path |
-| `VALORI_AUTH_TOKEN` | — | Bearer token for all HTTP endpoints |
+| `VALORI_AUTH_TOKEN` | — | Legacy bearer token (admin scope). Use `VALORI_KEYS_PATH` for per-tenant keys. |
+| `VALORI_KEYS_PATH` | — | JSON file for persisting API keys across restarts. Absent = in-memory only. |
 
 ### Cluster node (additional)
 

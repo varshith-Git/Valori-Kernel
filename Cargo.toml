@@ -8,6 +8,7 @@ members = [
     "crates/valori-verify",
     "crates/valori-cli",
     "crates/valori-consensus",
+    "crates/valori-mcp",
     "embedded",
 ]
 # Excluded from default builds:
@@ -23,6 +24,7 @@ default-members = [
     "crates/valori-verify",
     "crates/valori-cli",
     "crates/valori-consensus",
+    "crates/valori-mcp",
 ]
 
 # Shared package metadata — every crate inherits this with `.workspace = true`,

@@ -49,7 +49,10 @@ export function useSearch() {
         queriedAt: data.queried_at ?? new Date().toISOString(),
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Search failed");
+      const msg = e instanceof Error ? e.message : "Search failed";
+      setError(msg);
+      const { toast } = await import("@/lib/toast");
+      toast(msg, "error");
     } finally {
       setIsLoading(false);
     }

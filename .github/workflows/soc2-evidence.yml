@@ -1,0 +1,53 @@
+name: SOC 2 evidence collection (Phase 3.10)
+
+# Collects audit evidence weekly and uploads it as a workflow artifact.
+# The artifact retention (90 days) provides a continuous SOC 2 evidence trail
+# accessible to auditors without granting direct cluster access.
+#
+# For production deployments, replace the mock node URL with your
+# actual VALORI_NODE_URL secret and supply VALORI_AUTH_TOKEN.
+
+on:
+  schedule:
+    # Every Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      node_url:
+        description: "Valori node URL to collect from"
+        required: false
+        default: "http://localhost:3000"
+
+jobs:
+  collect:
+    name: Collect SOC 2 evidence
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Collect evidence
+        env:
+          VALORI_NODE_URL:   ${{ github.event.inputs.node_url || vars.VALORI_NODE_URL || 'http://localhost:3000' }}
+          VALORI_AUTH_TOKEN: ${{ secrets.VALORI_AUTH_TOKEN }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          python3 scripts/soc2/collect_evidence.py \
+            --node  "$VALORI_NODE_URL" \
+            --token "$VALORI_AUTH_TOKEN" \
+            --out   "evidence/$DATE"
+
+      - name: Upload evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: soc2-evidence-${{ github.run_id }}
+          path: evidence/
+          # 90-day retention ensures at least a quarter of continuous evidence.
+          retention-days: 90

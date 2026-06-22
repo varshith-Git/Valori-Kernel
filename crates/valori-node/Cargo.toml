@@ -33,6 +33,10 @@ opendal = { version = "0.55.0", features = ["services-s3", "services-fs"] }
 bytes = "1.0"
 tap = "1.0.1"
 base64 = "0.22.1"
+# Crypto-shredding (Phase 3.6)
+aes-gcm = "0.10"
+# Batch idempotency dedup (Phase 3.12)
+rustc-hash = "2.1.1"
 
 [dev-dependencies] 
 tempfile = "3.23.0"

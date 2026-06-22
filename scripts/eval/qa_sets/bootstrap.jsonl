@@ -1,0 +1,10 @@
+{"question": "What hash function does Valori use for its audit chain?", "expected_facts": ["BLAKE3"], "category": "factual"}
+{"question": "How does Valori ensure deterministic vector arithmetic across CPU architectures?", "expected_facts": ["Q16.16", "fixed-point"], "category": "factual"}
+{"question": "What consensus algorithm does Valori's cluster mode use?", "expected_facts": ["Raft", "openraft"], "category": "factual"}
+{"question": "How does Valori handle multi-tenant data isolation?", "expected_facts": ["namespace", "collection"], "category": "factual"}
+{"question": "What mechanism enables Valori to recover after a node crash without data loss?", "expected_facts": ["WAL", "write-ahead log", "event log"], "category": "factual"}
+{"question": "What is a Valori snapshot used for?", "expected_facts": ["kernel state", "graph", "vector"], "category": "factual"}
+{"question": "How does Valori implement GDPR right to erasure while maintaining an audit trail?", "expected_facts": ["ShredKey", "audit", "cryptographic"], "category": "multi-hop"}
+{"question": "What property makes the Valori event log tamper-evident?", "expected_facts": ["append-only", "BLAKE3", "chained"], "category": "factual"}
+{"question": "Why does Valori use fixed-point arithmetic instead of floating-point for vectors?", "expected_facts": ["deterministic", "bit-identical", "reproducible"], "category": "reasoning"}
+{"question": "What persistent storage backend does Valori use for the Raft log?", "expected_facts": ["redb"], "category": "factual"}

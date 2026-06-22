@@ -1,0 +1,31 @@
+{
+  "type": "ValoriEvalReport",
+  "schema_version": "1",
+  "timestamp": "2026-06-21T10:17:31Z",
+  "url": "http://localhost:3000",
+  "namespace": "eval-1782037049",
+  "k": 5,
+  "n": 10,
+  "embed_provider": "ollama",
+  "embed_model": "nomic-embed-text",
+  "corpus": "[bootstrap]",
+  "metrics": {
+    "recall_at_1": 1.0,
+    "recall_at_5": 1.0,
+    "citation_existence": 1.0,
+    "provenance_integrity": 1.0
+  },
+  "seeded_record_ids": [
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "note": "Bootstrap corpus \u2014 labeled [bootstrap]. Not for external claims."
+}

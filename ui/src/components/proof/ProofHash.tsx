@@ -21,17 +21,17 @@ export function ProofHash({ hash, isLoading }: Props) {
   if (isLoading || !hash) {
     return (
       <div className="flex flex-col gap-2">
-        <span className="text-xs text-zinc-500 uppercase tracking-widest">
+        <span className="text-xs text-muted-foreground uppercase tracking-widest">
           State Hash
         </span>
-        <div className="h-10 w-full animate-pulse rounded bg-zinc-800" />
+        <div className="h-10 w-full animate-pulse rounded bg-accent" />
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs text-zinc-500 uppercase tracking-widest">
+      <span className="text-xs text-muted-foreground uppercase tracking-widest">
         State Hash
       </span>
       <div className="flex items-center gap-3">
@@ -40,7 +40,7 @@ export function ProofHash({ hash, isLoading }: Props) {
         </code>
         <button
           onClick={copy}
-          className="shrink-0 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 transition-colors"
+          className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
           title="Copy hash"
         >
           {copied ? "✓ copied" : "copy"}

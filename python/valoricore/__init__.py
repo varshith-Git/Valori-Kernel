@@ -17,7 +17,7 @@ Quick-start::
 """
 
 from .local import LocalClient
-from .remote import SyncRemoteClient, AsyncRemoteClient
+from .remote import SyncRemoteClient, AsyncRemoteClient, ClusterClient, AsyncClusterClient
 from .memory import MemoryClient
 from .graph import Node, DocumentGraph
 from .async_memory import AsyncMemoryClient
@@ -86,6 +86,8 @@ __all__ = [
     "LocalClient",
     "SyncRemoteClient",
     "AsyncRemoteClient",
+    "ClusterClient",
+    "AsyncClusterClient",
 
     # ── Adapters ───────────────────────────────────────────────────
     "ValoricoreAdapter",

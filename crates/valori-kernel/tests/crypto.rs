@@ -1,13 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-//! Crypto-shredding seam (Phase 1.5).
+//! Crypto-shredding tests (Phase 3.6).
 //!
-//! Verifies that the reserved KernelEvent variants exist in the schema,
-//! round-trip through bincode, and are refused by apply_event with the
-//! correct error — ensuring the seam is present but safe until the
-//! encryption engine is wired in.
+//! Verifies that InsertRecordEncrypted and ShredKey events are fully
+//! implemented: round-trip through bincode, apply to KernelState, and
+//! set the correct flags on records.
 
 use valori_kernel::crypto::{CryptoError, KeyId, KeyVault, NullVault};
-use valori_kernel::error::KernelError;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::id::RecordId;
@@ -80,32 +78,55 @@ fn shred_key_variant_serializes() {
 }
 
 #[test]
-fn insert_record_encrypted_is_refused_by_apply() {
+fn insert_record_encrypted_applies_and_sets_flag() {
+    use valori_kernel::storage::record::{FLAG_ENCRYPTED, FLAG_SHREDDED};
+
     let mut state = KernelState::new();
+    state.dim = Some(4); // pre-set dim so encrypted insert doesn't require a prior insert
+
     let evt = KernelEvent::InsertRecordEncrypted {
         id: RecordId(0),
         key_id: TEST_KEY_ID,
-        ciphertext: vec![0xDE, 0xAD],
+        ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
         metadata_ciphertext: None,
-        tag: 0,
+        tag: 42,
     };
-    let err = state.apply_event(&evt).unwrap_err();
-    assert!(
-        matches!(err, KernelError::NotImplemented),
-        "expected NotImplemented, got {err:?}"
-    );
-    assert_eq!(state.record_count(), 0, "refused event must not mutate state");
+    state.apply_event(&evt).expect("InsertRecordEncrypted must succeed");
+
+    let rec = state.get_record(RecordId(0)).expect("record must be allocated");
+    assert!(rec.flags & FLAG_ENCRYPTED != 0, "FLAG_ENCRYPTED must be set");
+    assert!(rec.flags & FLAG_SHREDDED == 0, "FLAG_SHREDDED must NOT be set yet");
+    assert!(rec.vector.data.iter().all(|fxp| fxp.0 == 0), "vector must be zeroed");
 }
 
 #[test]
-fn shred_key_is_refused_by_apply() {
+fn shred_key_sets_shredded_flag_on_all_matching_records() {
+    use valori_kernel::storage::record::{FLAG_ENCRYPTED, FLAG_SHREDDED};
+
     let mut state = KernelState::new();
-    let evt = KernelEvent::ShredKey { key_id: TEST_KEY_ID };
-    let err = state.apply_event(&evt).unwrap_err();
-    assert!(
-        matches!(err, KernelError::NotImplemented),
-        "expected NotImplemented, got {err:?}"
-    );
+    state.dim = Some(4);
+
+    // Insert two records under the same key_id
+    for i in 0u32..2 {
+        let evt = KernelEvent::InsertRecordEncrypted {
+            id: RecordId(i),
+            key_id: TEST_KEY_ID,
+            ciphertext: vec![i as u8, 0, 0, 0],
+            metadata_ciphertext: None,
+            tag: 0,
+        };
+        state.apply_event(&evt).unwrap();
+    }
+
+    // Shred
+    let shred = KernelEvent::ShredKey { key_id: TEST_KEY_ID };
+    state.apply_event(&shred).expect("ShredKey must succeed");
+
+    for i in 0u32..2 {
+        let rec = state.get_record(RecordId(i)).expect("slot must be present");
+        assert!(rec.flags & FLAG_SHREDDED != 0, "record {i} must have FLAG_SHREDDED");
+        assert!(rec.metadata.is_none(), "ciphertext must be wiped from memory");
+    }
 }
 
 // ── CryptoError display ───────────────────────────────────────────────────────

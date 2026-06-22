@@ -28,21 +28,21 @@ export function SearchTab({ collection }: Props) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <p className="text-xs text-zinc-400">
+          <p className="text-xs text-muted-foreground">
             Query vector{" "}
             {dim && (
-              <span className="text-zinc-600">({dim}D — paste {dim} comma-separated floats)</span>
+              <span className="text-muted-foreground">({dim}D — paste {dim} comma-separated floats)</span>
             )}
           </p>
           <div className="flex items-center gap-2">
-            <label className="text-xs text-zinc-500">k =</label>
+            <label className="text-xs text-muted-foreground">k =</label>
             <input
               type="number"
               min={1}
               max={100}
               value={k}
               onChange={(e) => setK(Number(e.target.value))}
-              className="w-14 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-xs text-white text-center focus:outline-none focus:ring-1 focus:ring-zinc-500"
+              className="w-14 rounded border border-input bg-background px-2 py-1 text-xs text-foreground text-center focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
         </div>
@@ -52,18 +52,18 @@ export function SearchTab({ collection }: Props) {
           onKeyDown={(e) => e.key === "Enter" && e.metaKey && run()}
           placeholder="0.12, 0.34, 0.56, 0.78, ..."
           rows={3}
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-500 resize-none"
+          className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs text-card-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
         />
         <div className="flex items-center gap-2">
           <Button
             size="sm"
             disabled={isLoading || !input.trim()}
             onClick={run}
-            className="bg-white text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
           >
             {isLoading ? "Searching…" : "Search →"}
           </Button>
-          <span className="text-xs text-zinc-600">⌘↵ to run</span>
+          <span className="text-xs text-muted-foreground">⌘↵ to run</span>
         </div>
       </div>
 
@@ -72,22 +72,22 @@ export function SearchTab({ collection }: Props) {
       {results.length > 0 && (
         <div className="flex flex-col gap-2">
           {stateHash && (
-            <p className="text-xs text-zinc-600 font-mono">
+            <p className="text-xs text-muted-foreground font-mono">
               state: {stateHash.slice(0, 16)}…{" "}
               {queriedAt && `at ${new Date(queriedAt).toLocaleTimeString()}`}
             </p>
           )}
-          <div className="grid grid-cols-[2rem_1fr_6rem] gap-2 px-3 py-1.5 text-xs text-zinc-600 uppercase tracking-wider border-b border-zinc-800">
+          <div className="grid grid-cols-[2rem_1fr_6rem] gap-2 px-3 py-1.5 text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
             <span>#</span><span>Record ID</span><span>Score</span>
           </div>
           {results.map((r, i) => (
             <div
               key={r.id}
-              className="grid grid-cols-[2rem_1fr_6rem] gap-2 items-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm"
+              className="grid grid-cols-[2rem_1fr_6rem] gap-2 items-center rounded-lg border border-border bg-card px-3 py-2 text-sm"
             >
-              <span className="text-zinc-600 font-mono text-xs">{i + 1}</span>
-              <span className="font-mono text-zinc-200">#{r.id}</span>
-              <span className="font-mono text-xs text-zinc-400">
+              <span className="text-muted-foreground font-mono text-xs">{i + 1}</span>
+              <span className="font-mono text-card-foreground">#{r.id}</span>
+              <span className="font-mono text-xs text-muted-foreground">
                 {r.score.toFixed(6)}
               </span>
             </div>

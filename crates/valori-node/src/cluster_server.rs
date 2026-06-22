@@ -19,12 +19,12 @@
 //! this router makes a cluster node *usable* end to end, not feature-equal
 //! with standalone.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use tower_http::cors::{CorsLayer, Any};
 use serde::{Deserialize, Serialize};
@@ -40,9 +40,69 @@ use valori_kernel::types::id::{NodeId, RecordId};
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
+use crate::api_keys::{ApiScope, AuthState, KeyStore, required_scope};
+use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
+use valori_kernel::crypto::KeyVault;
 use crate::cluster::ClusterHandle;
 use crate::cluster_api::cluster_router;
+use crate::engine::NamespaceRegistry;
+use crate::errors::EngineError;
 use crate::events::event_log::EventLogWriter;
+use axum::extract::Extension;
+use axum::middleware::Next;
+use axum::extract::Request as AxumRequest;
+use axum::http::header::AUTHORIZATION;
+
+/// Startup readiness gate (fixes the partial-state-on-restart bug, B13).
+///
+/// On restart a node restores its state machine to the last persisted snapshot
+/// index and then replays the log forward to catch up. Until that replay
+/// reaches the committed index the node knew at boot, its local state is only
+/// partially reconstructed. Serving reads in that window returns partial state.
+///
+/// This gate refuses local reads until apply has caught up to `target`. It is
+/// startup-only: once satisfied it latches open and never gates again, so a
+/// steady-state node keeps the documented "Local reads may lag slightly"
+/// semantics. A fresh node (`target == 0`) is ready immediately.
+struct ReadinessGate {
+    target: u64,
+    ready: std::sync::atomic::AtomicBool,
+}
+
+impl ReadinessGate {
+    fn new(target: u64) -> Self {
+        Self {
+            target,
+            ready: std::sync::atomic::AtomicBool::new(target == 0),
+        }
+    }
+
+    /// `Ok(())` once the node has replayed up to the committed index it knew at
+    /// boot; otherwise a 503 telling the caller to retry shortly.
+    fn check(&self, raft: &Raft) -> Result<(), Response> {
+        let applied = raft.metrics().borrow().last_applied.map_or(0, |l| l.index);
+        self.check_applied(applied)
+    }
+
+    /// Pure readiness decision for a given applied index. Latches open: once
+    /// caught up, all later calls return `Ok` regardless of `applied` (a
+    /// steady-state node may legitimately lag a few entries behind committed).
+    fn check_applied(&self, applied: u64) -> Result<(), Response> {
+        use std::sync::atomic::Ordering;
+        if self.ready.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        if applied >= self.target {
+            self.ready.store(true, Ordering::Relaxed);
+            Ok(())
+        } else {
+            Err(read_unavailable(format!(
+                "node catching up after restart: applied {applied} < startup-committed {} — retry shortly",
+                self.target
+            )))
+        }
+    }
+}
 
 #[derive(Clone)]
 struct DataPlaneState {
@@ -53,6 +113,16 @@ struct DataPlaneState {
     http: reqwest::Client,
     /// Path to this node's events.log file — used by /v1/proof/event-log.
     event_log_path: Option<std::path::PathBuf>,
+    /// Startup readiness gate (B13). Shared; cheap to clone.
+    readiness: Arc<ReadinessGate>,
+    /// Local namespace registry — maps collection names to NamespaceIds.
+    /// Not Raft-replicated; reconstructed from inserts on restart if needed.
+    /// For multi-node clusters this means namespace names are node-local
+    /// (a follow-up will replicate them via KernelEvent::CreateNamespace).
+    namespaces: Arc<Mutex<NamespaceRegistry>>,
+    /// Phase 3.6: per-node AES-256-GCM vault. DEKs are not Raft-replicated;
+    /// each node holds only the keys for records it encrypted.
+    vault: Arc<dyn KeyVault + Send + Sync>,
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -100,10 +170,58 @@ fn make_cors_layer() -> Option<CorsLayer> {
     Some(layer)
 }
 
+async fn cluster_auth_guard(
+    Extension(auth): Extension<Arc<AuthState>>,
+    req: AxumRequest,
+    next: Next,
+) -> Result<axum::response::Response, StatusCode> {
+    if !auth.has_any_auth() {
+        return Ok(next.run(req).await);
+    }
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+    let required = required_scope(&method, &path);
+
+    let bearer = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let Some(token) = bearer else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    if let Some(record) = auth.key_store.lookup(token) {
+        if record.scope.satisfies(&required) {
+            return Ok(next.run(req).await);
+        }
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if let Some(ref legacy) = auth.legacy_token {
+        if token == legacy {
+            return Ok(next.run(req).await);
+        }
+    }
+
+    Err(StatusCode::UNAUTHORIZED)
+}
+
 /// The full router a cluster node serves: data plane + management plane.
 pub fn build_cluster_router(
     handle: &ClusterHandle,
     audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
+) -> Router {
+    build_cluster_router_with_keys(handle, audit, None, Arc::new(KeyStore::new(None)))
+}
+
+/// Cluster router with Phase 3.5 key store and optional legacy token.
+pub fn build_cluster_router_with_keys(
+    handle: &ClusterHandle,
+    audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
+    auth_token: Option<String>,
+    key_store: Arc<KeyStore>,
 ) -> Router {
     let raft = Arc::new(handle.raft.clone());
     let event_log_path = audit.as_ref().map(|a| {
@@ -114,7 +232,15 @@ pub fn build_cluster_router(
         sm: handle.state_machine.clone(),
         http: reqwest::Client::new(),
         event_log_path,
+        readiness: Arc::new(ReadinessGate::new(handle.startup_committed_index)),
+        namespaces: Arc::new(Mutex::new(NamespaceRegistry::new())),
+        vault: {
+            use crate::crypto_vault::AesGcmVault;
+            Arc::new(AesGcmVault::in_memory())
+        },
     };
+
+    let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
 
     let mut router = Router::new()
         .route("/records", post(insert_record))
@@ -124,6 +250,8 @@ pub fn build_cluster_router(
         .route("/v1/delete", post(delete_record))
         .route("/v1/soft-delete", post(soft_delete_record))
         .route("/v1/vectors/batch_insert", post(batch_insert))
+        .route("/v1/namespaces", post(create_collection_handler).get(list_collections_handler))
+        .route("/v1/namespaces/:name", delete(drop_collection_handler))
         .route("/v1/proof/state", get(state_proof))
         .route("/v1/proof/event-log", get(event_log_proof))
         .route("/v1/cluster/proof", get(cluster_proof))
@@ -131,8 +259,20 @@ pub fn build_cluster_router(
         .route("/graph/node/:id", get(get_graph_node))
         .route("/graph/edge", post(create_graph_edge))
         .route("/graph/edges/:id", get(get_graph_edges))
+        .route("/graph/subgraph", get(get_graph_subgraph))
+        .route("/v1/graphrag", post(cluster_graphrag))
+        .route("/v1/keys", post(cluster_create_key).get(cluster_list_keys))
+        .route("/v1/keys/:id", delete(cluster_revoke_key))
+        // Phase 3.6: Crypto-shredding
+        .route("/v1/records/encrypted", post(cluster_insert_encrypted))
+        .route("/v1/crypto/shred/:key_id", delete(cluster_shred_key))
+        .route("/v1/crypto/status/:key_id", get(cluster_crypto_status))
+        // Index config (Phase 3.13)
+        .route("/v1/index/config", axum::routing::get(cluster_index_config))
         .with_state(state)
-        .merge(cluster_router(raft, audit));
+        .merge(cluster_router(raft, audit))
+        .layer(axum::middleware::from_fn(cluster_auth_guard))
+        .layer(Extension(auth.clone()));
     if let Some(cors) = make_cors_layer() {
         router = router.layer(cors);
     }
@@ -141,6 +281,58 @@ pub fn build_cluster_router(
 
 async fn metrics() -> String {
     crate::telemetry::get_metrics()
+}
+
+// ── Collection (namespace) management ────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateCollectionRequest { name: String }
+
+#[derive(Serialize)]
+struct CreateCollectionResponse { name: String, id: u16, created: bool }
+
+#[derive(Serialize)]
+struct CollectionInfo { name: String, id: u16 }
+
+#[derive(Serialize)]
+struct ListCollectionsResponse { collections: Vec<CollectionInfo> }
+
+async fn create_collection_handler(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<CreateCollectionRequest>,
+) -> Result<Json<CreateCollectionResponse>, EngineError> {
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
+    }
+    let mut reg = s.namespaces.lock().unwrap();
+    let already_exists = reg.map.contains_key(&name) || name == "default";
+    let id = reg.create(&name)?;
+    Ok(Json(CreateCollectionResponse { name, id, created: !already_exists }))
+}
+
+async fn list_collections_handler(
+    State(s): State<DataPlaneState>,
+) -> Json<ListCollectionsResponse> {
+    let reg = s.namespaces.lock().unwrap();
+    let collections = reg.list().into_iter()
+        .map(|(name, id)| CollectionInfo { name, id })
+        .collect();
+    Json(ListCollectionsResponse { collections })
+}
+
+async fn drop_collection_handler(
+    State(s): State<DataPlaneState>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, EngineError> {
+    if name == "default" {
+        return Err(EngineError::InvalidInput("the 'default' collection cannot be dropped".into()));
+    }
+    let mut reg = s.namespaces.lock().unwrap();
+    reg.drop_collection(&name).ok_or_else(|| {
+        EngineError::InvalidInput(format!("collection '{name}' not found"))
+    })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn health(State(state): State<DataPlaneState>) -> Response {
@@ -324,6 +516,12 @@ async fn search(
     State(state): State<DataPlaneState>,
     Json(req): Json<SearchRequest>,
 ) -> Response {
+    // Startup readiness gate (B13): never serve from a state machine that is
+    // still replaying its log back up to the committed index known at boot.
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
+
     let query = match to_fxp(&req.query) {
         Ok(v) => v,
         Err(e) => {
@@ -502,6 +700,10 @@ async fn soft_delete_record(
 #[derive(Deserialize)]
 struct BatchInsertRequest {
     batch: Vec<Vec<f32>>,
+    /// Per-vector metadata strings (UTF-8). Forwarded into the committed
+    /// `AutoInsertRecord` event and therefore included in the BLAKE3 audit chain.
+    #[serde(default)]
+    metadata: Option<Vec<Option<String>>>,
 }
 
 async fn batch_insert(
@@ -519,10 +721,15 @@ async fn batch_insert(
             }
         };
 
+        let meta_bytes = req.metadata.as_ref()
+            .and_then(|m| m.get(ids.len()))
+            .and_then(|s| s.as_ref())
+            .map(|s| s.as_bytes().to_vec());
+
         match state
             .raft
             .client_write(ClientRequest {
-                event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
+                event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: 0 },
                 request_id: None,
                 schema_version: CURRENT_SCHEMA_VERSION,
             })
@@ -657,6 +864,9 @@ async fn get_graph_node(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
 ) -> Response {
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
     let result = state
         .sm
         .with_state(|s| {
@@ -734,6 +944,9 @@ async fn get_graph_edges(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
 ) -> Response {
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
     let edges: Option<Vec<serde_json::Value>> = state
         .sm
         .with_state(|s| {
@@ -758,5 +971,331 @@ async fn get_graph_edges(
             Json(serde_json::json!({ "error": format!("node {id} not found") })),
         )
             .into_response(),
+    }
+}
+
+// ── Graph — BFS subgraph ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SubgraphQuery {
+    root: u32,
+    #[serde(default = "default_subgraph_depth")]
+    depth: u32,
+}
+fn default_subgraph_depth() -> u32 { 2 }
+
+async fn get_graph_subgraph(
+    State(state): State<DataPlaneState>,
+    axum::extract::Query(q): axum::extract::Query<SubgraphQuery>,
+) -> Response {
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
+
+    let root = q.root;
+    let depth = q.depth;
+
+    let result = state
+        .sm
+        .with_state(move |s| {
+            let (nodes_out, edges_out) = crate::graph_rag::expand_subgraph(s, &[root], depth);
+            serde_json::json!({ "nodes": nodes_out, "edges": edges_out })
+        })
+        .await;
+
+    (StatusCode::OK, Json(result)).into_response()
+}
+
+// ── Phase 3.15: native GraphRAG (cluster) — KNN + subgraph in one snapshot ────
+
+#[derive(serde::Deserialize)]
+struct ClusterGraphRagRequest {
+    query_vector: Vec<f32>,
+    k: usize,
+    #[serde(default = "default_subgraph_depth")]
+    depth: u32,
+    #[serde(default)]
+    consistency: Consistency,
+}
+
+async fn cluster_graphrag(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<ClusterGraphRagRequest>,
+) -> Response {
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
+
+    let query = match to_fxp(&req.query_vector) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response();
+        }
+    };
+
+    // Linearizable by default: establish a read index so the local snapshot
+    // reflects every write committed before this GraphRAG read began.
+    if req.consistency == Consistency::Linearizable {
+        if let Err(resp) = ensure_read_consistency(&state.raft, &state.http).await {
+            return resp;
+        }
+    }
+
+    let k = req.k.max(1);
+    let depth = req.depth;
+
+    let payload = state
+        .sm
+        .with_state(move |s| {
+            let mut buf = vec![KernelSearchResult::default(); k];
+            let n = s.search_l2(&query, &mut buf, None);
+            let hits: Vec<(u32, i64)> =
+                buf[..n].iter().map(|r| (r.id.0, r.score.0 as i64)).collect();
+
+            let record_ids: Vec<u32> = hits.iter().map(|(id, _)| *id).collect();
+            let seed_map = crate::graph_rag::resolve_seed_nodes(s, &record_ids);
+
+            let mut seeds: Vec<u32> = Vec::new();
+            let mut hits_out: Vec<serde_json::Value> = Vec::new();
+            for (record_id, score) in &hits {
+                let node_id = seed_map.get(record_id).copied();
+                if let Some(nid) = node_id {
+                    seeds.push(nid);
+                }
+                hits_out.push(serde_json::json!({
+                    "memory_id": format!("rec:{record_id}"),
+                    "record_id": record_id,
+                    "score": score,
+                    "node_id": node_id,
+                }));
+            }
+
+            let (nodes, edges) = crate::graph_rag::expand_subgraph(s, &seeds, depth);
+            serde_json::json!({
+                "hits": hits_out,
+                "seed_nodes": seeds,
+                "subgraph": { "nodes": nodes, "edges": edges },
+            })
+        })
+        .await;
+
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
+// ── Phase 3.5: API key management (cluster) ───────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ClusterCreateKeyRequest {
+    #[serde(default = "default_cluster_scope")]
+    scope: ApiScope,
+    collection: Option<String>,
+    description: Option<String>,
+}
+
+fn default_cluster_scope() -> ApiScope { ApiScope::ReadWrite }
+
+async fn cluster_create_key(
+    Extension(auth): Extension<Arc<AuthState>>,
+    Json(req): Json<ClusterCreateKeyRequest>,
+) -> impl axum::response::IntoResponse {
+    let created = auth.key_store.create(req.scope, req.collection, req.description);
+    (StatusCode::CREATED, Json(created))
+}
+
+async fn cluster_list_keys(
+    Extension(auth): Extension<Arc<AuthState>>,
+) -> impl axum::response::IntoResponse {
+    let keys = auth.key_store.list();
+    Json(serde_json::json!({ "keys": keys }))
+}
+
+async fn cluster_revoke_key(
+    Extension(auth): Extension<Arc<AuthState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    if auth.key_store.revoke(&id) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// ── Phase 3.6: Crypto-shredding ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ClusterInsertEncryptedRequest {
+    payload: String,
+    tag: Option<u64>,
+    collection: Option<String>,
+    key_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ClusterInsertEncryptedResponse {
+    id: u32,
+    key_id: String,
+    log_index: u64,
+}
+
+async fn cluster_insert_encrypted(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<ClusterInsertEncryptedRequest>,
+) -> Response {
+    use base64::Engine as _;
+    let plaintext = match base64::engine::general_purpose::STANDARD.decode(&req.payload) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+
+    let key_id: [u8; 16] = if let Some(ref hex) = req.key_id {
+        match hex_to_key_id(hex) {
+            Some(k) => k,
+            None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+        }
+    } else {
+        new_key_id()
+    };
+
+    // Encrypt on this node's vault BEFORE submitting to Raft.
+    let ciphertext = match state.vault.encrypt(key_id, &plaintext) {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:?}")}))).into_response(),
+    };
+
+    let ns = if let Some(ref coll) = req.collection {
+        let reg = state.namespaces.lock().unwrap();
+        match reg.resolve(Some(coll.as_str())) {
+            Some(id) => id,
+            None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Collection not found"}))).into_response(),
+        }
+    } else {
+        valori_kernel::types::id::DEFAULT_NS.0
+    };
+
+    raft_write(
+        &state.raft,
+        ClientRequest {
+            event: KernelEvent::AutoInsertRecordEncrypted {
+                key_id,
+                ciphertext,
+                namespace_id: ns,
+                tag: req.tag.unwrap_or(0),
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        },
+        move |resp| {
+            (StatusCode::CREATED, Json(ClusterInsertEncryptedResponse {
+                id: resp.allocated_record_id.unwrap_or(0),
+                key_id: key_id_to_hex(&key_id),
+                log_index: resp.log_index,
+            })).into_response()
+        },
+    )
+    .await
+}
+
+async fn cluster_shred_key(
+    State(state): State<DataPlaneState>,
+    Path(key_id_hex): Path<String>,
+) -> Response {
+    let key_id = match hex_to_key_id(&key_id_hex) {
+        Some(k) => k,
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+    };
+
+    // Shred the vault key locally FIRST (ensures ciphertext is unrecoverable).
+    if let Err(e) = state.vault.shred(key_id) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:?}")}))).into_response();
+    }
+
+    // Propagate FLAG_SHREDDED to all replicas via Raft.
+    raft_write(
+        &state.raft,
+        ClientRequest {
+            event: KernelEvent::ShredKey { key_id },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        },
+        move |_resp| {
+            (StatusCode::OK, Json(serde_json::json!({"key_id": key_id_hex, "shredded": true}))).into_response()
+        },
+    )
+    .await
+}
+
+async fn cluster_crypto_status(
+    State(state): State<DataPlaneState>,
+    Path(key_id_hex): Path<String>,
+) -> Response {
+    let key_id = match hex_to_key_id(&key_id_hex) {
+        Some(k) => k,
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+    };
+    let exists = state.vault.key_exists(&key_id);
+    (StatusCode::OK, Json(serde_json::json!({"key_id": key_id_hex, "exists": exists}))).into_response()
+}
+
+// ── Phase 3.13: index config ──────────────────────────────────────────────────
+
+async fn cluster_index_config() -> Response {
+    // In cluster mode the data plane always uses KernelState's brute-force
+    // search path for consistency. HNSW is a standalone-node feature.
+    (StatusCode::OK, Json(serde_json::json!({
+        "index_type": "brute_force",
+        "hnsw": null,
+        "note": "cluster mode uses kernel brute-force search for linearizable consistency",
+    }))).into_response()
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::ReadinessGate;
+
+    /// A fresh node (target == 0) must be ready immediately without any apply.
+    #[test]
+    fn gate_target_zero_is_immediately_ready() {
+        let gate = ReadinessGate::new(0);
+        assert!(gate.check_applied(0).is_ok(), "target=0 should be ready at apply=0");
+        assert!(gate.check_applied(5).is_ok(), "target=0 should stay ready");
+    }
+
+    /// Below the target the gate must return an Err (503) response.
+    #[test]
+    fn gate_blocks_below_target() {
+        let gate = ReadinessGate::new(10);
+        assert!(gate.check_applied(0).is_err(),  "apply=0  < target=10 → not ready");
+        assert!(gate.check_applied(9).is_err(),  "apply=9  < target=10 → not ready");
+    }
+
+    /// Exactly at the target the gate must flip open and return Ok.
+    #[test]
+    fn gate_opens_at_target() {
+        let gate = ReadinessGate::new(10);
+        assert!(gate.check_applied(10).is_ok(), "apply=10 == target=10 → ready");
+    }
+
+    /// After the gate has latched open once, all subsequent calls return Ok
+    /// regardless of the applied index — steady-state nodes don't regress.
+    #[test]
+    fn gate_latches_open_permanently() {
+        let gate = ReadinessGate::new(5);
+        // Trip the latch.
+        assert!(gate.check_applied(5).is_ok());
+        // Simulate a momentarily lower applied index (shouldn't happen in practice
+        // but the gate must still return Ok once latched).
+        assert!(gate.check_applied(0).is_ok(), "latch must not re-close");
+        assert!(gate.check_applied(100).is_ok(), "latch open forever");
+    }
+
+    /// The latch is shared-state: once opened by one caller, the next caller
+    /// sees it open too (the fast-path `self.ready.load` branch).
+    #[test]
+    fn gate_fast_path_after_latch() {
+        let gate = ReadinessGate::new(3);
+        gate.check_applied(3).ok(); // open latch
+        // Second call must hit the fast-path (ready == true) and return Ok.
+        assert!(gate.check_applied(0).is_ok(), "fast-path must bypass target check");
     }
 }

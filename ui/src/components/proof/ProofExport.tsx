@@ -29,7 +29,7 @@ export function ProofExport({ hash, chainHeight }: Props) {
     <button
       onClick={download}
       disabled={!hash}
-      className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      className="rounded-md border border-input px-3 py-1.5 text-xs text-accent-foreground hover:bg-accent hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
     >
       Export proof JSON
     </button>

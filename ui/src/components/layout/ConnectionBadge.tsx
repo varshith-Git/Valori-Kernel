@@ -31,8 +31,8 @@ export function ConnectionBadge() {
       <span className={`flex items-center gap-1.5 text-xs ${textColor}`}>
         <span className={`h-2 w-2 rounded-full ${dotColor}`} />
         {isLeader ? "leader" : "follower"}
-        <span className="text-zinc-600">·</span>
-        <span className="text-zinc-500">node-{nodeId} · {members.length} nodes</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-muted-foreground">node-{nodeId} · {members.length} nodes</span>
       </span>
     );
   }
@@ -41,8 +41,8 @@ export function ConnectionBadge() {
     <span className={`flex items-center gap-1.5 text-xs ${textColor}`}>
       <span className={`h-2 w-2 rounded-full ${dotColor}`} />
       {status ?? "connected"}
-      <span className="text-zinc-600">·</span>
-      <span className="text-zinc-500">standalone</span>
+      <span className="text-muted-foreground">·</span>
+      <span className="text-muted-foreground">standalone</span>
     </span>
   );
 }

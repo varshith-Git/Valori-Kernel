@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API = process.env.VALORI_API_URL ?? "http://localhost:3000";
+import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 // Accepts: { batch: number[][], collection?: string }
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     };
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${API}/v1/vectors/batch_insert`, {
+    const res = await fetch(`${getApiUrl()}/v1/vectors/batch_insert`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),

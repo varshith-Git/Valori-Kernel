@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const API = process.env.VALORI_API_URL ?? "http://localhost:3000";
+import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 export async function GET() {
@@ -8,7 +8,7 @@ export async function GET() {
     const headers: Record<string, string> = {};
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${API}/v1/cluster/status`, {
+    const res = await fetch(`${getApiUrl()}/v1/cluster/status`, {
       headers,
       cache: "no-store",
     });

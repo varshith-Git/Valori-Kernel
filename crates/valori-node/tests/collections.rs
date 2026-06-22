@@ -9,7 +9,7 @@ use valori_node::server::{build_router, SharedEngine};
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 fn cfg() -> NodeConfig {
@@ -26,7 +26,7 @@ fn cfg() -> NodeConfig {
 }
 
 fn make_shared() -> SharedEngine {
-    Arc::new(Mutex::new(Engine::new(&cfg())))
+    Arc::new(RwLock::new(Engine::new(&cfg())))
 }
 
 fn vec4(x: f32) -> serde_json::Value {
@@ -140,7 +140,7 @@ async fn rejected_collection_does_not_mutate_state() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(shared.lock().await.state.record_count(), 0);
+    assert_eq!(shared.read().await.state.record_count(), 0);
 }
 
 // ── HTTP: collection CRUD ─────────────────────────────────────────────────────
@@ -288,8 +288,8 @@ async fn snapshot_preserves_collections_and_data() {
     let expected_id = ins["id"].as_u64().unwrap();
 
     // round-trip through snapshot
-    let snap_bytes = shared.lock().await.snapshot().unwrap();
-    shared.lock().await.restore(&snap_bytes).unwrap();
+    let snap_bytes = shared.read().await.snapshot().unwrap();
+    shared.write().await.restore(&snap_bytes).unwrap();
 
     // after restore: collection still exists and record still found
     let (s, hits) = post_json(shared, "/search",

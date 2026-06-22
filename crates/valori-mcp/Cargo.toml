@@ -1,0 +1,33 @@
+[package]
+name        = "valori-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Model Context Protocol server for Valori — gives any agent verifiable, deterministic long-term memory"
+
+[lib]
+name = "valori_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "valori-mcp"
+path = "src/main.rs"
+
+[dependencies]
+tokio       = { version = "1.0", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+serde       = { version = "1.0", features = ["derive"] }
+serde_json  = "1.0"
+# default-features = false keeps openssl out (cargo-deny bans it); rustls only.
+reqwest     = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+anyhow      = "1.0"
+blake3      = "1.5"
+async-trait = "0.1"
+clap        = { version = "4.5", features = ["derive", "env"] }
+
+[dev-dependencies]
+# Integration tests spin up a real in-process valori-node and point the
+# HTTP backend at it — the receipt path is proven against the real proof
+# endpoints, not a mock.
+valori-node = { workspace = true }
+axum        = "0.7"
+tempfile    = "3"

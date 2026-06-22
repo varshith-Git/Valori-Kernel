@@ -12,17 +12,17 @@ export function NodeCard({ member, isLeader, isThisNode }: Props) {
       className={`rounded-xl border p-5 flex flex-col gap-3 transition-colors ${
         isLeader
           ? "border-emerald-800 bg-emerald-950/30"
-          : "border-zinc-800 bg-zinc-900"
+          : "border-border bg-card"
       }`}
     >
       {/* Header row */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-lg font-semibold text-white">
+          <span className="font-mono text-lg font-semibold text-foreground">
             node-{member.id}
           </span>
           {isThisNode && (
-            <span className="text-xs rounded px-1.5 py-0.5 bg-zinc-800 text-zinc-400 border border-zinc-700">
+            <span className="text-xs rounded px-1.5 py-0.5 bg-accent text-muted-foreground border border-input">
               this node
             </span>
           )}
@@ -34,7 +34,7 @@ export function NodeCard({ member, isLeader, isThisNode }: Props) {
             </span>
           )}
           {member.voter ? (
-            <span className="text-xs rounded px-2 py-0.5 bg-zinc-800 text-zinc-400 border border-zinc-700">
+            <span className="text-xs rounded px-2 py-0.5 bg-accent text-muted-foreground border border-input">
               voter
             </span>
           ) : (
@@ -48,12 +48,12 @@ export function NodeCard({ member, isLeader, isThisNode }: Props) {
       {/* Addresses */}
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-widest text-zinc-600 w-10">API</span>
-          <code className="text-xs font-mono text-zinc-300">{member.api_addr}</code>
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground w-10">API</span>
+          <code className="text-xs font-mono text-accent-foreground">{member.api_addr}</code>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-widest text-zinc-600 w-10">Raft</span>
-          <code className="text-xs font-mono text-zinc-500">{member.raft_addr}</code>
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground w-10">Raft</span>
+          <code className="text-xs font-mono text-muted-foreground">{member.raft_addr}</code>
         </div>
       </div>
     </div>

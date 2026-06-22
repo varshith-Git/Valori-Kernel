@@ -3,6 +3,8 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CodePanel } from "@/components/codegen/CodePanel";
+import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 
 export type SearchMode =
   | "semantic"
@@ -42,6 +44,16 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
+  // SDK code generator state
+  const [queryVec, setQueryVec] = useState<number[] | null>(null);
+  const [queryText, setQueryText] = useState<string | undefined>(undefined);
+  const [codeResult, setCodeResult] = useState<SearchResult | null>(null);
+  const { config: embedCfg } = useEmbeddingConfig();
+
+  // Text-first semantic sub-mode: "text" embeds on the fly, "vector" is raw floats
+  const [semanticSubMode, setSemanticSubMode] = useState<"text" | "vector">("text");
+  const [busyLabel, setBusyLabel] = useState("Searching…");
+
   // Regex + ID filter applied client-side on semantic results
   const [regexFilter, setRegexFilter] = useState("");
   const [idQuery, setIdQuery] = useState("");
@@ -53,16 +65,48 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
     setBusy(true);
     try {
       if (mode === "semantic" || mode === "hybrid") {
-        const parsed = query
-          .split(",")
-          .map((s) => parseFloat(s.trim()))
-          .filter((n) => !isNaN(n));
-        if (parsed.length === 0) throw new Error("Enter comma-separated floats");
+        let searchVec: number[];
+
+        if (mode === "semantic" && semanticSubMode === "text") {
+          // Step 1: embed the text query
+          if (!query.trim()) throw new Error("Enter a query");
+          setBusyLabel("Embedding…");
+          const embedRes = await fetch("/api/embed-query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: query,
+              provider: embedCfg.provider,
+              model: embedCfg.model,
+              apiKey: embedCfg.apiKey,
+              endpoint: embedCfg.endpoint,
+            }),
+          });
+          if (!embedRes.ok) {
+            const err = await embedRes.json().catch(() => ({})) as { error?: string };
+            throw new Error(err.error ?? `Embedding failed (${embedRes.status})`);
+          }
+          const { vector } = await embedRes.json() as { vector: number[] };
+          searchVec = vector;
+          setQueryText(query); // save text for code gen
+          setBusyLabel("Searching…");
+        } else {
+          // Raw vector input
+          const parsed = query
+            .split(",")
+            .map((s) => parseFloat(s.trim()))
+            .filter((n) => !isNaN(n));
+          if (parsed.length === 0) throw new Error("Enter comma-separated floats");
+          searchVec = parsed;
+          setQueryText(undefined);
+          setBusyLabel("Searching…");
+        }
+
         const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            query: parsed,
+            query: searchVec,
             k,
             collection: namespace,
           }),
@@ -71,6 +115,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         const data = await res.json();
         setResults(data.results ?? []);
         setStateHash(data.state_hash ?? null);
+        setQueryVec(searchVec); // store for SDK code gen
       } else if (mode === "id") {
         // Search all and filter to that ID client-side
         const idNum = parseInt(idQuery, 10);
@@ -132,7 +177,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
   return (
     <div className="flex flex-col gap-5">
       {/* Mode selector */}
-      <div className="flex items-center gap-1 rounded-lg bg-zinc-900 border border-zinc-800 p-1 w-fit">
+      <div className="flex items-center gap-1 rounded-lg bg-card border border-border p-1 w-fit">
         {MODES.map((m) => (
           <button
             key={m.key}
@@ -143,8 +188,8 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
             }}
             className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
               mode === m.key
-                ? "bg-zinc-700 text-white"
-                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:text-accent-foreground hover:bg-accent"
             }`}
           >
             <span className="font-mono w-3 text-center">{m.icon}</span>
@@ -154,7 +199,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
       </div>
 
       {/* Input area */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 flex flex-col gap-4">
+      <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">
         {mode === "semantic" && (
           <SemanticInput
             query={query}
@@ -164,6 +209,10 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
             dim={dim}
             onRun={run}
             busy={busy}
+            busyLabel={busyLabel}
+            subMode={semanticSubMode}
+            setSubMode={setSemanticSubMode}
+            embedLabel={`${embedCfg.provider} / ${embedCfg.model}`}
           />
         )}
         {mode === "text" && <TextStub />}
@@ -215,57 +264,119 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
           stateHash={stateHash}
           onDelete={onDelete ? handleDelete : undefined}
           deletingId={deletingId}
+          onCode={queryVec ? (r) => setCodeResult(r) : undefined}
+        />
+      )}
+
+      {/* SDK code panel */}
+      {codeResult && queryVec && (
+        <CodePanel
+          isOpen
+          onClose={() => setCodeResult(null)}
+          queryVector={queryVec}
+          queryText={queryText}
+          k={k}
+          collection={namespace}
+          result={codeResult}
+          embedProvider={embedCfg.provider}
+          embedModel={embedCfg.model}
+          embedEndpoint={embedCfg.endpoint}
         />
       )}
     </div>
   );
 }
 
-// ── Mode sub-components ────────────────────────────────────────────────────────
+// -- Mode sub-components --------------------------------------------------------
 
 function SemanticInput({
-  query, setQuery, k, setK, dim, onRun, busy,
+  query, setQuery, k, setK, dim, onRun, busy, busyLabel, subMode, setSubMode, embedLabel,
 }: {
   query: string; setQuery: (v: string) => void;
   k: number; setK: (v: number) => void;
   dim: number | null; onRun: () => void; busy: boolean;
+  busyLabel: string;
+  subMode: "text" | "vector";
+  setSubMode: (m: "text" | "vector") => void;
+  embedLabel: string;
 }) {
   return (
     <>
-      <div>
-        <label className="text-xs text-zinc-500 mb-1 block">
-          Query vector (comma-separated floats
-          {dim ? `, dim=${dim}` : ""})
-        </label>
-        <textarea
-          rows={3}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun();
-          }}
-          placeholder={`0.1, 0.2, 0.3${dim ? ` ... (${dim} values)` : ""}`}
-          className="w-full rounded-lg bg-zinc-800 border border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-600 px-3 py-2 font-mono resize-none focus:outline-none focus:border-zinc-500"
-        />
-        <p className="text-[10px] text-zinc-600 mt-1">⌘↵ to search</p>
+      {/* Sub-mode toggle */}
+      <div className="flex items-center gap-1 rounded-md bg-accent border border-input p-0.5 w-fit">
+        <button
+          onClick={() => setSubMode("text")}
+          className={`px-3 py-1 text-xs rounded transition-colors ${
+            subMode === "text"
+              ? "bg-zinc-600 text-foreground"
+              : "text-muted-foreground hover:text-accent-foreground"
+          }`}
+        >
+          Text query
+        </button>
+        <button
+          onClick={() => setSubMode("vector")}
+          className={`px-3 py-1 text-xs rounded transition-colors font-mono ${
+            subMode === "vector"
+              ? "bg-zinc-600 text-foreground"
+              : "text-muted-foreground hover:text-accent-foreground"
+          }`}
+        >
+          Raw vector
+        </button>
       </div>
+
+      {/* Input */}
+      {subMode === "text" ? (
+        <div>
+          <textarea
+            rows={2}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun();
+            }}
+            placeholder="Ask anything — e.g. what is the refund policy?"
+            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 resize-none focus:outline-none focus:border-zinc-500"
+          />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Will embed with <span className="text-muted-foreground">{embedLabel}</span> · ⌘↵ to search
+          </p>
+        </div>
+      ) : (
+        <div>
+          <textarea
+            rows={3}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun();
+            }}
+            placeholder={`0.1, 0.2, 0.3${dim ? ` ... (${dim} values)` : ""}`}
+            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 font-mono resize-none focus:outline-none focus:border-zinc-500"
+          />
+          <p className="text-[10px] text-muted-foreground mt-1">Comma-separated floats{dim ? ` · ${dim} values` : ""} · ⌘↵ to search</p>
+        </div>
+      )}
+
+      {/* Controls */}
       <div className="flex items-center gap-3">
-        <label className="text-xs text-zinc-500">Top-K</label>
+        <label className="text-xs text-muted-foreground">Top-K</label>
         <Input
           type="number"
           min={1}
           max={200}
           value={k}
           onChange={(e) => setK(Math.min(200, Math.max(1, parseInt(e.target.value) || 10)))}
-          className="w-20 bg-zinc-800 border-zinc-700 text-white h-8 text-sm"
+          className="w-20 bg-accent border-input text-foreground h-8 text-sm"
         />
         <Button
           size="sm"
           disabled={busy || !query.trim()}
           onClick={onRun}
-          className="bg-white text-black hover:bg-zinc-200 h-8"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 h-8"
         >
-          {busy ? "Searching…" : "Search"}
+          {busy ? busyLabel : subMode === "text" ? "Embed & Search" : "Search"}
         </Button>
       </div>
     </>
@@ -292,9 +403,10 @@ function HybridInput({
       <SemanticInput
         query={query} setQuery={setQuery} k={k} setK={setK}
         dim={dim} onRun={onRun} busy={busy}
+        busyLabel="Searching…" subMode="vector" setSubMode={() => {}} embedLabel=""
       />
       <div className="flex items-center gap-3">
-        <label className="text-xs text-zinc-500">Semantic weight</label>
+        <label className="text-xs text-muted-foreground">Semantic weight</label>
         <input
           type="range"
           min={0}
@@ -304,7 +416,7 @@ function HybridInput({
           onChange={(e) => setWeight(parseFloat(e.target.value))}
           className="w-32 accent-white"
         />
-        <span className="text-xs font-mono text-zinc-400">{weight.toFixed(2)}</span>
+        <span className="text-xs font-mono text-muted-foreground">{weight.toFixed(2)}</span>
       </div>
     </>
   );
@@ -319,7 +431,7 @@ function IdInput({
   return (
     <div className="flex items-center gap-3">
       <div className="flex-1">
-        <label className="text-xs text-zinc-500 mb-1 block">Record ID (u32 integer)</label>
+        <label className="text-xs text-muted-foreground mb-1 block">Record ID (u32 integer)</label>
         <Input
           type="number"
           min={0}
@@ -327,14 +439,14 @@ function IdInput({
           value={idQuery}
           onChange={(e) => setIdQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && onRun()}
-          className="bg-zinc-800 border-zinc-700 text-white h-9"
+          className="bg-accent border-input text-foreground h-9"
         />
       </div>
       <Button
         size="sm"
         disabled={busy || !idQuery.trim()}
         onClick={onRun}
-        className="bg-white text-black hover:bg-zinc-200 h-9 self-end"
+        className="bg-primary text-primary-foreground hover:bg-primary/90 h-9 self-end"
       >
         {busy ? "Looking up…" : "Lookup"}
       </Button>
@@ -352,7 +464,7 @@ function RegexInput({
   return (
     <>
       <div>
-        <label className="text-xs text-zinc-500 mb-1 block">
+        <label className="text-xs text-muted-foreground mb-1 block">
           Regex pattern — matched against record IDs
         </label>
         <Input
@@ -360,27 +472,27 @@ function RegexInput({
           value={pattern}
           onChange={(e) => setPattern(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && onRun()}
-          className="bg-zinc-800 border-zinc-700 text-white font-mono h-9"
+          className="bg-accent border-input text-foreground font-mono h-9"
         />
-        <p className="text-[10px] text-zinc-600 mt-1">
+        <p className="text-[10px] text-muted-foreground mt-1">
           Fetches k records via zero-vec search, then filters IDs by pattern
         </p>
       </div>
       <div className="flex items-center gap-3">
-        <label className="text-xs text-zinc-500">Fetch k</label>
+        <label className="text-xs text-muted-foreground">Fetch k</label>
         <Input
           type="number"
           min={1}
           max={1000}
           value={k}
           onChange={(e) => setK(Math.min(1000, Math.max(1, parseInt(e.target.value) || 100)))}
-          className="w-20 bg-zinc-800 border-zinc-700 text-white h-8 text-sm"
+          className="w-20 bg-accent border-input text-foreground h-8 text-sm"
         />
         <Button
           size="sm"
           disabled={busy}
           onClick={onRun}
-          className="bg-white text-black hover:bg-zinc-200 h-8"
+          className="bg-primary text-primary-foreground hover:bg-primary/90 h-8"
         >
           {busy ? "Scanning…" : "Scan & filter"}
         </Button>
@@ -392,28 +504,28 @@ function RegexInput({
 function TextStub() {
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-5 py-5 flex flex-col gap-3">
+      <div className="rounded-lg border border-border bg-background px-5 py-5 flex flex-col gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-600 text-lg">T</span>
-          <p className="text-sm font-medium text-zinc-300">Text search</p>
-          <span className="text-[10px] rounded px-1.5 py-0.5 bg-zinc-800 text-zinc-500 border border-zinc-700">
+          <span className="text-muted-foreground text-lg">T</span>
+          <p className="text-sm font-medium text-accent-foreground">Text search</p>
+          <span className="text-[10px] rounded px-1.5 py-0.5 bg-accent text-muted-foreground border border-input">
             coming soon
           </span>
         </div>
-        <p className="text-xs text-zinc-500 leading-relaxed">
+        <p className="text-xs text-muted-foreground leading-relaxed">
           Text search converts your query into a vector using an embedding model
           before searching. Valori stores float vectors, not raw text.
         </p>
-        <div className="rounded-lg border border-dashed border-zinc-800 p-4">
-          <p className="text-xs text-zinc-600 font-medium mb-2">What&apos;s needed:</p>
-          <ul className="text-xs text-zinc-600 space-y-1 list-disc list-inside">
+        <div className="rounded-lg border border-dashed border-border p-4">
+          <p className="text-xs text-muted-foreground font-medium mb-2">What&apos;s needed:</p>
+          <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
             <li>An embedding API key (OpenAI / Cohere / custom)</li>
             <li>Configure it in Project → Settings → Embedding</li>
             <li>Re-insert records with their text source</li>
           </ul>
         </div>
-        <p className="text-xs text-zinc-600">
-          For now, use <strong className="text-zinc-400">Semantic</strong> mode and
+        <p className="text-xs text-muted-foreground">
+          For now, use <strong className="text-muted-foreground">Semantic</strong> mode and
           paste a pre-computed vector.
         </p>
       </div>
@@ -424,29 +536,29 @@ function TextStub() {
 function MetadataStub() {
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-5 py-5 flex flex-col gap-3">
+      <div className="rounded-lg border border-border bg-background px-5 py-5 flex flex-col gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-600 text-lg">⌗</span>
-          <p className="text-sm font-medium text-zinc-300">Metadata search</p>
-          <span className="text-[10px] rounded px-1.5 py-0.5 bg-zinc-800 text-zinc-500 border border-zinc-700">
+          <span className="text-muted-foreground text-lg">⌗</span>
+          <p className="text-sm font-medium text-accent-foreground">Metadata search</p>
+          <span className="text-[10px] rounded px-1.5 py-0.5 bg-accent text-muted-foreground border border-input">
             coming soon
           </span>
         </div>
-        <p className="text-xs text-zinc-500 leading-relaxed">
+        <p className="text-xs text-muted-foreground leading-relaxed">
           Filter records by key=value metadata fields. Valori&apos;s current record format
           stores float vectors only — a metadata layer is planned for a future release.
         </p>
-        <div className="rounded-lg border border-dashed border-zinc-800 p-4">
-          <p className="text-xs text-zinc-600 font-medium mb-2">Planned fields:</p>
-          <ul className="text-xs text-zinc-600 space-y-1 list-disc list-inside">
+        <div className="rounded-lg border border-dashed border-border p-4">
+          <p className="text-xs text-muted-foreground font-medium mb-2">Planned fields:</p>
+          <ul className="text-xs text-muted-foreground space-y-1 list-disc list-inside">
             <li>Arbitrary key-value string pairs per record</li>
             <li>Filter by exact match, prefix, or range</li>
             <li>Combine with semantic search (pre-filter + ANN)</li>
           </ul>
         </div>
-        <p className="text-xs text-zinc-600">
-          For now, use <strong className="text-zinc-400">#id</strong> to look up
-          specific records or <strong className="text-zinc-400">Regex</strong> to
+        <p className="text-xs text-muted-foreground">
+          For now, use <strong className="text-muted-foreground">#id</strong> to look up
+          specific records or <strong className="text-muted-foreground">Regex</strong> to
           match ID patterns.
         </p>
       </div>
@@ -459,69 +571,82 @@ function ResultsTable({
   stateHash,
   onDelete,
   deletingId,
+  onCode,
 }: {
   results: SearchResult[];
   stateHash: string | null;
   onDelete?: (id: number) => Promise<void>;
   deletingId: number | null;
+  onCode?: (r: SearchResult) => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-zinc-400">
+        <p className="text-sm text-muted-foreground">
           {results.length} result{results.length !== 1 ? "s" : ""}
         </p>
         {stateHash && (
-          <code className="text-[10px] font-mono text-zinc-600 truncate max-w-[260px]">
+          <code className="text-[10px] font-mono text-muted-foreground truncate max-w-[260px]">
             hash: {stateHash.slice(0, 24)}…
           </code>
         )}
       </div>
 
       {results.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-800 py-10 text-center">
-          <p className="text-sm text-zinc-500">No records found</p>
+        <div className="rounded-xl border border-dashed border-border py-10 text-center">
+          <p className="text-sm text-muted-foreground">No records found</p>
         </div>
       ) : (
-        <div className="rounded-xl border border-zinc-800 overflow-hidden">
+        <div className="rounded-xl border border-border overflow-hidden">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-zinc-800 bg-zinc-950">
-                <th className="text-left px-4 py-2.5 text-xs text-zinc-500 font-medium w-24">ID</th>
-                <th className="text-left px-4 py-2.5 text-xs text-zinc-500 font-medium">Score</th>
-                <th className="w-20" />
+              <tr className="border-b border-border bg-background">
+                <th className="text-left px-4 py-2.5 text-xs text-muted-foreground font-medium w-24">ID</th>
+                <th className="text-left px-4 py-2.5 text-xs text-muted-foreground font-medium">Score</th>
+                <th className="w-32" />
               </tr>
             </thead>
             <tbody>
               {results.map((r, i) => (
                 <tr
                   key={r.id}
-                  className={`border-b border-zinc-800/50 last:border-0 ${
-                    i % 2 === 0 ? "bg-zinc-900" : "bg-zinc-900/50"
+                  className={`border-b border-border/50 last:border-0 ${
+                    i % 2 === 0 ? "bg-card" : "bg-card/50"
                   }`}
                 >
-                  <td className="px-4 py-2.5 font-mono text-zinc-300">#{r.id}</td>
+                  <td className="px-4 py-2.5 font-mono text-accent-foreground">#{r.id}</td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-3">
                       <div
                         className="h-1.5 rounded-full bg-emerald-500/60"
                         style={{ width: `${Math.max(4, (r.score * 80))}px` }}
                       />
-                      <span className="font-mono text-xs text-zinc-400">
+                      <span className="font-mono text-xs text-muted-foreground">
                         {r.score.toFixed(4)}
                       </span>
                     </div>
                   </td>
                   <td className="px-4 py-2.5 text-right">
-                    {onDelete && (
-                      <button
-                        onClick={() => onDelete(r.id)}
-                        disabled={deletingId === r.id}
-                        className="text-xs text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
-                      >
-                        {deletingId === r.id ? "…" : "delete"}
-                      </button>
-                    )}
+                    <div className="flex items-center justify-end gap-3">
+                      {onCode && (
+                        <button
+                          onClick={() => onCode(r)}
+                          title="Get Python / TypeScript / curl code for this query"
+                          className="text-[11px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-sky-600 hover:text-sky-300 hover:bg-sky-950/40 transition-all whitespace-nowrap"
+                        >
+                          {"</>"} get code
+                        </button>
+                      )}
+                      {onDelete && (
+                        <button
+                          onClick={() => onDelete(r.id)}
+                          disabled={deletingId === r.id}
+                          className="text-xs text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-40"
+                        >
+                          {deletingId === r.id ? "…" : "delete"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

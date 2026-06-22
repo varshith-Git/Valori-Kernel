@@ -3,6 +3,7 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+@custom-variant light (&:is(.light *));
 
 @theme inline {
   --color-background: var(--background);
@@ -101,7 +102,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --ring: oklch(0.62 0.20 270 / 60%);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -109,12 +110,17 @@
   --chart-5: oklch(0.269 0 0);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.62 0.20 270);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: oklch(0.62 0.20 270 / 60%);
+
+  /* Valori accent — indigo-500 family */
+  --v-accent:       oklch(0.62 0.20 270);
+  --v-accent-muted: oklch(0.62 0.20 270 / 15%);
+  --v-accent-ring:  oklch(0.62 0.20 270 / 50%);
 }
 
 @layer base {
@@ -127,4 +133,74 @@
   html {
     @apply font-sans;
   }
+
+  /* Subtle scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: oklch(1 0 0 / 12%); border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 22%); }
+}
+
+/* Reusable accent utilities */
+.v-accent-text  { color: var(--v-accent); }
+.v-accent-bg    { background: var(--v-accent-muted); }
+.v-accent-ring  { box-shadow: 0 0 0 2px var(--v-accent-ring); }
+.v-accent-border { border-color: var(--v-accent); }
+
+/*
+  Light mode — two things happen:
+  1. Semantic tokens (--background, --foreground, etc.) are overridden.
+  2. The ENTIRE Tailwind zinc palette is remapped so every hardcoded
+     bg-zinc-950 / text-zinc-400 / border-zinc-800 etc. in every
+     component automatically becomes its light-mode equivalent.
+     This means we don't need to touch any individual component file.
+
+  Mapping logic: dark-mode zinc is a near-black→near-white scale.
+  In light mode we flip it: zinc-950 (darkest bg) becomes near-white,
+  zinc-100 (lightest text surface) becomes near-black, etc.
+*/
+.light {
+  /* Semantic tokens */
+  --background: oklch(0.985 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(0.97 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.93 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.93 0 0);
+  --muted-foreground: oklch(0.44 0 0);
+  --accent: oklch(0.93 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.87 0 0);
+  --input: oklch(0.87 0 0);
+  --ring: oklch(0.55 0.20 270 / 50%);
+  --sidebar: oklch(0.96 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.55 0.20 270);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.91 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.87 0 0);
+  --sidebar-ring: oklch(0.55 0.20 270 / 50%);
+
+  --v-accent:       oklch(0.52 0.20 270);
+  --v-accent-muted: oklch(0.52 0.20 270 / 12%);
+  --v-accent-ring:  oklch(0.52 0.20 270 / 40%);
+
+}
+
+/* Light-mode scrollbars */
+.light ::-webkit-scrollbar-thumb         { background: oklch(0 0 0 / 12%); }
+.light ::-webkit-scrollbar-thumb:hover   { background: oklch(0 0 0 / 22%); }
+
+/* Smooth theme transition — colours cross-fade instead of snapping */
+html {
+  transition:
+    background-color 0.25s ease,
+    color 0.15s ease;
 }

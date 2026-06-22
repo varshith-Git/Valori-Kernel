@@ -23,10 +23,10 @@ export default function ClusterPage() {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6 max-w-4xl">
-        <div className="h-7 w-40 animate-pulse rounded bg-zinc-800" />
+        <div className="h-7 w-40 animate-pulse rounded bg-accent" />
         <div className="grid grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-36 animate-pulse rounded-xl bg-zinc-800" />
+            <div key={i} className="h-36 animate-pulse rounded-xl bg-accent" />
           ))}
         </div>
       </div>
@@ -36,7 +36,7 @@ export default function ClusterPage() {
   if (error) {
     return (
       <div className="max-w-2xl">
-        <h1 className="text-xl font-semibold text-white">Cluster Health</h1>
+        <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
         <div className="mt-6 rounded-xl border border-red-900 bg-red-950 p-5">
           <p className="text-sm text-red-400">Backend unreachable</p>
           <p className="mt-1 text-xs text-red-700">{String(error)}</p>
@@ -48,16 +48,16 @@ export default function ClusterPage() {
   if (isStandalone) {
     return (
       <div className="max-w-2xl">
-        <h1 className="text-xl font-semibold text-white">Cluster Health</h1>
-        <div className="mt-6 rounded-xl border border-zinc-800 bg-zinc-900 p-8 text-center">
-          <p className="text-sm text-zinc-400 font-medium">Running in standalone mode</p>
-          <p className="mt-2 text-xs text-zinc-600 max-w-sm mx-auto">
+        <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
+        <div className="mt-6 rounded-xl border border-border bg-card p-8 text-center">
+          <p className="text-sm text-muted-foreground font-medium">Running in standalone mode</p>
+          <p className="mt-2 text-xs text-muted-foreground max-w-sm mx-auto">
             This node is not part of a Raft cluster. To enable cluster mode,
-            set <code className="font-mono bg-zinc-800 px-1 rounded">VALORI_CLUSTER_MEMBERS</code> and{" "}
-            <code className="font-mono bg-zinc-800 px-1 rounded">VALORI_NODE_ID</code> and
+            set <code className="font-mono bg-accent px-1 rounded">VALORI_CLUSTER_MEMBERS</code> and{" "}
+            <code className="font-mono bg-accent px-1 rounded">VALORI_NODE_ID</code> and
             restart.
           </p>
-          <pre className="mt-4 rounded-lg bg-zinc-950 px-5 py-4 text-left text-xs text-zinc-300 font-mono inline-block">
+          <pre className="mt-4 rounded-lg bg-background px-5 py-4 text-left text-xs text-accent-foreground font-mono inline-block">
 {`docker compose -f docker-compose.cluster.yml up -d`}
           </pre>
         </div>
@@ -75,8 +75,8 @@ export default function ClusterPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white">Cluster Health</h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Raft consensus · {members.length} node{members.length !== 1 ? "s" : ""} ·{" "}
             term {term ?? "—"}
           </p>
@@ -100,7 +100,7 @@ export default function ClusterPage() {
             variant="outline"
             size="sm"
             onClick={() => refresh()}
-            className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+            className="border-input text-muted-foreground hover:text-foreground hover:bg-accent"
           >
             Refresh
           </Button>
@@ -130,7 +130,7 @@ export default function ClusterPage() {
 
       {/* Node cards */}
       <div>
-        <h2 className="text-sm font-medium text-zinc-400 mb-3">
+        <h2 className="text-sm font-medium text-muted-foreground mb-3">
           Members ({members.length})
         </h2>
         <div className="grid grid-cols-3 gap-4">
@@ -161,8 +161,8 @@ export default function ClusterPage() {
 
       {/* Standalone hint (shouldn't reach here but safety net) */}
       {members.length === 0 && (
-        <div className="rounded-xl border border-dashed border-zinc-800 py-12 text-center">
-          <p className="text-sm text-zinc-500">No members found in cluster status.</p>
+        <div className="rounded-xl border border-dashed border-border py-12 text-center">
+          <p className="text-sm text-muted-foreground">No members found in cluster status.</p>
         </div>
       )}
     </div>
@@ -183,17 +183,17 @@ function StatCard({
   warn?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-4">
-      <p className="text-[10px] uppercase tracking-widest text-zinc-600">{label}</p>
+    <div className="rounded-lg border border-border bg-card px-4 py-4">
+      <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
       <p
         className={`mt-1.5 font-mono text-xl font-semibold ${
-          highlight ? "text-emerald-400" : warn ? "text-amber-400" : "text-white"
+          highlight ? "text-emerald-400" : warn ? "text-amber-400" : "text-foreground"
         }`}
       >
         {value}
       </p>
       {sub && (
-        <p className={`mt-0.5 text-xs ${warn ? "text-amber-600" : "text-zinc-600"}`}>
+        <p className={`mt-0.5 text-xs ${warn ? "text-amber-600" : "text-muted-foreground"}`}>
           {sub}
         </p>
       )}

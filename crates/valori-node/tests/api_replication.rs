@@ -6,7 +6,7 @@
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -43,12 +43,12 @@ async fn test_replication_stream_endpoint() {
         1
     );
 
-    let state = Arc::new(Mutex::new(engine));
+    let state = Arc::new(RwLock::new(engine));
 
     // ── 3. Start server ───────────────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let app = build_router(state.clone(), None);
+    let app = build_router(state.clone(), None, None);
 
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
@@ -69,7 +69,7 @@ async fn test_replication_stream_endpoint() {
 
     // ── 6. Insert a live record ───────────────────────────────────────────────
     {
-        let mut engine_lock = state.lock().await;
+        let mut engine_lock = state.write().await;
         engine_lock.insert_record_from_f32(&vec).unwrap();
     }
 

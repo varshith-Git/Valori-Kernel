@@ -1,0 +1,6 @@
+{
+  "p50_ms": 1.5,
+  "p99_ms": 8.0,
+  "throughput_rps": 3000,
+  "_note": "Seed baseline from Phase 3.8. Update via: python3 benchmarks/write_regression.py --save-baseline"
+}
