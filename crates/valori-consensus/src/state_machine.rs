@@ -479,7 +479,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     // deterministic because all replicas apply entries in the
                     // same Raft-ordered sequence.
                     let pre_alloc_id: Option<KRecordId> =
-                        if matches!(&req.event, KernelEvent::AutoInsertRecord { .. }) {
+                        if matches!(&req.event, KernelEvent::AutoInsertRecord { .. } | KernelEvent::AutoInsertRecordEncrypted { .. }) {
                             Some(inner.state.next_record_id())
                         } else {
                             None

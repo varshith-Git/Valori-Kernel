@@ -6,7 +6,7 @@ use valori_node::api::{BatchInsertRequest, BatchInsertResponse};
 use axum::{body::Body, http::{Request, StatusCode}};
 use tower::ServiceExt;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tempfile::tempdir;
 
 const DIM: usize = 16;
@@ -28,7 +28,7 @@ async fn test_batch_ingest_success() {
     let config = make_cfg(dir.path());
 
     let engine = Engine::new(&config);
-    let shared_state = Arc::new(Mutex::new(engine));
+    let shared_state = Arc::new(RwLock::new(engine));
     let app = build_router(shared_state, None, None);
 
     let batch = vec![vec![0.1; DIM], vec![0.2; DIM], vec![0.3; DIM]];
@@ -36,7 +36,7 @@ async fn test_batch_ingest_success() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None }).unwrap()))
+        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None }).unwrap()))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();
@@ -53,8 +53,8 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
     let config = make_cfg(dir.path());
 
     let engine = Engine::new(&config);
-    let shared_state = Arc::new(Mutex::new(engine));
-    let app = build_router(shared_state.clone(), None);
+    let shared_state = Arc::new(RwLock::new(engine));
+    let app = build_router(shared_state.clone(), None, None);
 
     // One vector has the wrong dimension — the whole batch must be rejected.
     let batch = vec![
@@ -66,7 +66,7 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None }).unwrap()))
+        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None }).unwrap()))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();
@@ -77,7 +77,7 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
     );
 
     // Nothing should have been inserted.
-    let engine = shared_state.lock().await;
+    let engine = shared_state.read().await;
     assert!(
         engine.search_l2(&vec![0.1; DIM], 1).unwrap().is_empty(),
         "No records should have been inserted after a rejected batch"

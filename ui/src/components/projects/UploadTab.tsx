@@ -1,7 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface Props {
   collection: string;
@@ -10,8 +12,11 @@ interface Props {
 export function UploadTab({ collection }: Props) {
   const [paste, setPaste] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [result, setResult] = useState<{ ids: number[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [provider, setProvider] = useState("transformers");
+  const [model, setModel] = useState("Xenova/bge-base-en-v1.5");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const insert = async (batch: number[][]) => {
@@ -62,17 +67,52 @@ export function UploadTab({ collection }: Props) {
     }
   };
 
+  const ingestDocument = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("collection", collection);
+      formData.append("provider", provider);
+      formData.append("model", model);
+      formData.append("chunkSize", "500");
+      formData.append("chunkOverlap", "50");
+
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error ?? `Status ${res.status}`);
+      }
+      const data = await res.json();
+      setResult({ ids: data.results.map((r: any) => r.record_id) });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ingestion failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const raw = ev.target?.result as string;
-      const batch = parseBatch(raw);
-      if (typeof batch === "string") { setError(batch); return; }
-      insert(batch);
-    };
-    reader.readAsText(f);
+    
+    if (f.name.toLowerCase().endsWith(".json")) {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const raw = ev.target?.result as string;
+        const batch = parseBatch(raw);
+        if (typeof batch === "string") { setError(batch); return; }
+        insert(batch);
+      };
+      reader.readAsText(f);
+    } else {
+      ingestDocument(f);
+    }
     e.target.value = "";
   };
 
@@ -84,26 +124,85 @@ export function UploadTab({ collection }: Props) {
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Model Selection Dropdown */}
+      <div className="flex gap-4 border border-border bg-card/50 p-4 rounded-xl">
+        <div className="flex-1">
+          <label className="text-xs text-muted-foreground mb-1 block font-medium">Embedding Provider</label>
+          <select 
+            value={provider} 
+            onChange={(e) => {
+               setProvider(e.target.value);
+               if (e.target.value === "transformers") setModel("Xenova/bge-base-en-v1.5");
+               else if (e.target.value === "openai") setModel("text-embedding-3-small");
+               else if (e.target.value === "ollama") setModel("nomic-embed-text");
+            }}
+            className="w-full bg-background border border-input text-sm text-card-foreground rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+          >
+            <option value="transformers">Local Open Source (Transformers.js)</option>
+            <option value="openai">OpenAI API</option>
+            <option value="ollama">Ollama (Local)</option>
+          </select>
+        </div>
+        <div className="flex-1">
+          <label className="text-xs text-muted-foreground mb-1 block font-medium">Model</label>
+          {provider === "transformers" ? (
+             <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full bg-background border border-input text-sm text-card-foreground rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring">
+               <option value="Xenova/bge-base-en-v1.5">bge-base-en-v1.5 (768 dims)</option>
+               <option value="Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2 (384 dims)</option>
+               <option value="Xenova/e5-base-v2">e5-base-v2 (768 dims)</option>
+             </select>
+          ) : provider === "openai" ? (
+             <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full bg-background border border-input text-sm text-card-foreground rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring">
+               <option value="text-embedding-3-small">text-embedding-3-small</option>
+               <option value="text-embedding-3-large">text-embedding-3-large</option>
+             </select>
+          ) : (
+             <input type="text" value={model} onChange={(e) => setModel(e.target.value)} className="w-full bg-background border border-input text-sm text-card-foreground rounded-md px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring" />
+          )}
+        </div>
+      </div>
+
       {/* File drop */}
       <div>
-        <p className="text-xs text-zinc-400 mb-2 font-medium">Upload JSON file</p>
+        <p className="text-xs text-muted-foreground mb-2 font-medium">Upload Document or JSON</p>
         <div
-          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-zinc-700 py-8 text-center cursor-pointer hover:border-zinc-500 transition-colors"
+          className={cn(
+            "flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed py-10 text-center cursor-pointer transition-all duration-200",
+            dragging
+              ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)] scale-[1.01]"
+              : "border-input hover:border-ring hover:bg-accent/30"
+          )}
           onClick={() => fileRef.current?.click()}
+          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragEnter={(e) => { e.preventDefault(); setDragging(true); }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files?.[0];
+            if (!f) return;
+            // Reuse the same handler as the file input
+            handleFile({ target: { files: e.dataTransfer.files, value: "" } } as unknown as React.ChangeEvent<HTMLInputElement>);
+          }}
         >
-          <span className="text-2xl">↑</span>
-          <p className="text-sm text-zinc-400">Drop file or click to browse</p>
-          <p className="text-xs text-zinc-600">
-            Format:{" "}
-            <code className="font-mono">
-              {"[[0.1, 0.2, ...], ...]"} or [{'"'}values{'"'}: [...], {'"'}metadata{'"'}: {"{"}...{"}"}{"}"} ...]
-            </code>
-          </p>
+          <UploadCloud
+            size={28}
+            className={cn(
+              "transition-colors",
+              dragging ? "text-[var(--v-accent)]" : "text-muted-foreground"
+            )}
+          />
+          <div>
+            <p className={cn("text-sm font-medium", dragging ? "text-foreground" : "text-muted-foreground")}>
+              {dragging ? "Release to upload" : "Drop file or click to browse"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">PDF · TXT · JSON</p>
+          </div>
         </div>
         <input
           ref={fileRef}
           type="file"
-          accept=".json"
+          accept=".json,.pdf,.txt"
           className="hidden"
           onChange={handleFile}
         />
@@ -111,19 +210,19 @@ export function UploadTab({ collection }: Props) {
 
       {/* Paste */}
       <div>
-        <p className="text-xs text-zinc-400 mb-2 font-medium">Or paste vectors</p>
+        <p className="text-xs text-muted-foreground mb-2 font-medium">Or paste vectors</p>
         <textarea
           value={paste}
           onChange={(e) => setPaste(e.target.value)}
           placeholder={`[[0.1, 0.2, 0.3, 0.4],\n [0.5, 0.6, 0.7, 0.8]]`}
           rows={5}
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-500 resize-none"
+          className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs text-card-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
         />
         <Button
           size="sm"
           disabled={busy || !paste.trim()}
           onClick={handlePaste}
-          className="mt-2 bg-white text-zinc-900 hover:bg-zinc-100 disabled:opacity-40"
+          className="mt-2 bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
         >
           {busy ? "Inserting…" : "Insert →"}
         </Button>

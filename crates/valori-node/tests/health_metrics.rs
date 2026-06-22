@@ -16,7 +16,7 @@ use valori_node::server::{build_router, SharedEngine};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tower::ServiceExt; // for `.oneshot()`
 
 // ── Engine-level unit tests ───────────────────────────────────────────────────
@@ -186,7 +186,7 @@ fn test_insert_batch_exact_fit_succeeds() {
 // ── HTTP integration tests ────────────────────────────────────────────────────
 
 fn make_shared(cfg: &NodeConfig) -> SharedEngine {
-    Arc::new(Mutex::new(Engine::new(cfg)))
+    Arc::new(RwLock::new(Engine::new(cfg)))
 }
 
 #[tokio::test]
@@ -214,7 +214,7 @@ async fn test_http_health_returns_503_when_full() {
     let cfg = tiny_cfg(3);
     let shared = make_shared(&cfg);
     {
-        let mut engine = shared.lock().await;
+        let mut engine = shared.write().await;
         for i in 0u32..3 {
             let v: Vec<f32> = (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect();
             engine.insert_record_from_f32(&v).unwrap();
@@ -321,7 +321,7 @@ async fn test_http_insert_returns_507_when_full() {
     let cfg = tiny_cfg(2);
     let shared = make_shared(&cfg);
     {
-        let mut engine = shared.lock().await;
+        let mut engine = shared.write().await;
         for i in 0u32..2 {
             let v: Vec<f32> = (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect();
             engine.insert_record_from_f32(&v).unwrap();

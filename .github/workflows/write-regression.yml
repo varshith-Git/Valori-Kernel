@@ -1,0 +1,91 @@
+name: Write-throughput regression gate (Phase 3.8)
+
+# Runs on every PR that touches Rust crate code.
+# Fails the check (warning comment, does not block merge) if:
+#   - p99 single-insert latency regresses > 15% vs baseline
+#   - batch throughput drops > 10% vs baseline
+#
+# To update the baseline after a deliberate performance improvement:
+#   python3 benchmarks/write_regression.py --save-baseline
+# then commit benchmarks/baseline/write_regression_baseline.json.
+
+on:
+  pull_request:
+    branches: ["main", "multinode"]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "benchmarks/write_regression.py"
+      - "benchmarks/baseline/**"
+      - ".github/workflows/write-regression.yml"
+  workflow_dispatch:
+
+jobs:
+  regression:
+    name: Write-throughput regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build valori-node (release)
+        run: cargo build -p valori-node --release
+
+      - name: Start valori-node in background
+        run: |
+          VALORI_DIM=128 VALORI_MAX_RECORDS=20000 \
+            ./target/release/valori-node &
+          # Wait for node to be ready (up to 10 s)
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:3000/health && break
+            sleep 0.5
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run regression benchmark
+        id: bench
+        run: |
+          python3 benchmarks/write_regression.py --compare 2>&1 | tee bench_output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post regression warning comment on PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('bench_output.txt', 'utf8');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚠️ Write-throughput regression detected\n\n\`\`\`\n${output}\n\`\`\`\n\nThis check **does not block merge** — it is informational. If this is a deliberate trade-off, update the baseline:\n\`\`\`bash\npython3 benchmarks/write_regression.py --save-baseline\ngit add benchmarks/baseline/write_regression_baseline.json\ngit commit -m "chore: update perf baseline"\n\`\`\``
+            });
+
+      # Soft-fail: mark the check as failed for visibility but do not block.
+      # Remove `continue-on-error: true` to make regressions block merges.
+      - name: Assert no regression
+        continue-on-error: true
+        run: |
+          VALORI_DIM=128 VALORI_MAX_RECORDS=20000 \
+            python3 benchmarks/write_regression.py --compare

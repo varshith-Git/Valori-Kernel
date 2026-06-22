@@ -37,7 +37,7 @@ const TYPE_COLORS: Record<ParsedEvent["type"], string> = {
   SOFT_DELETE: "bg-amber-950 text-amber-400 border-amber-900",
   NODE: "bg-blue-950 text-blue-400 border-blue-900",
   EDGE: "bg-purple-950 text-purple-400 border-purple-900",
-  UNKNOWN: "bg-zinc-900 text-zinc-500 border-zinc-800",
+  UNKNOWN: "bg-card text-muted-foreground border-border",
 };
 
 export default function AuditPage() {
@@ -92,7 +92,7 @@ export default function AuditPage() {
   if (error === "event-log-disabled") {
     return (
       <div className="max-w-2xl">
-        <h1 className="text-xl font-semibold text-white">Audit Trail</h1>
+        <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
         <div className="mt-6 rounded-xl border border-amber-900 bg-amber-950 p-6">
           <p className="text-sm font-medium text-amber-400">
             Event log not enabled on this node
@@ -100,7 +100,7 @@ export default function AuditPage() {
           <p className="mt-2 text-xs text-amber-600">
             Restart Valori with <code className="font-mono bg-amber-900 px-1 rounded">VALORI_EVENT_LOG_PATH</code> set:
           </p>
-          <pre className="mt-3 rounded bg-zinc-950 px-4 py-3 text-xs text-zinc-300 font-mono">
+          <pre className="mt-3 rounded bg-background px-4 py-3 text-xs text-accent-foreground font-mono">
 {`VALORI_DIM=4 \\
 VALORI_CORS_ORIGIN="*" \\
 VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \\
@@ -115,8 +115,8 @@ cargo run -p valori-node`}
     <div className="flex flex-col gap-5 max-w-4xl">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-white">Audit Trail</h1>
-          <p className="mt-1 text-sm text-zinc-500">
+          <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Every mutation, in order, with BLAKE3 chaining
           </p>
         </div>
@@ -125,7 +125,7 @@ cargo run -p valori-node`}
             variant="outline"
             size="sm"
             onClick={load}
-            className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+            className="border-input text-muted-foreground hover:text-foreground hover:bg-accent"
           >
             Refresh
           </Button>
@@ -134,7 +134,7 @@ cargo run -p valori-node`}
             size="sm"
             onClick={exportCsv}
             disabled={filtered.length === 0}
-            className="border-zinc-700 text-zinc-400 hover:text-white hover:bg-zinc-800"
+            className="border-input text-muted-foreground hover:text-foreground hover:bg-accent"
           >
             Export CSV
           </Button>
@@ -150,7 +150,7 @@ cargo run -p valori-node`}
             className={`rounded-full px-3 py-1 text-xs transition-colors border ${
               filter === t
                 ? "bg-zinc-100 text-zinc-900 border-zinc-100"
-                : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+                : "border-border text-muted-foreground hover:border-muted hover:text-accent-foreground"
             }`}
           >
             {t === "ALL" ? `All (${events.length})` : t}
@@ -161,26 +161,26 @@ cargo run -p valori-node`}
       {isLoading ? (
         <div className="flex flex-col gap-2">
           {[1, 2, 3, 4, 5].map((i) => (
-            <div key={i} className="h-12 animate-pulse rounded-lg bg-zinc-800" />
+            <div key={i} className="h-12 animate-pulse rounded-lg bg-accent" />
           ))}
         </div>
       ) : error ? (
         <p className="text-sm text-red-400">{error}</p>
       ) : filtered.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-800 py-12 text-center">
-          <p className="text-sm text-zinc-500">No events yet.</p>
+        <div className="rounded-xl border border-dashed border-border py-12 text-center">
+          <p className="text-sm text-muted-foreground">No events yet.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <div className="grid grid-cols-[3.5rem_7rem_1fr] gap-3 px-3 py-2 text-xs text-zinc-600 uppercase tracking-wider border-b border-zinc-800">
+          <div className="grid grid-cols-[3.5rem_7rem_1fr] gap-3 px-3 py-2 text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
             <span>Event #</span><span>Type</span><span>Details</span>
           </div>
           {filtered.map((e) => (
             <div
               key={e.index}
-              className="grid grid-cols-[3.5rem_7rem_1fr] gap-3 items-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm hover:border-zinc-700 transition-colors"
+              className="grid grid-cols-[3.5rem_7rem_1fr] gap-3 items-center rounded-lg border border-border bg-card px-3 py-2.5 text-sm hover:border-input transition-colors"
             >
-              <span className="font-mono text-xs text-zinc-500">{e.index}</span>
+              <span className="font-mono text-xs text-muted-foreground">{e.index}</span>
               <span>
                 <span
                   className={`inline-block rounded border px-1.5 py-0.5 text-xs font-medium ${TYPE_COLORS[e.type]}`}
@@ -188,12 +188,12 @@ cargo run -p valori-node`}
                   {e.type}
                 </span>
               </span>
-              <span className="text-xs text-zinc-400 font-mono truncate">
+              <span className="text-xs text-muted-foreground font-mono truncate">
                 {e.recordId !== null && (
-                  <span className="text-zinc-200">Record #{e.recordId} </span>
+                  <span className="text-card-foreground">Record #{e.recordId} </span>
                 )}
                 {e.tag !== null && (
-                  <span className="text-zinc-600">tag={e.tag} </span>
+                  <span className="text-muted-foreground">tag={e.tag} </span>
                 )}
               </span>
             </div>

@@ -20,7 +20,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use openraft::Config;
+use openraft::storage::RaftLogStorage;
+use openraft::{Config, SnapshotPolicy};
 
 use valori_consensus::types::Raft;
 use valori_consensus::{
@@ -177,6 +178,10 @@ pub struct ClusterHandle {
     /// Background watcher tasks (state-hash poller, etc.) that must be
     /// aborted before the database file can be re-opened on restart.
     pub watcher_tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// The committed log index this node knew at boot. The data plane's
+    /// readiness gate refuses reads until apply reaches this index, so a
+    /// restarting node does not serve partial state while replaying its log.
+    pub startup_committed_index: u64,
 }
 
 impl ClusterHandle {
@@ -198,11 +203,30 @@ pub async fn bootstrap_cluster(
     cfg: &ClusterConfig,
     audit: Box<dyn AuditSink>,
 ) -> Result<ClusterHandle, std::io::Error> {
+    // Snapshot cadence is an explicit, operator-tunable policy — not openraft's
+    // implicit default. A snapshot is built every `snapshot_every` applied
+    // entries; logs are then purged keeping `snapshot_keep` entries. The
+    // cadence bounds how far a restarting node must replay before it is caught
+    // up (see the startup readiness gate in cluster_server). Workloads that
+    // amplify events per write (e.g. graph-heavy ingestion) should lower
+    // VALORI_SNAPSHOT_EVERY_EVENTS so the catch-up window stays small.
+    let snapshot_every = std::env::var("VALORI_SNAPSHOT_EVERY_EVENTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(5000);
+    let snapshot_keep = std::env::var("VALORI_RAFT_SNAPSHOT_KEEP")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(1000);
+
     let raft_config = Arc::new(
         Config {
             heartbeat_interval: 200,
             election_timeout_min: 800,
             election_timeout_max: 1600,
+            snapshot_policy: SnapshotPolicy::LogsSinceLast(snapshot_every),
+            max_in_snapshot_log_to_keep: snapshot_keep,
             ..Default::default()
         }
         .validate()
@@ -222,19 +246,30 @@ pub async fn bootstrap_cluster(
         None => ValoriNetworkFactory::default(),
     };
 
-    let (state_machine, raft) = match &cfg.raft_log_path {
+    let (state_machine, raft, startup_committed_index) = match &cfg.raft_log_path {
         Some(path) => {
-            let store = valori_consensus::RedbLogStore::open(path)
+            let mut store = valori_consensus::RedbLogStore::open(path)
                 .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
             let db = store.db();
             let sm = ValoriStateMachine::with_db(audit, db)
                 .map_err(|e| std::io::Error::other(format!("state machine restore failed: {e}")))?;
+            // The committed index this node durably knew before (re)start. The
+            // data plane refuses reads until apply catches back up to it, so a
+            // freshly-restarted node never serves partial state during replay.
+            let startup_committed_index = store
+                .read_committed()
+                .await
+                .ok()
+                .flatten()
+                .map_or(0, |l| l.index);
             let raft = Raft::new(cfg.node_id, raft_config, network, store, sm.clone())
                 .await
                 .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
-            (sm, raft)
+            (sm, raft, startup_committed_index)
         }
         None => {
+            // In-memory log store has no durable prior state — nothing to catch
+            // up to, so the node is read-ready immediately.
             let sm = ValoriStateMachine::new(audit);
             let raft = Raft::new(
                 cfg.node_id,
@@ -245,7 +280,7 @@ pub async fn bootstrap_cluster(
             )
             .await
             .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
-            (sm, raft)
+            (sm, raft, 0)
         }
     };
 
@@ -274,6 +309,7 @@ pub async fn bootstrap_cluster(
         raft_addr,
         server_task,
         watcher_tasks: vec![state_hash_watcher],
+        startup_committed_index,
     })
 }
 

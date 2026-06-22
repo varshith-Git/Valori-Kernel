@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "valori": {
+      "command": "valori-mcp",
+      "env": {
+        "VALORI_URL": "http://localhost:3000"
+      }
+    }
+  }
+}

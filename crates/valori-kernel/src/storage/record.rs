@@ -9,23 +9,17 @@ use crate::types::vector::FxpVector;
 /// all search, record_count, and state-hash operations.
 pub const FLAG_SOFT_DELETED: u8 = 0x01;
 
-/// Bit-flag: record payload is encrypted (crypto-shredding envelope).
-/// When set, `metadata` contains a serialised `EncryptedPayload` struct
-/// rather than raw bytes. `vector` was derived from the plaintext before
-/// encryption and is stored unencrypted (vectors are derived, not PII).
-///
-/// **Phase 1 — reserved only.** No code reads or writes this flag yet.
-/// Implementation: Phase 3 (docs/phases/phase-1.5-crypto-shredding.md).
+/// Bit-flag: record payload is encrypted (Phase 3.6 crypto-shredding).
+/// `metadata` holds the AES-256-GCM ciphertext of the original
+/// `(vector_bytes ‖ metadata_bytes)` payload. The in-memory `vector` is
+/// zeroed — this record does not participate in nearest-neighbour search.
+/// It IS counted in state-hash and record slots (provable existence).
 pub const FLAG_ENCRYPTED: u8 = 0x02;
 
-/// Bit-flag: the DEK (Data Encryption Key) for this record has been
-/// destroyed. The ciphertext in `metadata` is permanently unrecoverable.
-/// The record slot is retained so the hash-chain and graph adjacency lists
-/// remain intact; the record is excluded from search and state-hash
-/// identically to soft-deleted records.
-///
-/// **Phase 1 — reserved only.** No code reads or writes this flag yet.
-/// Implementation: Phase 3 (docs/phases/phase-1.5-crypto-shredding.md).
+/// Bit-flag: the DEK for this record has been destroyed (shredded).
+/// Set by `KernelEvent::ShredKey`. The ciphertext in `metadata` remains
+/// in the log (audit chain intact) but is permanently unrecoverable.
+/// Excluded from search, record_count, and active iteration.
 pub const FLAG_SHREDDED: u8 = 0x04;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,9 +51,18 @@ impl Record {
         }
     }
 
-    /// Returns `true` when the record is live (not soft-deleted).
+    /// Returns `true` when the record is live (not soft-deleted, not shredded).
+    /// Encrypted records ARE considered active (they exist and contribute to
+    /// the state hash), but are not searchable — use `is_searchable()` for search.
     #[inline]
     pub fn is_active(&self) -> bool {
-        self.flags & FLAG_SOFT_DELETED == 0
+        self.flags & (FLAG_SOFT_DELETED | FLAG_SHREDDED) == 0
+    }
+
+    /// Returns `true` when the record can appear in nearest-neighbour search
+    /// results. Encrypted records have a zero vector and must be excluded.
+    #[inline]
+    pub fn is_searchable(&self) -> bool {
+        self.flags & (FLAG_SOFT_DELETED | FLAG_ENCRYPTED | FLAG_SHREDDED) == 0
     }
 }

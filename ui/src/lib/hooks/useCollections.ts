@@ -35,7 +35,7 @@ export function useProjectGroups(): {
 
   const grouped = new Map<string, ProjectGroup>();
 
-  for (const ns of namespaces) {
+  for (const ns of (Array.isArray(namespaces) ? namespaces : [])) {
     const { project, collection } = parseNs(ns);
     const existing = grouped.get(project);
     if (!existing) {
@@ -61,25 +61,40 @@ export function useProjectGroups(): {
 export function useCollections(project: string) {
   const { projects: namespaces, isLoading, error, refresh } = useProjects();
 
-  const collections = namespaces
+  const safeNs = Array.isArray(namespaces) ? namespaces : [];
+  const collections = safeNs
     .filter((ns) => ns.startsWith(`${project}${SEP}`))
     .map((ns) => ns.slice(project.length + SEP.length));
 
   const create = async (collection: string) => {
     const ns = makeNs(project, collection);
-    await fetch("/api/namespaces", {
+    const res = await fetch("/api/namespaces", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: ns }),
     });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({})) as { error?: string };
+      const msg = e.error ?? `Failed to create collection (${res.status})`;
+      const { toast } = await import("@/lib/toast");
+      toast(msg, "error");
+      throw new Error(msg);   // keeps dialog open with inline error
+    }
     refresh();
   };
 
   const drop = async (collection: string) => {
     const ns = makeNs(project, collection);
-    await fetch(`/api/namespaces/${encodeURIComponent(ns)}`, {
+    const res = await fetch(`/api/namespaces/${encodeURIComponent(ns)}`, {
       method: "DELETE",
     });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({})) as { error?: string };
+      const msg = e.error ?? `Failed to delete collection (${res.status})`;
+      const { toast } = await import("@/lib/toast");
+      toast(msg, "error");
+      throw new Error(msg);
+    }
     refresh();
   };
 

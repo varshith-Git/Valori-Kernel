@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Plus } from "lucide-react";
 import { useProjectGroups } from "@/lib/hooks/useCollections";
 import { useProjects } from "@/lib/hooks/useProjects";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { Button } from "@/components/ui/button";
 
 export default function ProjectsPage() {
   const router = useRouter();
@@ -17,10 +19,10 @@ export default function ProjectsPage() {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-4 max-w-5xl">
-        <div className="h-7 w-32 animate-pulse rounded bg-zinc-800" />
+        <div className="h-7 w-32 animate-pulse rounded bg-accent" />
         <div className="grid grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-28 animate-pulse rounded-xl bg-zinc-800" />
+            <div key={i} className="h-28 animate-pulse rounded-xl bg-accent" />
           ))}
         </div>
       </div>
@@ -32,35 +34,43 @@ export default function ProjectsPage() {
       <div className="flex flex-col gap-6 max-w-5xl">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-white">Projects</h1>
-            <p className="mt-1 text-sm text-zinc-500">
+            <h1 className="text-xl font-semibold text-foreground">Projects</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
               Each project groups collections. Collections are stored as{" "}
-              <code className="font-mono text-zinc-400">project--collection</code> namespaces in Valori.
+              <code className="font-mono text-muted-foreground">project--collection</code> namespaces in Valori.
             </p>
           </div>
-          <button
+          <Button
             onClick={() => setCreateOpen(true)}
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-800 transition-colors"
+            size="sm"
+            className="bg-[var(--v-accent)] text-white hover:opacity-90 gap-1.5"
           >
-            + New Project
-          </button>
+            <Plus size={14} />
+            New Project
+          </Button>
         </div>
 
         {groups.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 py-16 text-center">
-            <p className="text-sm text-zinc-500">No projects yet.</p>
-            <p className="mt-1 text-xs text-zinc-600">
-              Create a project, then add collections inside it.
-            </p>
-            <button
+          <div className="rounded-xl border border-dashed border-border py-20 text-center flex flex-col items-center gap-4">
+            <div className="h-12 w-12 rounded-xl bg-card border border-border flex items-center justify-center">
+              <Plus size={20} className="text-muted-foreground" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-muted-foreground">No projects yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">Create a project, then add collections inside it.</p>
+            </div>
+            <Button
               onClick={() => setCreateOpen(true)}
-              className="mt-4 rounded-lg border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+              size="sm"
+              variant="outline"
+              className="border-input text-accent-foreground hover:bg-accent gap-1.5"
             >
-              + New Project
-            </button>
+              <Plus size={13} />
+              Create project
+            </Button>
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {groups.map((g) => (
               <ProjectCard
                 key={g.project}
@@ -75,9 +85,10 @@ export default function ProjectsPage() {
             ))}
             <button
               onClick={() => setCreateOpen(true)}
-              className="flex items-center justify-center rounded-xl border border-dashed border-zinc-800 py-8 text-sm text-zinc-600 hover:border-zinc-600 hover:text-zinc-400 transition-colors"
+              className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-border py-8 text-sm text-muted-foreground hover:border-[var(--v-accent)] hover:text-muted-foreground transition-colors group"
             >
-              + New Project
+              <Plus size={16} className="group-hover:text-[var(--v-accent)] transition-colors" />
+              New Project
             </button>
           </div>
         )}
@@ -134,14 +145,14 @@ function ProjectCard({
 }) {
   return (
     <div
-      className="group relative rounded-xl border border-zinc-800 bg-zinc-900 p-5 cursor-pointer hover:border-zinc-700 transition-colors"
+      className="group relative rounded-xl border border-border bg-card p-5 cursor-pointer hover:border-input transition-colors"
       onClick={onClick}
     >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-600 font-mono text-sm">⬡</span>
+          <span className="text-muted-foreground font-mono text-sm">⬡</span>
           {isBare && (
-            <span className="text-[10px] text-zinc-600 border border-zinc-800 rounded px-1.5 py-0.5">
+            <span className="text-[10px] text-muted-foreground border border-border rounded px-1.5 py-0.5">
               legacy
             </span>
           )}
@@ -151,20 +162,20 @@ function ProjectCard({
             e.stopPropagation();
             onDelete();
           }}
-          className="opacity-0 group-hover:opacity-100 text-xs text-zinc-600 hover:text-red-400 transition-all"
+          className="opacity-0 group-hover:opacity-100 text-xs text-muted-foreground hover:text-red-400 transition-all"
         >
           delete
         </button>
       </div>
 
-      <p className="mt-3 font-medium text-white text-base truncate">{project}</p>
+      <p className="mt-3 font-medium text-foreground text-base truncate">{project}</p>
 
       <div className="mt-2 flex items-center gap-1.5">
-        <span className="text-xs text-zinc-500">
+        <span className="text-xs text-muted-foreground">
           {isBare ? (
             "bare namespace"
           ) : collectionCount === 0 ? (
-            <span className="text-zinc-600">no collections</span>
+            <span className="text-muted-foreground">no collections</span>
           ) : (
             `${collectionCount} collection${collectionCount !== 1 ? "s" : ""}`
           )}

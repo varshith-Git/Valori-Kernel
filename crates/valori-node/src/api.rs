@@ -61,6 +61,14 @@ pub struct SearchRequest {
     pub k: usize,
     #[serde(default)]
     pub collection: Option<String>,
+    /// ISO 8601 UTC timestamp — search the vector state as it existed at this moment.
+    /// Requires the event log to be enabled (`VALORI_EVENT_LOG_PATH`).
+    #[serde(default)]
+    pub as_of: Option<String>,
+    /// Log index — search the vector state after exactly this many committed events.
+    /// Mutually exclusive with `as_of`; `as_of_log_index` takes precedence if both given.
+    #[serde(default)]
+    pub as_of_log_index: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -72,6 +80,58 @@ pub struct SearchHit {
 #[derive(Serialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchHit>,
+    /// Present only for as-of searches: the log index of the replayed state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of_log_index: Option<u64>,
+    /// Unix-second wall-clock timestamp of the `as_of_log_index` event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of_timestamp_unix: Option<u64>,
+    /// ISO 8601 string of `as_of_timestamp_unix`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of_timestamp_iso: Option<String>,
+    /// BLAKE3 hex hash of the kernel state at `as_of_log_index`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of_state_hash: Option<String>,
+}
+
+impl SearchResponse {
+    pub fn simple(results: Vec<SearchHit>) -> Self {
+        Self { results, as_of_log_index: None, as_of_timestamp_unix: None, as_of_timestamp_iso: None, as_of_state_hash: None }
+    }
+}
+
+/// A single entry in the timeline — one committed kernel event with its metadata.
+#[derive(Serialize)]
+pub struct TimelineEntry {
+    /// Sequential index (0-based) into the committed event log.
+    pub log_index: u64,
+    /// Unix-second wall-clock timestamp when this event was committed.
+    pub timestamp_unix: u64,
+    /// ISO 8601 UTC string for `timestamp_unix`.
+    pub timestamp_iso: String,
+    /// Human-readable event kind.
+    pub event_type: &'static str,
+    /// Record ID if this is a record-level event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_id: Option<u32>,
+    /// Node ID if this is a graph-node event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<u32>,
+    /// Edge ID if this is a graph-edge event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_id: Option<u32>,
+}
+
+#[derive(Serialize)]
+pub struct TimelineResponse {
+    pub events: Vec<TimelineEntry>,
+    pub total: usize,
+    /// Inclusive lower bound filter applied (unix seconds), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_unix: Option<u64>,
+    /// Inclusive upper bound filter applied (unix seconds), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_unix: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +319,18 @@ pub struct BatchInsertRequest {
     pub batch: Vec<Vec<f32>>,
     #[serde(default)]
     pub collection: Option<String>,
+    /// Optional per-vector metadata blobs (UTF-8 JSON strings).
+    /// If present, must be the same length as `batch`.
+    /// Each entry is committed inside the `InsertRecord` event and is
+    /// therefore included in the BLAKE3 audit chain.
+    #[serde(default)]
+    pub metadata: Option<Vec<Option<String>>>,
+    /// Per-item idempotency keys (32-hex strings = 16-byte UUIDs).
+    /// If present, must be the same length as `batch`. A null entry means
+    /// "no dedup key for this item". A repeated key causes that item to be
+    /// skipped and the previously assigned ID is returned instead.
+    #[serde(default)]
+    pub request_ids: Option<Vec<Option<String>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

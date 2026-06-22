@@ -44,14 +44,14 @@ export function DeleteCollectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 text-white max-w-md">
+      <DialogContent className="bg-card border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base">Delete collection</DialogTitle>
         </DialogHeader>
         <div className="py-2 flex flex-col gap-3">
-          <p className="text-sm text-zinc-400">
+          <p className="text-sm text-muted-foreground">
             This permanently deletes{" "}
-            <code className="font-mono text-zinc-300">{ns}</code> and all its
+            <code className="font-mono text-accent-foreground">{ns}</code> and all its
             vectors. Type the collection name to confirm.
           </p>
           <Input
@@ -62,7 +62,7 @@ export function DeleteCollectionDialog({
             onKeyDown={(e) =>
               e.key === "Enter" && confirm === collection && submit()
             }
-            className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-600"
+            className="bg-accent border-input text-foreground placeholder:text-muted-foreground"
           />
         </div>
         <DialogFooter>
@@ -70,7 +70,7 @@ export function DeleteCollectionDialog({
             variant="outline"
             size="sm"
             onClick={() => onOpenChange(false)}
-            className="border-zinc-700 text-zinc-400"
+            className="border-input text-muted-foreground"
           >
             Cancel
           </Button>
@@ -78,7 +78,7 @@ export function DeleteCollectionDialog({
             size="sm"
             disabled={confirm !== collection || busy}
             onClick={submit}
-            className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+            className="bg-red-600 text-foreground hover:bg-red-700 disabled:opacity-40"
           >
             {busy ? "Deleting…" : "Delete collection"}
           </Button>

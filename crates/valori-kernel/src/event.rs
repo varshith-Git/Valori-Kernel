@@ -121,6 +121,15 @@ pub enum KernelEvent {
         to: NodeId,
         kind: EdgeKind,
     },
+
+    /// Insert an encrypted record with ID assigned at apply time (cluster-mode).
+    /// The ciphertext was computed by the leader's vault before submitting to Raft.
+    AutoInsertRecordEncrypted {
+        namespace_id: u16,
+        key_id: [u8; 16],
+        ciphertext: alloc::vec::Vec<u8>,
+        tag: u64,
+    },
 }
 
 impl KernelEvent {
@@ -139,6 +148,7 @@ impl KernelEvent {
             KernelEvent::AutoInsertRecord { .. } => "AutoInsertRecord",
             KernelEvent::AutoCreateNode { .. } => "AutoCreateNode",
             KernelEvent::AutoCreateEdge { .. } => "AutoCreateEdge",
+            KernelEvent::AutoInsertRecordEncrypted { .. } => "AutoInsertRecordEncrypted",
         }
     }
 }
@@ -232,6 +242,14 @@ impl Serialize for KernelEvent {
                 state.serialize_field("kind", kind)?;
                 state.end()
             }
+            KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 12, "AutoInsertRecordEncrypted", 4)?;
+                state.serialize_field("namespace_id", namespace_id)?;
+                state.serialize_field("key_id", key_id)?;
+                state.serialize_field("ciphertext", ciphertext)?;
+                state.serialize_field("tag", tag)?;
+                state.end()
+            }
         }
     }
 }
@@ -323,6 +341,12 @@ impl<'de> Deserialize<'de> for KernelEvent {
                  to: NodeId,
                  kind: EdgeKind,
              },
+             AutoInsertRecordEncrypted {
+                 namespace_id: u16,
+                 key_id: [u8; 16],
+                 ciphertext: alloc::vec::Vec<u8>,
+                 tag: u64,
+             },
         }
 
         // Delegate to the Helper
@@ -345,6 +369,8 @@ impl<'de> Deserialize<'de> for KernelEvent {
                 KernelEvent::AutoCreateNode { kind, record },
             KernelEventHelper::AutoCreateEdge { from, to, kind } =>
                 KernelEvent::AutoCreateEdge { from, to, kind },
+            KernelEventHelper::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag } =>
+                KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag },
         })
     }
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use valori_cli::commands::{cluster, diff, inspect, replay_query, timeline, verify, wizard};
+use valori_cli::commands::{cluster, diff, import, inspect, replay_query, timeline, verify, wizard};
 
 #[derive(Parser)]
 #[command(
@@ -129,6 +129,15 @@ enum Commands {
         #[command(subcommand)]
         action: ClusterAction,
     },
+
+    /// Import vectors from an external source into a running Valori node.
+    ///
+    /// Validates that the source dimension matches the target node's VALORI_DIM
+    /// before touching any data. Supports resumable imports via a sidecar file.
+    Import {
+        #[command(subcommand)]
+        source: ImportSource,
+    },
 }
 
 #[derive(Subcommand)]
@@ -185,6 +194,77 @@ enum ClusterAction {
     },
 }
 
+#[derive(Subcommand)]
+enum ImportSource {
+    /// Import from a Qdrant collection via the scroll API.
+    ///
+    /// Example:
+    ///   valori import qdrant \
+    ///     --url http://localhost:6333 \
+    ///     --collection my-vectors \
+    ///     --target-url http://localhost:3000 \
+    ///     --target-collection my-vectors
+    Qdrant {
+        /// Base URL of the Qdrant HTTP API, e.g. http://localhost:6333
+        #[arg(long, default_value = "http://localhost:6333")]
+        url: String,
+
+        /// Source collection name in Qdrant.
+        #[arg(long)]
+        collection: String,
+
+        /// Base URL of the target Valori node, e.g. http://localhost:3000
+        #[arg(long, default_value = "http://localhost:3000")]
+        target_url: String,
+
+        /// Target collection name in Valori (created if it doesn't exist).
+        #[arg(long, default_value = "default")]
+        target_collection: String,
+
+        /// Number of records per scroll page.
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+
+        /// Resume from a previous interrupted import (reads sidecar file).
+        #[arg(long, default_value_t = false)]
+        resume: bool,
+
+        /// Bearer token for Valori authentication (VALORI_AUTH_TOKEN or an API key).
+        #[arg(long)]
+        token: Option<String>,
+    },
+
+    /// Import from a JSONL file.
+    ///
+    /// Each line must be a JSON object with a "vector" field (array of floats).
+    /// Optional fields: "metadata" (string), "tag" (u64).
+    /// Aliases accepted for "vector": "embedding", "values".
+    /// Aliases accepted for "metadata": "text", "content", "payload".
+    ///
+    /// Example line:
+    ///   {"vector": [0.1, 0.2, 0.3], "metadata": "Hello, world", "tag": 0}
+    Jsonl {
+        /// Path to the JSONL file to import.
+        file: PathBuf,
+
+        /// Base URL of the target Valori node.
+        #[arg(long, default_value = "http://localhost:3000")]
+        target_url: String,
+
+        /// Target collection name in Valori (created if it doesn't exist).
+        #[arg(long, default_value = "default")]
+        target_collection: String,
+
+        /// Records to buffer before flushing to Valori (controls memory usage).
+        #[arg(long, default_value = "100")]
+        batch_size: usize,
+
+        /// Bearer token for Valori authentication.
+        #[arg(long)]
+        token: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -213,6 +293,39 @@ async fn main() -> anyhow::Result<()> {
             ClusterAction::Upgrade { url, target_version } => {
                 cluster::upgrade(&url, &target_version)
             }
+        },
+
+        Some(Commands::Import { source }) => match source {
+            ImportSource::Qdrant {
+                url,
+                collection,
+                target_url,
+                target_collection,
+                batch_size,
+                resume,
+                token,
+            } => import::run_qdrant(import::QdrantImportArgs {
+                qdrant_url: url,
+                source_collection: collection,
+                target_url,
+                target_collection,
+                batch_size,
+                resume,
+                token,
+            }),
+            ImportSource::Jsonl {
+                file,
+                target_url,
+                target_collection,
+                batch_size,
+                token,
+            } => import::run_jsonl(import::JsonlImportArgs {
+                file,
+                target_url,
+                target_collection,
+                batch_size,
+                token,
+            }),
         },
     }
 }

@@ -23,6 +23,9 @@ export function useHealth() {
     chainHeight: data?.event_log_height ?? null,
     dim: data?.dim ?? null,
     fillPct: data?.records?.fill_pct ?? null,
+    capacity: data?.records?.capacity ?? null,
+    index: data?.index ?? null,
+    version: data?.version ?? null,
     error: error ?? null,
   };
 }

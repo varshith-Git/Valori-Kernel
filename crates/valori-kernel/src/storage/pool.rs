@@ -1,7 +1,7 @@
 //! Static Record Pool.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::storage::record::{Record, FLAG_SOFT_DELETED};
+use crate::storage::record::{Record, FLAG_ENCRYPTED, FLAG_SHREDDED, FLAG_SOFT_DELETED};
 use crate::types::id::RecordId;
 use crate::types::vector::FxpVector;
 use crate::error::{Result, KernelError};
@@ -76,6 +76,30 @@ impl RecordPool {
                 Ok(())
             }
             None => Err(KernelError::NotFound),
+        }
+    }
+
+    /// Mark a record as FLAG_ENCRYPTED and clear its vector (zeroed in-place).
+    /// Called when applying `InsertRecordEncrypted`.
+    pub fn mark_encrypted(&mut self, id: RecordId) -> crate::error::Result<()> {
+        let idx = id.0 as usize;
+        match self.records.get_mut(idx).and_then(|o| o.as_mut()) {
+            Some(r) => { r.flags |= FLAG_ENCRYPTED; Ok(()) }
+            None => Err(crate::error::KernelError::NotFound),
+        }
+    }
+
+    /// Mark a record as FLAG_SHREDDED and wipe its in-memory ciphertext.
+    /// Called when applying `ShredKey`.
+    pub fn mark_shredded(&mut self, id: RecordId) -> crate::error::Result<()> {
+        let idx = id.0 as usize;
+        match self.records.get_mut(idx).and_then(|o| o.as_mut()) {
+            Some(r) => {
+                r.flags |= FLAG_SHREDDED;
+                r.metadata = None; // ciphertext no longer needed in memory
+                Ok(())
+            }
+            None => Err(crate::error::KernelError::NotFound),
         }
     }
 

@@ -87,6 +87,14 @@ pub struct NodeConfig {
 
     // Security
     pub auth_token: Option<String>,
+    /// Path to the JSON file persisting API keys (Phase 3.5).
+    /// Env: `VALORI_KEYS_PATH`. Absent = key store is in-memory only (resets on restart).
+    pub keys_path: Option<PathBuf>,
+
+    // Phase 3.6: Crypto-shredding
+    // Env: VALORI_SHRED_LOG_PATH
+    // Append-only file of shredded key_ids (hex). Absent = in-memory only.
+    pub shred_log_path: Option<PathBuf>,
 
     // Clustering
     pub mode: NodeMode,
@@ -106,6 +114,15 @@ pub struct NodeConfig {
     // "*"    = permissive (all origins allowed — dev only).
     // "https://app.example.com" = single origin (production).
     pub cors_origin: Option<String>,
+
+    // ── Phase 3.13: HNSW parameter exposure ──────────────────────────────────
+    // Only take effect when VALORI_INDEX=hnsw. Absent = use HnswConfig defaults.
+    // Env: VALORI_HNSW_M (default 16) — max edges per node per layer
+    pub hnsw_m: Option<usize>,
+    // Env: VALORI_HNSW_EF_CONSTRUCTION (default 100) — beam width during index build
+    pub hnsw_ef_construction: Option<usize>,
+    // Env: VALORI_HNSW_EF_SEARCH (default 50) — beam width during query
+    pub hnsw_ef_search: Option<usize>,
 }
 
 impl Default for NodeConfig {
@@ -196,6 +213,8 @@ impl Default for NodeConfig {
             .ok().and_then(|v| v.parse::<u32>().ok());
 
         let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
+        let keys_path = std::env::var("VALORI_KEYS_PATH").ok().map(PathBuf::from);
+        let shred_log_path = std::env::var("VALORI_SHRED_LOG_PATH").ok().map(PathBuf::from);
 
         let object_store_url = std::env::var("VALORI_OBJECT_STORE_URL").ok();
         let object_store_keep = std::env::var("VALORI_OBJECT_STORE_KEEP")
@@ -203,6 +222,10 @@ impl Default for NodeConfig {
             .unwrap_or(7);
 
         let cors_origin = std::env::var("VALORI_CORS_ORIGIN").ok();
+
+        let hnsw_m = std::env::var("VALORI_HNSW_M").ok().and_then(|v| v.parse().ok());
+        let hnsw_ef_construction = std::env::var("VALORI_HNSW_EF_CONSTRUCTION").ok().and_then(|v| v.parse().ok());
+        let hnsw_ef_search = std::env::var("VALORI_HNSW_EF_SEARCH").ok().and_then(|v| v.parse().ok());
 
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
@@ -238,10 +261,15 @@ impl Default for NodeConfig {
             node_id,
             health_check_mode: false, // set by CLI arg, not env var
             auth_token,
+            keys_path,
+            shred_log_path,
             mode,
             object_store_url,
             object_store_keep,
             cors_origin,
+            hnsw_m,
+            hnsw_ef_construction,
+            hnsw_ef_search,
         }
     }
 }

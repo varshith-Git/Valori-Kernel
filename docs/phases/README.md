@@ -35,10 +35,30 @@ people and sessions that built it.
 | 2.10a — Persistent Raft log (redb) | [phase-2.10a-persistent-raft-log.md](phase-2.10a-persistent-raft-log.md) | see git log | ✅ done |
 | 2.10b — mTLS (rustls + cluster CA) | [phase-2.10b-mtls.md](phase-2.10b-mtls.md) | see git log | ✅ done |
 | 2.10c — Metrics (Prometheus) | [phase-2.10c-raft-metrics.md](phase-2.10c-raft-metrics.md) | see git log | ✅ done |
-| 2.10d — Partition harness | — | — | ⬜ planned (last Phase 2 item) |
+| 2.10d — Partition harness | [phase-2.10d-partition-harness.md](phase-2.10d-partition-harness.md) | `multinode` | ✅ done |
 | 2.11 — Boot dispatch + cluster data plane v1 | [phase-2.11-cluster-boot-dispatch.md](phase-2.11-cluster-boot-dispatch.md) | see git log | ✅ done |
 | 3.1 — S3 object store (snapshot offload + WAL archival) | [phase-3.1-s3-object-store.md](phase-3.1-s3-object-store.md) | `multinode` | ✅ done |
 | 3.2 — Rolling upgrades (zero-downtime version migration) | [phase-3.2-rolling-upgrades.md](phase-3.2-rolling-upgrades.md) | `multinode` | ✅ done |
+| 3.3 — Cluster-aware Python SDK | [phase-3.3-cluster-sdk.md](phase-3.3-cluster-sdk.md) | `multinode` | ✅ done |
+| 3.5 — Per-tenant API keys + RBAC | [phase-3.5-api-keys-rbac.md](phase-3.5-api-keys-rbac.md) | `multinode` | ✅ done |
+| 3.6 — Crypto-shredding (GDPR erasure) | [phase-3.6-crypto-shredding.md](phase-3.6-crypto-shredding.md) | `multinode` | ✅ done |
+| 3.7 — `valori import` (Qdrant + JSONL migration) | [phase-3.7-valori-import.md](phase-3.7-valori-import.md) | `multinode` | ✅ done |
+| 3.4 — As-of / point-in-time reads | [phase-3.4-as-of-reads.md](phase-3.4-as-of-reads.md) | `multinode` | ✅ done |
+| 5.1 — Verifiable AI: Proof-Carrying Answers + Compliance Pack | [phase-5.1-verifiable-ai.md](phase-5.1-verifiable-ai.md) | `multinode` | ✅ done |
+| B13 — Snapshot cadence + startup readiness gate | [phase-B13-snapshot-readiness.md](phase-B13-snapshot-readiness.md) | `multinode` | ✅ done |
+| C0 — Eval harness (recall@k, citation, provenance) | [phase-C0-eval-harness.md](phase-C0-eval-harness.md) | `multinode` | ✅ done |
+| C0 plan — Cortex converged build plan | [phase-C0-cortex-plan.md](phase-C0-cortex-plan.md) | `multinode` | 📋 plan |
+| C1 — Contextual retrieval + audited enrichment | [phase-C1-contextual-retrieval.md](phase-C1-contextual-retrieval.md) | `multinode` | ✅ done |
+| C2 — Audited entity graph + provenance receipt | [phase-C2-entity-graph.md](phase-C2-entity-graph.md) | `multinode` | ✅ done |
+| C3 — Self-maintaining memory | [phase-C3-self-maintaining-memory.md](phase-C3-self-maintaining-memory.md) | `multinode` | ✅ done |
+| 3.8 — Write-throughput regression gates | [phase-3.8-write-regression.md](phase-3.8-write-regression.md) | `multinode` | ✅ done |
+| 3.9 — Terraform modules (AWS + Azure) | [phase-3.9-terraform.md](phase-3.9-terraform.md) | `multinode` | ✅ done |
+| 3.10 — Signed releases + SBOM | [phase-3.10-signed-releases.md](phase-3.10-signed-releases.md) | `multinode` | ✅ done |
+| 3.11 — Concurrent reads via RwLock engine | [phase-3.11-rwlock-engine.md](phase-3.11-rwlock-engine.md) | `multinode` | ✅ done |
+| 3.12 — Batch insert per-item idempotency | [phase-3.12-batch-idempotency.md](phase-3.12-batch-idempotency.md) | `multinode` | ✅ done |
+| 3.13 — HNSW parameter exposure | [phase-3.13-hnsw-params.md](phase-3.13-hnsw-params.md) | `multinode` | ✅ done |
+| 3.14 — MCP server (verifiable agent memory) | [phase-3.14-mcp-server.md](phase-3.14-mcp-server.md) | `multinode` | ✅ done |
+| 3.15 — Native GraphRAG (one-call retrieval) | [phase-3.15-graphrag.md](phase-3.15-graphrag.md) | `multinode` | ✅ done |
 
 ## Report template
 

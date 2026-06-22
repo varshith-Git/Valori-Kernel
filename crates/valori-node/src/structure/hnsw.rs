@@ -8,10 +8,11 @@ use serde::{Serialize, Deserialize};
 /// Hierarchical Navigable Small World (HNSW) Index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HnswConfig {
-    pub m: usize,           // Max edges per node per layer
-    pub m_max0: usize,      // Max edges per node at layer 0 (usually 2*M)
-    pub ef_construction: usize, // Beam size during build
-    pub lambda: f64,        // Level generation parameter
+    pub m: usize,               // Max edges per node per layer
+    pub m_max0: usize,          // Max edges per node at layer 0 (usually 2*M)
+    pub ef_construction: usize, // Beam width during index build
+    pub ef_search: usize,       // Beam width during query (min k, default 50)
+    pub lambda: f64,            // Level generation parameter (derived from M)
 }
 
 impl Default for HnswConfig {
@@ -20,6 +21,7 @@ impl Default for HnswConfig {
             m: 16,
             m_max0: 32,
             ef_construction: 100,
+            ef_search: 50,
             lambda: 1.0 / (16.0f64.ln()), // 1 / ln(M)
         }
     }
@@ -74,13 +76,21 @@ pub struct HnswIndex {
 
 impl HnswIndex {
     pub fn new() -> Self {
+        Self::new_with_config(HnswConfig::default())
+    }
+
+    pub fn new_with_config(config: HnswConfig) -> Self {
         Self {
-            config: HnswConfig::default(),
+            config,
             vectors: RwLock::new(HashMap::new()),
             layers: RwLock::new(vec![HashMap::new()]), // Level 0 always exists
             entry_point: RwLock::new(None),
             max_level: RwLock::new(0),
         }
+    }
+
+    pub fn config(&self) -> &HnswConfig {
+        &self.config
     }
     
     fn dist(&self, v1: &[f32], v2: &[f32]) -> f32 {
@@ -191,7 +201,26 @@ impl VectorIndex for HnswIndex {
     fn insert(&mut self, id: u32, vector: &[f32]) {
         self.vectors.write().unwrap().insert(id, vector.to_vec());
         let level = self.deterministic_level(id);
-        
+
+        // Read entry point BEFORE any modifications so first-insert detection is correct.
+        let curr_entry = *self.entry_point.read().unwrap();
+
+        if curr_entry.is_none() {
+            // First insert: initialize layer slots then set entry point.
+            let mut layers = self.layers.write().unwrap();
+            let mut max_l = self.max_level.write().unwrap();
+            layers.resize_with(level + 1, HashMap::new);
+            for l in 0..=level {
+                layers[l].insert(id, Vec::new());
+            }
+            *max_l = level;
+            drop(layers);
+            drop(max_l);
+            *self.entry_point.write().unwrap() = Some(id);
+            return;
+        }
+
+        // Expand layer structure if this node reaches a new maximum level.
         {
             let mut layers = self.layers.write().unwrap();
             let mut max_l = self.max_level.write().unwrap();
@@ -200,77 +229,102 @@ impl VectorIndex for HnswIndex {
                 *max_l = level;
                 *self.entry_point.write().unwrap() = Some(id);
             }
-        }
-        
-        let max_l = *self.max_level.read().unwrap();
-        let curr_entry = *self.entry_point.read().unwrap();
-        
-        if curr_entry.is_none() {
-            *self.entry_point.write().unwrap() = Some(id);
+            // Pre-create empty neighbor slots so search_layer can find the node.
             for l in 0..=level {
-                 self.layers.write().unwrap().get_mut(l).unwrap().insert(id, Vec::new());
+                layers[l].entry(id).or_insert_with(Vec::new);
             }
-            return;
         }
-        
+
         let mut curr_entry_id = curr_entry.unwrap();
-        let vectors_guard = self.vectors.read().unwrap(); 
+        let max_l = *self.max_level.read().unwrap();
+        let vectors_guard = self.vectors.read().unwrap();
+
+        // Greedy descent through layers above this node's level to find a close entry.
         {
             let layers_guard = self.layers.read().unwrap();
             for l in (level + 1..=max_l).rev() {
                 let mut changed = true;
                 while changed {
                     changed = false;
-                    let curr_vec = if let Some(v) = vectors_guard.get(&curr_entry_id) { v } else { break; };
+                    let curr_vec = if let Some(v) = vectors_guard.get(&curr_entry_id) { v } else { break };
                     let curr_dist = self.dist(vector, curr_vec);
                     if let Some(layer_l) = layers_guard.get(l) {
-                         if let Some(neighbors) = layer_l.get(&curr_entry_id) {
-                             for &neighbor in neighbors {
-                                 if let Some(n_vec) = vectors_guard.get(&neighbor) {
-                                      let d = self.dist(vector, n_vec);
-                                      if d < curr_dist {
-                                          curr_entry_id = neighbor;
-                                          changed = true;
-                                      }
-                                 }
-                             }
-                         }
+                        if let Some(neighbors) = layer_l.get(&curr_entry_id) {
+                            for &neighbor in neighbors {
+                                if let Some(n_vec) = vectors_guard.get(&neighbor) {
+                                    let d = self.dist(vector, n_vec);
+                                    if d < curr_dist {
+                                        curr_entry_id = neighbor;
+                                        changed = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        
+
+        // Connect node into layers 0..=level.
         let mut layers = self.layers.write().unwrap();
         for l in (0..=level).rev() {
-             let candidates = self.search_layer(curr_entry_id, vector, self.config.ef_construction, l, layers.get(l).unwrap(), &vectors_guard);
-             let m = if l == 0 { self.config.m_max0 } else { self.config.m };
-             let neighbors = self.select_neighbors(candidates.clone(), m);
-             layers.get_mut(l).unwrap().insert(id, neighbors.clone());
-             for &neighbor_id in &neighbors {
-                 if let Some(neighbor_edges) = layers.get_mut(l).unwrap().get_mut(&neighbor_id) {
-                     neighbor_edges.push(id);
-                     if neighbor_edges.len() > m {
-                          let n_vec = if let Some(v) = vectors_guard.get(&neighbor_id) { v } else { continue };
-                          let mut n_candidates: Vec<Candidate> = Vec::new();
-                          for &nid in neighbor_edges.iter() {
-                              if let Some(v) = vectors_guard.get(&nid) {
-                                  n_candidates.push(Candidate { id: nid, dist: self.dist(n_vec, v) });
-                              }
-                          }
-                          n_candidates.sort(); 
-                          let best: Vec<u32> = n_candidates.into_iter().take(m).map(|c| c.id).collect();
-                          *neighbor_edges = best;
-                     }
-                 }
-             }
-             if !candidates.is_empty() {
-                 curr_entry_id = candidates[0].id;
-             }
+            let candidates = self.search_layer(
+                curr_entry_id, vector, self.config.ef_construction, l,
+                layers.get(l).unwrap(), &vectors_guard,
+            );
+            let m = if l == 0 { self.config.m_max0 } else { self.config.m };
+            let neighbors = self.select_neighbors(candidates.clone(), m);
+            layers.get_mut(l).unwrap().insert(id, neighbors.clone());
+            for &neighbor_id in &neighbors {
+                if let Some(neighbor_edges) = layers.get_mut(l).unwrap().get_mut(&neighbor_id) {
+                    neighbor_edges.push(id);
+                    if neighbor_edges.len() > m {
+                        let n_vec = if let Some(v) = vectors_guard.get(&neighbor_id) { v } else { continue };
+                        let mut n_candidates: Vec<Candidate> = neighbor_edges.iter()
+                            .filter_map(|&nid| {
+                                vectors_guard.get(&nid).map(|v| Candidate { id: nid, dist: self.dist(n_vec, v) })
+                            })
+                            .collect();
+                        n_candidates.sort();
+                        *neighbor_edges = n_candidates.into_iter().take(m).map(|c| c.id).collect();
+                    }
+                }
+            }
+            if !candidates.is_empty() {
+                curr_entry_id = candidates[0].id;
+            }
         }
     }
 
     fn delete(&mut self, id: u32) {
         self.vectors.write().unwrap().remove(&id);
+
+        // Remove the deleted node from all layer adjacency lists so it cannot
+        // act as a routing waypoint in future searches. Without this, deleted
+        // nodes become permanent dead-ends in the graph, silently degrading recall.
+        {
+            let mut layers = self.layers.write().unwrap();
+            for layer in layers.iter_mut() {
+                layer.remove(&id);
+                for neighbors in layer.values_mut() {
+                    neighbors.retain(|&n| n != id);
+                }
+            }
+        }
+
+        // If the deleted node was the entry point, find a replacement from the
+        // highest non-empty layer so the graph remains navigable.
+        let is_entry = *self.entry_point.read().unwrap() == Some(id);
+        if is_entry {
+            let layers = self.layers.read().unwrap();
+            let max_l = *self.max_level.read().unwrap();
+            let new_ep = (0..=max_l)
+                .rev()
+                .flat_map(|l| layers.get(l))
+                .find_map(|layer| layer.keys().next().copied());
+            drop(layers);
+            *self.entry_point.write().unwrap() = new_ep;
+        }
     }
 
     fn search(&self, query: &[f32], k: usize) -> Vec<(u32, f32)> {
@@ -311,7 +365,8 @@ impl VectorIndex for HnswIndex {
              }
         }
         
-        let ef = k.max(50); 
+        // ef must be at least k (HNSW correctness) and at least ef_search (quality floor).
+        let ef = k.max(self.config.ef_search);
         let results = self.search_layer(curr_entry, query, ef, 0, layers.get(0).unwrap(), &vectors);
         
         results.into_iter().take(k).map(|c| (c.id, c.dist)).collect()
@@ -388,7 +443,68 @@ impl VectorIndex for HnswIndex {
         
         *self.entry_point.write().unwrap() = dump.entry_point;
         *self.max_level.write().unwrap() = dump.max_level;
-        
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::structure::index::VectorIndex;
+
+    fn make_vec(vals: &[f32]) -> Vec<f32> { vals.to_vec() }
+
+    // Regression test for Bug A: first insert with deterministic_level > 0 used to
+    // produce a disconnected entry point, making the graph un-navigable.
+    // Force the condition by inserting enough nodes that one reaches level >= 1.
+    #[test]
+    fn first_high_level_insert_is_searchable() {
+        let mut idx = HnswIndex::new();
+        // Insert 64 nodes — statistically guarantees at least one gets level >= 1.
+        for i in 0..64u32 {
+            let v: Vec<f32> = (0..8).map(|j| (i * 8 + j) as f32).collect();
+            idx.insert(i, &v);
+        }
+        // Every inserted node must be reachable from search.
+        let query: Vec<f32> = (0..8).map(|j| j as f32).collect(); // close to node 0
+        let results = idx.search(&query, 5);
+        assert!(!results.is_empty(), "search must return results after inserting 64 nodes");
+        assert_eq!(results[0].0, 0, "nearest to [0..8] should be node 0");
+    }
+
+    // Regression test for Bug B: delete must remove the node from layer adjacency
+    // lists, not just from the vector map. Previously deleted nodes remained as
+    // routing waypoints and were silently skipped during traversal.
+    #[test]
+    fn deleted_node_not_returned_in_search() {
+        let mut idx = HnswIndex::new();
+        for i in 0..10u32 {
+            let v: Vec<f32> = vec![i as f32, 0.0, 0.0, 0.0];
+            idx.insert(i, &v);
+        }
+        // node 0 is the closest to [0,0,0,0]; delete it.
+        idx.delete(0);
+        let results = idx.search(&[0.0, 0.0, 0.0, 0.0], 5);
+        assert!(
+            results.iter().all(|(id, _)| *id != 0),
+            "deleted node 0 must not appear in search results"
+        );
+    }
+
+    // After deleting the entry point the graph must still be searchable.
+    #[test]
+    fn graph_navigable_after_entry_point_deleted() {
+        let mut idx = HnswIndex::new();
+        for i in 0..8u32 {
+            idx.insert(i, &[i as f32, 0.0]);
+        }
+        let ep = *idx.entry_point.read().unwrap();
+        if let Some(ep_id) = ep {
+            idx.delete(ep_id);
+            let results = idx.search(&[0.0, 0.0], 3);
+            assert!(!results.is_empty(), "graph must remain searchable after entry point deletion");
+            assert!(results.iter().all(|(id, _)| *id != ep_id));
+        }
     }
 }

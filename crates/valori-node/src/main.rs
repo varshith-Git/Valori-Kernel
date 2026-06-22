@@ -1,8 +1,9 @@
 use valori_node::config::NodeConfig;
-use valori_node::server::{build_router, SharedEngine};
+use valori_node::server::{build_router_with_keys, SharedEngine};
+use valori_node::api_keys::KeyStore;
 use valori_node::engine::Engine;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use tokio::net::TcpListener;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -59,7 +60,7 @@ async fn main() {
             tracing::info!("Starting fresh (no prior state found)"),
     }
 
-    let shared_state: SharedEngine = Arc::new(Mutex::new(engine));
+    let shared_state: SharedEngine = Arc::new(RwLock::new(engine));
 
     // ── Auto-snapshot task ────────────────────────────────────────────────────
     if let (Some(path), Some(secs)) = (cfg.snapshot_path.clone(), cfg.auto_snapshot_interval_secs) {
@@ -70,7 +71,7 @@ async fn main() {
                 interval.tick().await;
 
                 tracing::debug!("Auto-snapshotting...");
-                let engine = state_clone.lock().await;
+                let engine = state_clone.read().await;
                 match engine.save_snapshot(Some(&path)) {
                     Ok(_) => tracing::info!("Snapshot saved to {:?}", path),
                     Err(e) => tracing::error!("Snapshot failed: {:?}", e),
@@ -79,7 +80,8 @@ async fn main() {
         });
     }
 
-    let app = build_router(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone());
+    let key_store = Arc::new(KeyStore::new(cfg.keys_path.clone()));
+    let app = build_router_with_keys(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone(), key_store);
 
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);

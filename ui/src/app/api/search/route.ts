@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API = process.env.VALORI_API_URL ?? "http://localhost:3000";
+import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 export async function POST(req: NextRequest) {
@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
     };
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${API}/search`, {
+    const res = await fetch(`${getApiUrl()}/search`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),

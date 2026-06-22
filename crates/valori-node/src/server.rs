@@ -1,21 +1,25 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use axum::{
-    routing::{post, delete},
+    routing::{post, delete, get},
     Router,
-    extract::{State, Path as AxumPath},
+    extract::{State, Path as AxumPath, Extension},
     Json,
     body::Body,
 };
 use tower_http::cors::{CorsLayer, Any};
 use tokio_util::io::ReaderStream;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use crate::engine::Engine;
 use crate::api::*;
 use crate::errors::EngineError;
-use serde::Deserialize;
+use crate::api_keys::{ApiScope, AuthState, KeyStore, required_scope};
+use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
+use serde::{Deserialize, Serialize};
 
-pub type SharedEngine = Arc<Mutex<Engine>>;
+/// Phase 3.11: RwLock-backed engine — allows concurrent reads.
+/// Read handlers call `.read().await`; write handlers call `.write().await`.
+pub type SharedEngine = Arc<RwLock<Engine>>;
 
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use axum::extract::Query;
@@ -24,27 +28,45 @@ use axum::response::{Response, IntoResponse};
 use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
-use axum::middleware::from_fn_with_state;
 
-async fn auth_guard(
-    State(token): State<Arc<Option<String>>>,
+async fn auth_guard_v2(
+    Extension(auth): Extension<Arc<AuthState>>,
     req: AxumRequest,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if let Some(token_str) = &*token {
-        let auth_header = req.headers().get(AUTHORIZATION)
-            .and_then(|val| val.to_str().ok())
-            .filter(|val| val.starts_with("Bearer "));
-            
-        if let Some(val) = auth_header {
-             let provided = val.trim_start_matches("Bearer ");
-             if provided == token_str {
-                 return Ok(next.run(req).await);
-             }
-        }
-        return Err(StatusCode::UNAUTHORIZED);
+    if !auth.has_any_auth() {
+        return Ok(next.run(req).await);
     }
-    Ok(next.run(req).await)
+    let path = req.uri().path().to_string();
+    let method = req.method().clone();
+    let required = required_scope(&method, &path);
+
+    let bearer = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    let Some(token) = bearer else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    // Key store check first.
+    if let Some(record) = auth.key_store.lookup(token) {
+        if record.scope.satisfies(&required) {
+            return Ok(next.run(req).await);
+        }
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Legacy static token fallback — treated as admin.
+    if let Some(ref legacy) = auth.legacy_token {
+        if token == legacy {
+            return Ok(next.run(req).await);
+        }
+    }
+
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 fn make_cors_layer(origin: &Option<String>) -> Option<CorsLayer> {
@@ -68,21 +90,36 @@ fn make_cors_layer(origin: &Option<String>) -> Option<CorsLayer> {
     Some(layer)
 }
 
+/// Build a standalone HTTP router.  Existing callers pass `None` for `key_store`;
+/// use [`build_router_with_keys`] from `main.rs` to enable Phase 3.5 key management.
 pub fn build_router(
     state: SharedEngine,
     auth_token: Option<String>,
     cors_origin: Option<String>,
 ) -> Router {
+    build_router_with_keys(state, auth_token, cors_origin, Arc::new(KeyStore::new(None)))
+}
+
+/// Full router builder used by `main.rs` — supports per-tenant API keys.
+pub fn build_router_with_keys(
+    state: SharedEngine,
+    auth_token: Option<String>,
+    cors_origin: Option<String>,
+    key_store: Arc<KeyStore>,
+) -> Router {
     // ── Public routes — no auth required ─────────────────────────────────────
-    // Load balancers (health probes) and Prometheus scrapers must reach these
-    // without a bearer token, even when VALORI_AUTH_TOKEN is configured.
     let public = Router::new()
         .route("/health",  axum::routing::get(health_check))
         .route("/metrics", axum::routing::get(metrics_handler))
         .with_state(state.clone());
 
-    // ── Protected routes — require auth when a token is configured ────────────
-    let mut protected = Router::new()
+    // ── Key management routes (admin scope enforced by middleware) ────────────
+    let key_routes = Router::new()
+        .route("/v1/keys", post(create_key_handler).get(list_keys_handler))
+        .route("/v1/keys/:id", delete(revoke_key_handler));
+
+    // ── Protected routes ──────────────────────────────────────────────────────
+    let protected = Router::new()
         .route("/version", axum::routing::get(version_handler))
         .route("/records", post(insert_record))
         .route("/v1/delete", post(delete_record))
@@ -93,6 +130,8 @@ pub fn build_router(
         .route("/graph/nodes", axum::routing::get(list_nodes))
         .route("/graph/edge", post(create_edge))
         .route("/graph/edges/:id", axum::routing::get(get_edges))
+        .route("/graph/subgraph", axum::routing::get(get_subgraph))
+        .route("/v1/graphrag", post(graphrag))
         .route("/v1/snapshot/download", axum::routing::get(snapshot))
         .route("/v1/snapshot/upload", post(restore))
         .route("/v1/snapshot/save", post(snapshot_save))
@@ -107,23 +146,38 @@ pub fn build_router(
         .route("/v1/replication/events", axum::routing::get(get_replication_events))
         .route("/v1/replication/state", axum::routing::get(get_replication_state))
         .route("/timeline", axum::routing::get(get_timeline))
+        .route("/v1/timeline", axum::routing::get(get_timeline))
         .route("/v1/namespaces", post(create_collection_handler).get(list_collections_handler))
         .route("/v1/namespaces/:name", delete(drop_collection_handler))
-        // Phase 3.1: object-store endpoints
         .route("/v1/storage/snapshots", axum::routing::get(list_remote_snapshots))
         .route("/v1/storage/snapshots/upload", post(upload_snapshot_to_store))
         .route("/v1/storage/snapshots/restore", post(restore_from_store))
         .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
         .route("/v1/storage/wal/archive", post(archive_wal_segment))
+        // Crypto-shredding (Phase 3.6)
+        .route("/v1/records/encrypted", post(insert_encrypted_handler))
+        .route("/v1/crypto/shred/:key_id", delete(shred_key_handler))
+        .route("/v1/crypto/status/:key_id", get(crypto_status_handler))
+        // Index config (Phase 3.13)
+        .route("/v1/index/config", axum::routing::get(index_config_handler))
+        .merge(key_routes)
         .with_state(state);
 
-    if let Some(token) = auth_token {
-        tracing::info!("Auth Enabled: Bearer token required");
-        let auth_state = Arc::new(Some(token));
-        protected = protected.layer(from_fn_with_state(auth_state, auth_guard));
+    let auth = Arc::new(AuthState {
+        key_store: key_store.clone(),
+        legacy_token: auth_token,
+    });
+    if auth.has_any_auth() {
+        tracing::info!("Auth Enabled");
     } else {
-        tracing::warn!("Auth Disabled: No token configured");
+        tracing::warn!("Auth Disabled: no token or keys configured");
     }
+
+    // Extension must be the outermost layer (applied last) so it is injected
+    // into the request BEFORE auth_guard_v2 runs and tries to extract it.
+    let protected = protected
+        .layer(axum::middleware::from_fn(auth_guard_v2))
+        .layer(Extension(auth));
 
     let mut router = Router::new().merge(public).merge(protected);
     if let Some(cors) = make_cors_layer(&cors_origin) {
@@ -145,7 +199,7 @@ pub fn build_router(
 async fn health_check(
     State(state): State<SharedEngine>,
 ) -> impl IntoResponse {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let h = engine.health();
 
     // Refresh Prometheus gauges on every health probe — cheap, and it means
@@ -170,7 +224,7 @@ async fn delete_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<DeleteRecordRequest>,
 ) -> Result<Json<DeleteRecordResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.resolve_collection(payload.collection.as_deref())?;
     engine.delete_record(payload.id)?;
 
@@ -181,7 +235,7 @@ async fn snapshot_save(
     State(state): State<SharedEngine>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let path = req.path.map(std::path::PathBuf::from);
     let used_path = engine.save_snapshot(path.as_deref())?;
     
@@ -195,7 +249,7 @@ async fn snapshot_restore(
     State(state): State<SharedEngine>,
     Json(req): Json<SnapshotRestoreRequest>,
 ) -> Result<Json<SnapshotRestoreResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let path = std::path::PathBuf::from(req.path);
     
     if !path.exists() {
@@ -212,7 +266,7 @@ async fn meta_set(
     State(state): State<SharedEngine>,
     Json(payload): Json<MetadataSetRequest>,
 ) -> Result<Json<MetadataSetResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     engine.metadata.set(payload.target_id, payload.metadata);
     if let Err(e) = engine.flush_metadata() {
         tracing::warn!("meta_set: failed to persist metadata sidecar: {:?}", e);
@@ -224,7 +278,7 @@ async fn meta_get(
     State(state): State<SharedEngine>,
     Query(payload): Query<MetadataGetRequest>,
 ) -> Result<Json<MetadataGetResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let val = engine.metadata.get(&payload.target_id);
     Ok(Json(MetadataGetResponse {
         target_id: payload.target_id,
@@ -236,7 +290,7 @@ async fn insert_record(
     State(state): State<SharedEngine>,
     Json(payload): Json<InsertRecordRequest>,
 ) -> Result<Json<InsertRecordResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let id = engine.insert_record_from_f32_ns(&payload.values, ns)?;
     Ok(Json(InsertRecordResponse { id }))
@@ -246,9 +300,31 @@ async fn batch_insert(
     State(state): State<SharedEngine>,
     Json(payload): Json<BatchInsertRequest>,
 ) -> Result<Json<BatchInsertResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let ids = engine.insert_batch_ns(&payload.batch, ns)?;
+    let meta_bytes: Option<Vec<Option<Vec<u8>>>> = payload.metadata.as_ref().map(|m| {
+        m.iter().map(|s| s.as_ref().map(|s| s.as_bytes().to_vec())).collect()
+    });
+    // Parse optional per-item idempotency keys from 32-hex strings to [u8;16].
+    let parsed_request_ids: Option<Vec<Option<[u8; 16]>>> =
+        payload.request_ids.as_ref().map(|rids| {
+            rids.iter().map(|entry| {
+                entry.as_deref().and_then(|hex| {
+                    if hex.len() != 32 { return None; }
+                    let mut bytes = [0u8; 16];
+                    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+                        bytes[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+                    }
+                    Some(bytes)
+                })
+            }).collect()
+        });
+    let ids = engine.insert_batch_ns(
+        &payload.batch,
+        meta_bytes.as_deref(),
+        ns,
+        parsed_request_ids.as_deref(),
+    )?;
     Ok(Json(BatchInsertResponse { ids }))
 }
 
@@ -256,7 +332,10 @@ async fn search(
     State(state): State<SharedEngine>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, EngineError> {
-    let engine = state.lock().await;
+    if payload.as_of.is_some() || payload.as_of_log_index.is_some() {
+        return search_as_of(state, payload).await;
+    }
+    let engine = state.read().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let hits = if ns == 0 {
         engine.search_l2(&payload.query, payload.k)?
@@ -264,14 +343,184 @@ async fn search(
         engine.search_l2_ns(&payload.query, payload.k, ns)?
     };
     let results = hits.into_iter().map(|(id, score)| SearchHit { id, score }).collect();
-    Ok(Json(SearchResponse { results }))
+    Ok(Json(SearchResponse::simple(results)))
+}
+
+/// Point-in-time search: replay committed events up to the target index/timestamp,
+/// run the search on the replayed state, and return the results with a BLAKE3 proof.
+async fn search_as_of(
+    state: SharedEngine,
+    payload: SearchRequest,
+) -> Result<Json<SearchResponse>, EngineError> {
+    use valori_kernel::state::kernel::KernelState;
+    use valori_kernel::index::SearchResult;
+    use valori_kernel::types::scalar::FxpScalar;
+    use valori_kernel::types::vector::FxpVector;
+    use valori_kernel::fxp::qformat::SCALE;
+    use valori_kernel::snapshot::blake3::hash_state_blake3;
+
+    let engine = state.read().await;
+
+    let committer = engine.event_committer.as_ref().ok_or_else(|| {
+        EngineError::InvalidInput(
+            "as-of search requires the event log (set VALORI_EVENT_LOG_PATH)".into(),
+        )
+    })?;
+    let journal = committer.journal();
+
+    // Determine target log index and the corresponding timestamp.
+    let (target_idx, timestamp_unix) = if let Some(idx) = payload.as_of_log_index {
+        let ts = journal.event_timestamp(idx as usize).unwrap_or(0);
+        (idx as usize, ts)
+    } else {
+        // Parse the ISO 8601 timestamp.
+        let unix = parse_iso8601(payload.as_of.as_deref().unwrap_or(""))
+            .ok_or_else(|| EngineError::InvalidInput(
+                "invalid as_of timestamp — expected ISO 8601 UTC, e.g. 2026-03-03T00:00:00Z".into(),
+            ))?;
+        match journal.find_log_index_at_or_before(unix) {
+            Some(idx) => (idx, unix),
+            None => {
+                // No events at or before the requested time → empty state.
+                return Ok(Json(SearchResponse {
+                    results: vec![],
+                    as_of_log_index: Some(0),
+                    as_of_timestamp_unix: Some(unix),
+                    as_of_timestamp_iso: Some(unix_to_iso8601(unix)),
+                    as_of_state_hash: Some(bytes_to_hex(&[0u8; 32])),
+                }));
+            }
+        }
+    };
+
+    let events = journal.committed();
+    if target_idx >= events.len() {
+        return Err(EngineError::InvalidInput(format!(
+            "as_of_log_index {target_idx} is out of range (have {} events)",
+            events.len()
+        )));
+    }
+
+    // Replay events[0..=target_idx] into a fresh kernel.
+    let mut replay = KernelState::new();
+    for event in &events[0..=target_idx] {
+        let _ = replay.apply_event(event);
+    }
+
+    // Resolve namespace in the *replayed* state via the engine's registry
+    // (namespace registry is separate from kernel state and not replayed here).
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+
+    // Convert f32 query to Q16.16 FxpVector.
+    for &v in &payload.query {
+        if v > 32767.99 || v < -32768.0 {
+            return Err(EngineError::InvalidInput(
+                "query values must be in [-32768.0, 32767.99]".into(),
+            ));
+        }
+    }
+    let fxp_data: Vec<FxpScalar> = payload.query.iter()
+        .map(|&v| FxpScalar((v * SCALE as f32) as i32))
+        .collect();
+    let fxp_query = FxpVector { data: fxp_data };
+
+    let k = payload.k;
+    let mut results_buf = vec![SearchResult::default(); k];
+    let found = if ns == 0 {
+        replay.search_l2(&fxp_query, &mut results_buf, None)
+    } else {
+        replay.search_l2_ns(&fxp_query, &mut results_buf, ns)
+    };
+    let results: Vec<SearchHit> = results_buf[..found].iter().map(|r| {
+        let score = r.score.0 as f32 / (SCALE as f32 * SCALE as f32);
+        SearchHit { id: r.id.0, score }
+    }).collect();
+
+    let state_hash_bytes = hash_state_blake3(&replay);
+    let state_hash_hex = bytes_to_hex(&state_hash_bytes);
+
+    Ok(Json(SearchResponse {
+        results,
+        as_of_log_index: Some(target_idx as u64),
+        as_of_timestamp_unix: Some(timestamp_unix),
+        as_of_timestamp_iso: Some(unix_to_iso8601(timestamp_unix)),
+        as_of_state_hash: Some(state_hash_hex),
+    }))
+}
+
+fn bytes_to_hex(b: &[u8]) -> String {
+    b.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Parse a subset of ISO 8601 UTC: `YYYY-MM-DDTHH:MM:SSZ` or `YYYY-MM-DDTHH:MM:SS+00:00`.
+/// Returns unix seconds since the epoch.
+fn parse_iso8601(s: &str) -> Option<u64> {
+    let s = s.trim();
+    // Require at least "YYYY-MM-DDTHH:MM:SS"
+    if s.len() < 19 { return None; }
+    let year:  u64 = s[0..4].parse().ok()?;
+    let month: u64 = s[5..7].parse().ok()?;
+    let day:   u64 = s[8..10].parse().ok()?;
+    let hour:  u64 = s[11..13].parse().ok()?;
+    let min:   u64 = s[14..16].parse().ok()?;
+    let sec:   u64 = s[17..19].parse().ok()?;
+    if s.as_bytes().get(10) != Some(&b'T') { return None; }
+
+    // Leap-year calculation for days-since-epoch.
+    // Months → cumulative days (non-leap year).
+    const DAYS_IN_MONTH: [u64; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let is_leap = |y: u64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+
+    // Days from 1970-01-01 to start of `year`.
+    let mut days: i64 = 0;
+    for y in 1970..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    // Add days for completed months in current year.
+    for m in 1..month {
+        let extra = if m == 2 && is_leap(year) { 1 } else { 0 };
+        days += DAYS_IN_MONTH[m as usize] as i64 + extra;
+    }
+    days += day as i64 - 1; // 1-indexed day
+
+    if days < 0 { return None; }
+    Some(days as u64 * 86400 + hour * 3600 + min * 60 + sec)
+}
+
+/// Format unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC only).
+pub fn unix_to_iso8601(unix_secs: u64) -> String {
+    let mut rem = unix_secs;
+    let sec = rem % 60; rem /= 60;
+    let min = rem % 60; rem /= 60;
+    let hour = rem % 24; rem /= 24;
+
+    // Days since 1970-01-01.
+    let is_leap = |y: u64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    const DAYS_IN_MONTH: [u64; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    let mut year = 1970u64;
+    loop {
+        let days_in_year = if is_leap(year) { 366 } else { 365 };
+        if rem < days_in_year { break; }
+        rem -= days_in_year;
+        year += 1;
+    }
+    let mut month = 1u64;
+    loop {
+        let dim = DAYS_IN_MONTH[month as usize] + if month == 2 && is_leap(year) { 1 } else { 0 };
+        if rem < dim { break; }
+        rem -= dim;
+        month += 1;
+    }
+    let day = rem + 1;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
 async fn create_node(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateNodeRequest>,
 ) -> Result<Json<CreateNodeResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let node_id = engine.create_node_for_record(payload.record_id, payload.kind, ns)?;
     Ok(Json(CreateNodeResponse { node_id }))
@@ -281,7 +530,7 @@ async fn create_edge(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateEdgeRequest>,
 ) -> Result<Json<CreateEdgeResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.resolve_collection(payload.collection.as_deref())?;
     let edge_id = engine.create_edge(payload.from, payload.to, payload.kind)?;
     Ok(Json(CreateEdgeResponse { edge_id }))
@@ -291,7 +540,7 @@ async fn get_node(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Result<Json<GetNodeResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     use valori_kernel::types::id::NodeId;
     match engine.state.get_node(NodeId(id)) {
         Some(node) => Ok(Json(GetNodeResponse {
@@ -307,7 +556,7 @@ async fn delete_node(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Result<Json<DeleteNodeResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.delete_node(id)?;
     Ok(Json(DeleteNodeResponse { success: true }))
 }
@@ -321,7 +570,7 @@ async fn list_nodes(
     State(state): State<SharedEngine>,
     Query(q): Query<ListNodesQuery>,
 ) -> Result<Json<ListNodesResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let ns = engine.resolve_collection(q.collection.as_deref())?;
     let raw = engine.nodes_in_ns(ns);
     let nodes = raw
@@ -336,7 +585,7 @@ async fn get_edges(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Result<Json<GetEdgesResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     use valori_kernel::types::id::NodeId;
     
     let mut edges = Vec::new();
@@ -352,10 +601,77 @@ async fn get_edges(
     Ok(Json(GetEdgesResponse { edges }))
 }
 
+#[derive(serde::Deserialize)]
+struct SubgraphQuery {
+    root: u32,
+    #[serde(default = "default_depth")]
+    depth: u32,
+}
+fn default_depth() -> u32 { 2 }
+
+async fn get_subgraph(
+    State(state): State<SharedEngine>,
+    Query(q): Query<SubgraphQuery>,
+) -> impl IntoResponse {
+    let engine = state.read().await;
+    let (nodes_out, edges_out) =
+        crate::graph_rag::expand_subgraph(&engine.state, &[q.root], q.depth);
+    (StatusCode::OK, Json(serde_json::json!({ "nodes": nodes_out, "edges": edges_out })))
+}
+
+// ── Phase 3.15: native GraphRAG — KNN + subgraph expansion in one call ────────
+
+#[derive(serde::Deserialize)]
+struct GraphRagRequest {
+    query_vector: Vec<f32>,
+    k: usize,
+    #[serde(default = "default_depth")]
+    depth: u32,
+    #[serde(default)]
+    collection: Option<String>,
+}
+
+/// Retrieve the K nearest memories AND the knowledge subgraph around them, in a
+/// single read against one consistent kernel snapshot. No second store, no sync.
+async fn graphrag(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<GraphRagRequest>,
+) -> Result<Json<serde_json::Value>, EngineError> {
+    let engine = state.read().await;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+    let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
+
+    let mut seeds: Vec<u32> = Vec::new();
+    let mut hits_out: Vec<serde_json::Value> = Vec::new();
+    for (record_id, score) in &hits {
+        let node_id = engine.record_to_node.get(record_id).copied();
+        if let Some(nid) = node_id {
+            seeds.push(nid);
+        }
+        let memory_id = format!("rec:{record_id}");
+        let metadata = engine.metadata.get(&memory_id);
+        hits_out.push(serde_json::json!({
+            "memory_id": memory_id,
+            "record_id": record_id,
+            "score": score,
+            "node_id": node_id,
+            "metadata": metadata,
+        }));
+    }
+
+    let (nodes, edges) = crate::graph_rag::expand_subgraph(&engine.state, &seeds, payload.depth);
+
+    Ok(Json(serde_json::json!({
+        "hits": hits_out,
+        "seed_nodes": seeds,
+        "subgraph": { "nodes": nodes, "edges": edges },
+    })))
+}
+
 async fn snapshot(
     State(state): State<SharedEngine>,
 ) -> Result<Vec<u8>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     engine.snapshot()
 }
 
@@ -363,7 +679,7 @@ async fn restore(
     State(state): State<SharedEngine>,
     body: axum::body::Bytes,
 ) -> Result<(), EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.restore(&body)?;
     Ok(())
 }
@@ -372,7 +688,7 @@ async fn memory_upsert_vector(
     State(state): State<SharedEngine>,
     Json(payload): Json<MemoryUpsertVectorRequest>,
 ) -> Result<Json<MemoryUpsertResponse>, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let record_id = engine.insert_record_from_f32_ns(&payload.vector, ns)?;
 
@@ -405,7 +721,7 @@ async fn memory_search_vector(
     State(state): State<SharedEngine>,
     Json(payload): Json<MemorySearchVectorRequest>,
 ) -> Result<Json<MemorySearchResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
 
@@ -429,7 +745,7 @@ async fn memory_search_vector(
 async fn get_proof(
     State(state): State<SharedEngine>,
 ) -> impl IntoResponse {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let proof = engine.get_proof();
     // Encode all 32 bytes as lowercase hex — same wire format as the cluster's
     // state_proof handler so external clients see an identical response shape.
@@ -440,7 +756,7 @@ async fn get_proof(
 async fn get_event_proof(
     State(state): State<SharedEngine>,
 ) -> Result<Json<EventProofResponse>, EngineError> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     
     if let Some(ref committer) = engine.event_committer {
         let proof = engine.get_proof();
@@ -474,7 +790,7 @@ async fn get_wal_stream(
     State(state): State<SharedEngine>,
 ) -> Result<Body, EngineError> {
     let path = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.wal_path.clone()
     }.ok_or(EngineError::InvalidInput("No WAL configured".into()))?;
 
@@ -495,7 +811,7 @@ async fn get_replication_events(
     let start_offset = params.start_offset.unwrap_or(0);
 
     let (log_path, rx) = {
-        let mut engine = state.lock().await;
+        let mut engine = state.write().await; // flush requires &mut
         if let Some(ref mut committer) = engine.event_committer {
             if let Err(e) = committer.flush_log() {
                 tracing::error!("Failed to flush event log for replication: {}", e);
@@ -537,61 +853,80 @@ async fn metrics_handler(
 ) -> String {
     // Update kernel gauges from live state before rendering.
     {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.update_prometheus_metrics();
     }
     crate::telemetry::get_metrics()
 }
 
+#[derive(serde::Deserialize, Default)]
+struct TimelineQuery {
+    /// ISO 8601 UTC lower bound (inclusive).
+    from: Option<String>,
+    /// ISO 8601 UTC upper bound (inclusive).
+    to: Option<String>,
+    /// Filter to events in a specific collection (not yet applied at kernel level;
+    /// kept for future use when namespace is stored per-event).
+    #[allow(dead_code)]
+    collection: Option<String>,
+}
+
 async fn get_timeline(
     State(state): State<SharedEngine>,
-) -> Result<Json<Vec<String>>, EngineError> {
-    // Read from the in-memory EventJournal rather than re-parsing the
-    // on-disk file: the journal.committed() slice is always current because
-    // commit_buffer() runs synchronously inside commit_event().
+    Query(q): Query<TimelineQuery>,
+) -> Result<Json<TimelineResponse>, EngineError> {
     use valori_kernel::event::KernelEvent;
 
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let Some(ref committer) = engine.event_committer else {
-        return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
+        return Err(EngineError::InvalidInput("Event log not enabled (set VALORI_EVENT_LOG_PATH)".to_string()));
     };
 
-    let committed = committer.journal().committed();
-    let mut events = Vec::with_capacity(committed.len());
+    let from_unix = q.from.as_deref().and_then(parse_iso8601);
+    let to_unix   = q.to.as_deref().and_then(parse_iso8601);
 
-    for (event_id, event) in committed.iter().enumerate() {
-        let event_str = match event {
-            KernelEvent::InsertRecord { id, tag, .. } =>
-                format!("Event ID {event_id}: InsertRecord (Record {}, Tag: {tag})", id.0),
-            KernelEvent::DeleteRecord { id } =>
-                format!("Event ID {event_id}: DeleteRecord (Record {})", id.0),
-            KernelEvent::SoftDeleteRecord { id } =>
-                format!("Event ID {event_id}: SoftDeleteRecord (Record {})", id.0),
-            KernelEvent::CreateNode { id, kind, .. } =>
-                format!("Event ID {event_id}: CreateNode (Node {}, Kind: {kind:?})", id.0),
-            KernelEvent::CreateEdge { id, from, to, kind } =>
-                format!("Event ID {event_id}: CreateEdge (Edge {}, {from:?} -> {to:?}, Kind: {kind:?})", id.0),
-            KernelEvent::DeleteEdge { id } =>
-                format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0),
-            KernelEvent::DeleteNode { id } =>
-                format!("Event ID {event_id}: DeleteNode (Node {})", id.0),
-            KernelEvent::InsertRecordEncrypted { id, key_id, .. } =>
-                format!("Event ID {event_id}: InsertRecordEncrypted (Record {}, key {})",
-                    id.0, key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
-            KernelEvent::ShredKey { key_id } =>
-                format!("Event ID {event_id}: ShredKey (key {})",
-                    key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
-            KernelEvent::AutoInsertRecord { tag, .. } =>
-                format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})"),
-            KernelEvent::AutoCreateNode { kind, .. } =>
-                format!("Event ID {event_id}: AutoCreateNode (Kind: {kind:?})"),
-            KernelEvent::AutoCreateEdge { from, to, kind } =>
-                format!("Event ID {event_id}: AutoCreateEdge ({} → {}, Kind: {kind:?})", from.0, to.0),
+    let journal = committer.journal();
+    let mut entries: Vec<TimelineEntry> = Vec::new();
+
+    for (log_index, (event, ts)) in journal.committed_with_timestamps().enumerate() {
+        // Apply timestamp range filter.
+        if let Some(from) = from_unix { if ts < from { continue; } }
+        if let Some(to)   = to_unix   { if ts > to   { continue; } }
+
+        let (event_type, record_id, node_id, edge_id) = match event {
+            KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
+            KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),
+            KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted", Some(id.0), None,       None),
+            KernelEvent::DeleteRecord { id }              => ("DeleteRecord",           Some(id.0), None,       None),
+            KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",       Some(id.0), None,       None),
+            KernelEvent::ShredKey { .. }                  => ("ShredKey",               None,       None,       None),
+            KernelEvent::CreateNode { id, .. }            => ("CreateNode",             None,       Some(id.0), None),
+            KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",         None,       None,       None),
+            KernelEvent::DeleteNode { id }                => ("DeleteNode",             None,       Some(id.0), None),
+            KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",             None,       None,       Some(id.0)),
+            KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
+            KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
+            KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
         };
-        events.push(event_str);
+
+        entries.push(TimelineEntry {
+            log_index: log_index as u64,
+            timestamp_unix: ts,
+            timestamp_iso: unix_to_iso8601(ts),
+            event_type,
+            record_id,
+            node_id,
+            edge_id,
+        });
     }
 
-    Ok(Json(events))
+    let total = entries.len();
+    Ok(Json(TimelineResponse {
+        events: entries,
+        total,
+        from_unix,
+        to_unix,
+    }))
 }
 
 // ── Collection (namespace) management endpoints ───────────────────────────────
@@ -604,7 +939,7 @@ async fn create_collection_handler(
     if name.is_empty() {
         return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
     }
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     let already_exists = engine.namespaces.map.contains_key(&name) || name == "default";
     let id = engine.create_collection(&name)?;
     Ok(Json(CreateCollectionResponse {
@@ -617,7 +952,7 @@ async fn create_collection_handler(
 async fn list_collections_handler(
     State(state): State<SharedEngine>,
 ) -> Json<ListCollectionsResponse> {
-    let engine = state.lock().await;
+    let engine = state.read().await;
     let collections = engine
         .list_collections()
         .into_iter()
@@ -630,7 +965,7 @@ async fn drop_collection_handler(
     State(state): State<SharedEngine>,
     AxumPath(name): AxumPath<String>,
 ) -> Result<axum::http::StatusCode, EngineError> {
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.drop_collection(&name)?;
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -687,7 +1022,7 @@ async fn list_remote_snapshots(
     State(state): State<SharedEngine>,
 ) -> Result<Json<ListRemoteSnapshotsResponse>, EngineError> {
     let object_store = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.object_store.clone()
     };
     let os = object_store.ok_or_else(|| {
@@ -711,7 +1046,7 @@ async fn upload_snapshot_to_store(
     // Capture snapshot data and object store handle while holding the lock,
     // then release before any async I/O so we don't hold the mutex across awaits.
     let (snap_bytes, state_hash, object_store, keep) = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         let snap = engine.snapshot()?;
         let proof = engine.get_proof();
         let hash = proof
@@ -757,7 +1092,7 @@ async fn restore_from_store(
     Json(req): Json<RestoreFromStoreRequest>,
 ) -> Result<Json<RestoreFromStoreResponse>, EngineError> {
     let object_store = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.object_store.clone()
     };
     let os = object_store.ok_or_else(|| {
@@ -773,13 +1108,13 @@ async fn restore_from_store(
     let size_bytes = data.len();
 
     {
-        let mut engine = state.lock().await;
+        let mut engine = state.write().await;
         engine.restore(&data)?;
     }
 
     // Compute hash of the just-restored state.
     let state_hash = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine
             .get_proof()
             .final_state_hash
@@ -805,7 +1140,7 @@ async fn list_remote_wal(
     State(state): State<SharedEngine>,
 ) -> Result<Json<ListRemoteWalResponse>, EngineError> {
     let object_store = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.object_store.clone()
     };
     let os = object_store.ok_or_else(|| {
@@ -831,7 +1166,7 @@ async fn archive_wal_segment(
     Json(req): Json<ArchiveWalRequest>,
 ) -> Result<Json<ArchiveWalResponse>, EngineError> {
     let object_store = {
-        let engine = state.lock().await;
+        let engine = state.read().await;
         engine.object_store.clone()
     };
     let os = object_store.ok_or_else(|| {
@@ -856,4 +1191,167 @@ async fn archive_wal_segment(
         .map_err(|e| EngineError::InvalidInput(format!("archive failed: {e}")))?;
 
     Ok(Json(ArchiveWalResponse { key, size_bytes }))
+}
+
+// ── Phase 3.5: API key management ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct CreateKeyRequest {
+    #[serde(default = "default_scope")]
+    scope: ApiScope,
+    collection: Option<String>,
+    description: Option<String>,
+}
+
+fn default_scope() -> ApiScope { ApiScope::ReadWrite }
+
+async fn create_key_handler(
+    Extension(auth): Extension<Arc<AuthState>>,
+    Json(req): Json<CreateKeyRequest>,
+) -> impl IntoResponse {
+    let created = auth.key_store.create(req.scope, req.collection, req.description);
+    (StatusCode::CREATED, Json(created))
+}
+
+async fn list_keys_handler(
+    Extension(auth): Extension<Arc<AuthState>>,
+) -> impl IntoResponse {
+    let keys = auth.key_store.list();
+    Json(serde_json::json!({ "keys": keys }))
+}
+
+async fn revoke_key_handler(
+    Extension(auth): Extension<Arc<AuthState>>,
+    AxumPath(id): AxumPath<String>,
+) -> impl IntoResponse {
+    if auth.key_store.revoke(&id) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::NOT_FOUND
+    }
+}
+
+// ── Phase 3.6: Crypto-shredding ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct InsertEncryptedRequest {
+    /// Base64-encoded plaintext payload (will be encrypted by the vault).
+    payload: String,
+    tag: Option<u64>,
+    collection: Option<String>,
+    /// Optional pre-chosen key_id (hex). If absent, a fresh key_id is generated.
+    key_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct InsertEncryptedResponse {
+    id: u32,
+    key_id: String,
+}
+
+async fn insert_encrypted_handler(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<InsertEncryptedRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    use base64::Engine as _;
+    let plaintext = base64::engine::general_purpose::STANDARD
+        .decode(&payload.payload)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64 decode: {e}")))?;
+
+    let key_id: [u8; 16] = if let Some(ref hex) = payload.key_id {
+        hex_to_key_id(hex)
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?
+    } else {
+        new_key_id()
+    };
+
+    let mut engine = state.write().await;
+    let ns = engine.resolve_collection(payload.collection.as_deref())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let tag = payload.tag.unwrap_or(0);
+
+    let id = engine.insert_encrypted_ns(&plaintext, tag, ns, key_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok((StatusCode::CREATED, Json(InsertEncryptedResponse {
+        id,
+        key_id: key_id_to_hex(&key_id),
+    })))
+}
+
+#[derive(Serialize)]
+struct ShredKeyResponse {
+    key_id: String,
+    shredded: bool,
+}
+
+async fn shred_key_handler(
+    State(state): State<SharedEngine>,
+    AxumPath(key_id_hex): AxumPath<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let key_id = hex_to_key_id(&key_id_hex)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?;
+
+    let mut engine = state.write().await;
+    engine.shred_key(key_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(Json(ShredKeyResponse { key_id: key_id_hex, shredded: true }))
+}
+
+#[derive(Serialize)]
+struct CryptoStatusResponse {
+    key_id: String,
+    exists: bool,
+}
+
+async fn crypto_status_handler(
+    State(state): State<SharedEngine>,
+    AxumPath(key_id_hex): AxumPath<String>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let key_id = hex_to_key_id(&key_id_hex)
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?;
+
+    let engine = state.read().await;
+    let exists = engine.vault.key_exists(&key_id);
+    Ok(Json(CryptoStatusResponse { key_id: key_id_hex, exists }))
+}
+
+// ── Phase 3.13: index config endpoint ────────────────────────────────────────
+
+#[derive(Serialize)]
+struct IndexConfigResponse {
+    index_type: String,
+    hnsw: Option<HnswConfigView>,
+}
+
+#[derive(Serialize)]
+struct HnswConfigView {
+    m: usize,
+    m_max0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+}
+
+async fn index_config_handler(
+    State(state): State<SharedEngine>,
+) -> impl IntoResponse {
+    let engine = state.read().await;
+    let index_type = match engine.index_kind {
+        crate::config::IndexKind::BruteForce => "brute_force",
+        crate::config::IndexKind::Hnsw       => "hnsw",
+        crate::config::IndexKind::Ivf        => "ivf",
+    };
+    let hnsw = if engine.index_kind == crate::config::IndexKind::Hnsw {
+        let c = &engine.hnsw_config;
+        Some(HnswConfigView {
+            m: c.m,
+            m_max0: c.m_max0,
+            ef_construction: c.ef_construction,
+            ef_search: c.ef_search,
+        })
+    } else {
+        None
+    };
+    Json(IndexConfigResponse { index_type: index_type.into(), hnsw })
 }

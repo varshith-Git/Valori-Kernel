@@ -7,7 +7,7 @@ use valori_node::config::{NodeConfig, NodeMode};
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use std::time::Duration;
 
 #[tokio::test]
@@ -24,10 +24,10 @@ async fn test_replication_bootstrap() {
     leader_config.max_edges = 100;
     leader_config.wal_path = Some(std::env::temp_dir().join("leader_boot_wal.log"));
 
-    let leader_state = Arc::new(Mutex::new(Engine::new(&leader_config)));
+    let leader_state = Arc::new(RwLock::new(Engine::new(&leader_config)));
 
     {
-        let mut engine = leader_state.lock().await;
+        let mut engine = leader_state.write().await;
         let log_path = std::env::temp_dir().join("leader_boot_events.log");
         let _ = std::fs::remove_file(&log_path);
 
@@ -79,10 +79,10 @@ async fn test_replication_bootstrap() {
     follower_config.max_edges = 100;
     follower_config.mode = NodeMode::Follower { leader_url: leader_url.clone() };
 
-    let follower_state = Arc::new(Mutex::new(Engine::new(&follower_config)));
+    let follower_state = Arc::new(RwLock::new(Engine::new(&follower_config)));
 
     {
-        let mut engine = follower_state.lock().await;
+        let mut engine = follower_state.write().await;
         let log_path = std::env::temp_dir().join("follower_boot_events.log");
         let _ = std::fs::remove_file(&log_path);
 
@@ -107,7 +107,7 @@ async fn test_replication_bootstrap() {
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let count = {
-        let engine = follower_state.lock().await;
+        let engine = follower_state.read().await;
         engine.state.record_count()
     };
     assert_eq!(count, 10, "Follower should have bootstrapped 10 records from snapshot");
@@ -123,7 +123,7 @@ async fn test_replication_bootstrap() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let count_after = {
-        let engine = follower_state.lock().await;
+        let engine = follower_state.read().await;
         engine.state.record_count()
     };
     assert_eq!(count_after, 11, "Follower should have replicated the new event (11 total)");

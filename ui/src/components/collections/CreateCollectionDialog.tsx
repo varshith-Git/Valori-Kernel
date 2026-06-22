@@ -50,11 +50,11 @@ export function CreateCollectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 text-white max-w-md">
+      <DialogContent className="bg-card border-border text-foreground max-w-md">
         <DialogHeader>
           <DialogTitle className="text-base">
             New collection in{" "}
-            <span className="font-mono text-zinc-400">{project}</span>
+            <span className="font-mono text-muted-foreground">{project}</span>
           </DialogTitle>
         </DialogHeader>
         <div className="py-2 flex flex-col gap-2">
@@ -67,12 +67,12 @@ export function CreateCollectionDialog({
               setErr("");
             }}
             onKeyDown={(e) => e.key === "Enter" && submit()}
-            className="bg-zinc-800 border-zinc-700 text-white placeholder:text-zinc-600"
+            className="bg-accent border-input text-foreground placeholder:text-muted-foreground"
           />
           {name && (
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-muted-foreground">
               Namespace:{" "}
-              <code className="font-mono text-zinc-400">
+              <code className="font-mono text-muted-foreground">
                 {project}--{name}
               </code>
             </p>
@@ -84,7 +84,7 @@ export function CreateCollectionDialog({
             variant="outline"
             size="sm"
             onClick={() => onOpenChange(false)}
-            className="border-zinc-700 text-zinc-400"
+            className="border-input text-muted-foreground"
           >
             Cancel
           </Button>
@@ -92,7 +92,7 @@ export function CreateCollectionDialog({
             size="sm"
             disabled={!name || busy}
             onClick={submit}
-            className="bg-white text-black hover:bg-zinc-200"
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
             {busy ? "Creating…" : "Create collection"}
           </Button>

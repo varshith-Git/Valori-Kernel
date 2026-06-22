@@ -49,14 +49,14 @@ export function RecordsTab({ collection }: Props) {
     // Actually delete uses a different endpoint
   };
 
-  if (!dim) return <p className="text-xs text-zinc-500">Loading dimension…</p>;
-  if (isLoading) return <div className="h-8 animate-pulse rounded bg-zinc-800 w-1/2" />;
+  if (!dim) return <p className="text-xs text-muted-foreground">Loading dimension…</p>;
+  if (isLoading) return <div className="h-8 animate-pulse rounded bg-accent w-1/2" />;
   if (error) return <p className="text-xs text-red-400">{error}</p>;
   if (records.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-zinc-800 py-10 text-center">
-        <p className="text-sm text-zinc-500">No records in this project yet.</p>
-        <p className="mt-1 text-xs text-zinc-600">Use the Upload tab to add vectors.</p>
+      <div className="rounded-xl border border-dashed border-border py-10 text-center">
+        <p className="text-sm text-muted-foreground">No records in this project yet.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Use the Upload tab to add vectors.</p>
       </div>
     );
   }
@@ -64,19 +64,19 @@ export function RecordsTab({ collection }: Props) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between mb-1">
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted-foreground">
           Showing up to 50 records (nearest to zero vector in{" "}
           <span className="font-mono">{dim}D</span> space)
         </p>
         <button
           onClick={load}
-          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+          className="text-xs text-muted-foreground hover:text-accent-foreground transition-colors"
         >
           Refresh
         </button>
       </div>
 
-      <div className="grid grid-cols-[3rem_1fr_5rem_4rem] gap-2 px-3 py-1.5 text-xs text-zinc-600 uppercase tracking-wider border-b border-zinc-800">
+      <div className="grid grid-cols-[3rem_1fr_5rem_4rem] gap-2 px-3 py-1.5 text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
         <span>#</span><span>Record ID</span><span>Score</span><span></span>
       </div>
 
@@ -113,16 +113,16 @@ function RecordRow({
   };
 
   return (
-    <div className="grid grid-cols-[3rem_1fr_5rem_4rem] gap-2 items-center rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm">
-      <span className="text-zinc-600 font-mono text-xs">{rank}</span>
-      <span className="font-mono text-zinc-200">#{record.id}</span>
-      <span className="font-mono text-xs text-zinc-400">
+    <div className="grid grid-cols-[3rem_1fr_5rem_4rem] gap-2 items-center rounded-lg border border-border bg-card px-3 py-2 text-sm">
+      <span className="text-muted-foreground font-mono text-xs">{rank}</span>
+      <span className="font-mono text-card-foreground">#{record.id}</span>
+      <span className="font-mono text-xs text-muted-foreground">
         {record.score.toFixed(4)}
       </span>
       <button
         onClick={del}
         disabled={deleting}
-        className="text-xs text-zinc-600 hover:text-red-400 transition-colors text-right"
+        className="text-xs text-muted-foreground hover:text-red-400 transition-colors text-right"
       >
         {deleting ? "…" : "delete"}
       </button>

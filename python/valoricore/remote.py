@@ -3,6 +3,7 @@ import time
 import requests
 import warnings
 from typing import List, Dict, Optional, Any, Tuple
+from uuid import uuid4
 from .types import Vector, RecordId, NodeId, Proof
 from .exceptions import ConnectionError, ValidationError, NotFoundError, NotLeaderError
 
@@ -30,10 +31,22 @@ class SyncRemoteClient:
     and the resolved leader is cached so subsequent writes skip the hop.
     During a leader election the client retries with backoff before raising
     :class:`NotLeaderError`.
+
+    ``ui_url`` is the optional Next.js UI server URL (default: base_url with
+    port replaced by 3001). Required only for middleware-layer APIs such as
+    ``list_contradictions`` and ``resolve_contradiction``, which live in the
+    Next.js API layer rather than the Rust kernel.
     """
 
-    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5):
+    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
+                 ui_url: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
+        # UI layer URL — defaults to same host but port 3001
+        if ui_url:
+            self.ui_url = ui_url.rstrip("/")
+        else:
+            import re
+            self.ui_url = re.sub(r":\d+$", ":3001", self.base_url)
         self.session = requests.Session()
         self._auto_snapshot_interval = None
         self._insert_count = 0
@@ -56,7 +69,12 @@ class SyncRemoteClient:
                 with open(file_path, "wb") as f:
                     f.write(snap_bytes)
 
-    def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        json_data: Dict[str, Any],
+        idempotency_key: Optional[bytes] = None,
+    ) -> Dict[str, Any]:
         """POST with cluster awareness.
 
         ``requests`` follows the leader's 307 redirect automatically (the POST
@@ -64,7 +82,14 @@ class SyncRemoteClient:
         leader URL so the common case skips the redirect, (b) learn the leader
         from any redirect that did occur, and (c) retry on transient 503
         / connection errors during an election.
+
+        ``idempotency_key`` — 16 raw bytes (a UUID) injected as ``request_id``
+        in the JSON body and kept identical across all retry attempts so the
+        server can deduplicate a write that was already applied before the
+        connection was lost.
         """
+        if idempotency_key is not None:
+            json_data = {**json_data, "request_id": list(idempotency_key)}
         last_err: Optional[Exception] = None
         for attempt in range(self._max_retries + 1):
             base = self._leader_url or self.base_url
@@ -103,17 +128,29 @@ class SyncRemoteClient:
             f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
         )
 
-    def insert(self, vector: Vector, tag: int = 0, collection: str = "default") -> RecordId:
+    def insert(
+        self,
+        vector: Vector,
+        tag: int = 0,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> RecordId:
         """Insert a vector record. Returns the new Record ID.
 
         ``collection`` routes the record into a named namespace.  Create
         collections first with ``create_collection(name)``; the default
         collection always exists.
+
+        ``idempotency_key`` — 16-byte token (defaults to a fresh UUID4) used
+        to deduplicate retried writes on a Raft cluster. Pass the same bytes
+        to guarantee exactly-once delivery even when a retry follows a
+        connection reset. Ignored by standalone nodes.
         """
         data: Dict[str, Any] = {"values": vector, "tag": tag}
         if collection != "default":
             data["collection"] = collection
-        resp = self._post("/records", data)
+        key = idempotency_key if idempotency_key is not None else uuid4().bytes
+        resp = self._post("/records", data, idempotency_key=key)
         self._check_auto_snapshot(1)
         return resp["id"]
 
@@ -126,11 +163,33 @@ class SyncRemoteClient:
         rid = self.insert(vector, tag=tag, collection=collection)
         return (rid, proof_bytes)
 
-    def insert_batch(self, batch: List[Vector], collection: str = "default") -> List[RecordId]:
-        """Insert a batch of vectors. Returns list of new Record IDs."""
+    def insert_batch(
+        self,
+        batch: List[Vector],
+        collection: str = "default",
+        metadata: Optional[List[Optional[str]]] = None,
+        request_ids: Optional[List[Optional[str]]] = None,
+    ) -> List[RecordId]:
+        """Insert a batch of vectors with optional per-item idempotency keys.
+
+        Args:
+            metadata: Optional per-vector context strings (UTF-8 JSON).
+                      When provided, committed into the BLAKE3 audit chain.
+                      Length must match ``batch``.
+            request_ids: Optional per-vector idempotency keys (32-hex strings).
+                         A duplicate key causes that item to be skipped and the
+                         previously assigned ID returned. Length must match ``batch``.
+
+        Returns:
+            List of record IDs (existing ID for deduped items, new ID otherwise).
+        """
         data: Dict[str, Any] = {"batch": batch}
         if collection != "default":
             data["collection"] = collection
+        if metadata is not None:
+            data["metadata"] = metadata
+        if request_ids is not None:
+            data["request_ids"] = request_ids
         resp = self._post("/v1/vectors/batch_insert", data)
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
@@ -147,9 +206,10 @@ class SyncRemoteClient:
         self._check_auto_snapshot(len(vectors))
         return results
 
-    def soft_delete(self, record_id: int) -> None:
+    def soft_delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
         """Mark a record as inactive without physically removing it."""
-        self._post("/v1/soft-delete", {"id": record_id})
+        key = idempotency_key if idempotency_key is not None else uuid4().bytes
+        self._post("/v1/soft-delete", {"id": record_id}, idempotency_key=key)
 
     def search(
         self,
@@ -158,6 +218,8 @@ class SyncRemoteClient:
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
         collection: str = "default",
+        as_of: Optional[str] = None,
+        as_of_log_index: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
 
@@ -167,6 +229,15 @@ class SyncRemoteClient:
         read-index protocol; ``"local"`` serves immediately from the queried
         node and may lag (eventually consistent, but no leader round trip).
         Ignored by a standalone node.
+
+        ``as_of`` — ISO 8601 UTC timestamp, e.g. ``"2026-03-03T00:00:00Z"``.
+        Searches the vector state as it existed at that moment. Requires
+        ``VALORI_EVENT_LOG_PATH`` to be set on the node. Returns a full
+        response dict (not just the results list) that includes
+        ``as_of_log_index``, ``as_of_timestamp_iso``, and ``as_of_state_hash``.
+
+        ``as_of_log_index`` — search the state after exactly this many committed
+        events. Takes precedence over ``as_of`` if both are given.
         """
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
@@ -175,8 +246,69 @@ class SyncRemoteClient:
             data["consistency"] = consistency
         if collection != "default":
             data["collection"] = collection
+        if as_of_log_index is not None:
+            data["as_of_log_index"] = as_of_log_index
+        elif as_of is not None:
+            data["as_of"] = as_of
         resp = self._post("/search", data)
+        # as-of searches return the full response dict (with proof fields).
+        if as_of is not None or as_of_log_index is not None:
+            return resp
         return resp["results"]
+
+    def graphrag(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        depth: int = 2,
+        collection: str = "default",
+        consistency: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """GraphRAG: the k nearest vectors AND the connected knowledge subgraph
+        around them, retrieved in one call from a single consistent snapshot.
+
+        Returns ``{"hits": [...], "seed_nodes": [...],
+        "subgraph": {"nodes": [...], "edges": [...]}}`` where each hit is
+        ``{"memory_id", "record_id", "score", "node_id", "metadata"}``.
+
+        ``depth`` is the graph hop limit (clamped to 4 server-side). ``collection``
+        scopes the vector search. ``consistency`` applies in cluster mode
+        (``"linearizable"`` | ``"local"``); ignored by a standalone node.
+
+        The subgraph is only as rich as the edges that exist — ingest creates a
+        document→chunk edge per memory; entity/citation edges add more.
+        """
+        data: Dict[str, Any] = {"query_vector": query_vector, "k": k, "depth": depth}
+        if collection != "default":
+            data["collection"] = collection
+        if consistency is not None:
+            data["consistency"] = consistency
+        return self._post("/v1/graphrag", data)
+
+    def timeline(
+        self,
+        from_ts: Optional[str] = None,
+        to_ts: Optional[str] = None,
+        collection: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return the committed event timeline.
+
+        ``from_ts`` / ``to_ts`` are ISO 8601 UTC strings that filter the
+        window of events returned. Requires ``VALORI_EVENT_LOG_PATH``.
+
+        Returns a dict with ``events`` (list of entries), ``total``,
+        ``from_unix``, and ``to_unix``.
+        """
+        params: Dict[str, str] = {}
+        if from_ts:
+            params["from"] = from_ts
+        if to_ts:
+            params["to"] = to_ts
+        if collection:
+            params["collection"] = collection
+        resp = self.session.get(f"{self.base_url}/v1/timeline", params=params)
+        resp.raise_for_status()
+        return resp.json()
 
     def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
         """Create a graph node. Returns Node ID."""
@@ -255,6 +387,75 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
+    # ── Phase 3.6: Crypto-shredding ──────────────────────────────────────────
+
+    def insert_encrypted(
+        self,
+        payload: bytes,
+        tag: int = 0,
+        collection: str = "default",
+        key_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Encrypt *payload* with AES-256-GCM and store it.
+
+        The plaintext is base64-encoded before sending.  The server generates a
+        fresh DEK unless *key_id* (32 hex chars) is supplied.
+
+        Returns ``{"id": int, "key_id": str}`` — keep *key_id* for later shredding.
+        """
+        import base64
+        body: Dict[str, Any] = {
+            "payload": base64.b64encode(payload).decode(),
+            "tag": tag,
+            "collection": collection,
+        }
+        if key_id is not None:
+            body["key_id"] = key_id
+        return self._post("/v1/records/encrypted", body)
+
+    def shred_key(self, key_id: str) -> Dict[str, Any]:
+        """Destroy the DEK *key_id* (GDPR Article 17 erasure).
+
+        After this call, all records encrypted under *key_id* become permanently
+        unrecoverable.  Returns ``{"key_id": str, "shredded": bool}``.
+        """
+        url = self.base_url + f"/v1/crypto/shred/{key_id}"
+        try:
+            resp = self.session.delete(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to shred key '{key_id}': {e}")
+
+    def shred_key_status(self, key_id: str) -> Dict[str, Any]:
+        """Check whether *key_id* still exists in the vault.
+
+        Returns ``{"key_id": str, "exists": bool}``.
+        """
+        url = self.base_url + f"/v1/crypto/status/{key_id}"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to check key status '{key_id}': {e}")
+
+    def get_index_config(self) -> Dict[str, Any]:
+        """Return current index type and HNSW parameters.
+
+        Returns ``{"index_type": str, "hnsw": dict | None}``.
+        For HNSW: ``{"m", "m_max0", "ef_construction", "ef_search"}``.
+        """
+        url = self.base_url + "/v1/index/config"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get index config: {e}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         """
         Breadth-first search traversal of the knowledge graph.
@@ -293,9 +494,10 @@ class SyncRemoteClient:
                 
         return list(record_ids)
 
-    def delete(self, record_id: int) -> None:
+    def delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
         """Permanently remove a record from the remote pool."""
-        self._post("/v1/delete", {"id": record_id})
+        key = idempotency_key if idempotency_key is not None else uuid4().bytes
+        self._post("/v1/delete", {"id": record_id}, idempotency_key=key)
 
     # ── Cluster operations ──────────────────────────────────────────────────
 
@@ -323,6 +525,81 @@ class SyncRemoteClient:
             return resp.status_code == 200
         except requests.exceptions.RequestException:
             return False
+
+    def leader_url(self) -> Optional[str]:
+        """Return the cached leader base URL learned from the last 307 redirect.
+
+        Returns ``None`` on a fresh client or after a leader failover resets
+        the cache. The value updates automatically on the next successful write.
+        """
+        return self._leader_url
+
+    def get_cluster_role(self) -> str:
+        """Return this node's current Raft role: ``"leader"`` or ``"follower"``.
+
+        Raises :class:`ConnectionError` if the node is standalone (endpoint 404s).
+        """
+        url = self.base_url + "/v1/cluster/role"
+        try:
+            resp = self.session.get(url, timeout=5)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode (/v1/cluster/role not found)")
+            resp.raise_for_status()
+            return resp.json().get("role", "unknown")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
+
+    # ── API key management (Phase 3.5) ────────────────────────────────────────
+
+    def create_key(
+        self,
+        scope: str = "read_write",
+        collection: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a new API key.  Requires admin credentials.
+
+        ``scope`` — ``"read_only"``, ``"read_write"`` (default), or ``"admin"``.
+        ``collection`` — lock the key to a single collection (optional).
+
+        Returns the full key record including the plain-text ``token`` — shown
+        only once and not stored server-side in plain text.
+        """
+        data: Dict[str, Any] = {"scope": scope}
+        if collection is not None:
+            data["collection"] = collection
+        if description is not None:
+            data["description"] = description
+        return self._post("/v1/keys", data)
+
+    def list_keys(self) -> List[Dict[str, Any]]:
+        """List all API keys (masked — raw tokens are never returned).
+
+        Requires admin credentials.  Returns a list of key records with
+        ``id``, ``scope``, ``collection``, ``description``, ``created_at``,
+        and ``prefix`` (first 8 chars of the token).
+        """
+        url = self.base_url + "/v1/keys"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json().get("keys", [])
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list keys: {e}")
+
+    def revoke_key(self, key_id: str) -> None:
+        """Revoke an API key by ID.  Requires admin credentials.
+
+        Raises ``NotFoundError`` if ``key_id`` does not exist.
+        """
+        url = self.base_url + f"/v1/keys/{key_id}"
+        try:
+            resp = self.session.delete(url, timeout=5)
+            if resp.status_code == 404:
+                raise NotFoundError(f"Key not found: {key_id}")
+            resp.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to revoke key '{key_id}': {e}")
 
     def get_metadata(self, record_id: int) -> Optional[bytes]:
         """Retrieve metadata for a remote record."""
@@ -408,12 +685,86 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
+    # ── Cortex: Knowledge graph ────────────────────────────────────────────────
+
+    def subgraph(self, root_node: int, depth: int = 2) -> Dict[str, Any]:
+        """Bounded BFS from ``root_node`` (depth capped at 4 server-side).
+
+        Returns ``{"nodes": [...], "edges": [...]}`` where each node has
+        ``id``, ``kind`` (NodeKind u8), and ``record`` (record_id or None),
+        and each edge has ``id``, ``from``, ``to``, ``kind`` (EdgeKind u8).
+
+        NodeKind: 0=Record, 1=Concept, 5=Document, 6=Chunk
+        EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
+        """
+        url = self.base_url + f"/graph/subgraph?root={root_node}&depth={depth}"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"subgraph failed: {e}")
+
+    # ── Cortex: Contradiction queue ────────────────────────────────────────────
+
+    def list_contradictions(
+        self,
+        collection: str = "default",
+        status: str = "pending",
+    ) -> Dict[str, Any]:
+        """List contradiction entries detected at ingest time.
+
+        Each entry contains ``record_a``, ``record_b``, ``source_a``,
+        ``source_b``, ``similarity``, ``status``, ``text_a``, ``text_b``.
+
+        Calls the Next.js UI layer (``ui_url``, defaults to port 3001).
+        """
+        url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
+        try:
+            resp = self.session.get(url, timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"list_contradictions failed: {e}")
+
+    def resolve_contradiction(
+        self,
+        contradiction_id: str,
+        action: str,  # "dismiss" | "supersede_b"
+    ) -> Dict[str, Any]:
+        """Resolve a pending contradiction.
+
+        ``action="dismiss"``    — both records are valid, remove from queue.
+        ``action="supersede_b"``— mark record_b as superseded; it will no
+                                  longer appear in future search results.
+
+        Calls the Next.js UI layer (``ui_url``, defaults to port 3001).
+        """
+        url = self.ui_url + "/api/contradictions"
+        try:
+            resp = self.session.post(url, json={"id": contradiction_id, "action": action}, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"resolve_contradiction failed: {e}")
+
 class AsyncRemoteClient:
-    """Asynchronous REST client for a standalone Valoricore node using httpx."""
-    
-    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5):
+    """Asynchronous REST client for a standalone Valoricore node using httpx.
+
+    ``ui_url`` is the optional Next.js UI server URL (default: base_url with
+    port replaced by 3001). Required for ``list_contradictions`` and
+    ``resolve_contradiction`` which live in the Next.js API layer.
+    """
+
+    def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
+                 ui_url: Optional[str] = None):
         import httpx
         self.base_url = base_url.rstrip("/")
+        if ui_url:
+            self.ui_url = ui_url.rstrip("/")
+        else:
+            import re
+            self.ui_url = re.sub(r":\d+$", ":3001", self.base_url)
         # follow_redirects=True is essential for clusters: writes to a follower
         # answer 307 + Location pointing at the leader. httpx does NOT follow
         # redirects by default, so without this every write to a non-leader fails.
@@ -486,10 +837,21 @@ class AsyncRemoteClient:
         rid = await self.insert(vector, tag=tag, collection=collection)
         return (rid, proof_bytes)
 
-    async def insert_batch(self, batch: List[Vector], collection: str = "default") -> List[RecordId]:
+    async def insert_batch(
+        self,
+        batch: List[Vector],
+        collection: str = "default",
+        metadata: Optional[List[Optional[str]]] = None,
+        request_ids: Optional[List[Optional[str]]] = None,
+    ) -> List[RecordId]:
+        """Insert a batch of vectors with optional per-item idempotency keys."""
         data: Dict[str, Any] = {"batch": batch}
         if collection != "default":
             data["collection"] = collection
+        if metadata is not None:
+            data["metadata"] = metadata
+        if request_ids is not None:
+            data["request_ids"] = request_ids
         resp = await self._post("/v1/vectors/batch_insert", data)
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
@@ -517,8 +879,11 @@ class AsyncRemoteClient:
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
         collection: str = "default",
+        as_of: Optional[str] = None,
+        as_of_log_index: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local"."""
+        """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local".
+        ``as_of`` and ``as_of_log_index`` enable point-in-time search (see sync docs)."""
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
@@ -526,8 +891,52 @@ class AsyncRemoteClient:
             data["consistency"] = consistency
         if collection != "default":
             data["collection"] = collection
+        if as_of_log_index is not None:
+            data["as_of_log_index"] = as_of_log_index
+        elif as_of is not None:
+            data["as_of"] = as_of
         resp = await self._post("/search", data)
+        if as_of is not None or as_of_log_index is not None:
+            return resp
         return resp["results"]
+
+    async def graphrag(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        depth: int = 2,
+        collection: str = "default",
+        consistency: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.graphrag — k nearest vectors plus the
+        connected subgraph in one call. Returns ``{"hits", "seed_nodes", "subgraph"}``."""
+        data: Dict[str, Any] = {"query_vector": query_vector, "k": k, "depth": depth}
+        if collection != "default":
+            data["collection"] = collection
+        if consistency is not None:
+            data["consistency"] = consistency
+        return await self._post("/v1/graphrag", data)
+
+    async def timeline(
+        self,
+        from_ts: Optional[str] = None,
+        to_ts: Optional[str] = None,
+        collection: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.timeline."""
+        params: Dict[str, str] = {}
+        if from_ts:
+            params["from"] = from_ts
+        if to_ts:
+            params["to"] = to_ts
+        if collection:
+            params["collection"] = collection
+        try:
+            resp = await self.client.get(f"{self.base_url}/v1/timeline", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to fetch timeline: {e}")
 
     async def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
         data = {"kind": kind, "record_id": record_id}
@@ -590,6 +999,49 @@ class AsyncRemoteClient:
         edges = await self.get_edges(node_id)
         return [e["to_node"] for e in edges]
 
+    # ── Phase 3.6: Crypto-shredding ──────────────────────────────────────────
+
+    async def insert_encrypted(
+        self,
+        payload: bytes,
+        tag: int = 0,
+        collection: str = "default",
+        key_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.insert_encrypted`."""
+        import base64
+        body: Dict[str, Any] = {
+            "payload": base64.b64encode(payload).decode(),
+            "tag": tag,
+            "collection": collection,
+        }
+        if key_id is not None:
+            body["key_id"] = key_id
+        return await self._post("/v1/records/encrypted", body)
+
+    async def shred_key(self, key_id: str) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.shred_key`."""
+        url = self.base_url + f"/v1/crypto/shred/{key_id}"
+        async with self.session.delete(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def shred_key_status(self, key_id: str) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.shred_key_status`."""
+        url = self.base_url + f"/v1/crypto/status/{key_id}"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_index_config(self) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.get_index_config`."""
+        url = self.base_url + "/v1/index/config"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     async def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         visited = set([start_node])
         queue = [(start_node, 0)]
@@ -639,6 +1091,41 @@ class AsyncRemoteClient:
         except httpx.HTTPError as e:
             raise ConnectionError(f"Failed to fetch cluster status from {url}: {e}")
 
+    # ── API key management (Phase 3.5) ────────────────────────────────────────
+
+    async def create_key(
+        self,
+        scope: str = "read_write",
+        collection: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a new API key.  Requires admin credentials."""
+        data: Dict[str, Any] = {"scope": scope}
+        if collection is not None:
+            data["collection"] = collection
+        if description is not None:
+            data["description"] = description
+        return await self._post("/v1/keys", data)
+
+    async def list_keys(self) -> List[Dict[str, Any]]:
+        """List all API keys (masked).  Requires admin credentials."""
+        try:
+            resp = await self.client.get(f"{self.base_url}/v1/keys")
+            resp.raise_for_status()
+            return resp.json().get("keys", [])
+        except Exception as e:
+            raise ConnectionError(f"Failed to list keys: {e}")
+
+    async def revoke_key(self, key_id: str) -> None:
+        """Revoke an API key by ID.  Requires admin credentials."""
+        try:
+            resp = await self.client.delete(f"{self.base_url}/v1/keys/{key_id}")
+            if resp.status_code == 404:
+                raise NotFoundError(f"Key not found: {key_id}")
+            resp.raise_for_status()
+        except Exception as e:
+            raise ConnectionError(f"Failed to revoke key '{key_id}': {e}")
+
     async def cluster_health(self) -> bool:
         """True when the node sees an elected leader (HTTP 200 on /v1/cluster/health)."""
         import httpx
@@ -648,6 +1135,22 @@ class AsyncRemoteClient:
             return resp.status_code == 200
         except httpx.HTTPError:
             return False
+
+    async def leader_url(self) -> Optional[str]:
+        """Cached leader base URL learned from a 307 redirect, or None."""
+        return self._leader_url
+
+    async def get_cluster_role(self) -> str:
+        """Return this node's current Raft role: ``"leader"`` or ``"follower"``."""
+        url = self.base_url + "/v1/cluster/role"
+        try:
+            resp = await self.client.get(url)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode (/v1/cluster/role not found)")
+            resp.raise_for_status()
+            return resp.json().get("role", "unknown")
+        except Exception as e:
+            raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
 
     async def get_metadata(self, record_id: int) -> Optional[bytes]:
         url = f"{self.base_url}/v1/memory/meta/get?key=rec:{record_id}"
@@ -730,9 +1233,345 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
+    # ── Cortex: Knowledge graph ────────────────────────────────────────────────
+
+    async def subgraph(self, root_node: int, depth: int = 2) -> Dict[str, Any]:
+        """Bounded BFS from ``root_node``. Returns ``{"nodes": [...], "edges": [...]}``.
+
+        NodeKind: 0=Record, 1=Concept, 5=Document, 6=Chunk
+        EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
+        """
+        url = self.base_url + f"/graph/subgraph?root={root_node}&depth={depth}"
+        try:
+            resp = await self.client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"subgraph failed: {e}")
+
+    # ── Cortex: Contradiction queue ────────────────────────────────────────────
+
+    async def list_contradictions(
+        self,
+        collection: str = "default",
+        status: str = "pending",
+    ) -> Dict[str, Any]:
+        """List contradiction entries. Calls Next.js UI layer (ui_url, port 3001)."""
+        url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
+        try:
+            resp = await self.client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"list_contradictions failed: {e}")
+
+    async def resolve_contradiction(
+        self,
+        contradiction_id: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        """Resolve a pending contradiction (dismiss | supersede_b).
+        Calls Next.js UI layer (ui_url, port 3001)."""
+        url = self.ui_url + "/api/contradictions"
+        try:
+            resp = await self.client.post(url, json={"id": contradiction_id, "action": action})
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"resolve_contradiction failed: {e}")
+
     async def close(self):
         """Close the underlying httpx client."""
         await self.client.aclose()
+
+class ClusterClient:
+    """Multi-node cluster client — routes writes to the leader, round-robins reads.
+
+    Point it at all the nodes in your cluster; the client discovers the
+    leader automatically via the first 307 redirect and caches it.  Local
+    reads are spread across all nodes; linearizable reads go to the leader.
+
+    Usage::
+
+        from valoricore.remote import ClusterClient
+
+        c = ClusterClient([
+            "http://node1:3000",
+            "http://node2:3000",
+            "http://node3:3000",
+        ])
+
+        rid = c.insert([0.1, 0.2, 0.3, 0.4])
+        hits = c.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="local")
+        print(c.leader_url())   # → 'http://node2:3000' (whichever is the leader)
+    """
+
+    def __init__(
+        self,
+        nodes: List[str],
+        max_retries: int = 3,
+        retry_backoff: float = 0.5,
+        ui_url: Optional[str] = None,
+    ):
+        if not nodes:
+            raise ValueError("ClusterClient requires at least one node URL")
+        self._clients = [
+            SyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff, ui_url=ui_url)
+            for url in nodes
+        ]
+        self._rr_idx = 0
+
+    def leader_url(self) -> Optional[str]:
+        """Last known leader base URL, or ``None`` until the first write discovers it."""
+        for c in self._clients:
+            if c._leader_url is not None:
+                return c._leader_url
+        return None
+
+    def _write_client(self) -> SyncRemoteClient:
+        for c in self._clients:
+            if c._leader_url is not None:
+                return c
+        return self._clients[0]
+
+    def _read_client(self, consistency: str = "local") -> SyncRemoteClient:
+        if consistency == "linearizable":
+            return self._write_client()
+        c = self._clients[self._rr_idx % len(self._clients)]
+        self._rr_idx += 1
+        return c
+
+    # ── Writes ────────────────────────────────────────────────────────────────
+
+    def insert(
+        self,
+        vector: Vector,
+        tag: int = 0,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> RecordId:
+        return self._write_client().insert(
+            vector, tag=tag, collection=collection, idempotency_key=idempotency_key
+        )
+
+    def insert_batch(
+        self,
+        batch: List[Vector],
+        collection: str = "default",
+        metadata: Optional[List[Optional[str]]] = None,
+        request_ids: Optional[List[Optional[str]]] = None,
+    ) -> List[RecordId]:
+        return self._write_client().insert_batch(
+            batch, collection=collection, metadata=metadata, request_ids=request_ids
+        )
+
+    def delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
+        self._write_client().delete(record_id, idempotency_key=idempotency_key)
+
+    def soft_delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
+        self._write_client().soft_delete(record_id, idempotency_key=idempotency_key)
+
+    def create_collection(self, name: str) -> Dict[str, Any]:
+        return self._write_client().create_collection(name)
+
+    def drop_collection(self, name: str) -> None:
+        self._write_client().drop_collection(name)
+
+    def restore(self, data: bytes) -> None:
+        self._write_client().restore(data)
+
+    # ── Reads ─────────────────────────────────────────────────────────────────
+
+    def search(
+        self,
+        query: Vector,
+        k: int,
+        filter_tag: Optional[int] = None,
+        consistency: str = "local",
+        collection: str = "default",
+        **kwargs: Any,
+    ) -> Any:
+        return self._read_client(consistency).search(
+            query, k, filter_tag=filter_tag,
+            consistency=consistency, collection=collection, **kwargs,
+        )
+
+    def graphrag(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        depth: int = 2,
+        collection: str = "default",
+        consistency: str = "local",
+    ) -> Dict[str, Any]:
+        """GraphRAG routed to a read replica (see SyncRemoteClient.graphrag).
+        ``consistency`` defaults to "local"; pass "linearizable" for a
+        read-index round trip that reflects every committed write."""
+        return self._read_client(consistency).graphrag(
+            query_vector, k=k, depth=depth, collection=collection, consistency=consistency,
+        )
+
+    def list_collections(self) -> List[Dict[str, Any]]:
+        return self._read_client().list_collections()
+
+    def get_state_hash(self) -> str:
+        return self._read_client().get_state_hash()
+
+    def timeline(
+        self,
+        from_ts: Optional[str] = None,
+        to_ts: Optional[str] = None,
+        collection: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self._read_client().timeline(from_ts=from_ts, to_ts=to_ts, collection=collection)
+
+    def snapshot(self) -> bytes:
+        return self._read_client().snapshot()
+
+    # ── Cluster meta ──────────────────────────────────────────────────────────
+
+    def cluster_status(self) -> Dict[str, Any]:
+        return self._read_client().cluster_status()
+
+    def cluster_health(self) -> bool:
+        return any(c.cluster_health() for c in self._clients)
+
+    def get_cluster_role(self) -> str:
+        return self._write_client().get_cluster_role()
+
+    def create_key(self, scope: str = "read_write", collection: Optional[str] = None, description: Optional[str] = None) -> Dict[str, Any]:
+        return self._write_client().create_key(scope=scope, collection=collection, description=description)
+
+    def list_keys(self) -> List[Dict[str, Any]]:
+        return self._write_client().list_keys()
+
+    def revoke_key(self, key_id: str) -> None:
+        self._write_client().revoke_key(key_id)
+
+
+class AsyncClusterClient:
+    """Async multi-node cluster client. Mirrors :class:`ClusterClient`."""
+
+    def __init__(
+        self,
+        nodes: List[str],
+        max_retries: int = 3,
+        retry_backoff: float = 0.5,
+        ui_url: Optional[str] = None,
+    ):
+        if not nodes:
+            raise ValueError("AsyncClusterClient requires at least one node URL")
+        self._clients = [
+            AsyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff, ui_url=ui_url)
+            for url in nodes
+        ]
+        self._rr_idx = 0
+
+    def leader_url(self) -> Optional[str]:
+        for c in self._clients:
+            if c._leader_url is not None:
+                return c._leader_url
+        return None
+
+    def _write_client(self) -> "AsyncRemoteClient":
+        for c in self._clients:
+            if c._leader_url is not None:
+                return c
+        return self._clients[0]
+
+    def _read_client(self, consistency: str = "local") -> "AsyncRemoteClient":
+        if consistency == "linearizable":
+            return self._write_client()
+        c = self._clients[self._rr_idx % len(self._clients)]
+        self._rr_idx += 1
+        return c
+
+    async def insert(
+        self,
+        vector: Vector,
+        tag: int = 0,
+        collection: str = "default",
+    ) -> RecordId:
+        return await self._write_client().insert(vector, tag=tag, collection=collection)
+
+    async def insert_batch(
+        self,
+        batch: List[Vector],
+        collection: str = "default",
+        metadata: Optional[List[Optional[str]]] = None,
+        request_ids: Optional[List[Optional[str]]] = None,
+    ) -> List[RecordId]:
+        return await self._write_client().insert_batch(
+            batch, collection=collection, metadata=metadata, request_ids=request_ids
+        )
+
+    async def delete(self, record_id: int) -> None:
+        await self._write_client().delete(record_id)
+
+    async def create_collection(self, name: str) -> Dict[str, Any]:
+        return await self._write_client().create_collection(name)
+
+    async def drop_collection(self, name: str) -> None:
+        await self._write_client().drop_collection(name)
+
+    async def search(
+        self,
+        query: Vector,
+        k: int,
+        filter_tag: Optional[int] = None,
+        consistency: str = "local",
+        collection: str = "default",
+        **kwargs: Any,
+    ) -> Any:
+        return await self._read_client(consistency).search(
+            query, k, filter_tag=filter_tag,
+            consistency=consistency, collection=collection, **kwargs,
+        )
+
+    async def graphrag(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        depth: int = 2,
+        collection: str = "default",
+        consistency: str = "local",
+    ) -> Dict[str, Any]:
+        """Async version of ClusterClient.graphrag — routed to a read replica."""
+        return await self._read_client(consistency).graphrag(
+            query_vector, k=k, depth=depth, collection=collection, consistency=consistency,
+        )
+
+    async def list_collections(self) -> List[Dict[str, Any]]:
+        return await self._read_client().list_collections()
+
+    async def get_state_hash(self) -> str:
+        return await self._read_client().get_state_hash()
+
+    async def timeline(
+        self,
+        from_ts: Optional[str] = None,
+        to_ts: Optional[str] = None,
+        collection: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._read_client().timeline(from_ts=from_ts, to_ts=to_ts, collection=collection)
+
+    async def cluster_status(self) -> Dict[str, Any]:
+        return await self._read_client().cluster_status()
+
+    async def cluster_health(self) -> bool:
+        import asyncio
+        results = await asyncio.gather(
+            *[c.cluster_health() for c in self._clients], return_exceptions=True
+        )
+        return any(r is True for r in results)
+
+    async def get_cluster_role(self) -> str:
+        return await self._write_client().get_cluster_role()
+
+    async def close(self) -> None:
+        import asyncio
+        await asyncio.gather(*[c.close() for c in self._clients])
+
 
 # Backward Compatibility Alias
 class RemoteClient(SyncRemoteClient):

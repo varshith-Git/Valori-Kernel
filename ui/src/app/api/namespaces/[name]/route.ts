@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API = process.env.VALORI_API_URL ?? "http://localhost:3000";
+import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 function authHeaders(): Record<string, string> {
@@ -16,7 +16,7 @@ export async function DELETE(
   try {
     const { name } = await params;
     const res = await fetch(
-      `${API}/v1/namespaces/${encodeURIComponent(name)}`,
+      `${getApiUrl()}/v1/namespaces/${encodeURIComponent(name)}`,
       { method: "DELETE", headers: authHeaders() }
     );
     const data = await res.json().catch(() => ({}));

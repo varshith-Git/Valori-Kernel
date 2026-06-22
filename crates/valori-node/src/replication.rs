@@ -146,7 +146,7 @@ pub async fn run_follower_loop(
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
             let (local_hash, local_height) = {
-                let engine = state_checker.lock().await;
+                let engine = state_checker.read().await;
                 let h = engine.get_proof().final_state_hash;
                 let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
                 (
@@ -187,7 +187,7 @@ pub async fn run_follower_loop(
         }
 
         let (_local_height, is_empty) = {
-            let engine = state.lock().await;
+            let engine = state.read().await;
             if let Some(ref committer) = engine.event_committer {
                 let h = committer.journal().committed_height();
                 (h, h == 0)
@@ -201,7 +201,7 @@ pub async fn run_follower_loop(
         }
 
         let start_offset = {
-            let engine = state.lock().await;
+            let engine = state.read().await;
             engine.event_committer.as_ref().unwrap().journal().committed_height() as u64
         };
 
@@ -247,7 +247,7 @@ pub async fn run_follower_loop(
                                 use base64::{Engine as _, engine::general_purpose::STANDARD};
                                 if let Ok(bytes) = STANDARD.decode(&msg.b64) {
                                     if let Ok((LogEntry::Event(event), _)) = bincode::serde::decode_from_slice::<LogEntry, _>(&bytes, bincode::config::standard()) {
-                                        let mut engine = state.lock().await;
+                                        let mut engine = state.write().await;
                                         if let Some(ref mut committer) = engine.event_committer {
                                             match committer.commit_event(event.clone()) {
                                                 Ok(_) => {
@@ -301,7 +301,7 @@ async fn bootstrap_from_leader(
     client: &LeaderClient,
 ) -> Result<(), EngineError> {
     let snapshot_bytes = client.download_snapshot().await?;
-    let mut engine = state.lock().await;
+    let mut engine = state.write().await;
     engine.restore(&snapshot_bytes)?;
 
     let log_path = engine.event_committer.as_ref()

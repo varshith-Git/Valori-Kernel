@@ -51,22 +51,19 @@ pub enum Command {
     DropNamespace {
         namespace_id: u16,
     },
-    // -------------------------------------------------------------------------
-    // RESERVED — Phase 3 (crypto-shredding + security model).
-    //
-    //  InsertEncryptedRecord {
-    //      namespace_id: u16,
-    //      id:           RecordId,
-    //      vector:       FxpVector,
-    //      key_id:       [u8; 16],
-    //      nonce:        [u8; 12],
-    //      ciphertext:   Vec<u8>,
-    //      tag:          [u8; 16],
-    //  }
-    //
-    //  EraseRecord {
-    //      id:         RecordId,
-    //      erased_by:  [u8; 16],
-    //  }
-    // -------------------------------------------------------------------------
+    // Phase 3.6 — Crypto-shredding
+    /// Insert a record whose payload is AES-256-GCM encrypted by the node vault.
+    /// The kernel stores a zero vector (not searchable) and the raw ciphertext.
+    InsertRecordEncrypted {
+        namespace_id: u16,
+        id: RecordId,
+        key_id: [u8; 16],
+        ciphertext: alloc::vec::Vec<u8>,
+        tag: u64,
+    },
+    /// Destroy the DEK identified by `key_id` and mark all records encrypted
+    /// under it as FLAG_SHREDDED. Irreversible.
+    ShredKey {
+        key_id: [u8; 16],
+    },
 }

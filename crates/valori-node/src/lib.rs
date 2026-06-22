@@ -3,6 +3,7 @@ pub mod config;
 pub mod errors;
 pub mod api;
 pub mod engine;
+pub mod graph_rag;
 pub mod server;
 pub mod structure;
 pub mod metadata;
@@ -27,3 +28,7 @@ pub mod cluster_api;
 pub mod cluster_server;
 /// Phase 3.1: S3 / object-store backend for snapshot offload and WAL archival.
 pub mod object_store;
+/// Phase 3.5: Per-tenant API keys + RBAC.
+pub mod api_keys;
+/// Phase 3.6: AES-256-GCM vault for crypto-shredding (GDPR erasure).
+pub mod crypto_vault;

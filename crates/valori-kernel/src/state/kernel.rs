@@ -28,6 +28,9 @@ pub struct KernelState {
     /// `namespace_record_heads[ns] = NS_LIST_NIL` means namespace `ns` has no records.
     pub(crate) namespace_record_heads: alloc::vec::Vec<u32>,
     /// Head of the intrusive per-namespace node linked list.
+    /// Maps DEK (key_id) → list of RecordIds encrypted under it.
+    /// Rebuilt during WAL replay; used by `apply_shred_key` to mark records in O(N_key).
+    pub(crate) encrypted_record_keys: rustc_hash::FxHashMap<[u8; 16], alloc::vec::Vec<RecordId>>,
     pub(crate) namespace_node_heads: alloc::vec::Vec<u32>,
 }
 
@@ -42,7 +45,23 @@ impl KernelState {
             index: BruteForceIndex::default(),
             namespace_record_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
             namespace_node_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
+            encrypted_record_keys: rustc_hash::FxHashMap::default(),
         }
+    }
+
+    // ── Crypto-shredding (Phase 3.6) ─────────────────────────────────────────
+
+    /// Destroy a Data Encryption Key and mark all records encrypted under it as
+    /// `FLAG_SHREDDED`. Called when applying `KernelEvent::ShredKey`.
+    /// The actual vault key must already be destroyed by the caller BEFORE this
+    /// is called (or before the `ShredKey` event is emitted in cluster mode).
+    pub fn apply_shred_key(&mut self, key_id: [u8; 16]) -> Result<()> {
+        let records = self.encrypted_record_keys.remove(&key_id).unwrap_or_default();
+        for rid in records {
+            // Best-effort: a record may have been hard-deleted since encryption.
+            let _ = self.records.mark_shredded(rid);
+        }
+        Ok(())
     }
 
     // --- Read APIs ---
@@ -284,8 +303,58 @@ impl KernelState {
                 self.apply(&cmd)?;
             }
 
-            KernelEvent::InsertRecordEncrypted { .. } | KernelEvent::ShredKey { .. } => {
-                return Err(KernelError::NotImplemented);
+            KernelEvent::AutoInsertRecordEncrypted { namespace_id: evt_ns, key_id, ciphertext, tag } => {
+                let id = self.next_record_id();
+                let cmd = Command::InsertRecordEncrypted {
+                    namespace_id: *evt_ns,
+                    id,
+                    key_id: *key_id,
+                    ciphertext: ciphertext.clone(),
+                    tag: *tag,
+                };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, tag, .. } => {
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
+                if self.records.next_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
+                // Dim must be set; use zero vector (not searchable).
+                let dim = self.dim.ok_or(KernelError::InvalidOperation)?;
+                let zero_vec = FxpVector::new_zeros(dim);
+                // Store ciphertext in metadata for audit trail.
+                let allocated_id = self.records.insert(
+                    zero_vec, Some(ciphertext.clone()), *tag, namespace_id,
+                )?;
+                debug_assert_eq!(allocated_id, *id);
+                self.records.mark_encrypted(allocated_id)?;
+                // Track key → records for efficient shredding.
+                self.encrypted_record_keys
+                    .entry(*key_id)
+                    .or_default()
+                    .push(allocated_id);
+                // Wire into namespace linked list (same pattern as InsertRecord).
+                let old_head = self.namespace_record_heads[ns];
+                {
+                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    r.next_in_ns = old_head;
+                    r.prev_in_ns = NS_LIST_NIL;
+                }
+                if old_head != NS_LIST_NIL {
+                    if let Some(prev_head) = self.records.records[old_head as usize].as_mut() {
+                        prev_head.prev_in_ns = allocated_id.0;
+                    }
+                }
+                self.namespace_record_heads[ns] = allocated_id.0;
+                // Do NOT add to the vector index — zero vectors pollute search.
+            }
+
+            KernelEvent::ShredKey { key_id } => {
+                self.apply_shred_key(*key_id)?;
             }
         }
 
@@ -466,6 +535,26 @@ impl KernelState {
                     }
                 }
                 self.namespace_node_heads[ns] = NS_LIST_NIL;
+            }
+
+            Command::InsertRecordEncrypted { namespace_id, id, key_id, ciphertext, tag } => {
+                let evt = crate::event::KernelEvent::InsertRecordEncrypted {
+                    id: *id,
+                    key_id: *key_id,
+                    ciphertext: ciphertext.clone(),
+                    metadata_ciphertext: None,
+                    tag: *tag,
+                };
+                self.apply_event_ns(&evt, *namespace_id)?;
+                // version bump happens below — skip double-bump
+                self.version = self.version.next();
+                return Ok(());
+            }
+
+            Command::ShredKey { key_id } => {
+                self.apply_shred_key(*key_id)?;
+                self.version = self.version.next();
+                return Ok(());
             }
         }
 

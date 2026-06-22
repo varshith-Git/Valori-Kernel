@@ -63,6 +63,12 @@ pub struct EngineHealth {
     /// Height of the event journal if the event log is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_log_height: Option<u64>,
+    /// Absolute path of the event log file (null if not configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_log_path: Option<String>,
+    /// Absolute path of the snapshot file (null if not configured).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_path: Option<String>,
 }
 
 /// Result of `Engine::try_recover()`.
@@ -185,6 +191,19 @@ pub struct Engine {
 
     /// Number of snapshots to keep in the object store after pruning.
     pub object_store_keep: u32,
+
+    /// Phase 3.6: AES-256-GCM vault for crypto-shredding (GDPR erasure).
+    pub vault: Arc<dyn valori_kernel::crypto::KeyVault>,
+
+    /// Phase 3.12: per-item idempotency dedup for batch inserts.
+    /// Maps 16-byte request_id → assigned record ID. Never persisted; acts as
+    /// a best-effort within-process dedup that survives across requests.
+    pub batch_seen: rustc_hash::FxHashMap<[u8; 16], u32>,
+
+    /// Phase 3.13: HNSW parameters captured at Engine construction.
+    /// Stored so rebuild_index() and index-config endpoint can reproduce the
+    /// same config without re-reading env vars.
+    pub hnsw_config: crate::structure::hnsw::HnswConfig,
 }
 
 impl Engine {
@@ -193,8 +212,16 @@ impl Engine {
          let index: Box<dyn VectorIndex + Send + Sync> = match cfg.index_kind {
               IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
               IndexKind::Hnsw => {
-                  use crate::structure::hnsw::HnswIndex;
-                  Box::new(HnswIndex::new())
+                  use crate::structure::hnsw::{HnswIndex, HnswConfig};
+                  let mut hnsw_cfg = HnswConfig::default();
+                  if let Some(m) = cfg.hnsw_m {
+                      hnsw_cfg.m = m;
+                      hnsw_cfg.m_max0 = m * 2;
+                      hnsw_cfg.lambda = 1.0 / (m as f64).ln();
+                  }
+                  if let Some(ef) = cfg.hnsw_ef_construction { hnsw_cfg.ef_construction = ef; }
+                  if let Some(ef) = cfg.hnsw_ef_search       { hnsw_cfg.ef_search = ef; }
+                  Box::new(HnswIndex::new_with_config(hnsw_cfg))
               },
               IndexKind::Ivf => {
                   use crate::structure::ivf::{IvfIndex, IvfConfig};
@@ -282,6 +309,33 @@ impl Engine {
             namespaces: NamespaceRegistry::new(),
             object_store: crate::object_store::ObjectStoreBackend::from_env(),
             object_store_keep: cfg.object_store_keep,
+            vault: {
+                use crate::crypto_vault::AesGcmVault;
+                use valori_kernel::crypto::KeyVault;
+                let v: Arc<dyn KeyVault> = if let Some(ref p) = cfg.shred_log_path {
+                    match AesGcmVault::with_shred_log(p) {
+                        Ok(v) => Arc::new(v),
+                        Err(e) => {
+                            tracing::warn!("Failed to open shred log at {:?}: {e}", p);
+                            Arc::new(AesGcmVault::in_memory())
+                        }
+                    }
+                } else {
+                    Arc::new(AesGcmVault::in_memory())
+                };
+                v
+            },
+            batch_seen: rustc_hash::FxHashMap::default(),
+            hnsw_config: {
+                use crate::structure::hnsw::HnswConfig;
+                let mut c = HnswConfig::default();
+                if let Some(m) = cfg.hnsw_m {
+                    c.m = m; c.m_max0 = m * 2; c.lambda = 1.0 / (m as f64).ln();
+                }
+                if let Some(ef) = cfg.hnsw_ef_construction { c.ef_construction = ef; }
+                if let Some(ef) = cfg.hnsw_ef_search       { c.ef_search = ef; }
+                c
+            },
         }
     }
 
@@ -368,6 +422,11 @@ impl Engine {
         let event_log_height = self.event_committer.as_ref()
             .map(|c| c.journal().committed_height());
 
+        let event_log_path = self.event_committer.as_ref()
+            .map(|c| c.event_log().path().to_string_lossy().into_owned());
+        let snapshot_path = self.snapshot_path.as_ref()
+            .map(|p| p.to_string_lossy().into_owned());
+
         EngineHealth {
             status,
             version: env!("CARGO_PKG_VERSION"),
@@ -393,6 +452,8 @@ impl Engine {
                 fill_pct: round1(edge_fill),
             },
             event_log_height,
+            event_log_path,
+            snapshot_path,
         }
     }
 
@@ -484,25 +545,104 @@ impl Engine {
         Ok(rid.0)
     }
 
-    pub fn insert_batch(&mut self, batch: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
-        self.insert_batch_ns(batch, valori_kernel::types::id::DEFAULT_NS.0)
+    // ── Phase 3.6: Crypto-shredding ───────────────────────────────────────────
+
+    /// Insert a record with AES-256-GCM-encrypted payload (GDPR crypto-shredding).
+    /// The vault encrypts `plaintext`, stores the DEK under `key_id`, and
+    /// the ciphertext is persisted in the record slot. The vector is zeroed
+    /// (not searchable). Returns the allocated record id.
+    pub fn insert_encrypted_ns(&mut self, plaintext: &[u8], tag: u64, namespace_id: u16, key_id: [u8; 16]) -> Result<u32, EngineError> {
+        if self.state.record_count() >= self.max_records {
+            return Err(EngineError::Kernel(KernelError::CapacityExceeded));
+        }
+        // Ensure dim is set (dim must be set before any insert).
+        if self.state.dim.is_none() {
+            return Err(EngineError::InvalidInput("VALORI_DIM must be set before encrypted insert".into()));
+        }
+
+        let ciphertext = self.vault.encrypt(key_id, plaintext)
+            .map_err(|e| EngineError::InvalidInput(format!("Vault encrypt: {e:?}")))?;
+
+        let rid = self.state.next_record_id();
+        let cmd = Command::InsertRecordEncrypted {
+            namespace_id,
+            id: rid,
+            key_id,
+            ciphertext,
+            tag,
+        };
+        if let Some(ref mut writer) = self.wal_writer {
+            writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        }
+        self.state.apply(&cmd)?;
+        Ok(rid.0)
     }
 
-    pub fn insert_batch_ns(&mut self, batch: &[Vec<f32>], namespace_id: u16) -> Result<Vec<u32>, EngineError> {
+    /// Destroy the DEK and mark all records encrypted under it as FLAG_SHREDDED.
+    /// The vault key is destroyed FIRST, then the kernel flags are set, so
+    /// the ciphertext is unrecoverable even during a crash between the two.
+    pub fn shred_key(&mut self, key_id: [u8; 16]) -> Result<(), EngineError> {
+        // Vault destruction FIRST — ensures ciphertext is unrecoverable.
+        self.vault.shred(key_id)
+            .map_err(|e| EngineError::InvalidInput(format!("Vault shred: {e:?}")))?;
+
+        let cmd = Command::ShredKey { key_id };
+        if let Some(ref mut writer) = self.wal_writer {
+            writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        }
+        self.state.apply(&cmd)?;
+        Ok(())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    pub fn insert_batch(&mut self, batch: &[Vec<f32>]) -> Result<Vec<u32>, EngineError> {
+        self.insert_batch_ns(batch, None, valori_kernel::types::id::DEFAULT_NS.0, None)
+    }
+
+    pub fn insert_batch_ns(
+        &mut self,
+        batch: &[Vec<f32>],
+        metadata: Option<&[Option<Vec<u8>>]>,
+        namespace_id: u16,
+        request_ids: Option<&[Option<[u8; 16]>]>,
+    ) -> Result<Vec<u32>, EngineError> {
+        // ── Per-item dedup pass ────────────────────────────────────────────────
+        // Items with a known request_id are returned immediately without insert.
+        // We collect (index, deduped_id) for skipped items and build a full ids
+        // vec at the end, interleaving new inserts with deduped IDs.
+        let mut deduped: Vec<(usize, u32)> = Vec::new();
+        let mut insert_indices: Vec<usize> = Vec::new();
+
+        for (i, _) in batch.iter().enumerate() {
+            if let Some(Some(rid)) = request_ids.and_then(|r| r.get(i)) {
+                if let Some(&existing_id) = self.batch_seen.get(rid) {
+                    deduped.push((i, existing_id));
+                    continue;
+                }
+            }
+            insert_indices.push(i);
+        }
+
         // ── Capacity guard ─────────────────────────────────────────────────────
-        // Reject the entire batch atomically if it would overflow the record
-        // pool.  This prevents partial writes: either the whole batch fits, or
-        // none of it is committed.
-        if self.state.record_count() + batch.len() > self.max_records {
+        if self.state.record_count() + insert_indices.len() > self.max_records {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
 
+        // Map index → assigned id (populated during actual insert below).
+        let mut id_map: Vec<u32> = vec![0u32; batch.len()];
+
+        // Fill in deduped IDs first.
+        for (i, id) in &deduped {
+            id_map[*i] = *id;
+        }
+
         if let Some(ref mut committer) = self.event_committer {
-            let mut events = Vec::with_capacity(batch.len());
-            let mut ids = Vec::with_capacity(batch.len());
+            let mut events = Vec::with_capacity(insert_indices.len());
             let start_id = self.state.next_record_id().0;
 
-            for (i, values) in batch.iter().enumerate() {
+            for (slot, &i) in insert_indices.iter().enumerate() {
+                let values = &batch[i];
                 let mut fxp_data = Vec::with_capacity(values.len());
                 for &v in values {
                     if v > 32767.99 || v < -32768.0 {
@@ -510,28 +650,36 @@ impl Engine {
                     }
                     fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
                 }
-                let id = start_id + i as u32;
+                let id = start_id + slot as u32;
+                let meta = metadata.and_then(|m| m.get(i)).cloned().flatten();
                 events.push(valori_kernel::event::KernelEvent::InsertRecord {
                     id: RecordId(id),
                     vector: FxpVector { data: fxp_data },
-                    metadata: None,
+                    metadata: meta,
                     tag: 0,
                 });
-                ids.push(id);
+                id_map[i] = id;
             }
 
             committer.commit_batch(events.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             for event in &events {
                 self.apply_committed_event_ns(event, namespace_id)?;
             }
-            Ok(ids)
         } else {
-            let mut ids = Vec::with_capacity(batch.len());
-            for values in batch {
-                ids.push(self.insert_record_from_f32_ns(values, namespace_id)?);
+            for &i in &insert_indices {
+                let id = self.insert_record_from_f32_ns(&batch[i], namespace_id)?;
+                id_map[i] = id;
             }
-            Ok(ids)
         }
+
+        // Record new request_ids for future dedup.
+        for &i in &insert_indices {
+            if let Some(Some(rid)) = request_ids.and_then(|r| r.get(i)) {
+                self.batch_seen.insert(*rid, id_map[i]);
+            }
+        }
+
+        Ok(id_map)
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>, EngineError> {
@@ -814,8 +962,7 @@ impl Engine {
              return Err(EngineError::Kernel(KernelError::CapacityExceeded));
          }
 
-         use valori_kernel::types::id::NodeId;
-         let node_id = NodeId(self.state.node_count() as u32);
+         let node_id = self.state.next_node_id();
          let kind = NodeKind::from_u8(kind).unwrap_or_default();
          let record = record_id.map(RecordId);
 
@@ -1020,7 +1167,7 @@ impl Engine {
         let mut records: Vec<(u32, Vec<f32>)> = Vec::with_capacity(total_slots);
         for i in 0..total_slots {
             if let Some(record) = self.state.get_record(RecordId(i as u32)) {
-                if !record.is_active() { continue; }
+                if !record.is_searchable() { continue; }
                 // Non-default namespace records are found via the kernel's
                 // intrusive linked list (search_l2_ns); skip the global index.
                 if record.namespace_id != valori_kernel::types::id::DEFAULT_NS.0 { continue; }
@@ -1046,7 +1193,7 @@ impl Engine {
               IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
               IndexKind::Hnsw => {
                   use crate::structure::hnsw::HnswIndex;
-                  Box::new(HnswIndex::new())
+                  Box::new(HnswIndex::new_with_config(self.hnsw_config.clone()))
               },
               IndexKind::Ivf => {
                   use crate::structure::ivf::{IvfIndex, IvfConfig};
