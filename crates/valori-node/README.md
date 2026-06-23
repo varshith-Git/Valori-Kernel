@@ -76,7 +76,7 @@ does not exist the request is rejected with `400 Bad Request`.
 |---|---|---|
 | `/records` | `POST` | Insert a single vector. |
 | `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors in one call. |
-| `/search` | `POST` | K-nearest-neighbour search. Supports `as_of` / `as_of_log_index` for point-in-time reads. |
+| `/search` | `POST` | K-nearest-neighbour search. Supports `as_of` / `as_of_log_index` for point-in-time reads, and `decay_half_life_secs` for recency-aware ranking (Phase C4.1). |
 | `/v1/delete` | `POST` | Soft-delete a record by ID. |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 
@@ -223,6 +223,25 @@ curl -X POST http://localhost:3000/v1/graphrag \
 manual `/graph/edge` calls add more). On a cluster the request also honours
 `consistency` (linearizable by default). For agents, prefer the
 `memory_graph_recall` MCP tool, which wraps this with a verifiable receipt.
+
+### Recency-aware search — `decay_half_life_secs` (Phase C4.1)
+
+Add `decay_half_life_secs` to `/search` (or `/v1/memory/search_vector`) to fade
+older memories in ranking. A record one half-life old has its L2 distance
+doubled, so a fresh near-match can overtake a stale better one.
+
+```bash
+curl -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5, "decay_half_life_secs": 86400}'
+```
+
+Each hit gains `decay_factor` (∈ (0,1]) and `age_secs`; `score` stays the true,
+undecayed distance. Decay is a **read-time re-rank**: it never mutates kernel
+state and never changes the BLAKE3 state hash. Set `VALORI_DECAY_HALF_LIFE_SECS`
+for a server default (a per-request value, including `0` to disable, wins).
+Not applied to `as_of` queries. Standalone only in v1 (cluster accepts the field
+but treats it as neutral — see `docs/phases/phase-C4.1-decay.md`).
 
 ---
 
@@ -447,6 +466,12 @@ curl http://localhost:3000/v1/index/config
 | `VALORI_HNSW_EF_SEARCH` | `50` | Beam width floor during queries. Higher = better recall, slower search. |
 
 Only takes effect when `VALORI_INDEX=hnsw`. Has no effect in cluster mode (cluster uses kernel brute-force for linearizable consistency).
+
+### Decay (Phase C4.1)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VALORI_DECAY_HALF_LIFE_SECS` | — | Default recency half-life (seconds) for search ranking. Per-request `decay_half_life_secs` overrides; omit or `0` = no decay. |
 
 ---
 

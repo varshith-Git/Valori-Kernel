@@ -337,12 +337,50 @@ async fn search(
     }
     let engine = state.read().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let hits = if ns == 0 {
-        engine.search_l2(&payload.query, payload.k)?
+
+    // Effective decay half-life: request value wins (incl. an explicit 0 to
+    // disable), else the server default. 0 / None => pure distance ranking.
+    let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+
+    if half_life == 0 {
+        let hits = if ns == 0 {
+            engine.search_l2(&payload.query, payload.k)?
+        } else {
+            engine.search_l2_ns(&payload.query, payload.k, ns)?
+        };
+        let results = hits.into_iter()
+            .map(|(id, score)| SearchHit { id, score, decay_factor: None, age_secs: None })
+            .collect();
+        return Ok(Json(SearchResponse::simple(results)));
+    }
+
+    // Decay path: over-fetch a bounded pool, re-rank by decayed distance,
+    // then trim to k. This lets a fresh near-match overtake a stale better one.
+    let pool = payload.k.saturating_mul(4).max(50).min(1000);
+    let raw = if ns == 0 {
+        engine.search_l2(&payload.query, pool)?
     } else {
-        engine.search_l2_ns(&payload.query, payload.k, ns)?
+        engine.search_l2_ns(&payload.query, pool, ns)?
     };
-    let results = hits.into_iter().map(|(id, score)| SearchHit { id, score }).collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs()).unwrap_or(0);
+    let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
+        .map(|(id, score)| crate::decay::DecayHit {
+            id,
+            distance: score,
+            created_at: engine.record_created_at(id),
+        })
+        .collect();
+    let results = crate::decay::rerank(candidates, now, half_life, payload.k)
+        .into_iter()
+        .map(|h| SearchHit {
+            id: h.id,
+            score: h.distance,
+            decay_factor: Some(h.factor),
+            age_secs: h.age_secs,
+        })
+        .collect();
     Ok(Json(SearchResponse::simple(results)))
 }
 
@@ -433,7 +471,9 @@ async fn search_as_of(
     };
     let results: Vec<SearchHit> = results_buf[..found].iter().map(|r| {
         let score = r.score.0 as f32 / (SCALE as f32 * SCALE as f32);
-        SearchHit { id: r.id.0, score }
+        // Decay is a "now"-relative re-rank; it is intentionally NOT applied to
+        // point-in-time (as_of) queries, which reconstruct a historical state.
+        SearchHit { id: r.id.0, score, decay_factor: None, age_secs: None }
     }).collect();
 
     let state_hash_bytes = hash_state_blake3(&replay);
@@ -723,21 +763,43 @@ async fn memory_search_vector(
 ) -> Result<Json<MemorySearchResponse>, EngineError> {
     let engine = state.read().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
 
-    let results = hits
-        .into_iter()
-        .map(|(record_id, score)| {
-            let memory_id = format!("rec:{}", record_id);
-            let metadata = engine.metadata.get(&memory_id);
-            MemorySearchHit {
-                memory_id,
-                record_id,
-                score,
-                metadata,
-            }
-        })
-        .collect();
+    let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+
+    let results = if half_life == 0 {
+        let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
+        hits.into_iter()
+            .map(|(record_id, score)| {
+                let memory_id = format!("rec:{}", record_id);
+                let metadata = engine.metadata.get(&memory_id);
+                MemorySearchHit { memory_id, record_id, score, metadata,
+                    decay_factor: None, age_secs: None }
+            })
+            .collect()
+    } else {
+        // Recency-aware recall: over-fetch, decay re-rank, trim to k.
+        let pool = payload.k.saturating_mul(4).max(50).min(1000);
+        let raw = engine.search_l2_ns(&payload.query_vector, pool, ns)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs()).unwrap_or(0);
+        let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
+            .map(|(id, score)| crate::decay::DecayHit {
+                id, distance: score, created_at: engine.record_created_at(id),
+            })
+            .collect();
+        crate::decay::rerank(candidates, now, half_life, payload.k)
+            .into_iter()
+            .map(|h| {
+                let memory_id = format!("rec:{}", h.id);
+                let metadata = engine.metadata.get(&memory_id);
+                MemorySearchHit {
+                    memory_id, record_id: h.id, score: h.distance, metadata,
+                    decay_factor: Some(h.factor), age_secs: h.age_secs,
+                }
+            })
+            .collect()
+    };
 
     Ok(Json(MemorySearchResponse { results }))
 }

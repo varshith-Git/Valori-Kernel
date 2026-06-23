@@ -182,6 +182,13 @@ pub struct Engine {
     /// Not persisted — rebuilt from the node pool on restore.
     pub record_to_node: HashMap<u32, u32>,
 
+    /// Phase C4.1: derived index record_id → unix-second creation time, used by
+    /// the read-time decay re-rank. Stamped on live inserts only (never during
+    /// recovery replay), so it carries NO state-hash weight and is purely
+    /// advisory. After a restart it starts empty — records with no entry are
+    /// treated as neutral (un-aged) until the durable-timestamp follow-up.
+    pub created_at: HashMap<u32, u64>,
+
     /// Collection (namespace) registry — maps names to NamespaceIds.
     pub namespaces: NamespaceRegistry,
 
@@ -204,6 +211,10 @@ pub struct Engine {
     /// Stored so rebuild_index() and index-config endpoint can reproduce the
     /// same config without re-reading env vars.
     pub hnsw_config: crate::structure::hnsw::HnswConfig,
+
+    /// Phase C4.1: default decay half-life (seconds) applied to search ranking
+    /// when a request does not specify its own. `None`/0 = decay off.
+    pub decay_half_life_secs: Option<u64>,
 }
 
 impl Engine {
@@ -305,6 +316,7 @@ impl Engine {
             wal_accumulator,
             event_committer,
             record_to_node: HashMap::new(),
+            created_at: HashMap::new(),
             metadata_path,
             namespaces: NamespaceRegistry::new(),
             object_store: crate::object_store::ObjectStoreBackend::from_env(),
@@ -336,7 +348,23 @@ impl Engine {
                 if let Some(ef) = cfg.hnsw_ef_search       { c.ef_search = ef; }
                 c
             },
+            decay_half_life_secs: cfg.decay_half_life_secs,
         }
+    }
+
+    /// Current wall-clock time in unix seconds (decay reference clock).
+    fn now_unix() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Phase C4.1: unix-second creation time of a record, if it was inserted
+    /// during this process's lifetime. `None` means "unknown age" — the decay
+    /// re-rank treats it as neutral.
+    pub fn record_created_at(&self, id: u32) -> Option<u64> {
+        self.created_at.get(&id).copied()
     }
 
     /// Rebuild the `record_to_node` map from the current node pool.
@@ -542,6 +570,9 @@ impl Engine {
             }
         }
 
+        // C4.1: stamp creation time for decay (live inserts only).
+        self.created_at.insert(rid.0, Self::now_unix());
+
         Ok(rid.0)
     }
 
@@ -677,6 +708,13 @@ impl Engine {
             if let Some(Some(rid)) = request_ids.and_then(|r| r.get(i)) {
                 self.batch_seen.insert(*rid, id_map[i]);
             }
+        }
+
+        // C4.1: stamp creation time for decay on freshly inserted records only
+        // (deduped items keep their original creation time).
+        let now = Self::now_unix();
+        for &i in &insert_indices {
+            self.created_at.insert(id_map[i], now);
         }
 
         Ok(id_map)

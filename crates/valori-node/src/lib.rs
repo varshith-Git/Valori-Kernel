@@ -4,6 +4,7 @@ pub mod errors;
 pub mod api;
 pub mod engine;
 pub mod graph_rag;
+pub mod decay;
 pub mod server;
 pub mod structure;
 pub mod metadata;

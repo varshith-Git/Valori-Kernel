@@ -27,7 +27,7 @@ MCP client (Claude Desktop / agent)
 | Tool | Backed by | What's special |
 |---|---|---|
 | `memory_write` | `POST /v1/memory/upsert_vector` | every write is BLAKE3-chained into the audit log |
-| `memory_recall` | search + `/v1/proof/*` | **returns a verifiable receipt** |
+| `memory_recall` | search + `/v1/proof/*` | **returns a verifiable receipt**; optional `decay_half_life_secs` for recency-aware recall (older memories fade) — receipt still verifies over the decayed set |
 | `memory_graph_recall` | `POST /v1/graphrag` + `/v1/proof/*` | **GraphRAG in one call** — hits + connected subgraph, receipt binds both |
 | `memory_why` | `GET /graph/subgraph` | provenance subgraph — why a memory is held |
 | `memory_timeline` | `GET /v1/timeline` | the agent's memory as an auditable timeline |

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase C4.1 — Kernel-native time decay: self-maintaining memory, pillar 1)
+- **`decay_half_life_secs`** on `POST /search` and `POST /v1/memory/search_vector` — recency-aware re-ranking. When set (> 0), older records decay: a record one half-life old has its L2 distance doubled, so a fresh near-match can overtake a stale better one. Each hit gains `decay_factor` (∈ (0,1]) and `age_secs`; `score` stays the true, undecayed distance. Absent/`0` → byte-identical to the prior response.
+- **`VALORI_DECAY_HALF_LIFE_SECS`** — optional server-default half-life; a per-request value wins (incl. an explicit `0` to disable).
+- **Determinism preserved** — decay is a read-time re-rank: it never mutates kernel state, emits no event, and does not change the BLAKE3 state hash (regression-tested). Creation time lives in a derived, non-hashed `Engine.created_at` map stamped on live inserts only.
+- **Python SDK** — `search(..., decay_half_life_secs=…)` on all four clients (`Sync`/`Async` `RemoteClient`, `ClusterClient` via `**kwargs`).
+- **MCP** — `memory_recall` accepts `decay_half_life_secs` for recency-aware agent recall; the receipt still verifies over the decayed result set.
+- **Supersedes the UI-only Phase C3** "self-maintaining memory," which shipped no decay and lived outside the audit chain. See `docs/phases/phase-C4.1-decay.md`.
+- Known boundaries (v1): cluster decay is accepted-but-neutral (creation time isn't tracked in the consensus state machine yet — C4.1b); `created_at` is in-memory, so recovered records rank neutrally until re-stamped (durable WAL timestamps — C4.1b).
+
 ### Added (Phase 3.15 — Native GraphRAG: one-call retrieval)
 - **`POST /v1/graphrag`** — retrieve the K nearest vectors **and** the connected knowledge subgraph around them in a single call, from one consistent kernel snapshot. Request `{ query_vector, k, depth, collection? }`; response `{ hits, seed_nodes, subgraph: { nodes, edges } }`. Added to both standalone and cluster data planes (cluster also honours `consistency`).
 - **`memory_graph_recall` MCP tool** — GraphRAG with a receipt that binds **both** the hits and the returned subgraph (`receipt.subgraph = { node_ids, edge_ids }`, sorted). valori-mcp now exposes 7 tools.

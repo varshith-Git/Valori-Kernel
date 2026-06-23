@@ -27,6 +27,7 @@ pub trait NodeClient: Send + Sync {
         query_vector: Vec<f32>,
         k: usize,
         collection: Option<String>,
+        decay_half_life_secs: Option<u64>,
     ) -> Result<Value>;
 
     /// `GET /v1/proof/state` → 64-hex state hash.
@@ -137,10 +138,14 @@ impl NodeClient for HttpBackend {
         query_vector: Vec<f32>,
         k: usize,
         collection: Option<String>,
+        decay_half_life_secs: Option<u64>,
     ) -> Result<Value> {
         let mut body = json!({ "query_vector": query_vector, "k": k });
         if let Some(c) = collection {
             body["collection"] = json!(c);
+        }
+        if let Some(h) = decay_half_life_secs.filter(|&v| v > 0) {
+            body["decay_half_life_secs"] = json!(h);
         }
         self.post_json("/v1/memory/search_vector", body).await
     }

@@ -130,6 +130,7 @@ Valori is the **memory layer** of your AI stack — the place where embedding ve
 | **Agent memory** | Verifiable recall — `memory_recall` returns a BLAKE3 **receipt** binding the result set to the committed state hash; recomputable offline by any client |
 | **GraphRAG** | `POST /v1/graphrag` — K nearest vectors **+** the connected subgraph in one call, one consistent snapshot; no Neo4j+vector-DB two-system stack |
 | **GraphRAG** | `memory_graph_recall` MCP tool — GraphRAG with a receipt binding both the hits and the returned subgraph |
+| **Self-maintaining memory** | Recency decay — `decay_half_life_secs` on search fades older memories in ranking; a read-time re-rank that never touches the state hash (`memory_recall` supports it too) |
 | **Multi-tenancy** | Named collections (namespaces) — up to 1 024 per node, fully isolated vector search |
 | **Multi-tenancy** | Per-tenant API keys (`/v1/keys`) — `read_only`, `read_write`, `admin` scopes; BLAKE3-hashed token store |
 | **Point-in-time** | `search(query, as_of="2026-01-01T00:00:00Z")` or `as_of_log_index=N` — replays event log to target point |
@@ -570,6 +571,10 @@ hits = db.search([0.1, ...], k=10, consistency="local")
 # GraphRAG — K nearest vectors + the connected subgraph, in one call
 g = db.graphrag([0.1, 0.2, ...], k=5, depth=2)
 # → {"hits": [...], "seed_nodes": [...], "subgraph": {"nodes": [...], "edges": [...]}}
+
+# Recency-aware search (Phase C4.1) — older records fade in ranking.
+# Each hit gains decay_factor + age_secs; score stays the true distance.
+hits = db.search([0.1, ...], k=5, decay_half_life_secs=86400)  # 1-day half-life
 
 # Cluster health
 print(db.cluster_status())

@@ -114,7 +114,7 @@ mod tests {
         async fn memory_upsert(&self, _: Vec<f32>, _: Option<String>, _: Option<Value>) -> Result<Value> {
             Ok(json!({ "memory_id": "m", "record_id": 1 }))
         }
-        async fn memory_search(&self, _: Vec<f32>, _: usize, _: Option<String>) -> Result<Value> {
+        async fn memory_search(&self, _: Vec<f32>, _: usize, _: Option<String>, _: Option<u64>) -> Result<Value> {
             Ok(json!({ "results": [] }))
         }
         async fn proof_state(&self) -> Result<String> { Ok("aa".repeat(32)) }

@@ -1,5 +1,16 @@
 # Phase C3 — Self-Maintaining Memory
 
+> ⚠️ **Superseded by Phase C4.** This C3 shipped as UI-only Next.js logic
+> (`ui/src/app/api/ingest|contradictions|why`), so the SDK, the MCP wedge, and
+> the raw API got none of it; its state lived in a non-replicated metadata
+> sidecar outside the audit chain; its "contradiction detector" fired on cosine
+> *similarity* (agreement, not contradiction) into a review queue backed by a
+> `meta/list` endpoint that does not exist (so it always returns `[]`); and it
+> had **no decay**. C4 rebuilds these pillars as node-native, audited,
+> all-client capabilities. See [phase-C4.1-decay.md](phase-C4.1-decay.md)
+> (decay, done) and the C4.2 / C4.3 follow-ups (consolidation, contradiction).
+
+
 ## Goal
 
 Close three knowledge-base hygiene gaps that let stale, duplicate, and contradictory

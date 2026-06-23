@@ -498,6 +498,13 @@ struct SearchRequest {
     k: usize,
     #[serde(default)]
     consistency: Consistency,
+    /// Phase C4.1 — accepted for wire-compatibility with the standalone server so
+    /// one SDK call works against both node types. NOTE: cluster decay is a no-op
+    /// in v1 — per-record creation time is tracked in the standalone `Engine`, not
+    /// in the consensus state machine. Wiring it is the C4.1b follow-up.
+    #[serde(default)]
+    #[allow(dead_code)]
+    decay_half_life_secs: Option<u64>,
 }
 
 fn default_k() -> usize {

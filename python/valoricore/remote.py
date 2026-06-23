@@ -220,6 +220,7 @@ class SyncRemoteClient:
         collection: str = "default",
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
+        decay_half_life_secs: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
 
@@ -238,6 +239,14 @@ class SyncRemoteClient:
 
         ``as_of_log_index`` — search the state after exactly this many committed
         events. Takes precedence over ``as_of`` if both are given.
+
+        ``decay_half_life_secs`` (Phase C4.1) — recency-aware ranking. When set
+        (> 0), older records decay: a record one half-life old has its distance
+        doubled, so a fresh near-match can overtake a stale better one. Each hit
+        then carries ``decay_factor`` and ``age_secs``. ``score`` stays the true
+        (undecayed) distance. Decay is a read-time re-rank — it never changes the
+        kernel state hash. Ignored for ``as_of`` queries. (Standalone only in
+        v1; accepted-but-neutral on cluster nodes.)
         """
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
@@ -250,6 +259,8 @@ class SyncRemoteClient:
             data["as_of_log_index"] = as_of_log_index
         elif as_of is not None:
             data["as_of"] = as_of
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
         resp = self._post("/search", data)
         # as-of searches return the full response dict (with proof fields).
         if as_of is not None or as_of_log_index is not None:
@@ -881,9 +892,11 @@ class AsyncRemoteClient:
         collection: str = "default",
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
+        decay_half_life_secs: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local".
-        ``as_of`` and ``as_of_log_index`` enable point-in-time search (see sync docs)."""
+        ``as_of`` and ``as_of_log_index`` enable point-in-time search (see sync docs).
+        ``decay_half_life_secs`` (Phase C4.1) enables recency-aware re-ranking."""
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
@@ -895,6 +908,8 @@ class AsyncRemoteClient:
             data["as_of_log_index"] = as_of_log_index
         elif as_of is not None:
             data["as_of"] = as_of
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
         resp = await self._post("/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp

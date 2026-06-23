@@ -111,6 +111,58 @@ async fn recall_receipt_verifies_against_live_node() {
     );
 }
 
+/// Phase C4.1: recall with `decay_half_life_secs` returns recency-weighted hits
+/// AND a receipt that still verifies over the (decayed) result set. This is the
+/// agent-memory wedge gaining self-maintaining recency without losing the proof.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn decay_recall_carries_factor_and_verifiable_receipt() {
+    let url = spawn_node().await;
+    let backend = HttpBackend::new(url, None);
+    let server = McpServer::new(backend);
+
+    for (i, seed) in [0.10f32, 0.50, 0.90].iter().enumerate() {
+        let args = json!({ "vector": vec_n(*seed), "text": format!("memory {i}") });
+        let out = call(&server, "memory_write", args).await;
+        assert!(out["isError"] != json!(true), "write failed: {out:?}");
+    }
+
+    let recall = call(&server, "memory_recall",
+        json!({ "query_vector": vec_n(0.10), "k": 3, "decay_half_life_secs": 3600 })).await;
+    assert_eq!(recall["isError"], json!(false));
+    let payload: Value = serde_json::from_str(recall["content"][0]["text"].as_str().unwrap()).unwrap();
+
+    let results = payload["results"].as_array().expect("results array");
+    assert!(!results.is_empty(), "decayed recall returned no memories");
+    for r in results {
+        let f = r["decay_factor"].as_f64().expect("decay_factor present under decay");
+        assert!(f > 0.0 && f <= 1.0, "factor in (0,1], got {f}");
+    }
+
+    // The receipt must still verify over the decayed result set.
+    let receipt = &payload["receipt"];
+    let fingerprints: Vec<ResultFingerprint> = receipt["results"].as_array().unwrap().iter()
+        .map(|f| ResultFingerprint {
+            memory_id: f["memory_id"].as_str().unwrap().to_string(),
+            record_id: f["record_id"].as_u64().unwrap(),
+            score_bits: f["score_bits"].as_str().unwrap().to_string(),
+        })
+        .collect();
+    let rebuilt = ReceiptBody {
+        state_hash: receipt["state_hash"].as_str().unwrap().to_string(),
+        event_log_hash: receipt["event_log_hash"].as_str().map(|s| s.to_string()),
+        committed_height: receipt["committed_height"].as_u64(),
+        query_dim: receipt["query_dim"].as_u64().unwrap() as usize,
+        k: receipt["k"].as_u64().unwrap() as usize,
+        results: fingerprints,
+        subgraph: None,
+    };
+    assert_eq!(
+        compute_digest(&rebuilt),
+        receipt["receipt_digest"].as_str().unwrap(),
+        "receipt must verify over the decayed result set"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn timeline_reflects_writes() {
     let url = spawn_node().await;

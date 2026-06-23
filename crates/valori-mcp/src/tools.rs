@@ -45,13 +45,18 @@ pub fn tool_definitions() -> Vec<Value> {
             "name": RECALL,
             "description": "Recall the k nearest memories to a query embedding AND a verifiable \
                             receipt: a BLAKE3 digest binding the exact result set to the committed \
-                            state hash at recall time. Lets you prove later what the agent recalled.",
+                            state hash at recall time. Lets you prove later what the agent recalled. \
+                            Optionally pass decay_half_life_secs for recency-aware recall: older \
+                            memories are ranked down (a memory one half-life old has its distance \
+                            doubled), so fresh context surfaces over stale.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query_vector": { "type": "array", "items": { "type": "number" } },
                     "k": { "type": "integer", "minimum": 1, "default": 5 },
-                    "collection": { "type": "string" }
+                    "collection": { "type": "string" },
+                    "decay_half_life_secs": { "type": "integer", "minimum": 0,
+                        "description": "Recency half-life in seconds; 0/absent = no decay." }
                 },
                 "required": ["query_vector"]
             }
@@ -161,10 +166,11 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let query = parse_vector(args, "query_vector")?;
             let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             let collection = opt_str(args, "collection");
+            let decay = args.get("decay_half_life_secs").and_then(|v| v.as_u64());
             let query_dim = query.len();
 
             let results = client
-                .memory_search(query.clone(), k, collection)
+                .memory_search(query.clone(), k, collection, decay)
                 .await
                 .context("memory search failed")?;
 
@@ -290,7 +296,7 @@ mod tests {
             Ok(json!({ "memory_id": "mem-1", "record_id": 1,
                        "document_node_id": 10, "chunk_node_id": 11 }))
         }
-        async fn memory_search(&self, _q: Vec<f32>, _k: usize, _c: Option<String>) -> Result<Value> {
+        async fn memory_search(&self, _q: Vec<f32>, _k: usize, _c: Option<String>, _d: Option<u64>) -> Result<Value> {
             Ok(json!({ "results": [
                 { "memory_id": "mem-1", "record_id": 1, "score": 0.9, "metadata": {"text": "hi"} },
                 { "memory_id": "mem-2", "record_id": 2, "score": 0.5 }
