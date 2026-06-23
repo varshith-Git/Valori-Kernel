@@ -31,7 +31,7 @@ on:
 
 env:
   REGISTRY:   ghcr.io
-  IMAGE_NAME: varshith-git/valori-kernel/valori-node
+  IMAGE_NAME: ${{ github.repository_owner }}/valori-kernel/valori-node
 
 jobs:
   # ── 1. Build binaries for each platform ──────────────────────────────────────

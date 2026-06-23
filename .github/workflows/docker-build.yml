@@ -10,7 +10,7 @@ name: Docker Build & Smoke Test
 
 on:
   push:
-    branches: [ "main", "multinode" ]
+    branches: [ "main" ]
     paths:
       - "Dockerfile"
       - "docker-compose.yml"
@@ -20,7 +20,7 @@ on:
       - "Cargo.lock"
       - ".github/workflows/docker-build.yml"
   pull_request:
-    branches: [ "main", "multinode" ]
+    branches: [ "main" ]
     paths:
       - "Dockerfile"
       - "docker-compose.yml"

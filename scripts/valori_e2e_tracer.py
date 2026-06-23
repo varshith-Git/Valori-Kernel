@@ -23,7 +23,7 @@ def main():
     
     # 1. Initialize MemoryClient
     print("\n[STEP 1] Initialization")
-    client = MemoryClient(path="./test_e2e_db")
+    client = MemoryClient(path="./test_e2e_db", dim=384)
     print(f"✅ Client initialized.")
     print(f"🔐 Initial State Hash: {client.get_state_hash()}")
     
