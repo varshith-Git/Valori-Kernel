@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 env:
-  GIST_ID: "replace-with-your-gist-id"    # ← set this after creating the gist
+  GIST_ID: "99d8def7d72e6366caedb2a641a2b4b0"
 
 jobs:
   count-tests:
