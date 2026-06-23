@@ -424,6 +424,13 @@ impl ValoricoreEngine {
                         key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
                 KernelEvent::AutoInsertRecord { tag, .. } =>
                     format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})"),
+                KernelEvent::AutoCreateNode { kind, .. } =>
+                    format!("Event ID {event_id}: AutoCreateNode (Kind: {kind:?})"),
+                KernelEvent::AutoCreateEdge { from, to, kind } =>
+                    format!("Event ID {event_id}: AutoCreateEdge ({from:?} -> {to:?}, Kind: {kind:?})"),
+                KernelEvent::AutoInsertRecordEncrypted { key_id, tag, .. } =>
+                    format!("Event ID {event_id}: AutoInsertRecordEncrypted (key {}, Tag: {tag})",
+                        key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
             };
             events.push(event_str);
         }
