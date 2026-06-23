@@ -145,9 +145,11 @@ jobs:
 
       - name: Flatten dist directory
         run: |
-          find dist/ -type f | while read f; do
-            mv "$f" dist/$(basename "$f")
+          find dist/ -mindepth 2 -type f | while read f; do
+            dest="dist/$(basename "$f")"
+            [ "$f" != "$dest" ] && mv "$f" "$dest"
           done
+          find dist/ -mindepth 1 -maxdepth 1 -type d -empty -delete
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
