@@ -119,7 +119,7 @@ jobs:
           
       - name: Build kernel for WASM
         run: |
-          cargo build --lib --target wasm32-unknown-unknown --release
+          cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release
           
       - name: Install wasmtime
         run: |

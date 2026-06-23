@@ -141,15 +141,29 @@ Valori is the **memory layer** of your AI stack — the place where embedding ve
 | **CLI** | `valori inspect`, `verify`, `timeline`, `replay-query`, `diff`, `cluster`, `import` |
 | **Tests** | Unit, integration, openraft compliance suite, proptest fuzz — count auto-updated by CI |
 
-### Coming in Phase 3 (remaining)
+### Shipped — Phase 3 complete
 
 | Feature | What it unlocks |
 |---|---|
 | **Crypto-shredding (3.6)** | Per-record AES-256-GCM; DEK destruction = GDPR erasure in O(1) |
+| **Import (3.7)** | `valori import` — Qdrant + JSONL migration, one command |
+| **As-of reads (3.4)** | Point-in-time search against any past state hash |
 | **Write-throughput CI gates (3.8)** | PR fails if p99 insert latency regresses > 15% vs `main` baseline |
 | **Terraform modules (3.9)** | AWS / Azure one-command deployments |
 | **Signed releases + SBOM (3.10)** | Cosign signatures, CycloneDX SBOM, SLSA Level 2 provenance |
-| **BLAKE3 proof broadcast** | Nodes push state hashes to each other; quorum proof at `/v1/cluster/proof` |
+| **Concurrent reads (3.11)** | `RwLock` engine — reads no longer block each other |
+| **Batch idempotency (3.12)** | Per-item dedup in batch insert; safe to replay on failure |
+| **HNSW parameter exposure (3.13)** | `ef_construction`, `M`, `ef_search` configurable at runtime |
+| **MCP server (3.14)** | `valori-mcp` — verifiable agent memory for Claude Desktop and any MCP client |
+| **Native GraphRAG (3.15)** | `POST /v1/graphrag` — K nearest + subgraph traversal, one call, one consistent snapshot |
+
+### Coming next — Cortex (self-maintaining memory)
+
+| Feature | Phase |
+|---|---|
+| **Cluster decay** — durable creation timestamps in `ValoriStateMachine` | C4.1b |
+| **Consolidation** — scheduled merge via `SoftDeleteRecord` + `AutoInsertRecord` + `RefersTo` edges, all committed | C4.2 |
+| **Contradiction detection** — claim-level NLI, verdict committed as a `RefersTo` edge event | C4.3 |
 
 ---
 
