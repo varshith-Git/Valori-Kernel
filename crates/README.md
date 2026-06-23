@@ -1,51 +1,14 @@
-# valori-cli
+# Crates
 
-A command-line tool for inspecting, debugging, and verifying Valori AI memory databases directly from disk — no running server required.
+This workspace is split into focused crates. Each has its own README with full details.
 
-See **[crates/cli/README.md](cli/README.md)** for the full documentation.
-
----
-
-## Quick reference
-
-```bash
-# Install
-cargo install --path crates/cli
-
-# Check database health
-valori inspect --dir ./my_valori_db
-
-# Verify a snapshot file
-valori verify snapshot.val
-
-# Print the full event history
-valori timeline events.log
-
-# Replay to event #200 and run a search
-valori replay-query --snapshot snapshot.val --log events.log --at 200 \
-  --query '[0.1, -0.5, 0.8]' --top-k 5
-
-# Compare state between event #150 and #200
-valori diff --snapshot snapshot.val --log events.log --from 150 --to 200 \
-  --query '[0.1, -0.5, 0.8]'
-```
-
----
-
-## Architecture
-
-The crate contains two main pieces:
-
-**`valori` binary** — the five-command CLI described above.
-
-**Benchmark binaries** — standalone programs for measuring kernel performance on SIFT1M data:
-
-| Binary | Measures |
-|---|---|
-| `bench_ingest` | End-to-end ingestion throughput (events/second) |
-| `bench_1m` | Memory bandwidth breakdown: I/O, parsing, fixed-point math |
-| `bench_filter` | Tag-filtered search correctness |
-| `bench_persistence` | Snapshot save and load round-trip latency |
-| `bench_recall` | Recall@1 and Recall@10 vs brute-force ground truth |
-
-All benchmarks require SIFT1M vectors at `data/sift/sift/sift_base.fvecs`.
+| Crate | One-liner | README |
+|---|---|---|
+| [`valori-kernel`](valori-kernel/) | Deterministic core — Q16.16 fixed-point vector store, knowledge graph, BLAKE3 audit chain, snapshot encode/decode | [→](valori-kernel/README.md) |
+| [`valori-node`](valori-node/) | HTTP server (axum) + standalone engine + cluster orchestration | [→](valori-node/README.md) |
+| [`valori-consensus`](valori-consensus/) | Raft state machine + log store (openraft 0.9). Wraps the kernel as a `RaftStateMachine` | [→](valori-consensus/README.md) |
+| [`valori-mcp`](valori-mcp/) | Model Context Protocol server — verifiable agent memory with BLAKE3 receipts | [→](valori-mcp/README.md) |
+| [`valori-cli`](valori-cli/) | `valori` binary — `setup` wizard, `inspect`, `verify`, `timeline`, `diff`, `import` | [→](valori-cli/README.md) |
+| [`valori-ffi`](valori-ffi/) | PyO3 FFI layer — embedded in-process Python SDK (`MemoryClient`) | [→](valori-ffi/README.md) |
+| [`valori-wire`](valori-wire/) | Shared serialization types used by node ↔ Python SDK ↔ CLI | [→](valori-wire/README.md) |
+| [`valori-verify`](valori-verify/) | Standalone offline verifier — replays `events.log` and checks the BLAKE3 chain without a server | [→](valori-verify/README.md) |
