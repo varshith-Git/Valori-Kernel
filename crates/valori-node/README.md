@@ -184,6 +184,8 @@ High-level endpoints that combine vector storage with graph metadata.
 |---|---|---|
 | `/v1/memory/upsert_vector` | `POST` | Insert vector + metadata + graph nodes. |
 | `/v1/memory/search_vector` | `POST` | Search for similar vectors. |
+| `/v1/memory/consolidate` | `POST` | Replace a memory: soft-delete old + insert new + `Supersedes` edge (Phase C4.2). |
+| `/v1/memory/contradict` | `POST` | If two records' cosine similarity ≥ threshold, commit a `Contradicts` edge (Phase C4.3). |
 | `/v1/memory/meta/get` | `GET` | Retrieve metadata by ID. |
 | `/v1/memory/meta/set` | `POST` | Update metadata for an existing ID. |
 
@@ -195,6 +197,16 @@ curl -X POST http://localhost:3000/v1/memory/upsert_vector \
 curl -X POST http://localhost:3000/v1/memory/search_vector \
   -H "Content-Type: application/json" \
   -d '{"query_vector": [0.1, 0.2, 0.3, 0.4], "k": 3}'
+
+# Consolidate: replace record 7 with a new vector (commits 3 events to the chain)
+curl -X POST http://localhost:3000/v1/memory/consolidate \
+  -H "Content-Type: application/json" \
+  -d '{"old_record_id": 7, "new_vector": [0.2, 0.3, 0.4, 0.5]}'
+
+# Contradiction: link two records if cosine similarity ≥ threshold (default 0.85)
+curl -X POST http://localhost:3000/v1/memory/contradict \
+  -H "Content-Type: application/json" \
+  -d '{"record_a": 3, "record_b": 9, "threshold": 0.9}'
 ```
 
 ### GraphRAG — `POST /v1/graphrag` (Phase 3.15)
@@ -403,10 +415,25 @@ ids = client.insert_batch([[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]],
 # Scoped search
 results = client.search([0.1, 0.2, 0.3, 0.4], k=5, collection="tenant-acme")
 
+# Agent-memory primitives — return memory_id + graph nodes + decay fields
+m = client.memory_upsert([0.1, 0.2, 0.3, 0.4], metadata={"role": "note"})
+hits = client.memory_search([0.1, 0.2, 0.3, 0.4], k=5, decay_half_life_secs=86400)
+
+# Self-maintaining memory (audited — commits edges to the BLAKE3 chain)
+client.consolidate(old_record_id=m["record_id"], new_vector=[0.2, 0.3, 0.4, 0.5])
+client.contradict(record_a=3, record_b=9, threshold=0.9)
+
+# Proof / provenance receipt
+proof = client.event_log_proof()   # {"event_log_hash", "final_state_hash", "committed_height", ...}
+
 # List and drop
 collections = client.list_collections()   # [{"name": "default", "id": 0}, ...]
 client.drop_collection("tenant-acme")
 ```
+
+The SDK wraps all 40 product HTTP endpoints. `list_contradictions()` /
+`resolve_contradiction()` are **deprecated** (they called the legacy Next.js UI
+layer, not the node) — use `contradict()` / `consolidate()` instead.
 
 ### Multi-node cluster client
 

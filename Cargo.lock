@@ -1817,9 +1817,9 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memmap2"
-version = "0.9.10"
+version = "0.9.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
 dependencies = [
  "libc",
 ]
@@ -3824,7 +3824,7 @@ dependencies = [
 
 [[package]]
 name = "valori-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -3851,7 +3851,7 @@ dependencies = [
 
 [[package]]
 name = "valori-consensus"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3875,7 +3875,7 @@ dependencies = [
 
 [[package]]
 name = "valori-kernel"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "blake3",
@@ -3890,7 +3890,7 @@ dependencies = [
 
 [[package]]
 name = "valori-mcp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3907,7 +3907,7 @@ dependencies = [
 
 [[package]]
 name = "valori-node"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -3944,7 +3944,7 @@ dependencies = [
 
 [[package]]
 name = "valori-verify"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3962,7 +3962,7 @@ dependencies = [
 
 [[package]]
 name = "valori-wire"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "blake3",
@@ -3973,7 +3973,7 @@ dependencies = [
 
 [[package]]
 name = "valoricore-ffi"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "blake3",

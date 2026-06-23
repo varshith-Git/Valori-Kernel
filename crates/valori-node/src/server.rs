@@ -138,6 +138,8 @@ pub fn build_router_with_keys(
         .route("/v1/snapshot/restore", post(snapshot_restore))
         .route("/v1/memory/upsert_vector", post(memory_upsert_vector))
         .route("/v1/memory/search_vector", post(memory_search_vector))
+        .route("/v1/memory/consolidate", post(memory_consolidate))
+        .route("/v1/memory/contradict", post(memory_contradict))
         .route("/v1/memory/meta/set", post(meta_set))
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
         .route("/v1/proof/state", axum::routing::get(get_proof))
@@ -813,6 +815,92 @@ async fn get_proof(
     // state_proof handler so external clients see an identical response shape.
     let hex: String = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
     Json(serde_json::json!({ "final_state_hash": hex }))
+}
+
+// ── C4.2: Memory consolidation ───────────────────────────────────────────────
+
+async fn memory_consolidate(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<MemoryConsolidateRequest>,
+) -> Result<Json<MemoryConsolidateResponse>, EngineError> {
+    let mut engine = state.write().await;
+    let ns = engine.resolve_collection(payload.collection.as_deref())?;
+
+    // 1. Soft-delete the old record — committed event in the BLAKE3 chain.
+    engine.soft_delete_record(payload.old_record_id)?;
+
+    // 2. Insert the replacement vector — committed AutoInsertRecord event.
+    let new_record_id = engine.insert_record_from_f32_ns(&payload.new_vector, ns)?;
+
+    // 3. Wire a Supersedes edge: new → old — committed AutoCreateEdge event.
+    //    Create graph nodes for both ends first (if they don't already exist).
+    let new_node = engine.create_node_for_record(Some(new_record_id), NodeKind::Chunk as u8, ns)?;
+    let old_node = engine.create_node_for_record(Some(payload.old_record_id), NodeKind::Chunk as u8, ns)?;
+    let edge_id = engine.create_edge(new_node, old_node, EdgeKind::Supersedes as u8)?;
+
+    // Persist optional metadata for the new record.
+    if let Some(meta) = payload.metadata {
+        let memory_id = format!("rec:{}", new_record_id);
+        engine.metadata.set(memory_id.clone(), meta);
+        let _ = engine.flush_metadata();
+    }
+
+    let proof = engine.get_proof();
+    let state_hash = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+
+    Ok(Json(MemoryConsolidateResponse {
+        old_record_id: payload.old_record_id,
+        new_record_id,
+        supersedes_edge_id: edge_id,
+        state_hash,
+    }))
+}
+
+// ── C4.3: Contradiction detection ────────────────────────────────────────────
+
+const DEFAULT_CONTRADICT_THRESHOLD: f32 = 0.85;
+
+async fn memory_contradict(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<MemoryContradictRequest>,
+) -> Result<Json<MemoryContradictResponse>, EngineError> {
+    let threshold = payload.threshold.unwrap_or(DEFAULT_CONTRADICT_THRESHOLD);
+
+    // Read phase — compute similarity without holding write lock.
+    let similarity = {
+        let engine = state.read().await;
+        engine.cosine_similarity(payload.record_a, payload.record_b)
+            .ok_or_else(|| EngineError::InvalidInput(
+                format!("one or both records ({}, {}) not found or not searchable",
+                    payload.record_a, payload.record_b)
+            ))?
+    };
+
+    let contradicts = similarity >= threshold;
+
+    let (edge_id, state_hash) = if contradicts {
+        // Write phase — commit the Contradicts edge.
+        let mut engine = state.write().await;
+        let ns = engine.resolve_collection(payload.collection.as_deref())?;
+        let node_a = engine.create_node_for_record(Some(payload.record_a), NodeKind::Chunk as u8, ns)?;
+        let node_b = engine.create_node_for_record(Some(payload.record_b), NodeKind::Chunk as u8, ns)?;
+        let eid = engine.create_edge(node_a, node_b, EdgeKind::Contradicts as u8)?;
+        let hash = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+        (Some(eid), hash)
+    } else {
+        let engine = state.read().await;
+        let hash = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+        (None, hash)
+    };
+
+    Ok(Json(MemoryContradictResponse {
+        record_a: payload.record_a,
+        record_b: payload.record_b,
+        similarity,
+        contradicts,
+        edge_id,
+        state_hash,
+    }))
 }
 
 async fn get_event_proof(

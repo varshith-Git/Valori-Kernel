@@ -29,7 +29,7 @@
 //! refusal semantics: a snapshot from a foreign arithmetic format fails to
 //! decode and the node keeps its old state.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
 use std::sync::Arc;
 
@@ -144,6 +144,9 @@ struct StateMachineInner {
     current_snapshot: Option<(SnapshotMeta<NodeId, ValoriNode>, Vec<u8>)>,
     audit: Box<dyn AuditSink>,
     snapshot_seq: u64,
+    /// C4.1b: unix-second creation timestamps for records, keyed by record id.
+    /// Stamped at apply time so all replicas agree. Not hashed into state.
+    created_at: HashMap<u32, u64>,
     /// Set when a redb database is shared with the log store. Persists
     /// `last_applied`, `membership`, and snapshot data across restarts so
     /// openraft does not replay already-applied log entries through the
@@ -274,6 +277,7 @@ impl ValoriStateMachine {
                 snapshot_seq: 0,
                 db: None,
                 replay_until: None,
+                created_at: HashMap::new(),
             })),
         }
     }
@@ -383,6 +387,7 @@ impl ValoriStateMachine {
                 snapshot_seq: 0,
                 db: Some(db),
                 replay_until,
+                created_at: HashMap::new(),
             })),
         })
     }
@@ -396,6 +401,20 @@ impl ValoriStateMachine {
     /// this for serving reads without copying the state out).
     pub async fn with_state<T>(&self, f: impl FnOnce(&KernelState) -> T) -> T {
         f(&self.inner.lock().await.state)
+    }
+
+    /// C4.1b: unix-second creation timestamp for a record, or None if unknown.
+    pub async fn record_created_at(&self, id: u32) -> Option<u64> {
+        self.inner.lock().await.created_at.get(&id).copied()
+    }
+
+    /// C4.1b: run a closure with both kernel state and created_at map.
+    pub async fn with_state_and_timestamps<T>(
+        &self,
+        f: impl FnOnce(&KernelState, &HashMap<u32, u64>) -> T,
+    ) -> T {
+        let inner = self.inner.lock().await;
+        f(&inner.state, &inner.created_at)
     }
 }
 
@@ -526,6 +545,13 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                     .audit
                                     .record(&req.event, req.request_id)
                                     .map_err(|e| io_err(format!("audit sink write failed: {e}")))?;
+                            }
+                            // C4.1b: stamp creation time for decay on AutoInsertRecord.
+                            if let Some(rid) = pre_alloc_id {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs()).unwrap_or(0);
+                                inner.created_at.insert(rid.0, now);
                             }
                             (
                                 pre_alloc_id.map(|r| r.0),

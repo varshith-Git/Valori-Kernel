@@ -6,7 +6,7 @@
 
 **The vector database that can mathematically prove it never lost your data.**
 
-[![Version](https://img.shields.io/badge/version-0.2.1-6c47ff?style=flat-square&logo=rust)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.2.2-6c47ff?style=flat-square&logo=rust)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
 [![Build](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valoricore-Kernel/ci.yml?style=flat-square&label=CI)](https://github.com/varshith-Git/Valoricore-Kernel/actions)
 [![Determinism](https://img.shields.io/badge/determinism-multi--arch%20verified-brightgreen?style=flat-square)](.github/workflows/multi-arch-determinism.yml)
@@ -86,6 +86,7 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 | **GraphRAG** | Vector search + subgraph traversal in one call, one consistent snapshot |
 | **Agent memory (MCP)** | `valori-mcp` — verifiable recall with BLAKE3 receipt; works with Claude Desktop |
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
+| **Self-maintaining memory** | `consolidate` (supersede a memory) and `contradict` (flag conflicts) commit `Supersedes`/`Contradicts` edges to the audit chain |
 | **Multi-tenancy** | Up to 1 024 named collections; per-tenant API keys with RBAC |
 | **Point-in-time reads** | Replay to any past state hash or log index |
 | **GDPR erasure** | Crypto-shredding — DEK destruction = O(1) erasure, audit chain stays intact |

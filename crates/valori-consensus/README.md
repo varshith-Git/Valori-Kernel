@@ -167,6 +167,22 @@ The dedup table is part of replicated state (it travels in snapshots). Every
 node makes the same dedup decision. Only successful applies enter the table, so
 a rejected event's `request_id` can be retried.
 
+### Creation timestamps for decay (Phase C4.1b)
+
+`StateMachineInner.created_at: HashMap<u32, u64>` records the unix-second
+creation time of each record, stamped at `AutoInsertRecord` apply time. The
+cluster `/search` path reads it via `with_state_and_timestamps()` to run the
+recency-aware decay re-rank (`decay_half_life_secs`), matching the standalone
+node.
+
+This map is **derived, non-hashed, and not replicated** — exactly like the
+standalone `Engine.created_at`. It is deliberately excluded from the BLAKE3
+state hash so wall-clock time never affects determinism or cross-node hash
+equality. Consequence: a node that restarts or installs a snapshot starts with
+an empty map and ranks pre-event records neutrally (factor 1.0) until they are
+re-stamped. Durable creation timestamps (WAL/event timestamps) are deferred to
+Phase C4.1c.
+
 ### Snapshots
 
 Snapshots are self-verifying: the payload carries the BLAKE3 state hash;

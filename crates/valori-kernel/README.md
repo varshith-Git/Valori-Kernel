@@ -28,6 +28,23 @@ sequence always produces the same BLAKE3 state hash — on every architecture.
 every Raft replica calls `next_node_id()` / `next_edge_id()` in the same
 log-ordered sequence and converges to identical IDs without coordination.
 
+Graph edges carry an `EdgeKind` (`types/enums.rs`), serialised as a `u8`:
+
+| `EdgeKind` | Value | Meaning |
+|---|---|---|
+| `Relation` | 0 | Generic relation. |
+| `Follows` | 1 | Temporal/sequence link. |
+| `InEpisode` | 2 | Membership in an episode. |
+| `ByAgent` | 3 | Authored/emitted by an agent. |
+| `Mentions` | 4 | Source mentions a target entity. |
+| `RefersTo` | 5 | Reference/citation link. |
+| `ParentOf` | 6 | Document → chunk hierarchy. |
+| `Supersedes` | 7 | Replacement supersedes a retired memory (Phase C4.2 consolidation). |
+| `Contradicts` | 8 | Source contradicts a target memory (Phase C4.3 contradiction). |
+
+`Supersedes` and `Contradicts` make the self-maintaining-memory verdicts
+first-class **hashed events** in the audit chain rather than mutable metadata.
+
 ```rust
 // Cluster-mode: emit Auto events; the ID is determined at apply time.
 let event = KernelEvent::AutoCreateNode {

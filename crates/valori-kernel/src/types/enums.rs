@@ -46,7 +46,10 @@ pub enum EdgeKind {
     Mentions = 4,
     RefersTo = 5,
     ParentOf = 6,
-    // Add more as needed
+    /// C4.2: new record supersedes old one (consolidation)
+    Supersedes = 7,
+    /// C4.3: new record contradicts old one (NLI verdict)
+    Contradicts = 8,
 }
 
 impl EdgeKind {
@@ -59,6 +62,8 @@ impl EdgeKind {
             4 => Some(EdgeKind::Mentions),
             5 => Some(EdgeKind::RefersTo),
             6 => Some(EdgeKind::ParentOf),
+            7 => Some(EdgeKind::Supersedes),
+            8 => Some(EdgeKind::Contradicts),
             _ => None,
         }
     }

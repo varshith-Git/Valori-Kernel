@@ -56,6 +56,7 @@ pub fn dot_product(a: &[i32], b: &[i32]) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn test_valid_distance() {

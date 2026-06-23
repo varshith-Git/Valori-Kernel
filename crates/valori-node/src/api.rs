@@ -387,3 +387,60 @@ pub struct CreateCollectionResponse {
 pub struct ListCollectionsResponse {
     pub collections: Vec<CollectionInfo>,
 }
+
+// ── C4.2: Memory consolidation ───────────────────────────────────────────────
+
+/// Replace an existing memory record with a new vector, committing a
+/// SoftDeleteRecord + AutoInsertRecord + AutoCreateEdge(Supersedes) to the
+/// BLAKE3 audit chain in one logical operation.
+#[derive(Deserialize)]
+pub struct MemoryConsolidateRequest {
+    /// Record id of the memory being replaced.
+    pub old_record_id: u32,
+    /// New vector that replaces the old memory.
+    pub new_vector: Vec<f32>,
+    #[serde(default)]
+    pub collection: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+pub struct MemoryConsolidateResponse {
+    /// The old record id (now soft-deleted).
+    pub old_record_id: u32,
+    /// The new record id.
+    pub new_record_id: u32,
+    /// The Supersedes edge id linking new → old.
+    pub supersedes_edge_id: u32,
+    /// BLAKE3 state hash after all three events are applied.
+    pub state_hash: String,
+}
+
+// ── C4.3: Contradiction detection ────────────────────────────────────────────
+
+/// Check whether two records contradict each other (by cosine similarity
+/// threshold) and, if so, commit a Contradicts edge to the audit chain.
+#[derive(Deserialize)]
+pub struct MemoryContradictRequest {
+    pub record_a: u32,
+    pub record_b: u32,
+    /// Cosine similarity threshold above which the records are deemed to
+    /// contradict. Default 0.85 — tuned for claim-level NLI in Q16.16 space.
+    #[serde(default)]
+    pub threshold: Option<f32>,
+    #[serde(default)]
+    pub collection: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MemoryContradictResponse {
+    pub record_a: u32,
+    pub record_b: u32,
+    pub similarity: f32,
+    pub contradicts: bool,
+    /// Edge id of the Contradicts edge, present only when contradicts=true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_id: Option<u32>,
+    pub state_hash: String,
+}

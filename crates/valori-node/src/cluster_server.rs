@@ -269,6 +269,8 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/crypto/status/:key_id", get(cluster_crypto_status))
         // Index config (Phase 3.13)
         .route("/v1/index/config", axum::routing::get(cluster_index_config))
+        .route("/v1/memory/consolidate", post(cluster_memory_consolidate))
+        .route("/v1/memory/contradict", post(cluster_memory_contradict))
         .with_state(state)
         .merge(cluster_router(raft, audit))
         .layer(axum::middleware::from_fn(cluster_auth_guard))
@@ -385,6 +387,34 @@ where
     }
 }
 
+/// Like [`raft_write`] but returns the committed `ClientResponse` so the caller
+/// can read allocated IDs (record/node/edge) instead of pre-reading them in a
+/// separate await — which would race a concurrent write for the same ID.
+/// On any failure it returns the error `Response` for the caller to short-circuit.
+async fn raft_write_data(
+    raft: &Raft,
+    req: ClientRequest,
+) -> Result<valori_consensus::ClientResponse, Response> {
+    match raft.client_write(req).await {
+        Ok(resp) => {
+            if let Some(reason) = &resp.data.rejected {
+                return Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": reason })),
+                ).into_response());
+            }
+            Ok(resp.data)
+        }
+        Err(openraft::error::RaftError::APIError(
+            openraft::error::ClientWriteError::ForwardToLeader(fwd),
+        )) => Err(not_leader_response(fwd.leader_node.as_ref())),
+        Err(e) => Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": format!("raft write failed: {e}") })),
+        ).into_response()),
+    }
+}
+
 // ── Insert ────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -498,12 +528,9 @@ struct SearchRequest {
     k: usize,
     #[serde(default)]
     consistency: Consistency,
-    /// Phase C4.1 — accepted for wire-compatibility with the standalone server so
-    /// one SDK call works against both node types. NOTE: cluster decay is a no-op
-    /// in v1 — per-record creation time is tracked in the standalone `Engine`, not
-    /// in the consensus state machine. Wiring it is the C4.1b follow-up.
+    /// C4.1b: decay half-life in seconds for recency-aware re-ranking.
+    /// Applies to cluster search — creation timestamps tracked in the state machine.
     #[serde(default)]
-    #[allow(dead_code)]
     decay_half_life_secs: Option<u64>,
 }
 
@@ -545,24 +572,47 @@ async fn search(
     }
 
     let k = req.k.max(1);
-    // Reads are served LOCALLY — replicas' RAM pays for itself.
-    // search_l2 delegates to the kernel's BruteForceIndex, which is kept
-    // up to date by every apply (on_insert / on_delete are called inside
-    // KernelState::apply). Results arrive pre-sorted ascending by score.
-    let results: Vec<SearchHit> = state
-        .sm
-        .with_state(|s| {
-            let mut buf = vec![KernelSearchResult::default(); k];
-            let n = s.search_l2(&query, &mut buf, None);
-            buf[..n]
-                .iter()
-                .map(|r| SearchHit {
-                    id: r.id.0,
-                    score: r.score.0 as i64,
-                })
-                .collect()
-        })
-        .await;
+    let half_life = req.decay_half_life_secs.unwrap_or(0);
+
+    // C4.1b: when decay is requested, over-fetch and re-rank using per-record
+    // creation timestamps tracked in the state machine.
+    let results: Vec<SearchHit> = if half_life == 0 {
+        state
+            .sm
+            .with_state(|s| {
+                let mut buf = vec![KernelSearchResult::default(); k];
+                let n = s.search_l2(&query, &mut buf, None);
+                buf[..n]
+                    .iter()
+                    .map(|r| SearchHit { id: r.id.0, score: r.score.0 as i64 })
+                    .collect()
+            })
+            .await
+    } else {
+        let pool = k.saturating_mul(4).max(50).min(1000);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs()).unwrap_or(0);
+        state
+            .sm
+            .with_state_and_timestamps(|s, created_at| {
+                let mut buf = vec![KernelSearchResult::default(); pool];
+                let n = s.search_l2(&query, &mut buf, None);
+                let candidates: Vec<crate::decay::DecayHit> = buf[..n]
+                    .iter()
+                    .map(|r| crate::decay::DecayHit {
+                        id: r.id.0,
+                        distance: r.score.0 as f32,
+                        created_at: created_at.get(&r.id.0).copied(),
+                    })
+                    .collect();
+                crate::decay::rerank(candidates, now, half_life, k)
+                    .into_iter()
+                    .map(|h| SearchHit { id: h.id, score: h.distance as i64 })
+                    .collect()
+            })
+            .await
+    };
 
     (StatusCode::OK, Json(serde_json::json!({ "results": results }))).into_response()
 }
@@ -1253,6 +1303,184 @@ async fn cluster_index_config() -> Response {
         "hnsw": null,
         "note": "cluster mode uses kernel brute-force search for linearizable consistency",
     }))).into_response()
+}
+
+// ── C4.2: Cluster memory consolidation ───────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ClusterMemoryConsolidateRequest {
+    old_record_id: u32,
+    new_vector: Vec<f32>,
+    #[serde(default)]
+    collection: Option<String>,
+}
+
+async fn cluster_memory_consolidate(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<ClusterMemoryConsolidateRequest>,
+) -> Response {
+    let new_vector = match to_fxp(&req.new_vector) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    // Resolve namespace using the cluster's NamespaceRegistry.
+    let ns_id: u16 = if let Some(name) = req.collection.as_deref() {
+        let reg = state.namespaces.lock().unwrap();
+        match reg.resolve(Some(name)) {
+            Some(id) => id,
+            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "collection not found" }))).into_response(),
+        }
+    } else {
+        valori_kernel::types::id::DEFAULT_NS.0
+    };
+
+    let _ = ns_id; // namespace tracked by registry; nodes are global in the kernel graph
+
+    // Each step reads its allocated ID from the commit response — never a
+    // separate pre-read, which would race a concurrent writer for the same ID.
+
+    // 1. Soft-delete the old record.
+    if let Err(resp) = raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::SoftDeleteRecord { id: RecordId(req.old_record_id) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await { return resp; }
+
+    // 2. Insert replacement vector — id comes from the apply response.
+    let new_record_id = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoInsertRecord { vector: new_vector, metadata: None, tag: 0 },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => resp.allocated_record_id.unwrap_or(0),
+        Err(resp) => return resp,
+    };
+
+    // 3. Create graph nodes (no namespace_id field on AutoCreateNode).
+    let new_node = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(new_record_id)) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
+        Err(resp) => return resp,
+    };
+
+    let old_node = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.old_record_id)) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
+        Err(resp) => return resp,
+    };
+
+    // 4. Supersedes edge: new → old.
+    match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateEdge { from: new_node, to: old_node, kind: EdgeKind::Supersedes },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
+            "old_record_id": req.old_record_id,
+            "new_record_id": new_record_id,
+            "supersedes_edge_id": resp.allocated_edge_id.unwrap_or(0),
+            "log_index": resp.log_index,
+        }))).into_response(),
+        Err(resp) => resp,
+    }
+}
+
+// ── C4.3: Cluster contradiction detection ─────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ClusterMemoryContradictRequest {
+    record_a: u32,
+    record_b: u32,
+    #[serde(default)]
+    threshold: Option<f32>,
+    #[serde(default)]
+    collection: Option<String>,
+}
+
+fn cosine_similarity_from_records(
+    rec_a: &valori_kernel::storage::record::Record,
+    rec_b: &valori_kernel::storage::record::Record,
+) -> Option<f32> {
+    use valori_kernel::dist::dot_product;
+    if !rec_a.is_searchable() || !rec_b.is_searchable() { return None; }
+    let va: Vec<i32> = rec_a.vector.data.iter().map(|x| x.0).collect();
+    let vb: Vec<i32> = rec_b.vector.data.iter().map(|x| x.0).collect();
+    let dot = dot_product(&va, &vb) as f64;
+    let mag_a = (dot_product(&va, &va) as f64).sqrt();
+    let mag_b = (dot_product(&vb, &vb) as f64).sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 { return None; }
+    Some((dot / (mag_a * mag_b)) as f32)
+}
+
+async fn cluster_memory_contradict(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<ClusterMemoryContradictRequest>,
+) -> Response {
+    if let Err(resp) = state.readiness.check(&state.raft) {
+        return resp;
+    }
+
+    let threshold = req.threshold.unwrap_or(0.85);
+    let ra = req.record_a;
+    let rb = req.record_b;
+
+    let similarity: Option<f32> = state.sm.with_state(move |s| {
+        let rec_a = s.get_record(RecordId(ra))?;
+        let rec_b = s.get_record(RecordId(rb))?;
+        cosine_similarity_from_records(rec_a, rec_b)
+    }).await;
+
+    let similarity = match similarity {
+        Some(s) => s,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": format!("one or both records ({}, {}) not found or not searchable", req.record_a, req.record_b)
+        }))).into_response(),
+    };
+
+    let contradicts = similarity >= threshold;
+
+    if !contradicts {
+        return (StatusCode::OK, Json(serde_json::json!({
+            "record_a": req.record_a,
+            "record_b": req.record_b,
+            "similarity": similarity,
+            "contradicts": false,
+        }))).into_response();
+    }
+
+    // Commit graph nodes + Contradicts edge — IDs come from the apply responses.
+    let node_a = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_a)) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
+        Err(resp) => return resp,
+    };
+
+    let node_b = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_b)) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
+        Err(resp) => return resp,
+    };
+
+    match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateEdge { from: node_a, to: node_b, kind: EdgeKind::Contradicts },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
+            "record_a": req.record_a,
+            "record_b": req.record_b,
+            "similarity": similarity,
+            "contradicts": true,
+            "edge_id": resp.allocated_edge_id.unwrap_or(0),
+            "log_index": resp.log_index,
+        }))).into_response(),
+        Err(resp) => resp,
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

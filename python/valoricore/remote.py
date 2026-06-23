@@ -296,6 +296,224 @@ class SyncRemoteClient:
             data["consistency"] = consistency
         return self._post("/v1/graphrag", data)
 
+    def consolidate(
+        self,
+        old_record_id: int,
+        new_vector: Vector,
+        collection: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Consolidate a memory (Phase C4.2): replace ``old_record_id`` with a
+        new vector, committing three events to the BLAKE3 audit chain in one
+        operation — ``SoftDeleteRecord`` (old) → ``AutoInsertRecord`` (new) →
+        ``AutoCreateEdge(Supersedes)`` (new → old).
+
+        The old record is soft-deleted (preserved in the chain, excluded from
+        search); the Supersedes edge makes the replacement auditable and lets a
+        reader trace why the old memory was retired.
+
+        Returns ``{"old_record_id", "new_record_id", "supersedes_edge_id",
+        "state_hash"}``.
+        """
+        data: Dict[str, Any] = {
+            "old_record_id": old_record_id,
+            "new_vector": new_vector,
+        }
+        if collection != "default":
+            data["collection"] = collection
+        if metadata is not None:
+            data["metadata"] = metadata
+        return self._post("/v1/memory/consolidate", data)
+
+    def contradict(
+        self,
+        record_a: int,
+        record_b: int,
+        threshold: Optional[float] = None,
+        collection: str = "default",
+    ) -> Dict[str, Any]:
+        """Detect contradiction between two memories (Phase C4.3).
+
+        Computes cosine similarity between the two record vectors. If it meets
+        ``threshold`` (default 0.85 server-side), a ``Contradicts`` edge
+        (``record_a`` → ``record_b``) is committed to the audit chain; otherwise
+        nothing is written.
+
+        Returns ``{"record_a", "record_b", "similarity", "contradicts",
+        "edge_id"?, "state_hash"}``. ``edge_id`` is present only when
+        ``contradicts`` is true.
+        """
+        data: Dict[str, Any] = {"record_a": record_a, "record_b": record_b}
+        if threshold is not None:
+            data["threshold"] = threshold
+        if collection != "default":
+            data["collection"] = collection
+        return self._post("/v1/memory/contradict", data)
+
+    # ── Agent-memory primitives (return memory_id + graph nodes + decay) ─────────
+
+    def memory_upsert(
+        self,
+        vector: Vector,
+        collection: str = "default",
+        attach_to_document_node: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Insert a memory the agent-memory way: stores the vector **and** wires
+        a document→chunk graph (``ParentOf`` edge), returning a stable
+        ``memory_id`` plus the created graph node IDs.
+
+        Prefer this over :meth:`insert` when you want the memory addressable by
+        ``memory_id`` and linked into the knowledge graph (so GraphRAG and the
+        provenance receipts can traverse it). ``attach_to_document_node`` reuses
+        an existing document node instead of creating a new one.
+
+        Returns ``{"memory_id", "record_id", "document_node_id",
+        "chunk_node_id"}``.
+        """
+        data: Dict[str, Any] = {"vector": vector}
+        if collection != "default":
+            data["collection"] = collection
+        if attach_to_document_node is not None:
+            data["attach_to_document_node"] = attach_to_document_node
+        if metadata is not None:
+            data["metadata"] = metadata
+        if tags is not None:
+            data["tags"] = tags
+        return self._post("/v1/memory/upsert_vector", data)
+
+    def memory_search(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        collection: str = "default",
+        decay_half_life_secs: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Agent-memory search: like :meth:`search` but each hit carries the
+        stable ``memory_id`` and any stored ``metadata`` (and, when decay is
+        active, ``decay_factor`` + ``age_secs``).
+
+        ``decay_half_life_secs`` (Phase C4.1) — recency-aware ranking; older
+        memories fade. ``score`` stays the true (undecayed) distance.
+
+        Returns a list of ``{"memory_id", "record_id", "score", "metadata",
+        "decay_factor"?, "age_secs"?}``.
+        """
+        data: Dict[str, Any] = {"query_vector": query_vector, "k": k}
+        if collection != "default":
+            data["collection"] = collection
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
+        return self._post("/v1/memory/search_vector", data)["results"]
+
+    # ── Proof / provenance ──────────────────────────────────────────────────────
+
+    def event_log_proof(self) -> Dict[str, Any]:
+        """Return the event-log proof: the BLAKE3 hash of the committed event
+        log plus the final state hash, snapshot hash, event count, and committed
+        height. This is the receipt primitive — an external client can replay the
+        log and check it reproduces ``final_state_hash`` at ``committed_height``.
+
+        Returns ``{"kernel_version", "event_log_hash", "final_state_hash",
+        "snapshot_hash"?, "event_count", "committed_height"}``.
+        """
+        url = self.base_url + "/v1/proof/event-log"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get event-log proof: {e}")
+
+    def get_version(self) -> str:
+        """Return the node's software version (``CARGO_PKG_VERSION``)."""
+        url = self.base_url + "/version"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.text.strip()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get version: {e}")
+
+    def list_nodes(self, collection: str = "default") -> Dict[str, Any]:
+        """List graph nodes in a collection.
+
+        Returns ``{"nodes": [{"node_id", "kind", "record_id", "namespace_id"}],
+        "count"}``.
+        """
+        url = self.base_url + "/graph/nodes"
+        params = {} if collection == "default" else {"collection": collection}
+        try:
+            resp = self.session.get(url, params=params, timeout=5)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list nodes: {e}")
+
+    # ── Snapshot / object-store offload (Phase 3.1) ─────────────────────────────
+
+    def save_snapshot(self, path: Optional[str] = None) -> Dict[str, Any]:
+        """Write a snapshot to the node's local filesystem. ``path`` overrides
+        the configured ``VALORI_SNAPSHOT_PATH``. Returns ``{"success", "path"}``.
+        """
+        data: Dict[str, Any] = {}
+        if path is not None:
+            data["path"] = path
+        return self._post("/v1/snapshot/save", data)
+
+    def restore_snapshot(self, path: str) -> Dict[str, Any]:
+        """Restore node state from a snapshot file already on the node's local
+        filesystem at ``path`` (the counterpart to :meth:`save_snapshot`). To
+        restore from raw bytes held client-side, use :meth:`restore` instead.
+        Returns ``{"success"}``.
+        """
+        return self._post("/v1/snapshot/restore", {"path": path})
+
+    def list_remote_snapshots(self) -> Dict[str, Any]:
+        """List snapshots in the configured object store (S3/MinIO/R2).
+        Requires ``VALORI_OBJECT_STORE_URL`` on the node.
+        Returns ``{"snapshots": [...], "count"}``.
+        """
+        url = self.base_url + "/v1/storage/snapshots"
+        try:
+            resp = self.session.get(url, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list remote snapshots: {e}")
+
+    def upload_snapshot_to_store(self) -> Dict[str, Any]:
+        """Snapshot current state and upload it to the object store, pruning to
+        ``VALORI_OBJECT_STORE_KEEP``. Returns the upload result (key, size,
+        state hash). Requires an object store configured on the node.
+        """
+        return self._post("/v1/storage/snapshots/upload", {})
+
+    def restore_from_store(self, key: str) -> Dict[str, Any]:
+        """Download a snapshot by object-store ``key`` and restore the node's
+        state from it. Returns ``{"key", "state_hash", "size_bytes"}``.
+        """
+        return self._post("/v1/storage/snapshots/restore", {"key": key})
+
+    def list_remote_wal(self) -> Dict[str, Any]:
+        """List archived WAL segments in the object store.
+        Returns ``{"segments": [...], "count"}``.
+        """
+        url = self.base_url + "/v1/storage/wal"
+        try:
+            resp = self.session.get(url, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list remote WAL: {e}")
+
+    def archive_wal_segment(self, path: str) -> Dict[str, Any]:
+        """Archive a sealed WAL segment (absolute local ``path`` on the node) to
+        the object store. Returns ``{"key", "size_bytes"}``.
+        """
+        return self._post("/v1/storage/wal/archive", {"path": path})
+
     def timeline(
         self,
         from_ts: Optional[str] = None,
@@ -723,13 +941,21 @@ class SyncRemoteClient:
         collection: str = "default",
         status: str = "pending",
     ) -> Dict[str, Any]:
-        """List contradiction entries detected at ingest time.
+        """**Deprecated (Phase C4.3).** Legacy C3 review-queue read that calls
+        the Next.js UI layer (``ui_url``), *not* the Valori node, and returns
+        whatever that layer holds (historically ``[]``).
 
-        Each entry contains ``record_a``, ``record_b``, ``source_a``,
-        ``source_b``, ``similarity``, ``status``, ``text_a``, ``text_b``.
-
-        Calls the Next.js UI layer (``ui_url``, defaults to port 3001).
+        Contradiction is now node-native and auditable: use :meth:`contradict`
+        to commit a ``Contradicts`` edge to the BLAKE3 chain, and traverse those
+        edges via :meth:`graphrag` / :meth:`get_edges`. This method will be
+        removed in a future release.
         """
+        warnings.warn(
+            "list_contradictions() is deprecated; it queries the legacy UI layer, "
+            "not the node. Use contradict() (node-native, audited) instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
         try:
             resp = self.session.get(url, timeout=10)
@@ -743,14 +969,20 @@ class SyncRemoteClient:
         contradiction_id: str,
         action: str,  # "dismiss" | "supersede_b"
     ) -> Dict[str, Any]:
-        """Resolve a pending contradiction.
+        """**Deprecated (Phase C4.3).** Legacy C3 review-queue write to the
+        Next.js UI layer (``ui_url``), *not* the Valori node.
 
-        ``action="dismiss"``    — both records are valid, remove from queue.
-        ``action="supersede_b"``— mark record_b as superseded; it will no
-                                  longer appear in future search results.
-
-        Calls the Next.js UI layer (``ui_url``, defaults to port 3001).
+        The node-native, audited replacements are :meth:`consolidate`
+        (supersede a memory) and :meth:`contradict` (flag a conflict) — both
+        commit events to the BLAKE3 chain. This method will be removed in a
+        future release.
         """
+        warnings.warn(
+            "resolve_contradiction() is deprecated; it writes to the legacy UI layer, "
+            "not the node. Use consolidate() or contradict() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         url = self.ui_url + "/api/contradictions"
         try:
             resp = self.session.post(url, json={"id": contradiction_id, "action": action}, timeout=5)
@@ -931,6 +1163,156 @@ class AsyncRemoteClient:
         if consistency is not None:
             data["consistency"] = consistency
         return await self._post("/v1/graphrag", data)
+
+    async def consolidate(
+        self,
+        old_record_id: int,
+        new_vector: Vector,
+        collection: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.consolidate (Phase C4.2). Replaces
+        ``old_record_id`` with ``new_vector`` and commits a Supersedes edge.
+        Returns ``{"old_record_id", "new_record_id", "supersedes_edge_id",
+        "state_hash"}``."""
+        data: Dict[str, Any] = {
+            "old_record_id": old_record_id,
+            "new_vector": new_vector,
+        }
+        if collection != "default":
+            data["collection"] = collection
+        if metadata is not None:
+            data["metadata"] = metadata
+        return await self._post("/v1/memory/consolidate", data)
+
+    async def contradict(
+        self,
+        record_a: int,
+        record_b: int,
+        threshold: Optional[float] = None,
+        collection: str = "default",
+    ) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.contradict (Phase C4.3). Commits a
+        Contradicts edge when cosine similarity ≥ threshold. Returns
+        ``{"record_a", "record_b", "similarity", "contradicts", "edge_id"?,
+        "state_hash"}``."""
+        data: Dict[str, Any] = {"record_a": record_a, "record_b": record_b}
+        if threshold is not None:
+            data["threshold"] = threshold
+        if collection != "default":
+            data["collection"] = collection
+        return await self._post("/v1/memory/contradict", data)
+
+    # ── Agent-memory primitives ─────────────────────────────────────────────────
+
+    async def memory_upsert(
+        self,
+        vector: Vector,
+        collection: str = "default",
+        attach_to_document_node: Optional[int] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.memory_upsert. Returns
+        ``{"memory_id", "record_id", "document_node_id", "chunk_node_id"}``."""
+        data: Dict[str, Any] = {"vector": vector}
+        if collection != "default":
+            data["collection"] = collection
+        if attach_to_document_node is not None:
+            data["attach_to_document_node"] = attach_to_document_node
+        if metadata is not None:
+            data["metadata"] = metadata
+        if tags is not None:
+            data["tags"] = tags
+        return await self._post("/v1/memory/upsert_vector", data)
+
+    async def memory_search(
+        self,
+        query_vector: Vector,
+        k: int = 5,
+        collection: str = "default",
+        decay_half_life_secs: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Async version of SyncRemoteClient.memory_search. Returns a list of
+        ``{"memory_id", "record_id", "score", "metadata", "decay_factor"?,
+        "age_secs"?}``."""
+        data: Dict[str, Any] = {"query_vector": query_vector, "k": k}
+        if collection != "default":
+            data["collection"] = collection
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
+        resp = await self._post("/v1/memory/search_vector", data)
+        return resp["results"]
+
+    # ── Proof / provenance ──────────────────────────────────────────────────────
+
+    async def event_log_proof(self) -> Dict[str, Any]:
+        """Async version of SyncRemoteClient.event_log_proof. Returns
+        ``{"kernel_version", "event_log_hash", "final_state_hash",
+        "snapshot_hash"?, "event_count", "committed_height"}``."""
+        url = self.base_url + "/v1/proof/event-log"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def get_version(self) -> str:
+        """Return the node's software version."""
+        url = self.base_url + "/version"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return (await resp.text()).strip()
+
+    async def list_nodes(self, collection: str = "default") -> Dict[str, Any]:
+        """List graph nodes in a collection. Returns ``{"nodes": [...], "count"}``."""
+        url = self.base_url + "/graph/nodes"
+        params = {} if collection == "default" else {"collection": collection}
+        async with self.session.get(url, params=params) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    # ── Snapshot / object-store offload ─────────────────────────────────────────
+
+    async def save_snapshot(self, path: Optional[str] = None) -> Dict[str, Any]:
+        """Write a snapshot to the node's local filesystem. Returns
+        ``{"success", "path"}``."""
+        data: Dict[str, Any] = {}
+        if path is not None:
+            data["path"] = path
+        return await self._post("/v1/snapshot/save", data)
+
+    async def restore_snapshot(self, path: str) -> Dict[str, Any]:
+        """Restore node state from a snapshot file on the node's local
+        filesystem at ``path``. Returns ``{"success"}``."""
+        return await self._post("/v1/snapshot/restore", {"path": path})
+
+    async def list_remote_snapshots(self) -> Dict[str, Any]:
+        """List snapshots in the object store. Returns ``{"snapshots", "count"}``."""
+        url = self.base_url + "/v1/storage/snapshots"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def upload_snapshot_to_store(self) -> Dict[str, Any]:
+        """Snapshot + upload to the object store. Returns the upload result."""
+        return await self._post("/v1/storage/snapshots/upload", {})
+
+    async def restore_from_store(self, key: str) -> Dict[str, Any]:
+        """Restore state from an object-store snapshot ``key``. Returns
+        ``{"key", "state_hash", "size_bytes"}``."""
+        return await self._post("/v1/storage/snapshots/restore", {"key": key})
+
+    async def list_remote_wal(self) -> Dict[str, Any]:
+        """List archived WAL segments in the object store. Returns
+        ``{"segments", "count"}``."""
+        url = self.base_url + "/v1/storage/wal"
+        async with self.session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.json()
+
+    async def archive_wal_segment(self, path: str) -> Dict[str, Any]:
+        """Archive a sealed WAL segment (local ``path``) to the object store.
+        Returns ``{"key", "size_bytes"}``."""
+        return await self._post("/v1/storage/wal/archive", {"path": path})
 
     async def timeline(
         self,
@@ -1271,7 +1653,14 @@ class AsyncRemoteClient:
         collection: str = "default",
         status: str = "pending",
     ) -> Dict[str, Any]:
-        """List contradiction entries. Calls Next.js UI layer (ui_url, port 3001)."""
+        """**Deprecated (Phase C4.3).** Legacy C3 UI-layer read (``ui_url``), not
+        the node. Use :meth:`contradict` (node-native, audited) instead."""
+        warnings.warn(
+            "list_contradictions() is deprecated; it queries the legacy UI layer, "
+            "not the node. Use contradict() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
         try:
             resp = await self.client.get(url)
@@ -1285,8 +1674,14 @@ class AsyncRemoteClient:
         contradiction_id: str,
         action: str,
     ) -> Dict[str, Any]:
-        """Resolve a pending contradiction (dismiss | supersede_b).
-        Calls Next.js UI layer (ui_url, port 3001)."""
+        """**Deprecated (Phase C4.3).** Legacy C3 UI-layer write (``ui_url``), not
+        the node. Use :meth:`consolidate` or :meth:`contradict` instead."""
+        warnings.warn(
+            "resolve_contradiction() is deprecated; it writes to the legacy UI layer, "
+            "not the node. Use consolidate() or contradict() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         url = self.ui_url + "/api/contradictions"
         try:
             resp = await self.client.post(url, json={"id": contradiction_id, "action": action})
@@ -1426,11 +1821,42 @@ class ClusterClient:
             query_vector, k=k, depth=depth, collection=collection, consistency=consistency,
         )
 
+    def consolidate(
+        self,
+        old_record_id: int,
+        new_vector: Vector,
+        collection: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Consolidate a memory (Phase C4.2) — routed to the leader. See
+        SyncRemoteClient.consolidate. Cluster IDs are assigned by the Raft state
+        machine; the response carries the allocated record/edge IDs."""
+        return self._write_client().consolidate(
+            old_record_id, new_vector, collection=collection, metadata=metadata,
+        )
+
+    def contradict(
+        self,
+        record_a: int,
+        record_b: int,
+        threshold: Optional[float] = None,
+        collection: str = "default",
+    ) -> Dict[str, Any]:
+        """Detect contradiction (Phase C4.3) — routed to the leader. See
+        SyncRemoteClient.contradict."""
+        return self._write_client().contradict(
+            record_a, record_b, threshold=threshold, collection=collection,
+        )
+
     def list_collections(self) -> List[Dict[str, Any]]:
         return self._read_client().list_collections()
 
     def get_state_hash(self) -> str:
         return self._read_client().get_state_hash()
+
+    def event_log_proof(self) -> Dict[str, Any]:
+        """Event-log proof from a replica (see SyncRemoteClient.event_log_proof)."""
+        return self._read_client().event_log_proof()
 
     def timeline(
         self,
@@ -1556,11 +1982,39 @@ class AsyncClusterClient:
             query_vector, k=k, depth=depth, collection=collection, consistency=consistency,
         )
 
+    async def consolidate(
+        self,
+        old_record_id: int,
+        new_vector: Vector,
+        collection: str = "default",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Async version of ClusterClient.consolidate (Phase C4.2) — routed to the leader."""
+        return await self._write_client().consolidate(
+            old_record_id, new_vector, collection=collection, metadata=metadata,
+        )
+
+    async def contradict(
+        self,
+        record_a: int,
+        record_b: int,
+        threshold: Optional[float] = None,
+        collection: str = "default",
+    ) -> Dict[str, Any]:
+        """Async version of ClusterClient.contradict (Phase C4.3) — routed to the leader."""
+        return await self._write_client().contradict(
+            record_a, record_b, threshold=threshold, collection=collection,
+        )
+
     async def list_collections(self) -> List[Dict[str, Any]]:
         return await self._read_client().list_collections()
 
     async def get_state_hash(self) -> str:
         return await self._read_client().get_state_hash()
+
+    async def event_log_proof(self) -> Dict[str, Any]:
+        """Event-log proof from a replica (see SyncRemoteClient.event_log_proof)."""
+        return await self._read_client().event_log_proof()
 
     async def timeline(
         self,

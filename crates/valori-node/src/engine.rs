@@ -1193,6 +1193,27 @@ impl Engine {
         }).collect())
     }
 
+    /// C4.3: cosine similarity between two records in [−1, 1]. Returns None if
+    /// either record is missing, deleted, or has a zero-magnitude vector.
+    pub fn cosine_similarity(&self, id_a: u32, id_b: u32) -> Option<f32> {
+        use valori_kernel::dist::dot_product;
+        use valori_kernel::types::id::RecordId;
+        let rec_a = self.state.get_record(RecordId(id_a))?;
+        let rec_b = self.state.get_record(RecordId(id_b))?;
+        if !rec_a.is_searchable() || !rec_b.is_searchable() {
+            return None;
+        }
+        let va: Vec<i32> = rec_a.vector.data.iter().map(|s| s.0).collect();
+        let vb: Vec<i32> = rec_b.vector.data.iter().map(|s| s.0).collect();
+        let dot = dot_product(&va, &vb) as f64;
+        let mag_a = (dot_product(&va, &va) as f64).sqrt();
+        let mag_b = (dot_product(&vb, &vb) as f64).sqrt();
+        if mag_a == 0.0 || mag_b == 0.0 {
+            return None;
+        }
+        Some((dot / (mag_a * mag_b)) as f32)
+    }
+
     /// Trigger a full index build from the current kernel state.
     ///
     /// Unlike `rebuild_index()`, which reconstructs the index by inserting each

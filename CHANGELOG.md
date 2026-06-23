@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Python SDK — full endpoint coverage)
+- **The Python SDK now wraps every product endpoint (40/40).** Newly added to `SyncRemoteClient` and `AsyncRemoteClient`:
+  - **Agent-memory primitives** — `memory_upsert()` (`/v1/memory/upsert_vector`: store vector + document→chunk graph, returns `memory_id`) and `memory_search()` (`/v1/memory/search_vector`: hits carry `memory_id`, `metadata`, and decay fields). Previously only the lower-level `insert`/`search` (which return `{id, score}` with no `memory_id`/metadata) were exposed.
+  - **Proof / provenance** — `event_log_proof()` (`/v1/proof/event-log`: the receipt primitive — event-log hash, state hash, committed height). Also on `ClusterClient`/`AsyncClusterClient`.
+  - **Graph / introspection** — `list_nodes()` (`/graph/nodes`), `get_version()` (`/version`).
+  - **Snapshot / object-store offload** — `save_snapshot()`, `restore_snapshot()`, `list_remote_snapshots()`, `upload_snapshot_to_store()`, `restore_from_store()`, `list_remote_wal()`, `archive_wal_segment()`.
+- **Deprecated** `list_contradictions()` / `resolve_contradiction()` — legacy C3 methods that called the Next.js UI layer (`ui_url`), not the node, and returned whatever that layer held (historically `[]`). They now emit `DeprecationWarning` pointing to the node-native, audited `contradict()` / `consolidate()`. Scheduled for removal.
+
+### Added (Phase C4.3 — Contradiction detection: self-maintaining memory, pillar 3)
+- **`POST /v1/memory/contradict`** — given two record ids, computes cosine similarity between their Q16.16 vectors and, if it meets `threshold` (default 0.85), commits an `AutoCreateEdge(record_a → record_b, Contradicts)` to the BLAKE3 audit chain. Request `{ record_a, record_b, threshold?, collection? }`; response `{ record_a, record_b, similarity, contradicts, edge_id?, state_hash }` (`edge_id` only when `contradicts`). On both standalone and cluster data planes.
+- **`EdgeKind::Contradicts = 8`** — new kernel edge kind (no_std-safe); the verdict is a first-class hashed event, not mutable metadata.
+- **Python SDK** — `contradict(record_a, record_b, threshold=, collection=)` on all four clients; cluster variants route to the leader.
+- **v1 boundary (documented):** "contradiction" is currently a structural proxy — cosine similarity ≥ threshold, which detects near-duplicates, *not* semantic NLI. The hashed `Contradicts` event path is signal-agnostic: a real entailment model can replace the cosine gate at the node layer with zero kernel change. See `docs/phases/phase-C4.3-contradiction.md`.
+
+### Added (Phase C4.2 — Memory consolidation: self-maintaining memory, pillar 2)
+- **`POST /v1/memory/consolidate`** — replace a memory in one auditable operation: commits `SoftDeleteRecord(old)` → `AutoInsertRecord(new)` → `AutoCreateEdge(new → old, Supersedes)` to the audit chain. Request `{ old_record_id, new_vector, collection?, metadata? }`; response `{ old_record_id, new_record_id, supersedes_edge_id, state_hash }`. On both standalone and cluster data planes.
+- **`EdgeKind::Supersedes = 7`** — new kernel edge kind (no_std-safe) linking a replacement to the memory it retired, so a reader can trace why a record was soft-deleted.
+- **Python SDK** — `consolidate(old_record_id, new_vector, collection=, metadata=)` on all four clients; cluster variants route to the leader.
+- **Atomicity:** standalone is atomic (single engine write lock across all three events). Cluster commits the events as a sequence of Raft entries — each chain-valid and replicated, but not a single transaction; a mid-sequence leader crash can leave a partial result (follow-up: multi-event `ClientRequest`). See `docs/phases/phase-C4.2-consolidation.md`.
+
+### Added (Phase C4.1b — Cluster decay + state-machine creation timestamps)
+- **Cluster `/search` now honours `decay_half_life_secs`.** In C4.1 the cluster endpoint accepted the field but ignored it; now the consensus state machine tracks per-record creation timestamps (`StateMachineInner.created_at`, stamped at `AutoInsertRecord` apply time) and the cluster search path runs the same over-fetch → `decay::rerank` → top-k pipeline as standalone. One SDK call now behaves identically against both node types.
+- **`ValoriStateMachine::record_created_at` / `with_state_and_timestamps`** — read accessors exposing creation time to the search path under one lock.
+- **Determinism preserved** — `created_at` is a derived, non-hashed, non-replicated side map (same design as standalone `Engine.created_at`), so the BLAKE3 state hash is unchanged. Known boundary: a node that restarts or installs a snapshot loses timestamps and ranks pre-event records neutrally until re-stamped — durable WAL timestamps are deferred to **C4.1c**. See `docs/phases/phase-C4.1b-cluster-decay.md`.
+- **Internal:** new `raft_write_data` helper returns the committed `ClientResponse` so cluster multi-step writes (consolidate/contradict) read allocated record/node/edge IDs from the apply response instead of pre-reading them — closing a TOCTOU race against concurrent writers.
+
 ### Added (Phase C4.1 — Kernel-native time decay: self-maintaining memory, pillar 1)
 - **`decay_half_life_secs`** on `POST /search` and `POST /v1/memory/search_vector` — recency-aware re-ranking. When set (> 0), older records decay: a record one half-life old has its L2 distance doubled, so a fresh near-match can overtake a stale better one. Each hit gains `decay_factor` (∈ (0,1]) and `age_secs`; `score` stays the true, undecayed distance. Absent/`0` → byte-identical to the prior response.
 - **`VALORI_DECAY_HALF_LIFE_SECS`** — optional server-default half-life; a per-request value wins (incl. an explicit `0` to disable).
