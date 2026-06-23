@@ -2,14 +2,9 @@ use valori_kernel::error::{Result, KernelError};
 
 const WAL_STREAM_VERSION: u8 = 1;
 
-#[derive(Debug, Clone, Copy)]
-#[repr(packed)] 
-struct PacketHeader {
-    version: u8,
-    flags: u8,   // 0x01 = END_OF_SEGMENT
-    seq: u64,
-    len: u32,
-}
+// Packet layout (14 bytes): [VER:1][FLAGS:1][SEQ:8][LEN:4]
+// Parsed inline in ingest_packet — no struct needed since repr(packed) reads
+// would be UB on unaligned pointers on Cortex-M.
 
 pub const FLAG_EOS: u8 = 0x01;
 

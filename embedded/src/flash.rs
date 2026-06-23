@@ -61,8 +61,9 @@ impl FlashStorage {
         }
     }
     
-    /// Get the physical address (for debug/DMA)
+    /// Get the physical address (for DMA use in P2).
+    #[allow(dead_code)]
     pub fn address() -> usize {
-        unsafe { core::ptr::addr_of_mut!(SIMULATED_FLASH) as usize }
+        core::ptr::addr_of_mut!(SIMULATED_FLASH) as usize
     }
 }

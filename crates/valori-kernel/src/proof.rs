@@ -1,6 +1,8 @@
 //! Deterministic Proof Structures.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use alloc::vec;
+use alloc::vec::Vec;
 use serde::{Serialize, Deserialize};
 
 /// A cryptographic proof of the kernel's state and history.

@@ -8,14 +8,14 @@ license.workspace = true
 blake3 = { version = "1.5", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde", "alloc"] }
-crc64fast = "1.0"
-thiserror = "1.0"
-byteorder = "1.5"
-memmap2 = "0.9"
-rustc-hash = "2.1.1"
+crc64fast = { version = "1.0", optional = true }
+thiserror = { version = "2.0", default-features = false }
+byteorder = { version = "1.5", default-features = false }
+memmap2 = { version = "0.9", optional = true }
+rustc-hash = { version = "2.1.1", default-features = false, optional = true }
 
 [features]
-std = []
+std = ["crc64fast", "memmap2", "thiserror/std", "rustc-hash/std", "byteorder/std"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -30,6 +30,7 @@ pub struct KernelState {
     /// Head of the intrusive per-namespace node linked list.
     /// Maps DEK (key_id) → list of RecordIds encrypted under it.
     /// Rebuilt during WAL replay; used by `apply_shred_key` to mark records in O(N_key).
+    #[cfg(feature = "std")]
     pub(crate) encrypted_record_keys: rustc_hash::FxHashMap<[u8; 16], alloc::vec::Vec<RecordId>>,
     pub(crate) namespace_node_heads: alloc::vec::Vec<u32>,
 }
@@ -45,6 +46,7 @@ impl KernelState {
             index: BruteForceIndex::default(),
             namespace_record_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
             namespace_node_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
+            #[cfg(feature = "std")]
             encrypted_record_keys: rustc_hash::FxHashMap::default(),
         }
     }
@@ -53,12 +55,10 @@ impl KernelState {
 
     /// Destroy a Data Encryption Key and mark all records encrypted under it as
     /// `FLAG_SHREDDED`. Called when applying `KernelEvent::ShredKey`.
-    /// The actual vault key must already be destroyed by the caller BEFORE this
-    /// is called (or before the `ShredKey` event is emitted in cluster mode).
+    #[cfg(feature = "std")]
     pub fn apply_shred_key(&mut self, key_id: [u8; 16]) -> Result<()> {
         let records = self.encrypted_record_keys.remove(&key_id).unwrap_or_default();
         for rid in records {
-            // Best-effort: a record may have been hard-deleted since encryption.
             let _ = self.records.mark_shredded(rid);
         }
         Ok(())
@@ -315,7 +315,7 @@ impl KernelState {
                 self.apply(&cmd)?;
             }
 
-            KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, tag, .. } => {
+            KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {
                 let ns = namespace_id as usize;
                 if ns >= MAX_NAMESPACES {
                     return Err(KernelError::InvalidOperation);
@@ -333,6 +333,7 @@ impl KernelState {
                 debug_assert_eq!(allocated_id, *id);
                 self.records.mark_encrypted(allocated_id)?;
                 // Track key → records for efficient shredding.
+                #[cfg(feature = "std")]
                 self.encrypted_record_keys
                     .entry(*key_id)
                     .or_default()
@@ -354,7 +355,10 @@ impl KernelState {
             }
 
             KernelEvent::ShredKey { key_id } => {
+                #[cfg(feature = "std")]
                 self.apply_shred_key(*key_id)?;
+                #[cfg(not(feature = "std"))]
+                { let _ = key_id; return Err(KernelError::InvalidOperation); }
             }
         }
 
@@ -552,9 +556,10 @@ impl KernelState {
             }
 
             Command::ShredKey { key_id } => {
-                self.apply_shred_key(*key_id)?;
-                self.version = self.version.next();
-                return Ok(());
+                #[cfg(feature = "std")]
+                { self.apply_shred_key(*key_id)?; self.version = self.version.next(); return Ok(()); }
+                #[cfg(not(feature = "std"))]
+                { let _ = key_id; return Err(KernelError::InvalidOperation); }
             }
         }
 

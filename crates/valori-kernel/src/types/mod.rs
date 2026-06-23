@@ -1,5 +1,10 @@
-use crate::error::{KernelError, Result};
+#[cfg(feature = "std")]
+use crate::error::KernelError;
+#[cfg(feature = "std")]
+use crate::error::Result;
+#[cfg(feature = "std")]
 use byteorder::{LittleEndian, ReadBytesExt};
+#[cfg(feature = "std")]
 use std::io::Cursor;
 
 pub mod id;
@@ -7,11 +12,15 @@ pub mod vector;
 pub mod enums;
 pub mod scalar;
 
+#[cfg(feature = "std")]
 pub type FixedPointVector = Vec<i32>;
 
+#[cfg(feature = "std")]
 pub const CMD_INSERT: u8 = 1;
+#[cfg(feature = "std")]
 pub const CMD_DELETE: u8 = 2;
 
+#[cfg(feature = "std")]
 #[derive(Debug, PartialEq)]
 pub struct InsertPayload {
     pub cmd: u8,
@@ -22,6 +31,7 @@ pub struct InsertPayload {
     pub metadata: Option<Vec<u8>>,
 }
 
+#[cfg(feature = "std")]
 impl InsertPayload {
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let mut cursor = Cursor::new(data);
@@ -101,12 +111,14 @@ impl InsertPayload {
     }
 }
 
+#[cfg(feature = "std")]
 #[derive(Debug, PartialEq)]
 pub struct DeletePayload {
     pub cmd: u8,
     pub id: u64,
 }
 
+#[cfg(feature = "std")]
 impl DeletePayload {
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let mut cursor = Cursor::new(data);

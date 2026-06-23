@@ -12,22 +12,13 @@ pub struct EmbeddedProof {
     pub final_state_hash: String,
 }
 
-pub fn generate_proof<const M: usize, const D: usize, const N: usize, const E: usize>(
-    state: &KernelState<M, D, N, E>,
-    snapshot_bytes: &[u8]
-) -> EmbeddedProof {
-    // 1. Compute Hashes
-    let s_hash_bytes = snapshot_hash(snapshot_bytes);
-    let k_hash_bytes = kernel_state_hash(state);
-
-    // 2. Encode as Hex Strings (for JSON compatibility with Cloud/CLI)
-    // hex::encode returns String when alloc feature is enabled.
-    let s_hex = hex::encode(s_hash_bytes);
-    let k_hex = hex::encode(k_hash_bytes);
+pub fn generate_proof(state: &KernelState, snapshot_bytes: &[u8]) -> EmbeddedProof {
+    let s_hash = snapshot_hash(snapshot_bytes);
+    let k_hash = kernel_state_hash(state);
 
     EmbeddedProof {
         kernel_version: state.version(),
-        snapshot_hash: s_hex,
-        final_state_hash: k_hex,
+        snapshot_hash: hex::encode(s_hash),
+        final_state_hash: hex::encode(k_hash),
     }
 }

@@ -5,20 +5,16 @@ use blake3::Hasher;
 use valori_kernel::state::kernel::KernelState;
 use crate::wal;
 
-// -----------------------------------------------------------------------
-// Shadow Kernel (Provisional Execution)
-// -----------------------------------------------------------------------
-
-pub struct ShadowKernel<'a, const M: usize, const D: usize, const N: usize, const E: usize> {
-    pub state: &'a mut KernelState<M, D, N, E>,
+pub struct ShadowKernel<'a> {
+    pub state: &'a mut KernelState,
     pub wal_accumulator: Hasher,
     pub segment_active: bool,
     pub buffer: Vec<u8>,
     pub header_processed: bool,
 }
 
-impl<'a, const M: usize, const D: usize, const N: usize, const E: usize> ShadowKernel<'a, M, D, N, E> {
-    pub fn new(state: &'a mut KernelState<M, D, N, E>) -> Self {
+impl<'a> ShadowKernel<'a> {
+    pub fn new(state: &'a mut KernelState) -> Self {
         Self {
             state,
             wal_accumulator: Hasher::new(),
@@ -35,72 +31,53 @@ impl<'a, const M: usize, const D: usize, const N: usize, const E: usize> ShadowK
         self.header_processed = false;
     }
 
-    /// Apply a WAL chunk to the Shadow Kernel.
-    /// Buffers data and applies only complete commands.
-    /// Updates accumulator only for APPLIED commands.
+    /// Buffer an incoming WAL chunk and apply all complete events it contains.
+    /// Updates the BLAKE3 accumulator for every applied event so the proof
+    /// commits to the exact byte sequence that was applied.
     pub fn apply_chunk(&mut self, chunk: &[u8]) -> Result<(), ()> {
-        if !self.segment_active {
-            return Err(());
-        }
+        if !self.segment_active { return Err(()); }
 
         self.buffer.extend_from_slice(chunk);
 
-        // Process Loop
         loop {
-            // 1. Header Check (Once)
             if !self.header_processed {
-                if self.buffer.len() < wal::WalHeader::SIZE { 
-                    // Need more data (Wait for next chunk)
-                    return Ok(()); 
-                } 
-                
+                if self.buffer.len() < wal::WalHeader::SIZE {
+                    return Ok(());
+                }
+
                 let header = match wal::WalHeader::from_bytes(&self.buffer) {
                     Some(h) => h,
-                    None => return Err(()), // Should not happen given len check
+                    None => return Err(()),
                 };
 
-                // Validate Header
-                if header.dim != D as u32 {
-                     return Err(()); // Dimension Mismatch -> Invalid
+                // Dimension must match this firmware's compiled-in DIM.
+                if header.dim != crate::DIM as u32 {
+                    return Err(());
                 }
-                
-                // Accumulate Header Bytes (16 bytes)
-                // This ensures the Proof commits to the exact WAL properties.
+
                 let header_bytes = &self.buffer[0..wal::WalHeader::SIZE];
                 self.wal_accumulator.update(header_bytes);
-                
-                // Consume
-                let _ = self.buffer.drain(0..wal::WalHeader::SIZE); 
+
+                let _ = self.buffer.drain(0..wal::WalHeader::SIZE);
                 self.header_processed = true;
             }
 
             if self.buffer.is_empty() { break; }
 
-            // 2. Try Apply Command
-            // We pass a slice.
-            match wal::try_apply_command(self.state, &self.buffer) {
-                wal::ApplyResult::Applied(bytes_consumed) => {
-                     // Update Hash with consumed bytes (Command Data)
-                     let cmd_bytes = &self.buffer[0..bytes_consumed];
-                     self.wal_accumulator.update(cmd_bytes);
-                     
-                     // Remove from buffer
-                     let _ = self.buffer.drain(0..bytes_consumed);
-                },
-                wal::ApplyResult::Incomplete => {
-                    // Stop and wait for more data
-                    break;
-                },
-                wal::ApplyResult::Error => {
-                    return Err(()); // Invalid Data -> Halt
+            match wal::try_apply_event(self.state, &self.buffer) {
+                wal::ApplyResult::Applied(n) => {
+                    self.wal_accumulator.update(&self.buffer[0..n]);
+                    let _ = self.buffer.drain(0..n);
                 }
+                wal::ApplyResult::Incomplete => break,
+                wal::ApplyResult::Error => return Err(()),
             }
         }
-        
+
         Ok(())
     }
 
-    /// Finalize segment and return Accumulator Hash.
+    #[allow(dead_code)]
     pub fn get_accumulator_hash(&self) -> [u8; 32] {
         *self.wal_accumulator.finalize().as_bytes()
     }

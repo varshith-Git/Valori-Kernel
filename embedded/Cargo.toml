@@ -4,24 +4,52 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# ── Shared deps (no_std + alloc, used by both firmware and host tests) ────────
 [dependencies]
+valori-kernel = { workspace = true, default-features = false }
+blake3 = { version = "1.5", default-features = false }
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde"] }
+serde-json-core = "0.5"
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+libm = { version = "0.2", default-features = false }
+
+# ── INT: no_std integer inference engine ──────────────────────────────────────
+# Path assumes INT and Valori-Kernel are sibling directories under the same
+# parent: /sass/INT and /sass/Valori-Kernel.
+#
+# The "alloc" feature enables Box<QGPTModel> — required because the model
+# struct is ~172 KB and cannot live on the stack of a Cortex-M4.
+# No "std" feature — firmware stays fully no_std.
+matmul_engine = { path = "../../INT", default-features = false, features = ["alloc"] }
+
+# ── Bare-metal MCU deps (only linked when cross-compiling for ARM none target) ─
+[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 embedded-alloc = "0.5"
 panic-halt = "0.2"
 
-# Local Kernel Dependency (Core)
-# Using 'valori-kernel' as name to match workspace, path to root where lib.rs lives
-# Crucial: default-features = false ensures no_std
-valori-kernel = { workspace = true, default-features = false }
-blake3 = { version = "1.5", default-features = false }
-bincode = { version = "2.0.0-rc.3", default-features = false, features = ["serde"] }
-serde-json-core = "0.5" # No-std JSON serialization for proof
-hex = { version = "0.4", default-features = false, features = ["alloc"] } # For hex encoding hashes
-serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+# ── Host-side test deps (std, x86_64 / aarch64) ───────────────────────────────
+[dev-dependencies]
+valori-kernel = { workspace = true, features = ["std"] }
+hex = { version = "0.4" }
+
+[features]
+# Use UART0 MMIO addresses for the QEMU lm3s6965evb machine instead of STM32F4.
+qemu = []
+# Required to build the no_std MCU binary — not set when running host-side tests.
+# Build command: cargo build -p valori-embedded --target thumbv7em-none-eabihf --features mcu
+# Test command:  cargo test  -p valori-embedded   (no --features mcu)
+mcu = []
 
 [[bin]]
 name = "valori-embedded"
 path = "src/main.rs"
+required-features = ["mcu"]
 test = false
 bench = false
+
+[[test]]
+name = "cross_platform_hash"
+path = "tests/cross_platform_hash.rs"

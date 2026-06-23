@@ -109,5 +109,5 @@ impl KeyVault for NullVault {
 }
 
 fn hex_key(k: &KeyId) -> alloc::string::String {
-    k.iter().map(|b| format!("{b:02x}")).collect()
+    k.iter().map(|b| alloc::format!("{b:02x}")).collect()
 }

@@ -11,6 +11,7 @@ pub enum KernelError {
     #[error("Invalid payload length: expected {expected}, found {found}")]
     InvalidPayloadLength { expected: usize, found: usize },
 
+    #[cfg(feature = "std")]
     #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
 
@@ -42,4 +43,4 @@ pub enum KernelError {
     NotImplemented,
 }
 
-pub type Result<T> = std::result::Result<T, KernelError>;
+pub type Result<T> = core::result::Result<T, KernelError>;
