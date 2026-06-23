@@ -69,12 +69,27 @@ pub struct SearchRequest {
     /// Mutually exclusive with `as_of`; `as_of_log_index` takes precedence if both given.
     #[serde(default)]
     pub as_of_log_index: Option<u64>,
+    /// Phase C4.1 — recency half-life in seconds. When set (> 0), results are
+    /// re-ranked so older records decay: a record one half-life old has its L2
+    /// distance doubled. `0`/absent uses the server default (or pure distance).
+    /// Ignored for `as_of` / point-in-time queries.
+    #[serde(default)]
+    pub decay_half_life_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
 pub struct SearchHit {
     pub id: u32,
     pub score: f32,
+    /// Phase C4.1 — applied decay factor in (0, 1]. Present only when decay is
+    /// active. `score` stays the true (undecayed) L2 distance for honesty;
+    /// ranking reflects `score / decay_factor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decay_factor: Option<f32>,
+    /// Age of the record in seconds at query time. Present only when decay is
+    /// active and the record's creation time is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -221,6 +236,10 @@ pub struct MemorySearchVectorRequest {
     pub k: usize,
     #[serde(default)]
     pub collection: Option<String>,
+    /// Phase C4.1 — recency half-life (seconds). When set (> 0), the agent-memory
+    /// recall path re-ranks older memories down. See `SearchRequest`.
+    #[serde(default)]
+    pub decay_half_life_secs: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -248,6 +267,12 @@ pub struct MemorySearchHit {
     pub record_id: u32,
     pub score: f32,
     pub metadata: Option<serde_json::Value>,
+    /// Phase C4.1 — applied decay factor in (0, 1]; present only when decay is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decay_factor: Option<f32>,
+    /// Phase C4.1 — record age in seconds; present only when decay is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub age_secs: Option<u64>,
 }
 
 // ... existing content ...

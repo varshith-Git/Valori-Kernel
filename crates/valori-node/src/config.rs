@@ -123,6 +123,12 @@ pub struct NodeConfig {
     pub hnsw_ef_construction: Option<usize>,
     // Env: VALORI_HNSW_EF_SEARCH (default 50) — beam width during query
     pub hnsw_ef_search: Option<usize>,
+
+    // ── Phase C4.1: time-decay re-ranking ────────────────────────────────────
+    // Default half-life (seconds) applied to search ranking when a request does
+    // not specify its own. Absent or 0 = decay off (pure distance ranking).
+    // Env: VALORI_DECAY_HALF_LIFE_SECS
+    pub decay_half_life_secs: Option<u64>,
 }
 
 impl Default for NodeConfig {
@@ -227,6 +233,9 @@ impl Default for NodeConfig {
         let hnsw_ef_construction = std::env::var("VALORI_HNSW_EF_CONSTRUCTION").ok().and_then(|v| v.parse().ok());
         let hnsw_ef_search = std::env::var("VALORI_HNSW_EF_SEARCH").ok().and_then(|v| v.parse().ok());
 
+        let decay_half_life_secs = std::env::var("VALORI_DECAY_HALF_LIFE_SECS")
+            .ok().and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
+
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
             NodeMode::Follower { leader_url: url }
@@ -270,6 +279,7 @@ impl Default for NodeConfig {
             hnsw_m,
             hnsw_ef_construction,
             hnsw_ef_search,
+            decay_half_life_secs,
         }
     }
 }

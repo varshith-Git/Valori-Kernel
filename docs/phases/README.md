@@ -50,7 +50,8 @@ people and sessions that built it.
 | C0 plan — Cortex converged build plan | [phase-C0-cortex-plan.md](phase-C0-cortex-plan.md) | `multinode` | 📋 plan |
 | C1 — Contextual retrieval + audited enrichment | [phase-C1-contextual-retrieval.md](phase-C1-contextual-retrieval.md) | `multinode` | ✅ done |
 | C2 — Audited entity graph + provenance receipt | [phase-C2-entity-graph.md](phase-C2-entity-graph.md) | `multinode` | ✅ done |
-| C3 — Self-maintaining memory | [phase-C3-self-maintaining-memory.md](phase-C3-self-maintaining-memory.md) | `multinode` | ✅ done |
+| C3 — Self-maintaining memory (UI-only; **superseded by C4**) | [phase-C3-self-maintaining-memory.md](phase-C3-self-maintaining-memory.md) | `multinode` | ⚠️ superseded |
+| C4.1 — Kernel-native time decay (self-maintaining pillar 1) | [phase-C4.1-decay.md](phase-C4.1-decay.md) | `multinode` | ✅ done |
 | 3.8 — Write-throughput regression gates | [phase-3.8-write-regression.md](phase-3.8-write-regression.md) | `multinode` | ✅ done |
 | 3.9 — Terraform modules (AWS + Azure) | [phase-3.9-terraform.md](phase-3.9-terraform.md) | `multinode` | ✅ done |
 | 3.10 — Signed releases + SBOM | [phase-3.10-signed-releases.md](phase-3.10-signed-releases.md) | `multinode` | ✅ done |
