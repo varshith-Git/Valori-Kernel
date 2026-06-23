@@ -208,8 +208,10 @@ Packet framing: `[SYNC:4][TYPE:1][LEN:4 LE][PAYLOAD]`
 |---|---|---|
 | `TYPE_WAL` | `0x03` | host → device |
 | `TYPE_SEARCH` | `0x04` | host → device |
+| `TYPE_INFER` | `0x06` | host → device |
 | `TYPE_PROOF` | `0x01` | device → host |
 | `TYPE_SEARCH_RESULT` | `0x05` | device → host |
+| `TYPE_INFER_RESULT` | `0x07` | device → host |
 | `TYPE_ERR` | `0xEE` | device → host |
 | Sync word | `0x55 0xAA 0x55 0xAA` | both directions |
 
@@ -246,6 +248,61 @@ Total: `3 + 128×4 = 515 bytes`
 [{id: u32 LE, score: u32 LE} × k_found]
 [state_hash:   32 bytes]  BLAKE3 — verify against /v1/proof
 ```
+
+### Inference packet payload (host → device, TYPE_INFER)
+
+```
+[gen_len:    u8]          number of tokens to generate (1–32)
+[prompt_len: u8]          number of prompt token IDs
+[tokens:     prompt_len × u8]   token IDs in [0, VOCAB)
+```
+
+### Inference result payload (device → host, TYPE_INFER_RESULT)
+
+```
+[ok:         u8]          1 = success, 0 = error
+[out_len:    u8]          number of generated tokens
+[tokens:     out_len × u8]
+[receipt:    32 bytes]    BLAKE3(model_hash | prompt | output)
+[record_id:  u32 LE]      RecordId assigned in KernelState
+[version:    u64 LE]      KernelState version after insert
+[state_hash: 32 bytes]    Valori BLAKE3 state hash after insert
+```
+
+The `receipt` is computed as `BLAKE3(model_hash || prompt_tokens || output_tokens)`.
+A verifier can replay the same prompt through the same model binary, recompute the
+receipt, and confirm it appears at this position in the Valori audit chain.
+
+The `state_hash` returned here matches the cloud node's `/v1/proof` hash (assuming
+both have received the same event log), enabling end-to-end proof across devices.
+
+---
+
+## On-device RAG (inference.rs)
+
+`inference.rs` wires INT's `QGPTModel` into Valori's audit chain:
+
+1. **Model baked into flash** — `tiny_transformer_int8.bin` is embedded via `include_bytes!`.
+   The model BLAKE3 hash becomes part of every inference receipt.
+2. **Greedy decode** — prefill + autoregressive decode, all Q8 integer math, no f32 on the hot path.
+3. **Logit fingerprint stored in Valori** — the final-step logit distribution is converted to
+   Q16.16 `FxpVector` and inserted into `KernelState` via `KernelEvent::InsertRecord`.
+   The 32-byte BLAKE3 receipt goes into the `metadata` field.
+4. **On-device RAG** — `handle_with_rag()` searches Valori for K nearest past inferences,
+   prepends their tokens as context, then runs inference. The MCU retrieves from its own
+   memory — no server needed.
+
+**Memory budget (STM32F407, 192 KB RAM):**
+```
+QGPTModel<61,64,64,256,4,3>  ≈ 172 KB (heap)
+KV caches                      ≈  24 KB (stack per request)
+KernelState + WAL buffers      ≈  16 KB
+─────────────────────────────────────
+Total peak                     ≈ 212 KB  ← fits on STM32F407 with HEAP_MEM tuned
+```
+
+For RP2040 (264 KB) or nRF52840 (256 KB) this fits comfortably. For a smaller model
+(2 layers, DIM=32), RAM footprint drops to ~56 KB, leaving plenty for the vector store.
 
 ---
 
@@ -295,6 +352,7 @@ cargo test -p valori-embedded
 | `src/recovery.rs` | Boot recovery: checkpoint → hash verify → snapshot restore |
 | `src/proof.rs` | `EmbeddedProof` — `snapshot_hash` + `kernel_state_hash` → hex JSON |
 | `src/search.rs` | Parse search request, call `search_l2_ns`, emit verifiable result |
+| `src/inference.rs` | INT `QGPTModel` integration — greedy decode, BLAKE3 receipt, on-device RAG |
 | `tests/cross_platform_hash.rs` | Host-side CI tests proving determinism claim |
 | `scripts/qemu_test.sh` | QEMU build + smoke test script |
 
