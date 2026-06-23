@@ -9,12 +9,13 @@ members = [
     "crates/valori-cli",
     "crates/valori-consensus",
     "crates/valori-mcp",
-    "embedded",
+    # embedded is intentionally excluded from the workspace — it has a path
+    # dependency on the INT sibling repo (../../INT) which is not checked in.
+    # Build locally: cargo build --manifest-path embedded/Cargo.toml --target thumbv7em-none-eabihf
 ]
 # Excluded from default builds:
 #  - embedded: Cortex-M firmware (no_std + its own panic handler) — cannot
-#    build for the host. Build: cargo build -p valori-embedded
-#      --target thumbv7em-none-eabihf
+#    build for the host, and requires the INT sibling repo at ../../INT.
 #  - valori-ffi: PyO3 extension module — links against Python symbols that
 #    only resolve when maturin builds it. Build: pip install ./python
 default-members = [

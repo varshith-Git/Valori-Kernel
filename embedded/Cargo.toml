@@ -21,7 +21,7 @@ libm = { version = "0.2", default-features = false }
 # The "alloc" feature enables Box<QGPTModel> — required because the model
 # struct is ~172 KB and cannot live on the stack of a Cortex-M4.
 # No "std" feature — firmware stays fully no_std.
-matmul_engine = { path = "../../INT", default-features = false, features = ["alloc"] }
+matmul_engine = { path = "../../INT", default-features = false, features = ["alloc"], optional = true }
 
 # ── Bare-metal MCU deps (only linked when cross-compiling for ARM none target) ─
 [target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
@@ -42,6 +42,9 @@ qemu = []
 # Build command: cargo build -p valori-embedded --target thumbv7em-none-eabihf --features mcu
 # Test command:  cargo test  -p valori-embedded   (no --features mcu)
 mcu = []
+# Enable INT inference engine — requires the INT sibling repo at ../../INT.
+# Not available in CI; omit this flag for standard builds.
+int = ["matmul_engine"]
 
 [[bin]]
 name = "valori-embedded"

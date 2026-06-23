@@ -24,7 +24,8 @@ mod wal_stream;
 mod shadow;
 mod recovery;
 mod search;
-mod inference; // INT matmul_engine integration
+#[cfg(feature = "int")]
+mod inference;
 
 use cortex_m_rt::entry;
 use embedded_alloc::Heap;
@@ -74,8 +75,8 @@ fn main() -> ! {
     // Load the baked INT model from flash into the heap.
     // If the .bin is missing or malformed this returns false and inference
     // requests will reply with INFER_FAIL — the Valori WAL path keeps working.
+    #[cfg(feature = "int")]
     if !inference::init() {
-        // Non-fatal: emit a warning and continue; search + WAL still operate.
         transport::export_error(b"INT_INIT_FAIL");
     }
 
@@ -198,7 +199,10 @@ fn run_wal_replay(state: &mut KernelState) -> ! {
             // The proof binds this inference into the same BLAKE3 audit chain
             // as all vector store operations — one chain proves everything.
             transport::PacketKind::Infer => {
+                #[cfg(feature = "int")]
                 inference::handle(state, pkt);
+                #[cfg(not(feature = "int"))]
+                transport::export_error(b"INT_NOT_ENABLED");
             }
 
             transport::PacketKind::Unknown => {
