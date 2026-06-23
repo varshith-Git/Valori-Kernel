@@ -11,7 +11,7 @@ name: Write-throughput regression gate (Phase 3.8)
 
 on:
   pull_request:
-    branches: ["main", "multinode"]
+    branches: ["main"]
     paths:
       - "crates/**"
       - "Cargo.toml"

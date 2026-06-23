@@ -2,7 +2,7 @@ name: Multi-Architecture Determinism Validation
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     paths:
       - 'crates/**'
       - 'embedded/**'
@@ -33,7 +33,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -69,7 +69,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
@@ -107,7 +107,7 @@ jobs:
           targets: wasm32-unknown-unknown
           
       - name: Cache cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/bin/
