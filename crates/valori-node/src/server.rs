@@ -162,6 +162,10 @@ pub fn build_router_with_keys(
         .route("/v1/crypto/status/:key_id", get(crypto_status_handler))
         // Index config (Phase 3.13)
         .route("/v1/index/config", axum::routing::get(index_config_handler))
+        // Built-in document ingestion — Phase 1: chunking only
+        .route("/v1/ingest/document", post(crate::ingest::ingest_document))
+        // Built-in document ingestion — Phase 2: chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
+        .route("/v1/ingest", post(crate::ingest::ingest))
         .merge(key_routes)
         .with_state(state);
 
@@ -295,6 +299,10 @@ async fn insert_record(
     let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
     let id = engine.insert_record_from_f32_ns(&payload.values, ns)?;
+    // register text for BM25 reranking if provided
+    if let Some(ref text) = payload.text {
+        engine.reranker_insert(id, text);
+    }
     Ok(Json(InsertRecordResponse { id }))
 }
 
@@ -327,6 +335,14 @@ async fn batch_insert(
         ns,
         parsed_request_ids.as_deref(),
     )?;
+    // register text for BM25 reranking — one text string per vector
+    if let Some(ref texts) = payload.texts {
+        for (id, text) in ids.iter().zip(texts.iter()) {
+            if let Some(t) = text {
+                engine.reranker_insert(*id, t);
+            }
+        }
+    }
     Ok(Json(BatchInsertResponse { ids }))
 }
 
@@ -345,15 +361,31 @@ async fn search(
     let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
 
     if half_life == 0 {
-        let hits = if ns == 0 {
-            engine.search_l2(&payload.query, payload.k)?
+        let use_rerank = payload.rerank && payload.query_text.is_some()
+            && !engine.reranker.is_empty();
+        let fetch_k = if use_rerank {
+            (payload.k * crate::valori_reranker::POOL_FACTOR).max(payload.k)
         } else {
-            engine.search_l2_ns(&payload.query, payload.k, ns)?
+            payload.k
         };
-        let results = hits.into_iter()
-            .map(|(id, score)| SearchHit { id, score, decay_factor: None, age_secs: None })
-            .collect();
-        return Ok(Json(SearchResponse::simple(results)));
+        let hits = if ns == 0 {
+            engine.search_l2(&payload.query, fetch_k)?
+        } else {
+            engine.search_l2_ns(&payload.query, fetch_k, ns)?
+        };
+        let final_hits = if use_rerank {
+            let query_text = payload.query_text.as_deref().unwrap_or("");
+            let candidates: Vec<(u64, f32)> = hits.iter().map(|(id, s)| (*id as u64, *s)).collect();
+            let reranked = engine.reranker.rerank(query_text, candidates);
+            reranked.into_iter().take(payload.k)
+                .map(|(id, score)| SearchHit { id: id as u32, score, decay_factor: None, age_secs: None })
+                .collect()
+        } else {
+            hits.into_iter().take(payload.k)
+                .map(|(id, score)| SearchHit { id, score, decay_factor: None, age_secs: None })
+                .collect()
+        };
+        return Ok(Json(SearchResponse::simple(final_hits)));
     }
 
     // Decay path: over-fetch a bounded pool, re-rank by decayed distance,
@@ -1057,6 +1089,7 @@ async fn get_timeline(
             KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
             KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
             KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
+            KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
         };
 
         entries.push(TimelineEntry {

@@ -106,8 +106,8 @@ export default function SnapshotsPage() {
         <div
           className={`rounded-lg border px-4 py-3 text-sm ${
             msg.ok
-              ? "border-emerald-800 bg-emerald-950/40 text-emerald-400"
-              : "border-red-900 bg-red-950/40 text-red-400"
+              ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-400"
+              : "border-red-500/30 bg-red-500/12 text-red-400"
           }`}
         >
           {msg.ok ? "✓" : "✗"} {msg.text}
@@ -119,10 +119,10 @@ export default function SnapshotsPage() {
           {[1, 2, 3].map((i) => <div key={i} className="h-14 rounded-lg bg-accent" />)}
         </div>
       ) : data?.disabled ? (
-        <div className="rounded-xl border border-amber-900 bg-amber-950/40 p-6">
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/12 p-6">
           <p className="text-sm font-medium text-amber-400">Object store not configured</p>
           <p className="text-xs text-amber-700 mt-2">
-            Set <code className="font-mono bg-amber-900/40 px-1 rounded">VALORI_OBJECT_STORE_URL</code> to enable S3 snapshot storage.
+            Set <code className="font-mono bg-amber-500/20 px-1 rounded">VALORI_OBJECT_STORE_URL</code> to enable S3 snapshot storage.
           </p>
           <pre className="mt-3 rounded bg-background px-4 py-3 text-xs text-accent-foreground font-mono">
 {`VALORI_OBJECT_STORE_URL=s3://my-bucket/valori

@@ -123,6 +123,13 @@ struct DataPlaneState {
     /// Phase 3.6: per-node AES-256-GCM vault. DEKs are not Raft-replicated;
     /// each node holds only the keys for records it encrypted.
     vault: Arc<dyn KeyVault + Send + Sync>,
+    /// Phase I4: on-node embed config (from VALORI_EMBED_* env vars).
+    /// None when VALORI_EMBED_PROVIDER is not set.
+    embed_config: Option<crate::embedder::EmbedConfig>,
+    /// Phase I4: node-local metadata sidecar for /v1/ingest chunk metadata.
+    /// Mirrors the standalone Engine::metadata field. Not Raft-replicated —
+    /// chunk text/source metadata is advisory and node-local.
+    metadata: Arc<crate::metadata::MetadataStore>,
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -213,7 +220,8 @@ pub fn build_cluster_router(
     handle: &ClusterHandle,
     audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
 ) -> Router {
-    build_cluster_router_with_keys(handle, audit, None, Arc::new(KeyStore::new(None)))
+    let cfg = crate::config::NodeConfig::default();
+    build_cluster_router_with_keys(handle, audit, cfg.auth_token.clone(), Arc::new(KeyStore::new(None)), &cfg)
 }
 
 /// Cluster router with Phase 3.5 key store and optional legacy token.
@@ -222,6 +230,7 @@ pub fn build_cluster_router_with_keys(
     audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
     auth_token: Option<String>,
     key_store: Arc<KeyStore>,
+    node_cfg: &crate::config::NodeConfig,
 ) -> Router {
     let raft = Arc::new(handle.raft.clone());
     let event_log_path = audit.as_ref().map(|a| {
@@ -238,6 +247,8 @@ pub fn build_cluster_router_with_keys(
             use crate::crypto_vault::AesGcmVault;
             Arc::new(AesGcmVault::in_memory())
         },
+        embed_config: crate::embedder::EmbedConfig::from_node_config(node_cfg),
+        metadata: Arc::new(crate::metadata::MetadataStore::new()),
     };
 
     let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
@@ -269,8 +280,14 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/crypto/status/:key_id", get(cluster_crypto_status))
         // Index config (Phase 3.13)
         .route("/v1/index/config", axum::routing::get(cluster_index_config))
+        // Built-in document ingestion — chunking is stateless so standalone handler works in cluster too
+        .route("/v1/ingest/document", post(crate::ingest::ingest_document))
+        // Phase I4: full pipeline (chunk + embed + insert) via Raft
+        .route("/v1/ingest", post(cluster_ingest))
         .route("/v1/memory/consolidate", post(cluster_memory_consolidate))
         .route("/v1/memory/contradict", post(cluster_memory_contradict))
+        .route("/v1/memory/meta/set", post(cluster_meta_set))
+        .route("/v1/memory/meta/get", axum::routing::get(cluster_meta_get))
         .with_state(state)
         .merge(cluster_router(raft, audit))
         .layer(axum::middleware::from_fn(cluster_auth_guard))
@@ -339,15 +356,26 @@ async fn drop_collection_handler(
 
 async fn health(State(state): State<DataPlaneState>) -> Response {
     let m = state.raft.metrics().borrow().clone();
+    let embed_enabled = state.embed_config.is_some();
+    let embed_provider = state.embed_config.as_ref().map(|c| c.provider.clone());
     match m.current_leader {
         Some(leader) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "status": "ok", "leader": leader })),
+            Json(serde_json::json!({
+                "status": "ok",
+                "leader": leader,
+                "embed_enabled": embed_enabled,
+                "embed_provider": embed_provider,
+            })),
         )
             .into_response(),
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "status": "no-leader" })),
+            Json(serde_json::json!({
+                "status": "no-leader",
+                "embed_enabled": embed_enabled,
+                "embed_provider": embed_provider,
+            })),
         )
             .into_response(),
     }
@@ -529,10 +557,17 @@ struct SearchRequest {
     #[serde(default)]
     consistency: Consistency,
     /// C4.1b: decay half-life in seconds for recency-aware re-ranking.
-    /// Applies to cluster search — creation timestamps tracked in the state machine.
     #[serde(default)]
     decay_half_life_secs: Option<u64>,
+    /// BM25 hybrid reranking — fetch wider pool, re-rank by term frequency.
+    #[serde(default = "default_rerank")]
+    rerank: bool,
+    /// Raw query text for BM25 scoring. Required when `rerank=true`.
+    #[serde(default)]
+    query_text: Option<String>,
 }
+
+fn default_rerank() -> bool { true }
 
 fn default_k() -> usize {
     10
@@ -576,18 +611,47 @@ async fn search(
 
     // C4.1b: when decay is requested, over-fetch and re-rank using per-record
     // creation timestamps tracked in the state machine.
+    let use_rerank = req.rerank && req.query_text.is_some();
+    let fetch_k = if use_rerank {
+        (k * crate::valori_reranker::POOL_FACTOR).max(k)
+    } else {
+        k
+    };
+    let query_text_owned = req.query_text.clone().unwrap_or_default();
+
     let results: Vec<SearchHit> = if half_life == 0 {
-        state
+        let raw: Vec<SearchHit> = state
             .sm
             .with_state(|s| {
-                let mut buf = vec![KernelSearchResult::default(); k];
+                let mut buf = vec![KernelSearchResult::default(); fetch_k];
                 let n = s.search_l2(&query, &mut buf, None);
                 buf[..n]
                     .iter()
                     .map(|r| SearchHit { id: r.id.0, score: r.score.0 as i64 })
                     .collect()
             })
-            .await
+            .await;
+        if use_rerank && !raw.is_empty() {
+            let candidates: Vec<(u64, f32)> = raw.iter()
+                .map(|h| (h.id as u64, h.score as f32))
+                .collect();
+            let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
+            state.sm.with_text_corpus(|corpus| {
+                // build a reranker seeded with only the candidate texts
+                let mut reranker = crate::valori_reranker::ValoriReranker::new();
+                for id in &candidate_ids {
+                    if let Some(text) = corpus.get(id) {
+                        reranker.insert(*id, text);
+                    }
+                }
+                reranker.rerank(&query_text_owned, candidates)
+                    .into_iter().take(k)
+                    .map(|(id, score)| SearchHit { id: id as u32, score: score as i64 })
+                    .collect()
+            }).await
+        } else {
+            raw.into_iter().take(k).collect()
+        }
     } else {
         let pool = k.saturating_mul(4).max(50).min(1000);
         let now = std::time::SystemTime::now()
@@ -1481,6 +1545,247 @@ async fn cluster_memory_contradict(
         }))).into_response(),
         Err(resp) => resp,
     }
+}
+
+// ── Phase I4: cluster full-pipeline ingest ────────────────────────────────────
+//
+// POST /v1/ingest  (cluster mode)
+//
+// Same contract as the standalone handler in ingest.rs but every write goes
+// ── Metadata sidecar — replicated via SetMeta KernelEvent (Phase I5) ─────────
+
+#[derive(serde::Deserialize)]
+struct MetaSetPayload {
+    target_id: String,
+    metadata: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct MetaGetQuery {
+    target_id: String,
+}
+
+async fn cluster_meta_set(
+    State(state): State<DataPlaneState>,
+    Json(payload): Json<MetaSetPayload>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match state.raft.client_write(ClientRequest {
+        event: KernelEvent::SetMeta {
+            key:   payload.target_id,
+            value: payload.metadata.to_string(),
+        },
+        request_id: None,
+        schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(_) => (axum::http::StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(openraft::error::RaftError::APIError(
+            openraft::error::ClientWriteError::ForwardToLeader(fwd),
+        )) => not_leader_response(fwd.leader_node.as_ref()),
+        Err(e) => (axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                   Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
+    }
+}
+
+async fn cluster_meta_get(
+    State(state): State<DataPlaneState>,
+    axum::extract::Query(q): axum::extract::Query<MetaGetQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let value = state.sm.with_state(|k| {
+        k.meta.get(&q.target_id).and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+    }).await;
+    Json(serde_json::json!({
+        "target_id": q.target_id,
+        "metadata":  value,
+    })).into_response()
+}
+
+// ── Phase I4: Full chunk→embed→insert pipeline replicated via Raft ────────────
+// through raft.client_write() so all peers replicate the vectors, graph
+// nodes/edges, and metadata sidecar on ALL nodes.
+
+async fn cluster_ingest(
+    State(state): State<DataPlaneState>,
+    Json(payload): Json<crate::ingest::IngestRequest>,
+) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use valori_kernel::types::id::{RecordId, NodeId};
+
+    let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
+    let source     = payload.source.clone().unwrap_or_else(|| "unknown".into());
+    let strategy   = payload.strategy.as_deref().unwrap_or("auto");
+    let chunk_size = payload.chunk_size.unwrap_or(1000);
+    let overlap    = payload.chunk_overlap.unwrap_or(200);
+
+    // 1. Embed config
+    let embed_cfg = match state.embed_config.clone() {
+        Some(c) => c,
+        None => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error":
+                "on-node embedding not configured — set VALORI_EMBED_PROVIDER (ollama/openai/custom), \
+                 VALORI_EMBED_MODEL, VALORI_EMBED_URL" }))).into_response();
+        }
+    };
+
+    // 2. Chunk
+    let (chunks, strategy_used) =
+        crate::ingest::chunk_document(&payload.text, strategy, chunk_size, overlap);
+    if chunks.is_empty() {
+        return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "no chunks produced" }))).into_response();
+    }
+
+    // 3. Embed
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+    let vectors = match crate::embedder::embed_batch(&texts, &embed_cfg, &state.http).await {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY,
+                          Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    };
+    if vectors.is_empty() || vectors[0].is_empty() {
+        return (StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "embed provider returned empty vectors" }))).into_response();
+    }
+
+    // 4. Resolve namespace (std Mutex — no .await)
+    let ns: u16 = {
+        let mut reg = state.namespaces.lock().expect("namespaces lock");
+        if collection == "default" {
+            0
+        } else {
+            match reg.create(&collection) {
+                Ok(id) => id,
+                Err(e) => return (StatusCode::BAD_REQUEST,
+                                  Json(serde_json::json!({ "error": format!("{e:?}") }))).into_response(),
+            }
+        }
+    };
+
+    // 5. Insert vectors via Raft — one client_write per chunk
+    let mut record_ids: Vec<u32> = Vec::with_capacity(chunks.len());
+    for (i, vec_f32) in vectors.iter().enumerate() {
+        let vector = match to_fxp(vec_f32) {
+            Ok(v) => v,
+            Err(e) => return (StatusCode::BAD_REQUEST,
+                               Json(serde_json::json!({ "error": e }))).into_response(),
+        };
+        // Encode text in metadata bytes so all replicas can rerank
+        let meta_bytes = Some(
+            serde_json::json!({ "doc": &source, "n": i, "total": chunks.len(), "text": &chunks[i].text })
+                .to_string().into_bytes()
+        );
+        match state.raft.client_write(ClientRequest {
+            event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }).await {
+            Ok(resp) => {
+                if let Some(reason) = &resp.data.rejected {
+                    return (StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(serde_json::json!({ "error": reason }))).into_response();
+                }
+                record_ids.push(resp.data.allocated_record_id.unwrap_or(0));
+            }
+            Err(openraft::error::RaftError::APIError(
+                openraft::error::ClientWriteError::ForwardToLeader(fwd),
+            )) => return not_leader_response(fwd.leader_node.as_ref()),
+            Err(e) => return (StatusCode::SERVICE_UNAVAILABLE,
+                              Json(serde_json::json!({ "error": format!("raft write: {e}") }))).into_response(),
+        }
+    }
+
+    // 6. Document graph node via Raft
+    let doc_node_id: u32 = match state.raft.client_write(ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
+        request_id: None,
+        schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    // 7. Chunk nodes + ParentOf edges + node-local metadata sidecar
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into());
+
+    for (i, (chunk, &rid)) in chunks.iter().zip(record_ids.iter()).enumerate() {
+        let chunk_node_id = match state.raft.client_write(ClientRequest {
+            event: KernelEvent::AutoCreateNode {
+                kind: NodeKind::Chunk,
+                record: Some(RecordId(rid)),
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }).await {
+            Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
+            Err(_) => 0,
+        };
+
+        if doc_node_id > 0 && chunk_node_id > 0 {
+            let _ = state.raft.client_write(ClientRequest {
+                event: KernelEvent::AutoCreateEdge {
+                    from: NodeId(doc_node_id),
+                    to:   NodeId(chunk_node_id),
+                    kind: EdgeKind::ParentOf,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+            }).await;
+        }
+
+        let chunk_meta = serde_json::json!({
+            "text":             chunk.text,
+            "source":           source,
+            "chunk_index":      i,
+            "total_chunks":     chunks.len(),
+            "section_title":    chunk.title,
+            "document_node_id": doc_node_id,
+            "chunk_node_id":    chunk_node_id,
+            "collection":       collection,
+            "chunk_mode":       strategy_used,
+            "ingested_at":      &now,
+            "embed_model":      &embed_cfg.model,
+            "embed_provider":   &embed_cfg.provider,
+        });
+        let _ = state.raft.client_write(ClientRequest {
+            event: KernelEvent::SetMeta {
+                key:   format!("record:{rid}"),
+                value: chunk_meta.to_string(),
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }).await;
+    }
+
+    let doc_meta = serde_json::json!({
+        "source":       source,
+        "total_chunks": chunks.len(),
+        "collection":   collection,
+        "strategy":     strategy_used,
+        "embed_model":  &embed_cfg.model,
+        "ingested_at":  &now,
+    });
+    let _ = state.raft.client_write(ClientRequest {
+        event: KernelEvent::SetMeta {
+            key:   format!("document:{doc_node_id}"),
+            value: doc_meta.to_string(),
+        },
+        request_id: None,
+        schema_version: CURRENT_SCHEMA_VERSION,
+    }).await;
+
+    Json(crate::ingest::IngestResponse {
+        ok: true,
+        document_node_id: doc_node_id,
+        strategy_used,
+        chunk_count: chunks.len(),
+        record_ids,
+        collection,
+    }).into_response()
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

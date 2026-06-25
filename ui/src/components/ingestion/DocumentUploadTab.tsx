@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import Link from "next/link";
 import { useEmbeddingConfig, PROVIDER_DEFAULTS } from "@/lib/hooks/useEmbeddingConfig";
 import { useLLMConfig } from "@/lib/hooks/useLLMConfig";
@@ -20,6 +20,9 @@ interface IngestResult {
   total_chunks: number;
   chunks: ChunkResult[];
   error?: string;
+  pipeline?: "server" | "client";
+  embed_provider?: string;
+  strategy_used?: string;
 }
 
 interface Props {
@@ -43,9 +46,21 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showChunks, setShowChunks] = useState(false);
   const [enrichEnabled, setEnrichEnabled] = useState(false);
+  const [chunkMode, setChunkMode] = useState<"fixed" | "tree">("tree");
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[] | null>(null);
   const [suggestingQuestions, setSuggestingQuestions] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [serverEmbed, setServerEmbed] = useState<{ enabled: boolean; provider?: string } | null>(null);
+
+  // Probe node for on-node embedding capability once on mount
+  useEffect(() => {
+    fetch("/api/health")
+      .then((r) => r.ok ? r.json() : null)
+      .then((h: { embed_enabled?: boolean; embed_provider?: string } | null) => {
+        if (h) setServerEmbed({ enabled: !!h.embed_enabled, provider: h.embed_provider });
+      })
+      .catch(() => {});
+  }, []);
 
   const handleFile = (f: File) => {
     setFile(f);
@@ -78,6 +93,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
 
     // Contextual enrichment (C1): pass LLM params so the server can generate
     // a context sentence per chunk and commit it in the audited event metadata.
+    form.append("chunkMode", chunkMode);
     form.append("enrichEnabled", String(enrichEnabled));
     if (enrichEnabled) {
       form.append("llmProvider", llmCfg.provider);
@@ -123,7 +139,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
             {config.chunkSize}/{config.chunkOverlap}
           </span>
           {!providerReady && (
-            <span className="ml-2 rounded border border-amber-800 bg-amber-950 px-2 py-0.5 text-amber-400">
+            <span className="ml-2 rounded border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-amber-700">
               API key missing
             </span>
           )}
@@ -135,6 +151,23 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           configure →
         </Link>
       </div>
+
+      {/* Server-pipeline banner */}
+      {serverEmbed?.enabled && (
+        <div className="flex items-center gap-3 rounded-lg border border-[var(--v-accent)]/30 bg-[var(--v-accent-muted)] px-4 py-3">
+          <span className="text-[var(--v-accent)] text-sm">⚡</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-[var(--v-accent)]">Server-side pipeline active</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Node handles chunk + embed + insert via{" "}
+              <span className="font-mono">{serverEmbed.provider}</span>. No client-side embedding needed.
+            </p>
+          </div>
+          <span className="rounded border border-[var(--v-accent)]/30 px-2 py-0.5 text-[10px] font-mono text-[var(--v-accent)]">
+            /v1/ingest
+          </span>
+        </div>
+      )}
 
       {/* Dimension mismatch warning */}
       {dimMismatch && (
@@ -154,6 +187,34 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           </p>
         </div>
       )}
+
+      {/* Chunking strategy */}
+      <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
+        <div className="flex flex-col gap-0.5">
+          <p className="text-xs font-medium text-card-foreground">Chunking strategy</p>
+          <p className="text-[11px] text-muted-foreground">
+            {chunkMode === "tree"
+              ? "Tree mode — one chunk per section (title + body). Best for structured docs."
+              : "Fixed-size mode — overlapping windows. Better for unstructured text."}
+          </p>
+        </div>
+        <div className="flex gap-1 ml-4">
+          {(["tree", "fixed"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setChunkMode(m)}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors ${
+                chunkMode === m
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-card-foreground"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Contextual enrichment toggle */}
       <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
@@ -226,7 +287,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
         >
           {status === "ingesting" ? (
             <span className="flex items-center gap-2">
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-zinc-400 border-t-zinc-900" />
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-zinc-900" />
               Ingesting…
             </span>
           ) : (
@@ -245,6 +306,12 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
               </p>
               <p className="text-xs text-emerald-700 mt-1 font-mono">
                 document node: #{result.document_node_id}
+                {result.strategy_used && (
+                  <span className="ml-2 text-emerald-800">· {result.strategy_used}</span>
+                )}
+                {result.pipeline === "server" && (
+                  <span className="ml-2 text-emerald-800">· server pipeline ⚡</span>
+                )}
               </p>
             </div>
             <button
@@ -326,7 +393,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
                 {suggestedQuestions && (
                   <button
                     onClick={() => setSuggestedQuestions(null)}
-                    className="text-[10px] text-zinc-700 hover:text-muted-foreground transition-colors"
+                    className="text-[10px] text-muted-foreground hover:text-muted-foreground transition-colors"
                   >
                     regenerate
                   </button>
@@ -395,7 +462,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           <p className="font-medium text-muted-foreground mb-1">How ingestion works</p>
           <ol className="list-decimal list-inside space-y-0.5">
             <li>File is parsed into raw text — PDFs use position-aware extraction to preserve table columns</li>
-            <li>Text is split into overlapping chunks</li>
+            <li>Text is split — <strong>Tree</strong>: one chunk per detected section (best for Q&A); <strong>Fixed</strong>: overlapping size windows</li>
             <li>Each chunk is embedded via your configured model</li>
             <li>Vectors are stored in this collection</li>
             <li>Text is stored in the metadata sidecar (searchable via /audit)</li>

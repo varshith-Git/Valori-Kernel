@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 
 const LABELS: Record<string, string> = {
-  "":           "Proof",
+  "":           "Home",
+  proof:        "Proof",
   search:       "Search",
   logs:         "Logs",
   metrics:      "Metrics",
@@ -15,7 +16,8 @@ const LABELS: Record<string, string> = {
   cluster:      "Cluster",
   projects:     "Projects",
   settings:     "Settings",
-  help:         "Feature Guide",
+  help:         "Help",
+  launch:       "Launcher",
 };
 
 export function Breadcrumb() {
@@ -45,7 +47,7 @@ export function Breadcrumb() {
         const isLast = i === visible.length - 1;
         return (
           <span key={c.href} className="flex items-center gap-1 min-w-0">
-            {i > 0 && <ChevronRight size={13} className="shrink-0 text-zinc-700" />}
+            {i > 0 && <ChevronRight size={13} className="shrink-0 text-border" />}
             {isLast ? (
               <span className="font-medium text-card-foreground truncate">{c.label}</span>
             ) : (

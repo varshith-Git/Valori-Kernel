@@ -98,7 +98,43 @@ async fn main() {
     }
 
     let listener = TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(shared_state.clone(), cfg.snapshot_path.clone()))
+        .await
+        .unwrap();
+}
+
+/// Resolve on SIGTERM / Ctrl-C. Before returning (which lets axum drain and exit)
+/// write a final snapshot if a snapshot path is configured. The WAL already
+/// guarantees durability — this just keeps the next start instant. Snapshot-on-close.
+async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::PathBuf>) {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => { s.recv().await; }
+            Err(_)    => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c   => {}
+        _ = terminate => {}
+    }
+
+    if let Some(path) = snapshot_path {
+        tracing::info!("Shutdown signal received — saving final snapshot to {:?}", path);
+        let engine = state.read().await;
+        match engine.save_snapshot(Some(path.as_path())) {
+            Ok(_)  => tracing::info!("Final snapshot saved"),
+            Err(e) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
+        }
+    }
 }
 
 // ── Cluster mode (Phase 2) ────────────────────────────────────────────────────

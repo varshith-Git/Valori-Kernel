@@ -991,6 +991,26 @@ All data methods accept `collection: str = "default"`:
 | `insert_batch(batch, collection)` | ✅ |
 | `search(query, k, filter_tag, consistency, collection)` | ✅ (also accepts `consistency="linearizable"\|"local"`) |
 
+#### Built-in Ingest Pipeline (Phase I1/I2)
+
+No client-side chunking or embedding required when the node has `VALORI_EMBED_PROVIDER` set.
+
+| Method | Returns | Description |
+|---|---|---|
+| `chunk_document(text, strategy, collection, source, chunk_size, chunk_overlap)` | `{"strategy_used", "chunk_count", "chunks": [{"index","title","text"}]}` | Server-side chunking only — no vectors inserted. `strategy`: `auto\|tree\|conversation\|sentence\|fixed` |
+| `ingest(text, source, strategy, collection, chunk_size, chunk_overlap)` | `{"ok", "document_node_id", "strategy_used", "chunk_count", "record_ids", "collection"}` | Full pipeline: chunk + embed + insert + graph nodes + metadata. Requires `VALORI_EMBED_PROVIDER` on node. Returns `422` if not configured. |
+
+```python
+# Chunking only (no embed step — works without VALORI_EMBED_PROVIDER)
+result = client.chunk_document(text, strategy="tree", collection="research")
+# → {"strategy_used": "tree", "chunk_count": 31, "chunks": [...]}
+
+# Full pipeline — node handles chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
+result = client.ingest(text, source="paper.pdf", strategy="auto", collection="research")
+# → {"ok": True, "document_node_id": 42, "chunk_count": 31,
+#    "record_ids": [1,2,...31], "strategy_used": "tree", "collection": "research"}
+```
+
 #### Cluster
 
 | Method | Returns | Description |

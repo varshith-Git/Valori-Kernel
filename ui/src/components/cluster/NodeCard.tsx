@@ -29,7 +29,7 @@ export function NodeCard({ member, isLeader, isThisNode }: Props) {
         </div>
         <div className="flex gap-1.5">
           {isLeader && (
-            <span className="text-xs rounded px-2 py-0.5 bg-emerald-900 text-emerald-300 border border-emerald-800 font-medium">
+            <span className="text-xs rounded px-2 py-0.5 bg-emerald-500/15 text-emerald-700 border border-emerald-500/30 font-medium">
               LEADER
             </span>
           )}
@@ -38,7 +38,7 @@ export function NodeCard({ member, isLeader, isThisNode }: Props) {
               voter
             </span>
           ) : (
-            <span className="text-xs rounded px-2 py-0.5 bg-amber-950 text-amber-400 border border-amber-900">
+            <span className="text-xs rounded px-2 py-0.5 bg-amber-500/15 text-amber-700 border border-amber-500/30">
               learner
             </span>
           )}

@@ -94,7 +94,7 @@ export default function SearchPage() {
           <div className="flex flex-col gap-1 col-span-2">
             <label className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium">
               Read consistency
-              <span className="ml-1.5 text-zinc-700 normal-case tracking-normal font-normal">
+              <span className="ml-1.5 text-muted-foreground normal-case tracking-normal font-normal">
                 — affects cluster deployments only
               </span>
             </label>
@@ -142,7 +142,7 @@ export default function SearchPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-red-900 bg-red-950 px-4 py-3">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
           <p className="text-sm text-red-400">{error}</p>
         </div>
       )}

@@ -152,7 +152,7 @@ function NsSelector({
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 appearance-none focus:outline-none focus:border-zinc-500"
+          className="w-full bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 appearance-none focus:outline-none focus:border-ring"
         >
           <option value="">— select namespace —</option>
           {namespaces.map((ns) => (
@@ -206,7 +206,7 @@ function SnapshotCard({
         ))}
       </div>
       <div>
-        <p className="text-[9px] text-zinc-700 uppercase tracking-widest mb-0.5">NS Proof Hash</p>
+        <p className="text-[9px] text-muted-foreground uppercase tracking-widest mb-0.5">NS Proof Hash</p>
         <p className="font-mono text-[9.5px] text-muted-foreground break-all">
           {snap.ns_proof_hash.slice(0, 40)}…
         </p>
@@ -476,7 +476,7 @@ export function DiffTab({ namespace }: { namespace: string }) {
                   onClick={() => setDiffView(v)}
                   className={`px-3 py-0.5 text-xs rounded transition-colors ${
                     diffView === v
-                      ? "bg-zinc-600 text-foreground"
+                      ? "bg-muted text-foreground"
                       : "text-muted-foreground hover:text-accent-foreground"
                   }`}
                 >
@@ -569,14 +569,14 @@ export function DiffTab({ namespace }: { namespace: string }) {
                 </div>
               ))}
             </div>
-            <p className="text-[10px] text-zinc-700">
+            <p className="text-[10px] text-muted-foreground">
               {diff.hashMatch
                 ? "Identical proof hashes confirm these namespaces share the same event history."
                 : "Proof hashes differ — the namespaces have different event histories or record sets."}
             </p>
           </div>
 
-          <p className="text-[10px] text-zinc-700 text-right font-mono">
+          <p className="text-[10px] text-muted-foreground text-right font-mono">
             computed at {new Date(diff.computed_at).toLocaleString()}
           </p>
         </>

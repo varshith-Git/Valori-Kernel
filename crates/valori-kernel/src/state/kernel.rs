@@ -33,6 +33,9 @@ pub struct KernelState {
     #[cfg(feature = "std")]
     pub(crate) encrypted_record_keys: rustc_hash::FxHashMap<[u8; 16], alloc::vec::Vec<RecordId>>,
     pub(crate) namespace_node_heads: alloc::vec::Vec<u32>,
+    /// Replicated metadata sidecar — set via `KernelEvent::SetMeta`.
+    /// Key: arbitrary string (e.g. "record:42"). Value: pre-serialised JSON string.
+    pub meta: alloc::collections::BTreeMap<alloc::string::String, alloc::string::String>,
 }
 
 impl KernelState {
@@ -48,6 +51,7 @@ impl KernelState {
             namespace_node_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
             #[cfg(feature = "std")]
             encrypted_record_keys: rustc_hash::FxHashMap::default(),
+            meta: alloc::collections::BTreeMap::new(),
         }
     }
 
@@ -99,6 +103,11 @@ impl KernelState {
     /// Iterate over all live graph nodes (excludes deleted/hole slots).
     pub fn iter_nodes(&self) -> impl Iterator<Item = &crate::graph::node::GraphNode> {
         self.nodes.nodes.iter().filter_map(|slot| slot.as_ref())
+    }
+
+    /// Iterate over all live records in a given namespace.
+    pub fn iter_records_in_ns(&self, namespace_id: u16) -> impl Iterator<Item = &crate::storage::record::Record> {
+        self.records.iter().filter(move |r| r.namespace_id == namespace_id)
     }
 
     pub fn next_record_id(&self) -> RecordId {
@@ -313,6 +322,10 @@ impl KernelState {
                     tag: *tag,
                 };
                 self.apply(&cmd)?;
+            }
+
+            KernelEvent::SetMeta { key, value } => {
+                self.meta.insert(key.clone(), value.clone());
             }
 
             KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {

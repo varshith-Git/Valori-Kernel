@@ -130,6 +130,14 @@ pub enum KernelEvent {
         ciphertext: alloc::vec::Vec<u8>,
         tag: u64,
     },
+
+    /// Store a metadata key-value pair in the kernel (cluster-mode).
+    /// Value is a pre-serialized JSON string. Applied on every replica so all
+    /// nodes share the same metadata sidecar after ingest.
+    SetMeta {
+        key: alloc::string::String,
+        value: alloc::string::String,
+    },
 }
 
 impl KernelEvent {
@@ -149,6 +157,7 @@ impl KernelEvent {
             KernelEvent::AutoCreateNode { .. } => "AutoCreateNode",
             KernelEvent::AutoCreateEdge { .. } => "AutoCreateEdge",
             KernelEvent::AutoInsertRecordEncrypted { .. } => "AutoInsertRecordEncrypted",
+            KernelEvent::SetMeta { .. } => "SetMeta",
         }
     }
 }
@@ -250,6 +259,12 @@ impl Serialize for KernelEvent {
                 state.serialize_field("tag", tag)?;
                 state.end()
             }
+            KernelEvent::SetMeta { key, value } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 13, "SetMeta", 2)?;
+                state.serialize_field("key", key)?;
+                state.serialize_field("value", value)?;
+                state.end()
+            }
         }
     }
 }
@@ -347,6 +362,10 @@ impl<'de> Deserialize<'de> for KernelEvent {
                  ciphertext: alloc::vec::Vec<u8>,
                  tag: u64,
              },
+             SetMeta {
+                 key: alloc::string::String,
+                 value: alloc::string::String,
+             },
         }
 
         // Delegate to the Helper
@@ -371,6 +390,7 @@ impl<'de> Deserialize<'de> for KernelEvent {
                 KernelEvent::AutoCreateEdge { from, to, kind },
             KernelEventHelper::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag } =>
                 KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag },
+            KernelEventHelper::SetMeta { key, value } => KernelEvent::SetMeta { key, value },
         })
     }
 }

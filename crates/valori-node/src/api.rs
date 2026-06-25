@@ -36,6 +36,11 @@ pub struct InsertRecordRequest {
     pub values: Vec<f32>,
     #[serde(default)]
     pub collection: Option<String>,
+    /// Optional raw text for BM25 hybrid reranking. When provided, stored
+    /// in the reranker index alongside the vector so future searches can
+    /// use term-frequency scoring to reorder results.
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -75,7 +80,20 @@ pub struct SearchRequest {
     /// Ignored for `as_of` / point-in-time queries.
     #[serde(default)]
     pub decay_half_life_secs: Option<u64>,
+    /// BM25 hybrid reranking. When `true` (default), the server fetches
+    /// `k × POOL_FACTOR` candidates by vector similarity and re-ranks them by
+    /// a 50/50 blend of normalised vector score + BM25 term-frequency score
+    /// before returning the top-k. Requires `query_text` to be set.
+    /// Set to `false` to get pure vector ranking (legacy behaviour).
+    #[serde(default = "default_rerank")]
+    pub rerank: bool,
+    /// The raw query string used for BM25 scoring. Required when `rerank=true`.
+    /// Ignored when `rerank=false`.
+    #[serde(default)]
+    pub query_text: Option<String>,
 }
+
+fn default_rerank() -> bool { true }
 
 #[derive(Serialize)]
 pub struct SearchHit {
@@ -356,6 +374,12 @@ pub struct BatchInsertRequest {
     /// skipped and the previously assigned ID is returned instead.
     #[serde(default)]
     pub request_ids: Option<Vec<Option<String>>>,
+    /// Optional per-vector text strings for BM25 hybrid reranking.
+    /// If present, must be the same length as `batch`. A null entry means
+    /// no text is stored for that vector. Text is tokenised and indexed
+    /// so that future /search calls with `rerank=true` can re-score results.
+    #[serde(default)]
+    pub texts: Option<Vec<Option<String>>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

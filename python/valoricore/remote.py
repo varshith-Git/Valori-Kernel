@@ -134,6 +134,7 @@ class SyncRemoteClient:
         tag: int = 0,
         collection: str = "default",
         idempotency_key: Optional[bytes] = None,
+        text: Optional[str] = None,
     ) -> RecordId:
         """Insert a vector record. Returns the new Record ID.
 
@@ -141,14 +142,20 @@ class SyncRemoteClient:
         collections first with ``create_collection(name)``; the default
         collection always exists.
 
+        ``text`` — optional raw text for BM25 hybrid reranking. When provided,
+        the server tokenises and indexes it so that future ``search()`` calls
+        with ``rerank=True`` can re-score results by term frequency. Pass the
+        same text you would use as a search query (e.g. the section title +
+        body for document chunks).
+
         ``idempotency_key`` — 16-byte token (defaults to a fresh UUID4) used
-        to deduplicate retried writes on a Raft cluster. Pass the same bytes
-        to guarantee exactly-once delivery even when a retry follows a
-        connection reset. Ignored by standalone nodes.
+        to deduplicate retried writes on a Raft cluster.
         """
         data: Dict[str, Any] = {"values": vector, "tag": tag}
         if collection != "default":
             data["collection"] = collection
+        if text is not None:
+            data["text"] = text
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
         resp = self._post("/records", data, idempotency_key=key)
         self._check_auto_snapshot(1)
@@ -169,16 +176,20 @@ class SyncRemoteClient:
         collection: str = "default",
         metadata: Optional[List[Optional[str]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
+        texts: Optional[List[Optional[str]]] = None,
     ) -> List[RecordId]:
         """Insert a batch of vectors with optional per-item idempotency keys.
 
         Args:
             metadata: Optional per-vector context strings (UTF-8 JSON).
-                      When provided, committed into the BLAKE3 audit chain.
-                      Length must match ``batch``.
+                      Committed into the BLAKE3 audit chain. Length must match ``batch``.
             request_ids: Optional per-vector idempotency keys (32-hex strings).
-                         A duplicate key causes that item to be skipped and the
-                         previously assigned ID returned. Length must match ``batch``.
+                         Length must match ``batch``.
+            texts: Optional per-vector raw text strings for BM25 hybrid reranking.
+                   When provided, the server indexes each text so future ``search()``
+                   calls with ``rerank=True`` re-score by term frequency.
+                   Length must match ``batch``. Use ``None`` entries to skip indexing
+                   for specific vectors.
 
         Returns:
             List of record IDs (existing ID for deduped items, new ID otherwise).
@@ -190,9 +201,92 @@ class SyncRemoteClient:
             data["metadata"] = metadata
         if request_ids is not None:
             data["request_ids"] = request_ids
+        if texts is not None:
+            data["texts"] = texts
         resp = self._post("/v1/vectors/batch_insert", data)
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
+
+    def chunk_document(
+        self,
+        text: str,
+        strategy: str = "auto",
+        collection: str = "default",
+        source: Optional[str] = None,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Split a document into chunks using server-side intelligence.
+
+        The server sniffs the text and picks the best strategy automatically
+        (``strategy="auto"``), or you can force one of:
+
+        - ``"tree"``         — one chunk per section header (best for papers/manuals)
+        - ``"conversation"`` — one chunk per Q&A exchange (best for transcripts)
+        - ``"sentence"``     — sentence-window chunks (best for articles/prose)
+        - ``"fixed"``        — overlapping fixed-size windows (general fallback)
+
+        Returns a dict with:
+            ``strategy_used`` — the strategy that was actually applied
+            ``chunk_count``   — total chunks produced
+            ``chunks``        — list of ``{index, title, text}`` dicts
+
+        To embed and insert, iterate over ``chunks`` and pass each ``chunk["text"]``
+        to your embedding model, then call ``insert_batch``.
+
+        Example::
+
+            result = client.chunk_document(transcript_text, strategy="conversation")
+            vectors = [embed(c["text"]) for c in result["chunks"]]
+            texts   = [c["text"] for c in result["chunks"]]
+            ids = client.insert_batch(vectors, texts=texts, collection="interviews")
+        """
+        data: dict = {"text": text, "strategy": strategy, "collection": collection,
+                      "chunk_size": chunk_size, "chunk_overlap": chunk_overlap}
+        if source is not None:
+            data["source"] = source
+        return self._post("/v1/ingest/document", data)
+
+    def ingest(
+        self,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Chunk, embed, and insert a document in one server-side call.
+
+        Requires the node to be started with ``VALORI_EMBED_PROVIDER`` set
+        (``ollama``, ``openai``, or ``custom``), plus ``VALORI_EMBED_MODEL``
+        and ``VALORI_EMBED_URL`` as needed.
+
+        Returns a dict with:
+            ``ok``               — True on success
+            ``document_node_id`` — graph node ID for the document
+            ``strategy_used``    — chunking strategy that was applied
+            ``chunk_count``      — total chunks inserted
+            ``record_ids``       — list of record IDs for each chunk
+            ``collection``       — collection name the chunks landed in
+
+        Example::
+
+            result = client.ingest(text, source="annual_report.pdf",
+                                   strategy="tree", collection="reports")
+            print(result["chunk_count"], "chunks inserted")
+            print("document node:", result["document_node_id"])
+        """
+        data: dict = {
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        }
+        if source is not None:
+            data["source"] = source
+        return self._post("/v1/ingest", data)
 
     def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
         """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
@@ -221,6 +315,8 @@ class SyncRemoteClient:
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
         decay_half_life_secs: Optional[int] = None,
+        rerank: bool = True,
+        query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
 
@@ -232,21 +328,24 @@ class SyncRemoteClient:
         Ignored by a standalone node.
 
         ``as_of`` — ISO 8601 UTC timestamp, e.g. ``"2026-03-03T00:00:00Z"``.
-        Searches the vector state as it existed at that moment. Requires
-        ``VALORI_EVENT_LOG_PATH`` to be set on the node. Returns a full
-        response dict (not just the results list) that includes
-        ``as_of_log_index``, ``as_of_timestamp_iso``, and ``as_of_state_hash``.
+        Searches the vector state as it existed at that moment.
 
         ``as_of_log_index`` — search the state after exactly this many committed
         events. Takes precedence over ``as_of`` if both are given.
 
-        ``decay_half_life_secs`` (Phase C4.1) — recency-aware ranking. When set
-        (> 0), older records decay: a record one half-life old has its distance
-        doubled, so a fresh near-match can overtake a stale better one. Each hit
-        then carries ``decay_factor`` and ``age_secs``. ``score`` stays the true
-        (undecayed) distance. Decay is a read-time re-rank — it never changes the
-        kernel state hash. Ignored for ``as_of`` queries. (Standalone only in
-        v1; accepted-but-neutral on cluster nodes.)
+        ``decay_half_life_secs`` (Phase C4.1) — recency-aware ranking. Older
+        records decay so fresh near-matches rise above stale ones.
+
+        ``rerank`` (default ``True``) — BM25 hybrid reranking. The server fetches
+        a wider candidate pool and re-ranks by a blend of vector similarity and
+        BM25 term-frequency score before returning the top-k. Requires
+        ``query_text`` to take effect; if ``query_text`` is None, pure vector
+        ranking is used regardless of this flag.
+
+        ``query_text`` — the raw query string used for BM25 scoring. When
+        provided alongside ``rerank=True``, the server re-orders vector
+        candidates by exact keyword relevance before returning results. Pass
+        the same human-readable query you would display to the user.
         """
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
@@ -261,6 +360,9 @@ class SyncRemoteClient:
             data["as_of"] = as_of
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
+        data["rerank"] = rerank
+        if query_text is not None:
+            data["query_text"] = query_text
         resp = self._post("/search", data)
         # as-of searches return the full response dict (with proof fields).
         if as_of is not None or as_of_log_index is not None:
@@ -588,6 +690,16 @@ class SyncRemoteClient:
         Returns: ``{"name": str, "id": int, "created": bool}``
         """
         return self._post("/v1/namespaces", {"name": name})
+
+    def health(self) -> str:
+        """Return the node health status string (e.g. ``"ok"``)."""
+        url = self.base_url + "/health"
+        try:
+            resp = self.session.get(url, timeout=5)
+            resp.raise_for_status()
+            return resp.json().get("status", "unknown")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to reach node: {e}")
 
     def list_collections(self) -> List[Dict[str, Any]]:
         """List all collections.
@@ -1064,10 +1176,13 @@ class AsyncRemoteClient:
             f"no leader available after {self._max_retries + 1} attempts to {self.base_url}{path}: {last_err}"
         )
 
-    async def insert(self, vector: Vector, tag: int = 0, collection: str = "default") -> RecordId:
+    async def insert(self, vector: Vector, tag: int = 0, collection: str = "default",
+                     text: Optional[str] = None) -> RecordId:
         data: Dict[str, Any] = {"values": vector, "tag": tag}
         if collection != "default":
             data["collection"] = collection
+        if text is not None:
+            data["text"] = text
         resp = await self._post("/records", data)
         await self._check_auto_snapshot(1)
         return resp["id"]
@@ -1086,8 +1201,9 @@ class AsyncRemoteClient:
         collection: str = "default",
         metadata: Optional[List[Optional[str]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
+        texts: Optional[List[Optional[str]]] = None,
     ) -> List[RecordId]:
-        """Insert a batch of vectors with optional per-item idempotency keys."""
+        """Insert a batch of vectors. ``texts`` enables BM25 hybrid reranking — see SyncRemoteClient.insert_batch."""
         data: Dict[str, Any] = {"batch": batch}
         if collection != "default":
             data["collection"] = collection
@@ -1095,9 +1211,48 @@ class AsyncRemoteClient:
             data["metadata"] = metadata
         if request_ids is not None:
             data["request_ids"] = request_ids
+        if texts is not None:
+            data["texts"] = texts
         resp = await self._post("/v1/vectors/batch_insert", data)
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
+
+    async def chunk_document(
+        self,
+        text: str,
+        strategy: str = "auto",
+        collection: str = "default",
+        source: Optional[str] = None,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Async version of SyncRemoteClient.chunk_document. See that method for full docs."""
+        data: dict = {"text": text, "strategy": strategy, "collection": collection,
+                      "chunk_size": chunk_size, "chunk_overlap": chunk_overlap}
+        if source is not None:
+            data["source"] = source
+        return await self._post("/v1/ingest/document", data)
+
+    async def ingest(
+        self,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Async version of SyncRemoteClient.ingest. See that method for full docs."""
+        data: dict = {
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        }
+        if source is not None:
+            data["source"] = source
+        return await self._post("/v1/ingest", data)
 
     async def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
         """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
@@ -1125,10 +1280,10 @@ class AsyncRemoteClient:
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
         decay_half_life_secs: Optional[int] = None,
+        rerank: bool = True,
+        query_text: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """See SyncRemoteClient.search. ``consistency`` is "linearizable" | "local".
-        ``as_of`` and ``as_of_log_index`` enable point-in-time search (see sync docs).
-        ``decay_half_life_secs`` (Phase C4.1) enables recency-aware re-ranking."""
+        """See SyncRemoteClient.search. ``rerank`` + ``query_text`` enable BM25 hybrid reranking."""
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
@@ -1142,6 +1297,9 @@ class AsyncRemoteClient:
             data["as_of"] = as_of
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
+        data["rerank"] = rerank
+        if query_text is not None:
+            data["query_text"] = query_text
         resp = await self._post("/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp
@@ -1932,8 +2090,9 @@ class AsyncClusterClient:
         vector: Vector,
         tag: int = 0,
         collection: str = "default",
+        text: Optional[str] = None,
     ) -> RecordId:
-        return await self._write_client().insert(vector, tag=tag, collection=collection)
+        return await self._write_client().insert(vector, tag=tag, collection=collection, text=text)
 
     async def insert_batch(
         self,
@@ -1941,9 +2100,11 @@ class AsyncClusterClient:
         collection: str = "default",
         metadata: Optional[List[Optional[str]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
+        texts: Optional[List[Optional[str]]] = None,
     ) -> List[RecordId]:
         return await self._write_client().insert_batch(
-            batch, collection=collection, metadata=metadata, request_ids=request_ids
+            batch, collection=collection, metadata=metadata,
+            request_ids=request_ids, texts=texts,
         )
 
     async def delete(self, record_id: int) -> None:

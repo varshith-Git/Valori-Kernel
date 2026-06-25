@@ -60,7 +60,7 @@ function ChunkCard({ chunk }: { chunk: ChunkMeta }) {
     <div className="group relative border-b border-border/50 last:border-0 px-5 py-4 hover:bg-accent/20 transition-colors">
       <div className="flex items-start gap-3">
         {/* Chunk number */}
-        <span className="flex-shrink-0 w-8 text-right font-mono text-[10px] text-zinc-700 mt-0.5 select-none">
+        <span className="flex-shrink-0 w-8 text-right font-mono text-[10px] text-muted-foreground mt-0.5 select-none">
           {chunk.chunk_index + 1}
         </span>
 
@@ -228,7 +228,7 @@ function DocumentCard({
               </span>
             )}
             {meta.provider && (
-              <span className="text-[10px] font-mono text-zinc-700">
+              <span className="text-[10px] font-mono text-muted-foreground">
                 {meta.provider}/{meta.model}
               </span>
             )}

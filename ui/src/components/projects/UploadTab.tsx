@@ -230,7 +230,7 @@ export function UploadTab({ collection }: Props) {
 
       {/* Result / error */}
       {result && (
-        <div className="rounded-lg border border-emerald-800 bg-emerald-950 px-4 py-3">
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
           <p className="text-sm text-emerald-400 font-medium">
             ✓ Inserted {result.ids.length} record{result.ids.length !== 1 ? "s" : ""}
           </p>
@@ -241,7 +241,7 @@ export function UploadTab({ collection }: Props) {
         </div>
       )}
       {error && (
-        <div className="rounded-lg border border-red-900 bg-red-950 px-4 py-3">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
           <p className="text-sm text-red-400">{error}</p>
         </div>
       )}

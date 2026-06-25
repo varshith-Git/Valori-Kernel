@@ -1,7 +1,6 @@
 "use client";
 
 import { use, useState, useCallback, useRef, useEffect } from "react";
-import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MultiSearch } from "@/components/collections/MultiSearch";
@@ -138,26 +137,12 @@ export default function CollectionPage({
 
   return (
     <div className="flex flex-col gap-5 max-w-4xl">
-      {/* Breadcrumb — already in the top header, but keep the ns badge here */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Link href="/projects" className="hover:text-accent-foreground transition-colors">Projects</Link>
-        <span className="text-zinc-700">/</span>
-        <Link
-          href={`/projects/${encodeURIComponent(project)}`}
-          className="hover:text-accent-foreground transition-colors"
-        >
-          {project}
-        </Link>
-        <span className="text-zinc-700">/</span>
-        <span className="text-card-foreground font-medium">{col}</span>
-        <code className="ml-1 text-[10px] text-muted-foreground font-mono bg-card px-2 py-0.5 rounded border border-border">
-          {namespace}
-        </code>
-      </div>
-
       {/* Tab bar: primary + overflow */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
+          <code className="text-[10px] text-muted-foreground font-mono bg-card px-2 py-0.5 rounded border border-border self-center">
+            {namespace}
+          </code>
           <TabsList className="h-auto bg-card border border-border p-1 gap-0.5 flex-wrap">
             {PRIMARY_TABS.map(({ value, label, tip }) => (
               <TabsTrigger

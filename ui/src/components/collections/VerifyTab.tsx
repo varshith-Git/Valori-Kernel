@@ -61,7 +61,7 @@ function Stat({ label, value, sub }: { label: string; value: string | number; su
     <div className="flex flex-col gap-0.5 rounded-lg bg-accent/50 border border-border px-4 py-3">
       <p className="text-[10px] text-muted-foreground uppercase tracking-widest">{label}</p>
       <p className="text-xl font-semibold text-foreground tabular-nums">{value}</p>
-      {sub && <p className="text-[10px] text-zinc-700">{sub}</p>}
+      {sub && <p className="text-[10px] text-muted-foreground">{sub}</p>}
     </div>
   );
 }
@@ -75,7 +75,7 @@ function EventLine({ ev, idx }: { ev: NsEvent; idx: number }) {
       onMouseLeave={() => setHover(false)}
       className="flex items-start gap-3 px-4 py-[3px] hover:bg-white/[0.025] font-mono text-[12px] leading-5"
     >
-      <span className="flex-shrink-0 w-8 text-right text-zinc-700 select-none tabular-nums text-[10px] mt-0.5">
+      <span className="flex-shrink-0 w-8 text-right text-muted-foreground select-none tabular-nums text-[10px] mt-0.5">
         {idx + 1}
       </span>
       <span
@@ -201,7 +201,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
                 </span>
                 <button
                   onClick={() => setShowIds((v) => !v)}
-                  className="text-zinc-700 hover:text-muted-foreground transition-colors"
+                  className="text-muted-foreground hover:text-muted-foreground transition-colors"
                 >
                   {showIds ? "hide event IDs ▲" : "show event IDs ▼"}
                 </button>
@@ -238,12 +238,12 @@ export function VerifyTab({ namespace }: { namespace: string }) {
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-background flex-wrap">
           <span className="font-mono text-xs text-muted-foreground">
             audit trail
-            <span className="text-zinc-700"> · {data.namespace}</span>
+            <span className="text-muted-foreground"> · {data.namespace}</span>
           </span>
           <span className="text-[10px] text-muted-foreground tabular-nums">
             {filtered.length}
             {filtered.length !== data.events.length && (
-              <span className="text-zinc-700"> / {data.events.length}</span>
+              <span className="text-muted-foreground"> / {data.events.length}</span>
             )} events
           </span>
           <div className="flex-1" />
@@ -264,7 +264,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="filter…"
-              className="font-mono text-[12px] bg-card border border-input rounded px-3 py-1 pl-6 w-44 text-card-foreground placeholder-zinc-700 outline-none focus:border-zinc-500 transition-colors"
+              className="font-mono text-[12px] bg-card border border-input rounded px-3 py-1 pl-6 w-44 text-card-foreground placeholder:text-muted-foreground outline-none focus:border-ring transition-colors"
             />
             {filter && (
               <button onClick={() => setFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">×</button>
@@ -277,7 +277,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
               style={activeKinds.has(k) || activeKinds.size === 0 ? { color: kindColor(k) } : undefined}
               className={`font-mono text-[10px] px-1.5 py-0.5 rounded border transition-all ${
                 activeKinds.size > 0 && !activeKinds.has(k)
-                  ? "border-border text-zinc-700 opacity-40"
+                  ? "border-border text-muted-foreground opacity-40"
                   : "border-input hover:border-ring"
               }`}
             >
@@ -285,7 +285,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
             </button>
           ))}
           {activeKinds.size > 0 && (
-            <button onClick={() => setActiveKinds(new Set())} className="text-[10px] text-zinc-700 hover:text-muted-foreground">
+            <button onClick={() => setActiveKinds(new Set())} className="text-[10px] text-muted-foreground hover:text-muted-foreground">
               clear
             </button>
           )}

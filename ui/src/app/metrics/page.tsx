@@ -179,7 +179,7 @@ function MetricCard({
           <span className="text-xs text-muted-foreground font-mono">{unit}</span>
         )}
         {sub && (
-          <span className="text-[10px] text-zinc-700 ml-1">{sub}</span>
+          <span className="text-[10px] text-muted-foreground ml-1">{sub}</span>
         )}
       </div>
 
@@ -189,11 +189,11 @@ function MetricCard({
       </div>
 
       {/* Min / max */}
-      <div className="flex items-center justify-between px-4 py-1.5 border-t border-zinc-900">
-        <span className="text-[10px] text-zinc-700 font-mono tabular-nums">
+      <div className="flex items-center justify-between px-4 py-1.5 border-t border-border">
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
           min {fmtRate(minV)}
         </span>
-        <span className="text-[10px] text-zinc-700 font-mono tabular-nums">
+        <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
           max {fmtRate(maxV)}
         </span>
       </div>
@@ -235,7 +235,7 @@ function InfoCard({
         <p className="text-sm font-semibold text-foreground mt-0.5" style={{ color: accentColor }}>
           {value}
         </p>
-        {sub && <p className="text-[10px] text-zinc-700 mt-0.5">{sub}</p>}
+        {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
       </div>
     </div>
   );
@@ -400,7 +400,7 @@ export default function MetricsPage() {
             {connected ? "connected" : "disconnected"}
           </span>
           {lastPing && (
-            <span className="text-[10px] text-zinc-700 font-mono tabular-nums">
+            <span className="text-[10px] text-muted-foreground font-mono tabular-nums">
               {new Date(lastPing).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </span>
           )}

@@ -69,6 +69,12 @@ pub struct EngineHealth {
     /// Absolute path of the snapshot file (null if not configured).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot_path: Option<String>,
+    /// True when VALORI_EMBED_PROVIDER is set — the node can handle /v1/ingest
+    /// (chunk + embed + insert in one call) without any client-side embedding.
+    pub embed_enabled: bool,
+    /// Which embed provider is configured (e.g. "ollama", "openai"). Null if disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embed_provider: Option<String>,
 }
 
 /// Result of `Engine::try_recover()`.
@@ -192,6 +198,15 @@ pub struct Engine {
     /// Collection (namespace) registry — maps names to NamespaceIds.
     pub namespaces: NamespaceRegistry,
 
+    /// Sidecar file for the `NamespaceRegistry` (collection name → id map).
+    /// Written on every create/drop; loaded by `try_recover()` after recovery.
+    /// The event log carries record mutations but NOT collection names, and
+    /// event-log recovery (unlike snapshot restore) does not rebuild the
+    /// registry — so without this sidecar, collections disappear from the UI
+    /// after a hard restart even though their records survive. Mirrors
+    /// `metadata_path`.
+    pub namespaces_path: Option<PathBuf>,
+
     /// Phase 3.1: object-store backend for snapshot offload and WAL archival.
     /// `None` when `VALORI_OBJECT_STORE_URL` is not set.
     pub object_store: Option<Arc<crate::object_store::ObjectStoreBackend>>,
@@ -215,6 +230,14 @@ pub struct Engine {
     /// Phase C4.1: default decay half-life (seconds) applied to search ranking
     /// when a request does not specify its own. `None`/0 = decay off.
     pub decay_half_life_secs: Option<u64>,
+
+    /// BM25 hybrid reranker — stores tokenised text per record_id so the
+    /// /search handler can re-rank vector candidates by term frequency.
+    pub reranker: crate::valori_reranker::ValoriReranker,
+
+    /// Phase I2: on-node embedding config (populated from VALORI_EMBED_* env vars).
+    /// `None` when embedding is not configured.
+    pub embed_config: Option<crate::embedder::EmbedConfig>,
 }
 
 impl Engine {
@@ -299,6 +322,13 @@ impl Engine {
         let metadata_path = cfg.event_log_path.as_ref()
             .map(|p| p.with_extension("metadata.json"));
 
+        // Same sidecar treatment for the collection name→id registry. Fall back
+        // to the snapshot path so the registry is durable even in snapshot-only
+        // configurations.
+        let namespaces_path = cfg.event_log_path.as_ref()
+            .or(cfg.snapshot_path.as_ref())
+            .map(|p| p.with_extension("namespaces.json"));
+
         Self {
             state: KernelState::new(),
             metadata: crate::metadata::MetadataStore::new(),
@@ -319,6 +349,7 @@ impl Engine {
             created_at: HashMap::new(),
             metadata_path,
             namespaces: NamespaceRegistry::new(),
+            namespaces_path,
             object_store: crate::object_store::ObjectStoreBackend::from_env(),
             object_store_keep: cfg.object_store_keep,
             vault: {
@@ -349,6 +380,8 @@ impl Engine {
                 c
             },
             decay_half_life_secs: cfg.decay_half_life_secs,
+            reranker: crate::valori_reranker::ValoriReranker::new(),
+            embed_config: crate::embedder::EmbedConfig::from_node_config(cfg),
         }
     }
 
@@ -407,6 +440,60 @@ impl Engine {
                 .map_err(|e| EngineError::InvalidInput(
                     format!("Failed to load metadata sidecar: {}", e),
                 ))?;
+        }
+        Ok(())
+    }
+
+    /// Atomically persist the `NamespaceRegistry` to its sidecar file.
+    ///
+    /// No-op when `namespaces_path` is not configured. Called by
+    /// `create_collection` / `drop_collection` so the collection name→id map
+    /// survives a hard restart even though it is not part of the event log.
+    /// Writes to a temp file then renames, so a crash mid-write never leaves a
+    /// truncated registry.
+    pub fn flush_namespaces(&self) -> Result<(), EngineError> {
+        if let Some(ref path) = self.namespaces_path {
+            let json = serde_json::to_vec(&self.namespaces)
+                .map_err(|e| EngineError::InvalidInput(
+                    format!("Failed to serialize namespace registry: {}", e),
+                ))?;
+            let tmp = {
+                let mut s = path.clone().into_os_string();
+                s.push(".tmp");
+                PathBuf::from(s)
+            };
+            std::fs::write(&tmp, &json)
+                .map_err(|e| EngineError::InvalidInput(
+                    format!("Failed to write namespace sidecar: {}", e),
+                ))?;
+            std::fs::rename(&tmp, path)
+                .map_err(|e| EngineError::InvalidInput(
+                    format!("Failed to commit namespace sidecar: {}", e),
+                ))?;
+        }
+        Ok(())
+    }
+
+    /// Load the `NamespaceRegistry` from its sidecar file, replacing in-memory
+    /// state. A missing file is silently treated as "no collections yet" (valid
+    /// fresh start). No-op when `namespaces_path` is not configured. Called by
+    /// `try_recover()` after every recovery branch so collections survive the
+    /// event-log path, which does not otherwise rebuild the registry.
+    pub fn load_namespaces(&mut self) -> Result<(), EngineError> {
+        if let Some(ref path) = self.namespaces_path {
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let reg: NamespaceRegistry = serde_json::from_slice(&bytes)
+                        .map_err(|e| EngineError::InvalidInput(
+                            format!("Failed to parse namespace sidecar: {}", e),
+                        ))?;
+                    self.namespaces = reg;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => { /* fresh start */ }
+                Err(e) => return Err(EngineError::InvalidInput(
+                    format!("Failed to read namespace sidecar: {}", e),
+                )),
+            }
         }
         Ok(())
     }
@@ -482,6 +569,8 @@ impl Engine {
             event_log_height,
             event_log_path,
             snapshot_path,
+            embed_enabled: self.embed_config.is_some(),
+            embed_provider: self.embed_config.as_ref().map(|c| c.provider.clone()),
         }
     }
 
@@ -574,6 +663,13 @@ impl Engine {
         self.created_at.insert(rid.0, Self::now_unix());
 
         Ok(rid.0)
+    }
+
+    /// Insert text for BM25 reranking. Called by HTTP handlers after
+    /// insert_record_from_f32_ns / insert_batch_ns with the raw query_text
+    /// the client sent alongside the vector.
+    pub fn reranker_insert(&mut self, record_id: u32, text: &str) {
+        self.reranker.insert(record_id as u64, text);
     }
 
     // ── Phase 3.6: Crypto-shredding ───────────────────────────────────────────
@@ -748,6 +844,9 @@ impl Engine {
         // Tell the kernel about the namespace (no-op if already exists).
         let cmd = valori_kernel::state::command::Command::CreateNamespace { namespace_id: id };
         self.state.apply(&cmd)?;
+        // Persist the name→id map: the event log does not carry collection names,
+        // so without this the collection vanishes from the UI after a restart.
+        self.flush_namespaces()?;
         Ok(id)
     }
 
@@ -761,8 +860,14 @@ impl Engine {
         let id = self.namespaces.drop_collection(name).ok_or_else(|| {
             EngineError::InvalidInput(format!("collection '{name}' not found"))
         })?;
+        // collect record ids in this namespace before applying the drop
+        let ns_record_ids: Vec<u64> = self.state.iter_records_in_ns(id)
+            .map(|r| r.id.0 as u64)
+            .collect();
         let cmd = valori_kernel::state::command::Command::DropNamespace { namespace_id: id };
         self.state.apply(&cmd)?;
+        self.reranker.remove_batch(&ns_record_ids);
+        self.flush_namespaces()?;
         Ok(())
     }
 
@@ -921,6 +1026,7 @@ impl Engine {
             self.state.apply(&cmd)?;
             self.index.delete(id);
         }
+        self.reranker.remove(id as u64);
         Ok(())
     }
 
@@ -1312,6 +1418,9 @@ impl Engine {
                                     self.rebuild_index();
                                     self.rebuild_record_to_node();
                                     self.load_metadata().ok();
+                                    // The event log does not carry collection
+                                    // names; restore them from the sidecar.
+                                    self.load_namespaces().ok();
                                     return RecoveryMode::EventLog(count);
                                 }
                                 Err(e) => {
@@ -1336,6 +1445,9 @@ impl Engine {
                         Ok(()) => {
                             tracing::info!("Snapshot recovery succeeded from {:?}", path);
                             self.load_metadata().ok();
+                            // Sidecar wins if present (it is written on every
+                            // create/drop, so it is at least as fresh as NSRG).
+                            self.load_namespaces().ok();
                             return RecoveryMode::Snapshot;
                         }
                         Err(e) => {
@@ -1350,6 +1462,9 @@ impl Engine {
         }
 
         // ── Priority 3: fresh start ───────────────────────────────────────────
+        // A collection created but never written to (no records, no snapshot)
+        // still has its name in the sidecar — restore it so it does not vanish.
+        self.load_namespaces().ok();
         tracing::info!("No durable state found; starting from an empty store");
         RecoveryMode::Fresh
     }

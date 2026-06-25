@@ -112,12 +112,13 @@ async function embedOne(text: string, cfg: EmbedCfg): Promise<number[]> {
 async function searchVec(
   vector: number[],
   k: number,
-  namespace: string
+  namespace: string,
+  queryText?: string
 ): Promise<{ id: number; score: number }[]> {
   const res = await fetch("/api/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query: vector, k, collection: namespace }),
+    body: JSON.stringify({ query: vector, k, collection: namespace, query_text: queryText }),
   });
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
   return ((await res.json()) as { results: { id: number; score: number }[] }).results ?? [];
@@ -149,7 +150,7 @@ async function runEvaluation(
       onProgress(`Embedding: "${qlabel}"`, ++step, totalSteps);
       const qVec = await embedOne(pair.question, cfg);
       anyVec ??= qVec;
-      const retrieved = await searchVec(qVec, k, namespace);
+      const retrieved = await searchVec(qVec, k, namespace, pair.question);
 
       // 2. Embed expected answer → oracle
       onProgress(`Scoring oracle: "${qlabel}"`, ++step, totalSteps);
@@ -248,7 +249,7 @@ function ChunkRow({ chunk, rank }: { chunk: ChunkResult; rank: number }) {
         <div className="flex-1 h-1 bg-accent rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
-              chunk.relevant ? "bg-emerald-500" : "bg-zinc-600"
+              chunk.relevant ? "bg-emerald-500" : "bg-muted"
             }`}
             style={{ width: `${Math.max(2, cosine)}%` }}
           />
@@ -406,7 +407,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
           value={pasteText}
           onChange={(e) => { setPasteText(e.target.value); setParseError(null); }}
           placeholder={PASTE_PLACEHOLDER}
-          className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 font-mono resize-y focus:outline-none focus:border-zinc-500"
+          className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 font-mono resize-y focus:outline-none focus:border-ring"
         />
 
         {parseError && (
@@ -417,7 +418,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
           <button
             onClick={handleParse}
             disabled={!pasteText.trim()}
-            className="text-sm px-4 py-2 rounded-lg bg-muted text-foreground hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+            className="text-sm px-4 py-2 rounded-lg bg-muted text-foreground hover:bg-muted disabled:opacity-40 transition-colors"
           >
             Parse →
           </button>
@@ -461,7 +462,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
                     <td className="px-3 py-2 text-right">
                       <button
                         onClick={() => setPairs((prev) => prev.filter((x) => x.id !== p.id))}
-                        className="text-zinc-700 hover:text-red-400 transition-colors text-base leading-none"
+                        className="text-muted-foreground hover:text-red-400 transition-colors text-base leading-none"
                       >
                         ×
                       </button>

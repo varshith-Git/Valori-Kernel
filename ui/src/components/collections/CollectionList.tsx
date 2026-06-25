@@ -133,7 +133,7 @@ function CollectionCard({
             e.preventDefault();
             onDelete();
           }}
-          className="absolute top-3 right-3 rounded-md px-2 py-1 text-xs bg-accent text-muted-foreground hover:bg-red-950 hover:text-red-400 border border-input hover:border-red-900 transition-colors"
+          className="absolute top-3 right-3 rounded-md px-2 py-1 text-xs bg-accent text-muted-foreground hover:bg-red-500/15 hover:text-red-700 border border-input hover:border-red-500/30 transition-colors"
         >
           Delete
         </button>

@@ -124,7 +124,7 @@ export function EmbeddingSelector() {
             onChange={(e) => setConfig({ chunkSize: parseInt(e.target.value, 10) })}
             className="w-full"
           />
-          <div className="flex justify-between text-[10px] text-zinc-700 mt-0.5">
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
             <span>200</span><span>4000</span>
           </div>
         </div>
@@ -141,7 +141,7 @@ export function EmbeddingSelector() {
             onChange={(e) => setConfig({ chunkOverlap: parseInt(e.target.value, 10) })}
             className="w-full"
           />
-          <div className="flex justify-between text-[10px] text-zinc-700 mt-0.5">
+          <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
             <span>0</span><span>500</span>
           </div>
         </div>

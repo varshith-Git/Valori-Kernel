@@ -63,6 +63,12 @@ people and sessions that built it.
 | 3.13 — HNSW parameter exposure | [phase-3.13-hnsw-params.md](phase-3.13-hnsw-params.md) | `multinode` | ✅ done |
 | 3.14 — MCP server (verifiable agent memory) | [phase-3.14-mcp-server.md](phase-3.14-mcp-server.md) | `multinode` | ✅ done |
 | 3.15 — Native GraphRAG (one-call retrieval) | [phase-3.15-graphrag.md](phase-3.15-graphrag.md) | `multinode` | ✅ done |
+| 6 — Persistent, isolated projects (UI workspace) | [phase-6-persistent-projects.md](phase-6-persistent-projects.md) | `main` | ✅ done |
+| C5 — Valori Reranker (hybrid retrieval) | [phase-C5-valori-reranker.md](phase-C5-valori-reranker.md) | `main` | ✅ done |
+| I1 — Server-side document chunking (`/v1/ingest/document`) | [phase-I1-server-chunking.md](phase-I1-server-chunking.md) | `main` | ✅ done |
+| I2 — On-node embedding + full pipeline (`/v1/ingest`) | [phase-I2-on-node-embedding.md](phase-I2-on-node-embedding.md) | `main` | ✅ done |
+| I3 — UI wired through server pipeline with auto-fallback | [phase-I3-ui-server-pipeline.md](phase-I3-ui-server-pipeline.md) | `main` | ✅ done |
+| I4 — `/v1/ingest` wired into cluster mode (Raft path) | [phase-I4-cluster-ingest.md](phase-I4-cluster-ingest.md) | `main` | ✅ done |
 
 ## Report template
 

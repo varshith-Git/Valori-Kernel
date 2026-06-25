@@ -18,15 +18,6 @@ export default function ProjectPage({
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Link href="/projects" className="hover:text-accent-foreground transition-colors">
-          Projects
-        </Link>
-        <span>/</span>
-        <span className="text-foreground font-medium">{project}</span>
-      </div>
-
       <Tabs defaultValue="collections">
         <TabsList className="bg-card border border-border">
           <TabsTrigger

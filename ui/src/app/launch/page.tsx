@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Play, Square, RefreshCw, Server, Network, ChevronDown, ChevronUp,
-  Terminal, Plus, Trash2, UserPlus, Link2, CheckCircle2, XCircle, RotateCcw,
+  Terminal, Plus, Trash2, UserPlus, Link2, CheckCircle2, XCircle,
 } from "lucide-react";
 import type { LaunchConfig, NodeCfg, NodeState, NodeStatus } from "@/lib/server/process-manager";
 
@@ -23,8 +23,8 @@ const DIMENSIONS = [
 ];
 
 const INDEX_TYPES = [
-  { value: "brute", label: "Brute-force L2  — exact, always consistent"        },
-  { value: "hnsw",  label: "HNSW graph      — approximate, faster at scale"    },
+  { value: "brute", label: "Brute-force L2  — exact, always consistent"     },
+  { value: "hnsw",  label: "HNSW graph      — approximate, faster at scale" },
 ];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -35,6 +35,10 @@ function buildMembers(nodes: NodeCfg[], host = "localhost"): string {
     .join(",");
 }
 
+// Advanced/cluster launches persist under ~/.valori/cluster (the everyday
+// per-project flow lives on Home and writes to ~/.valori/projects/<name>).
+const CLUSTER_DIR = "~/.valori/cluster";
+
 function makeDefaultNodes(count: number): NodeCfg[] {
   return Array.from({ length: count }, (_, i) => {
     const id = i + 1;
@@ -42,9 +46,9 @@ function makeDefaultNodes(count: number): NodeCfg[] {
       id,
       httpPort:     3000 + id,
       raftPort:     3100 + id,
-      eventLogPath: `/tmp/valori-n${id}-events.log`,
-      snapshotPath: `/tmp/valori-n${id}.snap`,
-      raftLogPath:  `/tmp/valori-n${id}-raft.redb`,
+      eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
+      snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
+      raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
       clusterInit:  id === 1,
     };
   });
@@ -53,7 +57,7 @@ function makeDefaultNodes(count: number): NodeCfg[] {
 function defaultSingle(): LaunchConfig {
   return {
     dim: 768, index: "brute", maxRecords: 1_000_000,
-    nodes: [{ id: 1, httpPort: 3000, eventLogPath: "/tmp/valori-n1-events.log", snapshotPath: "/tmp/valori-n1.snap" }],
+    nodes: [{ id: 1, httpPort: 3000, eventLogPath: `${CLUSTER_DIR}/n1-events.log`, snapshotPath: `${CLUSTER_DIR}/n1.snap` }],
   };
 }
 
@@ -71,9 +75,9 @@ function nextNodeConfig(existing: NodeCfg[]): NodeCfg {
     id,
     httpPort:     maxHttp + 1,
     raftPort:     maxRaft + 1,
-    eventLogPath: `/tmp/valori-n${id}-events.log`,
-    snapshotPath: `/tmp/valori-n${id}.snap`,
-    raftLogPath:  `/tmp/valori-n${id}-raft.redb`,
+    eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
+    snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
+    raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
     clusterInit:  false,
   };
 }
@@ -82,15 +86,18 @@ function nextNodeConfig(existing: NodeCfg[]): NodeCfg {
 
 function StatusBadge({ status }: { status: NodeStatus | "unknown" }) {
   const ring: Record<string, string> = {
-    stopped:  "border-zinc-700 bg-zinc-800 text-zinc-400",
-    starting: "border-amber-800 bg-amber-950/60 text-amber-400 animate-pulse",
-    running:  "border-emerald-800 bg-emerald-950/60 text-emerald-400",
-    error:    "border-red-800 bg-red-950/60 text-red-400",
-    unknown:  "border-zinc-700 bg-zinc-800 text-zinc-500",
+    stopped:  "border-border bg-accent text-muted-foreground",
+    starting: "border-amber-500/30 bg-amber-500/15 text-amber-700 animate-pulse",
+    running:  "border-emerald-500/30 bg-emerald-500/15 text-emerald-700",
+    error:    "border-red-500/30 bg-red-500/15 text-red-700",
+    unknown:  "border-border bg-accent text-muted-foreground",
   };
   const dot: Record<string, string> = {
-    stopped: "bg-zinc-500", starting: "bg-amber-400 animate-pulse", running: "bg-emerald-400",
-    error: "bg-red-400", unknown: "bg-zinc-500",
+    stopped:  "bg-muted-foreground/50",
+    starting: "bg-amber-400 animate-pulse",
+    running:  "bg-emerald-400",
+    error:    "bg-red-400",
+    unknown:  "bg-muted-foreground/50",
   };
   const s = status in ring ? status : "unknown";
   return (
@@ -101,7 +108,7 @@ function StatusBadge({ status }: { status: NodeStatus | "unknown" }) {
   );
 }
 
-// ─── log viewer ──────────────────────────────────────────────────────────────
+// ─── log viewer — intentionally always-dark terminal ────────────────────────
 
 function LogViewer({ nodeId }: { nodeId: number }) {
   const [lines, setLines] = useState<string[]>([]);
@@ -111,7 +118,6 @@ function LogViewer({ nodeId }: { nodeId: number }) {
   useEffect(() => {
     setLines([]);
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
-
     const es = new EventSource(`/api/launch/logs?nodeId=${nodeId}`);
     esRef.current = es;
     es.onmessage = (e) => {
@@ -124,14 +130,18 @@ function LogViewer({ nodeId }: { nodeId: number }) {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lines]);
 
   return (
-    <div className="relative h-64 overflow-y-auto rounded-xl bg-zinc-950 border border-zinc-800 p-3 font-mono text-[11px] leading-relaxed">
+    /* Terminal: intentionally always dark — oklch inline to stay fixed across themes */
+    <div
+      className="relative h-64 overflow-y-auto rounded-xl border border-border p-3 font-mono text-[11px] leading-relaxed"
+      style={{ background: "oklch(0.10 0 0)" }}
+    >
       {lines.length === 0
-        ? <p className="text-zinc-600 select-none">Waiting for output…</p>
+        ? <p className="text-white/30 select-none">Waiting for output…</p>
         : lines.map((l, i) => (
             <div key={i} className={
-              l.startsWith("[launcher]") ? "text-zinc-500"
+              l.startsWith("[launcher]") ? "text-white/40"
               : l.startsWith("[err]")    ? "text-red-400"
-              : "text-emerald-300"
+              : "text-emerald-400"
             }>{l || <br />}</div>
           ))
       }
@@ -148,12 +158,12 @@ function F({ label, value, onChange, type = "text", note }: {
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[10px] text-zinc-400 uppercase tracking-wider">{label}</label>
+      <label className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</label>
       <input
         type={type} value={value} onChange={e => onChange(e.target.value)}
-        className="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-500 placeholder:text-zinc-600"
+        className="rounded-lg bg-background border border-input px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-ring placeholder:text-muted-foreground/50"
       />
-      {note && <p className="text-[10px] text-zinc-600">{note}</p>}
+      {note && <p className="text-[10px] text-muted-foreground/70">{note}</p>}
     </div>
   );
 }
@@ -167,17 +177,17 @@ function Sel({ label, value, onChange, options, note }: {
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <label className="text-[10px] text-zinc-400 uppercase tracking-wider">{label}</label>
+      <label className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</label>
       <select
         value={value}
         onChange={e => onChange(e.target.value)}
-        className="rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-xs text-zinc-200 font-mono focus:outline-none focus:border-zinc-500 appearance-none cursor-pointer"
+        className="rounded-lg bg-background border border-input px-3 py-2 text-xs text-foreground font-mono focus:outline-none focus:border-ring appearance-none cursor-pointer"
       >
         {options.map(o => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
-      {note && <p className="text-[10px] text-zinc-600">{note}</p>}
+      {note && <p className="text-[10px] text-muted-foreground/70">{note}</p>}
     </div>
   );
 }
@@ -187,55 +197,41 @@ function Sel({ label, value, onChange, options, note }: {
 function NodeCard({
   nc, idx, status, anyRunning, clusterRunning, onStart, onStop, onRemove, onJoin, onChange,
 }: {
-  nc: NodeCfg;
-  idx: number;
-  status: NodeState | null;
-  anyRunning: boolean;
-  clusterRunning: boolean;
-  onStart: () => void;
-  onStop: () => void;
-  onRemove: () => void;
-  onJoin: () => void;
-  onChange: (p: Partial<NodeCfg>) => void;
+  nc: NodeCfg; idx: number; status: NodeState | null;
+  anyRunning: boolean; clusterRunning: boolean;
+  onStart: () => void; onStop: () => void; onRemove: () => void;
+  onJoin: () => void; onChange: (p: Partial<NodeCfg>) => void;
 }) {
   const [showLogs, setShowLogs] = useState(false);
-  const [joining, setJoining] = useState(false);
-  const [joinMsg, setJoinMsg] = useState("");
-  const isActive = status?.status === "running" || status?.status === "starting";
+  const [joining, setJoining]   = useState(false);
+  const [joinMsg, setJoinMsg]   = useState("");
+  const isActive  = status?.status === "running" || status?.status === "starting";
   const isStopped = !status || status.status === "stopped" || status.status === "error";
 
   const handleJoin = async () => {
-    setJoining(true);
-    setJoinMsg("Starting and joining…");
-    try {
-      await onJoin();
-      setJoinMsg("Joined!");
-    } catch (e) {
-      setJoinMsg(`Error: ${String(e)}`);
-    } finally {
-      setJoining(false);
-    }
+    setJoining(true); setJoinMsg("Starting and joining…");
+    try   { await onJoin(); setJoinMsg("Joined!"); }
+    catch (e) { setJoinMsg(`Error: ${String(e)}`); }
+    finally   { setJoining(false); }
   };
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 overflow-hidden">
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-zinc-800 bg-zinc-900/40">
-        <Server size={13} className="text-zinc-400 shrink-0" />
-        <span className="text-sm font-semibold text-zinc-200">Node {nc.id}</span>
+      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border bg-muted/30">
+        <Server size={13} className="text-muted-foreground shrink-0" />
+        <span className="text-sm font-semibold text-foreground">Node {nc.id}</span>
         {nc.clusterInit && (
-          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-950 border border-blue-800 text-blue-400">INIT</span>
+          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-950/60 border border-blue-800/60 text-blue-400">INIT</span>
         )}
         <StatusBadge status={status?.status ?? "stopped"} />
-        {status?.pid && <span className="text-[10px] text-zinc-600 font-mono">pid {status.pid}</span>}
+        {status?.pid && <span className="text-[10px] text-muted-foreground font-mono">pid {status.pid}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
-          {/* Not-yet-in-cluster node: show Join if cluster is running, otherwise Start */}
           {isStopped && clusterRunning && (
             <button
-              onClick={handleJoin}
-              disabled={joining}
-              className="flex items-center gap-1.5 rounded-md bg-blue-900/60 hover:bg-blue-800/60 border border-blue-700/50 px-3 py-1 text-xs text-blue-300 disabled:opacity-50 transition-colors"
+              onClick={handleJoin} disabled={joining}
+              className="flex items-center gap-1.5 rounded-md bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/40 px-3 py-1 text-xs text-blue-700 disabled:opacity-50 transition-colors"
             >
               <UserPlus size={11} />
               {joining ? "Joining…" : "Add & join"}
@@ -244,7 +240,7 @@ function NodeCard({
           {isStopped && !clusterRunning && (
             <button
               onClick={onStart}
-              className="flex items-center gap-1.5 rounded-md bg-emerald-800/60 hover:bg-emerald-700/60 border border-emerald-700/50 px-3 py-1 text-xs text-emerald-300 transition-colors"
+              className="flex items-center gap-1.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 px-3 py-1 text-xs text-emerald-700 transition-colors"
             >
               <Play size={11} /> Start
             </button>
@@ -252,14 +248,14 @@ function NodeCard({
           {isActive && (
             <button
               onClick={onStop}
-              className="flex items-center gap-1.5 rounded-md bg-red-950/60 hover:bg-red-900/60 border border-red-800/50 px-3 py-1 text-xs text-red-300 transition-colors"
+              className="flex items-center gap-1.5 rounded-md bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 px-3 py-1 text-xs text-red-700 transition-colors"
             >
               <Square size={11} /> Stop
             </button>
           )}
           <button
             onClick={() => setShowLogs(s => !s)}
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <Terminal size={11} />
             {showLogs ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
@@ -267,7 +263,7 @@ function NodeCard({
           {isStopped && !anyRunning && idx > 0 && (
             <button
               onClick={onRemove}
-              className="rounded-md p-1 text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-colors"
+              className="rounded-md p-1 text-muted-foreground/50 hover:text-red-400 hover:bg-accent transition-colors"
               title="Remove node"
             >
               <Trash2 size={11} />
@@ -277,18 +273,19 @@ function NodeCard({
       </div>
 
       {joinMsg && (
-        <div className={`px-4 py-2 text-[11px] font-mono border-b border-zinc-800 ${joinMsg.startsWith("Error") ? "text-red-400 bg-red-950/20" : "text-blue-400 bg-blue-950/20"}`}>
+        <div className={`px-4 py-2 text-[11px] font-mono border-b border-border ${
+          joinMsg.startsWith("Error") ? "text-red-700 bg-red-500/10" : "text-blue-700 bg-blue-500/10"
+        }`}>
           {joinMsg}
         </div>
       )}
 
-      {/* Config (only editable when stopped) */}
       <div className="px-4 py-3 grid grid-cols-2 gap-2">
-        <F label="HTTP Port" value={nc.httpPort} onChange={v => onChange({ httpPort: Number(v) })} type="number" />
-        <F label="Raft Port" value={nc.raftPort ?? (3100 + nc.id)} onChange={v => onChange({ raftPort: Number(v) })} type="number" />
-        <F label="Event log" value={nc.eventLogPath ?? ""} onChange={v => onChange({ eventLogPath: v })} />
-        <F label="Snapshot"  value={nc.snapshotPath ?? ""}  onChange={v => onChange({ snapshotPath: v })} />
-        <F label="Raft log (redb)" value={nc.raftLogPath ?? ""} onChange={v => onChange({ raftLogPath: v })} />
+        <F label="HTTP Port"       value={nc.httpPort}            onChange={v => onChange({ httpPort: Number(v) })} type="number" />
+        <F label="Raft Port"       value={nc.raftPort ?? (3100 + nc.id)} onChange={v => onChange({ raftPort: Number(v) })} type="number" />
+        <F label="Event log"       value={nc.eventLogPath ?? ""}  onChange={v => onChange({ eventLogPath: v })} />
+        <F label="Snapshot"        value={nc.snapshotPath ?? ""}  onChange={v => onChange({ snapshotPath: v })} />
+        <F label="Raft log (redb)" value={nc.raftLogPath ?? ""}   onChange={v => onChange({ raftLogPath: v })} />
       </div>
 
       {showLogs && (
@@ -303,21 +300,15 @@ function NodeCard({
 // ─── connect panel ───────────────────────────────────────────────────────────
 
 interface HistoryEntry {
-  url:           string;
-  lastConnected: string;
-  dim?:          number;
-  records?:      number;
-  status?:       string;
-  reachable?:    boolean;
+  url: string; lastConnected: string;
+  dim?: number; records?: number; status?: string; reachable?: boolean;
 }
 
 interface ConnData {
-  url:       string;
-  reachable: boolean;
-  dim?:      number;
-  records?:  number;
-  source:    "override" | "env" | "history";
-  history:   HistoryEntry[];
+  url: string; reachable: boolean;
+  dim?: number; records?: number;
+  source: "override" | "env" | "history";
+  history: HistoryEntry[];
 }
 
 function relativeTime(iso: string): string {
@@ -333,7 +324,7 @@ function relativeTime(iso: string): string {
 function ConnectPanel() {
   const [data, setData]       = useState<ConnData | null>(null);
   const [input, setInput]     = useState("");
-  const [connecting, setConn] = useState<string | null>(null); // url being connected
+  const [connecting, setConn] = useState<string | null>(null);
   const [result, setResult]   = useState<{ url: string; ok: boolean; msg: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -350,8 +341,7 @@ function ConnectPanel() {
   const connect = async (url: string) => {
     const clean = url.trim();
     if (!clean) return;
-    setConn(clean);
-    setResult(null);
+    setConn(clean); setResult(null);
     try {
       const r = await fetch("/api/connection", {
         method: "PUT",
@@ -367,9 +357,7 @@ function ConnectPanel() {
       await load();
     } catch (e) {
       setResult({ url: clean, ok: false, msg: String(e) });
-    } finally {
-      setConn(null);
-    }
+    } finally { setConn(null); }
   };
 
   const isActive = (url: string) => data?.url === url;
@@ -378,47 +366,43 @@ function ConnectPanel() {
   return (
     <div className="flex flex-col gap-5">
 
-      {/* ── Active connection summary ── */}
+      {/* Active connection summary */}
       {data && (
         <div className={`rounded-xl border p-5 flex items-center justify-between gap-4 ${
-          data.reachable
-            ? "border-emerald-800/60 bg-emerald-950/20"
-            : "border-zinc-800 bg-card"
+          data.reachable ? "border-emerald-500/30 bg-emerald-500/10" : "border-border bg-card"
         }`}>
           <div className="flex flex-col gap-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-medium text-foreground">Active</span>
               <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
-                data.source === "env"     ? "border-zinc-700 bg-zinc-800 text-zinc-400" :
-                data.source === "history" ? "border-blue-800 bg-blue-950/40 text-blue-400" :
-                                            "border-amber-800 bg-amber-950/40 text-amber-400"
+                data.source === "env"     ? "border-border bg-accent text-muted-foreground" :
+                data.source === "history" ? "border-blue-800/60 bg-blue-950/40 text-blue-400" :
+                                            "border-amber-800/60 bg-amber-950/40 text-amber-400"
               }`}>
                 {data.source === "env" ? "VALORI_API_URL" : data.source === "history" ? "auto-restored" : "override"}
               </span>
             </div>
             <code className="text-sm font-mono text-foreground truncate">{data.url}</code>
             {data.reachable && (
-              <p className="text-xs text-emerald-400">
-                dim={data.dim ?? "?"}  ·  {(data.records ?? 0).toLocaleString()} records
-              </p>
+              <p className="text-xs text-emerald-500">dim={data.dim ?? "?"} · {(data.records ?? 0).toLocaleString()} records</p>
             )}
           </div>
           <div className="flex items-center gap-3 shrink-0">
             {data.reachable
-              ? <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium"><CheckCircle2 size={14} /> Online</span>
-              : <span className="flex items-center gap-1 text-xs text-zinc-500"><XCircle size={14} /> Offline</span>
+              ? <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium"><CheckCircle2 size={14} /> Online</span>
+              : <span className="flex items-center gap-1 text-xs text-muted-foreground"><XCircle size={14} /> Offline</span>
             }
-            <button onClick={load} className="rounded-md p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors" title="Refresh">
+            <button onClick={load} className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Refresh">
               <RefreshCw size={13} />
             </button>
           </div>
         </div>
       )}
 
-      {/* ── History ── */}
+      {/* History */}
       {data && data.history.length > 0 && (
         <div className="flex flex-col gap-3">
-          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">Recent connections</p>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Recent connections</p>
           <div className="flex flex-col gap-2">
             {data.history.map(h => (
               <div
@@ -426,26 +410,19 @@ function ConnectPanel() {
                 className={`rounded-xl border p-4 flex items-center gap-4 transition-colors ${
                   isActive(h.url)
                     ? "border-[var(--v-accent)]/60 bg-[var(--v-accent-muted)]"
-                    : "border-zinc-800 bg-zinc-950/40 hover:border-zinc-700"
+                    : "border-border bg-card hover:border-input"
                 }`}
               >
-                {/* Status dot */}
-                <span className={`w-2 h-2 rounded-full shrink-0 ${
-                  h.reachable ? "bg-emerald-400" : "bg-zinc-600"
-                }`} />
-
-                {/* URL + metadata */}
+                <span className={`w-2 h-2 rounded-full shrink-0 ${h.reachable ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
                 <div className="flex-1 min-w-0">
-                  <code className="text-sm font-mono text-zinc-200 truncate block">{h.url}</code>
-                  <div className="flex items-center gap-3 mt-0.5 text-[11px] text-zinc-500">
+                  <code className="text-sm font-mono text-foreground truncate block">{h.url}</code>
+                  <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
                     <span>{relativeTime(h.lastConnected)}</span>
                     {h.dim     && <span>dim={h.dim}</span>}
                     {h.records != null && <span>{h.records.toLocaleString()} records</span>}
                     {isActive(h.url) && <span className="text-[var(--v-accent)] font-medium">● active</span>}
                   </div>
                 </div>
-
-                {/* Actions */}
                 <div className="shrink-0">
                   {isActive(h.url) ? (
                     <span className="text-[11px] text-[var(--v-accent)] font-medium px-3">Connected</span>
@@ -453,7 +430,7 @@ function ConnectPanel() {
                     <button
                       onClick={() => connect(h.url)}
                       disabled={!!connecting}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 px-3 py-1.5 text-xs text-zinc-200 disabled:opacity-40 transition-colors"
+                      className="flex items-center gap-1.5 rounded-lg border border-border bg-accent hover:bg-muted px-3 py-1.5 text-xs text-foreground disabled:opacity-40 transition-colors"
                     >
                       {isBusy(h.url) ? <RefreshCw size={11} className="animate-spin" /> : <Play size={11} />}
                       {isBusy(h.url) ? "Connecting…" : "Resume"}
@@ -466,7 +443,7 @@ function ConnectPanel() {
         </div>
       )}
 
-      {/* ── New URL ── */}
+      {/* New URL */}
       <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
         <p className="text-xs font-medium text-foreground">Connect to a different node</p>
         <div className="flex gap-2">
@@ -476,17 +453,14 @@ function ConnectPanel() {
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && connect(input)}
             placeholder="http://localhost:3000"
-            className="flex-1 rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-zinc-200 font-mono focus:outline-none focus:border-zinc-500"
+            className="flex-1 rounded-lg bg-background border border-input px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:border-ring placeholder:text-muted-foreground/50"
           />
           <button
             onClick={() => connect(input)}
             disabled={!!connecting || !input.trim()}
             className="flex items-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 px-4 py-2 text-sm font-medium text-white transition-colors"
           >
-            {connecting === input.trim()
-              ? <RefreshCw size={13} className="animate-spin" />
-              : <Link2 size={13} />
-            }
+            {connecting === input.trim() ? <RefreshCw size={13} className="animate-spin" /> : <Link2 size={13} />}
             {connecting === input.trim() ? "Connecting…" : "Connect"}
           </button>
         </div>
@@ -494,8 +468,8 @@ function ConnectPanel() {
         {result && (
           <div className={`flex items-start gap-2 px-3 py-2 rounded-lg text-xs font-mono ${
             result.ok
-              ? "bg-emerald-950/40 text-emerald-400 border border-emerald-800"
-              : "bg-zinc-900 text-zinc-400 border border-zinc-700"
+              ? "bg-emerald-500/12 text-emerald-700 border border-emerald-500/30"
+              : "bg-accent text-muted-foreground border border-border"
           }`}>
             {result.ok ? <CheckCircle2 size={13} className="mt-px shrink-0" /> : <XCircle size={13} className="mt-px shrink-0" />}
             {result.msg}
@@ -503,7 +477,7 @@ function ConnectPanel() {
         )}
       </div>
 
-      <p className="text-[11px] text-zinc-600 leading-relaxed">
+      <p className="text-[11px] text-muted-foreground leading-relaxed">
         Connection URL is saved to <code className="font-mono">~/.valori/ui-connections.json</code> and auto-restored
         when <code className="font-mono">npm run dev</code> restarts. Set <code className="font-mono">VALORI_API_URL</code> to pin a permanent default.
       </p>
@@ -538,8 +512,6 @@ export default function LaunchPage() {
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  // ── cluster config helpers ──────────────────────────────────────────────────
-
   const syncMembers = (nodes: NodeCfg[]) =>
     ({ ...clusterCfg, nodes, clusterMembers: buildMembers(nodes) });
 
@@ -558,8 +530,6 @@ export default function LaunchPage() {
     setClusterCfg(syncMembers(next));
   };
 
-  // ── start / stop helpers ───────────────────────────────────────────────────
-
   const startNode = async (cfg: LaunchConfig, nodeIdx: number) => {
     await fetch("/api/launch", {
       method: "POST",
@@ -567,15 +537,12 @@ export default function LaunchPage() {
       body: JSON.stringify({ config: cfg, nodeIdx }),
     });
     fetchStatus();
-    // Auto-connect the UI to the newly started node
     const nc = cfg.nodes[nodeIdx];
-    const url = `http://localhost:${nc.httpPort}`;
-    // Give the node 1.5s to start then connect (non-blocking — fire and forget)
     setTimeout(async () => {
       await fetch("/api/connection", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url: `http://localhost:${nc.httpPort}` }),
       }).catch(() => {});
     }, 1500);
   };
@@ -586,7 +553,6 @@ export default function LaunchPage() {
   };
 
   const joinNode = async (cfg: LaunchConfig, newNodeIdx: number) => {
-    // Find any running node's HTTP port to discover the leader
     const runningNode = cfg.nodes.find(n => {
       const s = statuses[n.id]?.status;
       return s === "running" || s === "starting";
@@ -595,20 +561,12 @@ export default function LaunchPage() {
     const res = await fetch("/api/launch/join", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        config:          cfg,
-        newNodeIdx,
-        anyRunningPort:  runningNode.httpPort,
-      }),
+      body: JSON.stringify({ config: cfg, newNodeIdx, anyRunningPort: runningNode.httpPort }),
     });
     const data = await res.json() as { ok?: boolean; error?: string };
     if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
     fetchStatus();
   };
-
-  // ── derived state ──────────────────────────────────────────────────────────
-
-  const cfg = mode === "single" ? singleCfg : clusterCfg;
 
   const clusterRunning = clusterCfg.nodes.some(n => {
     const s = statuses[n.id]?.status;
@@ -621,8 +579,6 @@ export default function LaunchPage() {
   const allRunning = (nodes: NodeCfg[]) =>
     nodes.length > 0 && nodes.every(n => statuses[n.id]?.status === "running");
 
-  // ── single ─────────────────────────────────────────────────────────────────
-
   const sc = singleCfg.nodes[0];
   const singleStatus = statuses[sc.id] ?? null;
   const singleActive = singleStatus?.status === "running" || singleStatus?.status === "starting";
@@ -634,16 +590,16 @@ export default function LaunchPage() {
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Cluster Launcher</h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
           Start and manage Valori node processes directly from the UI.
-          {repoRoot && <span className="ml-2 font-mono text-[11px] text-zinc-500">{repoRoot}</span>}
+          {repoRoot && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{repoRoot}</span>}
         </p>
       </div>
 
       {/* Mode toggle */}
       <div className="flex gap-2 items-center">
         {([
-          { id: "single",  icon: <Server size={15} />,  label: "Single Node"  },
-          { id: "cluster", icon: <Network size={15} />, label: "Cluster"       },
-          { id: "connect", icon: <Link2 size={15} />,   label: "Connect"       },
+          { id: "single",  icon: <Server size={15} />,  label: "Single Node" },
+          { id: "cluster", icon: <Network size={15} />, label: "Cluster"      },
+          { id: "connect", icon: <Link2 size={15} />,   label: "Connect"      },
         ] as const).map(m => (
           <button
             key={m.id}
@@ -665,7 +621,7 @@ export default function LaunchPage() {
         </button>
       </div>
 
-      {/* ── Single node ─────────────────────────────────────────────────────── */}
+      {/* ── Single node ── */}
       {mode === "single" && (
         <div className="rounded-2xl border border-border bg-card p-6 shadow-sm flex flex-col gap-5">
           <div className="flex items-center gap-2">
@@ -675,14 +631,14 @@ export default function LaunchPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Sel label="Dimension"  value={singleCfg.dim}   onChange={v => setSingleCfg({ ...singleCfg, dim: Number(v) })}         options={DIMENSIONS} />
-            <F   label="HTTP Port"  value={sc.httpPort}      onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, httpPort: Number(v) }] })} type="number" />
-            <Sel label="Index type" value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" })} options={INDEX_TYPES} />
+            <Sel label="Dimension"   value={singleCfg.dim}   onChange={v => setSingleCfg({ ...singleCfg, dim: Number(v) })} options={DIMENSIONS} />
+            <F   label="HTTP Port"   value={sc.httpPort}      onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, httpPort: Number(v) }] })} type="number" />
+            <Sel label="Index type"  value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" })} options={INDEX_TYPES} />
             <F   label="Max records" value={singleCfg.maxRecords} onChange={v => setSingleCfg({ ...singleCfg, maxRecords: Number(v) })} type="number" />
-            <F label="Event log path" value={sc.eventLogPath ?? ""} onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, eventLogPath: v }] })}
-               note="Leave blank for in-memory only" />
-            <F label="Snapshot path" value={sc.snapshotPath ?? ""} onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, snapshotPath: v }] })} />
-            <F label="Auth token (optional)" value={singleCfg.authToken ?? ""} onChange={v => setSingleCfg({ ...singleCfg, authToken: v })} type="password" />
+            <F   label="Event log path" value={sc.eventLogPath ?? ""} onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, eventLogPath: v }] })}
+                 note="Leave blank for in-memory only" />
+            <F   label="Snapshot path"  value={sc.snapshotPath ?? ""}  onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, snapshotPath: v }] })} />
+            <F   label="Auth token (optional)" value={singleCfg.authToken ?? ""} onChange={v => setSingleCfg({ ...singleCfg, authToken: v })} type="password" />
           </div>
 
           <div className="flex items-center gap-3">
@@ -696,24 +652,24 @@ export default function LaunchPage() {
             ) : (
               <button
                 onClick={() => stopNode(sc.id)}
-                className="flex items-center gap-2 rounded-lg bg-red-900 hover:bg-red-800 border border-red-700 px-5 py-2 text-sm font-medium text-red-200 transition-colors"
+                className="flex items-center gap-2 rounded-lg bg-red-900 hover:bg-red-800 border border-red-700/60 px-5 py-2 text-sm font-medium text-red-200 transition-colors"
               >
                 <Square size={14} /> Stop node
               </button>
             )}
-            {singleStatus?.pid && <span className="text-[10px] text-zinc-500 font-mono">pid {singleStatus.pid}</span>}
+            {singleStatus?.pid && <span className="text-[10px] text-muted-foreground font-mono">pid {singleStatus.pid}</span>}
           </div>
 
           {singleStatus && (
             <div>
-              <p className="text-xs text-zinc-500 mb-2 flex items-center gap-1.5"><Terminal size={12} />Output</p>
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5"><Terminal size={12} />Output</p>
               <LogViewer nodeId={sc.id} />
             </div>
           )}
         </div>
       )}
 
-      {/* ── Cluster ─────────────────────────────────────────────────────────── */}
+      {/* ── Cluster ── */}
       {mode === "cluster" && (
         <div className="flex flex-col gap-5">
           {/* Shared config */}
@@ -722,11 +678,11 @@ export default function LaunchPage() {
               <div className="flex items-center gap-2">
                 <Network size={15} className="text-muted-foreground" />
                 <h2 className="text-sm font-semibold text-foreground">Shared configuration</h2>
-                <span className="text-[10px] text-zinc-500 font-mono">{clusterCfg.nodes.length} nodes</span>
+                <span className="text-[10px] text-muted-foreground font-mono">{clusterCfg.nodes.length} nodes</span>
               </div>
               <div className="flex items-center gap-2">
                 {allRunning(clusterCfg.nodes) && (
-                  <span className="text-xs text-emerald-400 font-medium">All healthy</span>
+                  <span className="text-xs text-emerald-500 font-medium">All healthy</span>
                 )}
                 <div className="flex gap-1.5">
                   {clusterCfg.nodes.map(n => (
@@ -737,16 +693,16 @@ export default function LaunchPage() {
             </div>
 
             <div className="grid grid-cols-4 gap-3">
-              <Sel label="Dimension"   value={clusterCfg.dim}   onChange={v => setClusterCfg({ ...clusterCfg, dim: Number(v) })}               options={DIMENSIONS} />
+              <Sel label="Dimension"   value={clusterCfg.dim}   onChange={v => setClusterCfg({ ...clusterCfg, dim: Number(v) })} options={DIMENSIONS} />
               <Sel label="Index type"  value={clusterCfg.index} onChange={v => setClusterCfg({ ...clusterCfg, index: v as "brute" | "hnsw" })} options={INDEX_TYPES} />
               <F   label="Max records" value={clusterCfg.maxRecords} onChange={v => setClusterCfg({ ...clusterCfg, maxRecords: Number(v) })} type="number" />
               <F   label="Auth token"  value={clusterCfg.authToken ?? ""} onChange={v => setClusterCfg({ ...clusterCfg, authToken: v })} type="password" />
             </div>
 
             {/* Auto-computed members string */}
-            <div className="rounded-lg bg-zinc-950 border border-zinc-800 px-4 py-3">
-              <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">VALORI_CLUSTER_MEMBERS (auto-computed)</p>
-              <code className="text-[11px] text-zinc-300 font-mono break-all">{clusterCfg.clusterMembers}</code>
+            <div className="rounded-lg bg-muted border border-border px-4 py-3">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">VALORI_CLUSTER_MEMBERS (auto-computed)</p>
+              <code className="text-[11px] text-foreground font-mono break-all">{clusterCfg.clusterMembers}</code>
             </div>
 
             {/* Start All / Stop All */}
@@ -766,7 +722,7 @@ export default function LaunchPage() {
               ) : (
                 <button
                   onClick={() => clusterCfg.nodes.forEach(n => stopNode(n.id))}
-                  className="flex items-center gap-2 rounded-lg bg-red-900 hover:bg-red-800 border border-red-700 px-5 py-2 text-sm font-medium text-red-200 transition-colors"
+                  className="flex items-center gap-2 rounded-lg bg-red-900 hover:bg-red-800 border border-red-700/60 px-5 py-2 text-sm font-medium text-red-200 transition-colors"
                 >
                   <Square size={14} /> Stop all nodes
                 </button>
@@ -778,9 +734,7 @@ export default function LaunchPage() {
           <div className="flex flex-col gap-3">
             {clusterCfg.nodes.map((nc, idx) => (
               <NodeCard
-                key={nc.id}
-                nc={nc}
-                idx={idx}
+                key={nc.id} nc={nc} idx={idx}
                 status={statuses[nc.id] ?? null}
                 anyRunning={anyNodeRunning(clusterCfg.nodes)}
                 clusterRunning={clusterRunning}
@@ -793,12 +747,10 @@ export default function LaunchPage() {
             ))}
           </div>
 
-          {/* Add node button */}
+          {/* Add node */}
           <button
-            onClick={() => {
-              addNodeToConfig();
-            }}
-            className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border py-4 text-sm text-muted-foreground hover:border-muted hover:text-foreground hover:bg-accent/30 transition-colors"
+            onClick={addNodeToConfig}
+            className="flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border py-4 text-sm text-muted-foreground hover:border-input hover:text-foreground hover:bg-accent/30 transition-colors"
           >
             <Plus size={15} />
             {clusterRunning ? "Add node (will join running cluster)" : "Add node"}
@@ -806,7 +758,7 @@ export default function LaunchPage() {
         </div>
       )}
 
-      {/* ── Connect ─────────────────────────────────────────────────────────── */}
+      {/* ── Connect ── */}
       {mode === "connect" && <ConnectPanel />}
 
       {/* Hint */}

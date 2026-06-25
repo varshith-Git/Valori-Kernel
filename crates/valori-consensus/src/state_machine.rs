@@ -147,6 +147,10 @@ struct StateMachineInner {
     /// C4.1b: unix-second creation timestamps for records, keyed by record id.
     /// Stamped at apply time so all replicas agree. Not hashed into state.
     created_at: HashMap<u32, u64>,
+    /// BM25 text corpus — record_id → raw text for cluster-side reranking.
+    /// The cluster_server reads this via with_text_corpus() and runs BM25
+    /// locally after fetching vector candidates. Avoids a valori-node dep.
+    text_corpus: std::collections::HashMap<u64, String>,
     /// Set when a redb database is shared with the log store. Persists
     /// `last_applied`, `membership`, and snapshot data across restarts so
     /// openraft does not replay already-applied log entries through the
@@ -278,6 +282,7 @@ impl ValoriStateMachine {
                 db: None,
                 replay_until: None,
                 created_at: HashMap::new(),
+                text_corpus: std::collections::HashMap::new(),
             })),
         }
     }
@@ -388,6 +393,7 @@ impl ValoriStateMachine {
                 db: Some(db),
                 replay_until,
                 created_at: HashMap::new(),
+                text_corpus: std::collections::HashMap::new(),
             })),
         })
     }
@@ -415,6 +421,15 @@ impl ValoriStateMachine {
     ) -> T {
         let inner = self.inner.lock().await;
         f(&inner.state, &inner.created_at)
+    }
+
+    /// Run a read-only closure against the BM25 text corpus.
+    /// cluster_server builds a ValoriReranker on the fly from these texts.
+    pub async fn with_text_corpus<T>(
+        &self,
+        f: impl FnOnce(&std::collections::HashMap<u64, String>) -> T,
+    ) -> T {
+        f(&self.inner.lock().await.text_corpus)
     }
 }
 
@@ -552,6 +567,14 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map(|d| d.as_secs()).unwrap_or(0);
                                 inner.created_at.insert(rid.0, now);
+                                // BM25: store raw text from metadata for cluster reranking
+                                if let KernelEvent::AutoInsertRecord { ref metadata, .. } = req.event {
+                                    if let Some(ref meta_bytes) = metadata {
+                                        if let Ok(text) = std::str::from_utf8(meta_bytes) {
+                                            inner.text_corpus.insert(rid.0 as u64, text.to_string());
+                                        }
+                                    }
+                                }
                             }
                             (
                                 pre_alloc_id.map(|r| r.0),

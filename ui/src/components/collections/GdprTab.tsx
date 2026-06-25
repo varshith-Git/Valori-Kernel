@@ -232,7 +232,7 @@ function ErasureCertificate({
         </button>
       </div>
 
-      <div className="text-[10px] text-zinc-700 border-t border-border pt-3 leading-relaxed">
+      <div className="text-[10px] text-muted-foreground border-t border-border pt-3 leading-relaxed">
         <strong className="text-muted-foreground">Verification:</strong> Replay events.log through{" "}
         <code>valori-verify</code>. The erased records&apos; vectors are permanently gone; the{" "}
         <code>DeleteRecord</code> events remain in the audit chain as proof of erasure. For encrypted
@@ -477,7 +477,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
                   onClick={() => setFilterMode(m)}
                   className={`px-2.5 py-0.5 text-xs rounded transition-colors ${
                     filterMode === m
-                      ? "bg-zinc-600 text-foreground"
+                      ? "bg-muted text-foreground"
                       : "text-muted-foreground hover:text-accent-foreground"
                   }`}
                 >
@@ -553,7 +553,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
                 />
               ))}
               {totalRecords > filteredRecords.length && (
-                <p className="text-[10px] text-zinc-700 text-center py-2">
+                <p className="text-[10px] text-muted-foreground text-center py-2">
                   Showing {filteredRecords.length} of {totalRecords} records (filtered)
                 </p>
               )}

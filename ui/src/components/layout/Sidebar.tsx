@@ -6,6 +6,7 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useCluster } from "@/lib/hooks/useCluster";
 import { useProjectGroups } from "@/lib/hooks/useCollections";
+import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -163,7 +164,10 @@ function StatusFooter() {
 export function Sidebar() {
   const path = usePathname();
   const router = useRouter();
-  const { groups, isLoading } = useProjectGroups();
+  // All projects come from the on-disk manifest (works while nodes are stopped).
+  // Collections under the *active* project come from the live, connected node.
+  const { projects, isLoading, create, open } = useProjectManifest();
+  const { groups } = useProjectGroups();
   const { isStandalone } = useCluster();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -259,7 +263,7 @@ export function Sidebar() {
                   <div key={i} className="h-7 animate-pulse rounded-lg bg-accent/60" />
                 ))}
               </div>
-            ) : groups.length === 0 ? (
+            ) : projects.length === 0 ? (
               <button
                 onClick={() => setCreateOpen(true)}
                 className="mx-1 mt-1 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-3 text-xs text-muted-foreground hover:border-muted hover:text-muted-foreground transition-colors"
@@ -268,11 +272,14 @@ export function Sidebar() {
                 Create first project
               </button>
             ) : (
-              groups.map((g) => {
-                const href = `/projects/${encodeURIComponent(g.project)}`;
+              projects.map((p) => {
+                const href = `/projects/${encodeURIComponent(p.name)}`;
                 const active = path === href || path.startsWith(href + "/");
+                const running = p.status === "running" || p.status === "starting";
+                // Live collections only available for the active (connected) project.
+                const cols = active ? (groups.find((g) => g.project === p.name)?.collections ?? []) : [];
                 return (
-                  <div key={g.project}>
+                  <div key={p.name}>
                     <Link
                       href={href}
                       className={cn(
@@ -291,19 +298,21 @@ export function Sidebar() {
                               : "text-muted-foreground group-hover:text-muted-foreground"
                           }
                         />
-                        <span className="truncate">{g.project}</span>
+                        <span className="truncate">{p.name}</span>
                       </span>
-                      {!g.isBare && g.collections.length > 0 && (
-                        <span className="ml-1 tabular-nums text-[10px] text-muted-foreground">
-                          {g.collections.length}
-                        </span>
-                      )}
+                      <span
+                        className={cn(
+                          "ml-1 h-1.5 w-1.5 rounded-full shrink-0",
+                          running ? "bg-emerald-400" : "bg-muted-foreground/40"
+                        )}
+                        title={running ? "running" : "at rest"}
+                      />
                     </Link>
 
                     {/* Inline collections under active project */}
-                    {active && !g.isBare && g.collections.length > 0 && (
+                    {active && cols.length > 0 && (
                       <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
-                        {g.collections.map((col) => {
+                        {cols.map((col) => {
                           const colHref = `${href}/${encodeURIComponent(col)}`;
                           return (
                             <Link
@@ -338,7 +347,10 @@ export function Sidebar() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name: string) => {
+        onCreate={async (name, dim, index) => {
+          const entry = await create({ name, dim, index });
+          if (!entry) return;
+          await open(name);
           router.push(`/projects/${encodeURIComponent(name)}`);
         }}
       />

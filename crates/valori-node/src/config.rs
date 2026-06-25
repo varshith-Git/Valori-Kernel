@@ -129,6 +129,19 @@ pub struct NodeConfig {
     // not specify its own. Absent or 0 = decay off (pure distance ranking).
     // Env: VALORI_DECAY_HALF_LIFE_SECS
     pub decay_half_life_secs: Option<u64>,
+
+    // ── Phase I2: on-node embedding ───────────────────────────────────────────
+    // When set, /v1/ingest calls the embedding provider and inserts vectors
+    // without the client needing to run its own embed step.
+    //
+    // VALORI_EMBED_PROVIDER: ollama | openai | custom   (absent = embedding disabled)
+    // VALORI_EMBED_MODEL:    e.g. nomic-embed-text, text-embedding-3-small
+    // VALORI_EMBED_URL:      base URL of the provider  (default per provider)
+    // VALORI_EMBED_API_KEY:  API key (required for openai/custom if auth needed)
+    pub embed_provider: Option<String>,
+    pub embed_model:    Option<String>,
+    pub embed_url:      Option<String>,
+    pub embed_api_key:  Option<String>,
 }
 
 impl Default for NodeConfig {
@@ -236,6 +249,11 @@ impl Default for NodeConfig {
         let decay_half_life_secs = std::env::var("VALORI_DECAY_HALF_LIFE_SECS")
             .ok().and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
 
+        let embed_provider = std::env::var("VALORI_EMBED_PROVIDER").ok();
+        let embed_model    = std::env::var("VALORI_EMBED_MODEL").ok();
+        let embed_url      = std::env::var("VALORI_EMBED_URL").ok();
+        let embed_api_key  = std::env::var("VALORI_EMBED_API_KEY").ok();
+
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
             NodeMode::Follower { leader_url: url }
@@ -280,6 +298,10 @@ impl Default for NodeConfig {
             hnsw_ef_construction,
             hnsw_ef_search,
             decay_half_life_secs,
+            embed_provider,
+            embed_model,
+            embed_url,
+            embed_api_key,
         }
     }
 }

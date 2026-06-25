@@ -62,7 +62,7 @@ function LogLine({ index, line }: { index: number; line: string }) {
       className="group flex items-start gap-3 px-4 py-[3px] hover:bg-white/[0.03] font-mono text-[12.5px] leading-5"
     >
       {/* Line number */}
-      <span className="flex-shrink-0 w-10 text-right text-zinc-700 select-none tabular-nums">
+      <span className="flex-shrink-0 w-10 text-right text-muted-foreground select-none tabular-nums">
         {index + 1}
       </span>
 
@@ -156,7 +156,7 @@ export default function LogsPage() {
         <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
           {lines.length}
           {lines.length !== rawLines.length && (
-            <span className="text-zinc-700"> / {rawLines.length}</span>
+            <span className="text-muted-foreground"> / {rawLines.length}</span>
           )}
           {" "}events
         </span>
@@ -215,7 +215,7 @@ export default function LogsPage() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="filter…"
-            className="font-mono text-[12px] bg-card border border-input rounded px-3 py-1 pl-6 w-52 text-card-foreground placeholder-zinc-700 outline-none focus:border-zinc-500 transition-colors"
+            className="font-mono text-[12px] bg-card border border-input rounded px-3 py-1 pl-6 w-52 text-card-foreground placeholder:text-muted-foreground outline-none focus:border-ring transition-colors"
           />
           {filter && (
             <button
@@ -238,7 +238,7 @@ export default function LogsPage() {
                 : undefined}
               className={`font-mono text-[10px] px-1.5 py-0.5 rounded border transition-all ${
                 kinds.size > 0 && !kinds.has(k)
-                  ? "border-border text-zinc-700 opacity-50"
+                  ? "border-border text-muted-foreground opacity-50"
                   : "border-input hover:border-ring"
               }`}
             >
@@ -266,7 +266,7 @@ export default function LogsPage() {
         {error && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
             <span className="font-mono text-muted-foreground text-sm">event log not enabled</span>
-            <code className="font-mono text-[11px] text-zinc-700 bg-card border border-border rounded px-3 py-2">
+            <code className="font-mono text-[11px] text-muted-foreground bg-card border border-border rounded px-3 py-2">
               VALORI_EVENT_LOG_PATH=/tmp/valori-events.log cargo run -p valori-node
             </code>
           </div>
@@ -275,7 +275,7 @@ export default function LogsPage() {
         {/* Empty state */}
         {!error && !isLoading && lines.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <span className="font-mono text-zinc-700 text-sm">
+            <span className="font-mono text-muted-foreground text-sm">
               {filter || kinds.size > 0 ? "no matching events" : "no events yet"}
             </span>
           </div>
@@ -291,7 +291,7 @@ export default function LogsPage() {
       </div>
 
       {/* -- Status bar -- */}
-      <div className="flex-shrink-0 flex items-center gap-4 px-4 py-1.5 border-t border-border bg-background/80 font-mono text-[10px] text-zinc-700">
+      <div className="flex-shrink-0 flex items-center gap-4 px-4 py-1.5 border-t border-border bg-background/80 font-mono text-[10px] text-muted-foreground">
         <span>
           {autoScroll ? "↓ tailing" : "scroll ↑ — click tail to resume"}
         </span>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { TopBar } from "@/components/layout/TopBar";
 import { ThemeProvider } from "@/lib/theme";
 import { Toaster } from "@/components/ui/Toaster";
 
@@ -42,8 +43,10 @@ export default function RootLayout({
       <body className="flex h-full bg-background text-foreground">
         <ThemeProvider>
           <Sidebar />
-          {/* No top header — full vertical space for content */}
-          <main className="flex-1 overflow-auto px-7 py-7">{children}</main>
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <TopBar />
+            <main className="flex-1 overflow-auto px-7 py-7">{children}</main>
+          </div>
           <Toaster />
         </ThemeProvider>
       </body>

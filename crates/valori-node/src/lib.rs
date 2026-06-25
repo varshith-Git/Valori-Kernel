@@ -1,11 +1,17 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 pub mod config;
 pub mod errors;
+/// BM25 post-retrieval reranker — hybrid vector + term-frequency scoring.
+pub mod valori_reranker;
 pub mod api;
 pub mod engine;
 pub mod graph_rag;
 pub mod decay;
 pub mod server;
+/// Server-side document ingestion with built-in chunking strategies.
+pub mod ingest;
+/// HTTP embedding client — drives VALORI_EMBED_PROVIDER for on-node embedding.
+pub mod embedder;
 pub mod structure;
 pub mod metadata;
 pub mod persistence;

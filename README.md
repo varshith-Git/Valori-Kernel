@@ -86,6 +86,8 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 | **GraphRAG** | Vector search + subgraph traversal in one call, one consistent snapshot |
 | **Agent memory (MCP)** | `valori-mcp` — verifiable recall with BLAKE3 receipt; works with Claude Desktop |
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
+| **Valori Reranker** | Server-side hybrid retrieval — vector top-K pooled then re-scored by term frequency; 90% accuracy on hard lexical queries, 0.4 s latency, no external dependency |
+| **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
 | **Self-maintaining memory** | `consolidate` (supersede a memory) and `contradict` (flag conflicts) commit `Supersedes`/`Contradicts` edges to the audit chain |
 | **Multi-tenancy** | Up to 1 024 named collections; per-tenant API keys with RBAC |
 | **Point-in-time reads** | Replay to any past state hash or log index |
@@ -130,9 +132,35 @@ VALORI_SNAPSHOT_PATH=./data/snapshot.bin \
 ```python
 from valoricore import SyncRemoteClient
 db = SyncRemoteClient("http://localhost:3000")
-db.insert([0.1, 0.2, ...])
-hits = db.search([0.1, 0.2, ...], k=5)
-hits = db.search([0.1, 0.2, ...], k=5, decay_half_life_secs=86400)  # recency-aware
+db.insert([0.1, 0.2, ...], text="section title and body")   # index for reranking
+hits = db.search([0.1, 0.2, ...], k=5)                             # vector only
+hits = db.search([0.1, 0.2, ...], k=5, query_text="my query")     # hybrid rerank (default)
+hits = db.search([0.1, 0.2, ...], k=5, decay_half_life_secs=86400) # recency-aware
+```
+
+### Option 3 — One-call document ingest (chunk + embed on-node)
+
+Start the node with an embed provider and POST raw text — no client-side embedding needed:
+
+```bash
+VALORI_DIM=768 \
+VALORI_EMBED_PROVIDER=ollama \
+VALORI_EMBED_MODEL=nomic-embed-text \
+VALORI_EMBED_URL=http://localhost:11434 \
+  cargo run --release -p valori-node
+```
+
+```python
+from valoricore import SyncRemoteClient
+db = SyncRemoteClient("http://localhost:3000")
+
+# One call: text → auto-chunk → embed → insert → graph nodes → metadata
+result = db.ingest(text, source="paper.pdf", strategy="auto", collection="research")
+print(f"{result['chunk_count']} chunks inserted, doc node {result['document_node_id']}")
+
+# Chunking only (no embed step):
+chunks = db.chunk_document(text, strategy="tree")
+# → {"strategy_used": "tree", "chunk_count": 31, "chunks": [...]}
 ```
 
 ### Option 3 — 3-node cluster
@@ -158,6 +186,18 @@ VALORI_URL=http://localhost:3000 valori-mcp
 ```
 
 → [`crates/valori-mcp/README.md`](crates/valori-mcp/README.md)
+
+### Option 5 — Web dashboard with persistent projects
+
+```bash
+cd ui && npm install && npm run dev   # http://localhost:3001
+```
+
+Each **project** is an isolated, persistent workspace: its own node, port, and
+data dir under `~/.valori/projects/<name>/`. The Home screen lists every project
+(even when its node is stopped); opening one auto-starts its node and restores
+state, and closing it writes a snapshot and locks the files at rest — they can
+only be deleted from the UI. → [`docs/phases/phase-6-persistent-projects.md`](docs/phases/phase-6-persistent-projects.md)
 
 ---
 

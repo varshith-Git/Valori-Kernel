@@ -91,7 +91,70 @@ async function extractText(file: File): Promise<string> {
   return buf.toString("utf-8");
 }
 
-// -- Chunking ------------------------------------------------------------------
+// -- Tree chunker --------------------------------------------------------------
+// Parses raw text into section-based chunks by detecting numbered/titled headers.
+// Mirrors the Python tree_rag.py TreeIndex logic: each section becomes one chunk
+// with its title prepended, so the answer context is never split mid-sentence.
+
+interface TreeNode {
+  title: string;
+  text: string;   // title + own_text concatenated, ready to embed
+}
+
+function chunkTextTree(text: string): TreeNode[] {
+  const normalized = text
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  const lines = normalized.split("\n");
+
+  // Detect header lines: numbered sections like "3.1 Training", "4 RL", or
+  // ALL-CAPS short lines, or lines that end with nothing (pure title-case short lines).
+  const NUMBERED = /^(\d+(\.\d+)*)\s+[A-Z][^\n]{2,60}$/;
+  const MARKDOWN_HEADER = /^#{1,4}\s+.{2,80}$/;
+  // Also catch lines that look like section titles: Title Case, short, no period at end
+  const TITLE_CASE = /^[A-Z][A-Za-z0-9 ,:\-–/]{4,60}[^.!?,]$/;
+
+  const headerIdxs: number[] = [];
+  let inCode = false;
+  for (let i = 0; i < lines.length; i++) {
+    const s = lines[i].trim();
+    if (s.startsWith("```")) { inCode = !inCode; continue; }
+    if (inCode) continue;
+    if (NUMBERED.test(s) || MARKDOWN_HEADER.test(s)) {
+      headerIdxs.push(i);
+    } else if (TITLE_CASE.test(s) && s.length < 70) {
+      // Only treat as header if next line is non-empty (header followed by body)
+      if (i + 1 < lines.length && lines[i + 1].trim().length > 0) {
+        headerIdxs.push(i);
+      }
+    }
+  }
+
+  if (headerIdxs.length < 2) {
+    // Document has no detectable structure — fall back to the caller's fixed-size chunker
+    return [];
+  }
+
+  const nodes: TreeNode[] = [];
+  for (let i = 0; i < headerIdxs.length; i++) {
+    const start = headerIdxs[i];
+    const end = i + 1 < headerIdxs.length ? headerIdxs[i + 1] : lines.length;
+    const title = lines[start].trim();
+    const body = lines.slice(start + 1, end).join("\n").trim();
+    if (!body && i + 1 < headerIdxs.length) continue; // skip empty sections
+    const combined = `${title}\n${body}`.trim();
+    if (combined.length >= 50) {
+      nodes.push({ title, text: combined });
+    }
+  }
+
+  return nodes;
+}
+
+// -- Fixed-size chunking -------------------------------------------------------
 
 function chunkText(text: string, size: number, overlap: number): string[] {
   // Hard cap: no chunk larger than 1200 chars (~300 tokens) so small models stay grounded
@@ -501,6 +564,21 @@ async function detectContradictions(
   }
 }
 
+// -- Server capability probe ---------------------------------------------------
+// Returns true when VALORI_EMBED_PROVIDER is set on the node, meaning the node
+// can handle /v1/ingest (chunk + embed + insert) without client-side embedding.
+
+async function probeServerIngest(): Promise<{ enabled: boolean; provider?: string }> {
+  try {
+    const res = await fetch(`${getApiUrl()}/health`, { headers: apiHeaders() });
+    if (!res.ok) return { enabled: false };
+    const h = await res.json() as { embed_enabled?: boolean; embed_provider?: string };
+    return { enabled: !!h.embed_enabled, provider: h.embed_provider };
+  } catch {
+    return { enabled: false };
+  }
+}
+
 // -- Main handler --------------------------------------------------------------
 
 export async function POST(req: NextRequest) {
@@ -517,6 +595,70 @@ export async function POST(req: NextRequest) {
     const endpoint = (form.get("endpoint") as string) || "";
     const chunkSize = parseInt((form.get("chunkSize") as string) || "1000", 10);
     const chunkOverlap = parseInt((form.get("chunkOverlap") as string) || "200", 10);
+    const chunkMode = (form.get("chunkMode") as string) || "tree"; // "fixed" | "tree"
+
+    // 1. Extract raw text
+    const rawText = await extractText(file);
+    if (!rawText.trim()) return NextResponse.json({ error: "No text extracted from file" }, { status: 400 });
+
+    // Fast path: if the node has an embed provider configured, delegate the
+    // entire pipeline (chunk + embed + insert + graph + metadata) to the node.
+    // This bypasses all the client-side embedding, dedup, and graph wiring below
+    // and gives a much simpler, fully audited pipeline.
+    const serverCapability = await probeServerIngest();
+    if (serverCapability.enabled) {
+      const strategy = chunkMode === "tree" ? "auto" : chunkMode; // auto lets the node pick best strategy
+      const nodeRes = await fetch(`${getApiUrl()}/v1/ingest`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({
+          text: rawText,
+          source: file.name,
+          strategy,
+          collection,
+          chunk_size: chunkSize,
+          chunk_overlap: chunkOverlap,
+        }),
+      });
+      if (!nodeRes.ok) {
+        const e = await nodeRes.json().catch(() => ({})) as { error?: string };
+        return NextResponse.json(
+          { error: `Server ingest failed: ${e.error ?? nodeRes.status}` },
+          { status: nodeRes.status >= 500 ? 502 : nodeRes.status }
+        );
+      }
+      const r = await nodeRes.json() as {
+        ok: boolean;
+        document_node_id: number;
+        strategy_used: string;
+        chunk_count: number;
+        record_ids: number[];
+        collection: string;
+      };
+      // Normalise to the same shape the client-side path returns so the UI
+      // doesn't need to distinguish between the two pipelines.
+      return NextResponse.json({
+        ok: true,
+        document_node_id: r.document_node_id,
+        ingested: r.chunk_count,
+        dedup_skipped: 0,
+        total_chunks: r.chunk_count,
+        pipeline: "server",
+        embed_provider: serverCapability.provider,
+        strategy_used: r.strategy_used,
+        chunks: r.record_ids.map((id, i) => ({
+          record_id: id,
+          chunk_node_id: -1,    // graph nodes are created server-side; not exposed in this response
+          chunk_index: i,
+          preview: "",
+          entities: [],
+          dedup: false,
+        })),
+      });
+    }
+
+    // Slow path: client-side embed + insert (existing behaviour when the node
+    // has no embed provider configured).
 
     // Context enrichment config — present only when the user has enabled it in settings
     const enrichEnabled = form.get("enrichEnabled") === "true";
@@ -527,12 +669,23 @@ export async function POST(req: NextRequest) {
       endpoint: (form.get("llmEndpoint") as string) || "",
     } : null;
 
-    // 1. Extract raw text
-    const rawText = await extractText(file);
-    if (!rawText.trim()) return NextResponse.json({ error: "No text extracted from file" }, { status: 400 });
-
-    // 2. Chunk
-    const chunks = chunkText(rawText, chunkSize, chunkOverlap);
+    // 2. Chunk  (rawText already extracted above)
+    // "tree" mode: detect section headers → one chunk per section (title + body).
+    // Falls back to fixed-size if the document has no detectable structure.
+    let chunks: string[];
+    let chunkTitles: (string | null)[] = [];
+    if (chunkMode === "tree") {
+      const treeNodes = chunkTextTree(rawText);
+      if (treeNodes.length >= 2) {
+        chunks = treeNodes.map((n) => n.text);
+        chunkTitles = treeNodes.map((n) => n.title);
+      } else {
+        // No structure detected — fall back to fixed-size
+        chunks = chunkText(rawText, chunkSize, chunkOverlap);
+      }
+    } else {
+      chunks = chunkText(rawText, chunkSize, chunkOverlap);
+    }
     if (chunks.length === 0) return NextResponse.json({ error: "No chunks produced" }, { status: 400 });
 
     // 3. Create Document graph node
@@ -637,6 +790,7 @@ export async function POST(req: NextRequest) {
       const newIndices: number[] = [];
       const newVectors: number[][] = [];
       const newMetadata: (string | null)[] = [];
+      const newTexts: (string | null)[] = [];
 
       for (let j = 0; j < batch.length; j++) {
         if (dedupMap[j] !== null) {
@@ -650,6 +804,8 @@ export async function POST(req: NextRequest) {
         newMetadata.push(ctx
           ? JSON.stringify({ doc: file.name, n: chunkIdx, total: chunks.length, ctx })
           : null);
+        // Pass raw chunk text so the Valori Reranker can index it for hybrid search
+        newTexts.push(batch[j] ?? null);
       }
 
       // Insert only the non-duplicate vectors
@@ -658,7 +814,7 @@ export async function POST(req: NextRequest) {
         const insertRes = await fetch(`${getApiUrl()}/v1/vectors/batch_insert`, {
           method: "POST",
           headers: apiHeaders(),
-          body: JSON.stringify({ batch: newVectors, collection, metadata: newMetadata }),
+          body: JSON.stringify({ batch: newVectors, collection, metadata: newMetadata, texts: newTexts }),
         });
         if (!insertRes.ok) {
           const e = await insertRes.json().catch(() => ({})) as { error?: string };
@@ -770,6 +926,7 @@ export async function POST(req: NextRequest) {
         }
 
         const ctx = contextSentences[chunkIndex] ?? null;
+        const sectionTitle = chunkTitles[chunkIndex] ?? null;
         await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
           headers: apiHeaders(),
@@ -785,6 +942,8 @@ export async function POST(req: NextRequest) {
               collection,
               ingested_at: new Date().toISOString(),
               content_sha256: batchHashes[j],
+              chunk_mode: chunkMode,
+              ...(sectionTitle ? { section_title: sectionTitle } : {}),
               ...(ctx ? { context_sentence: ctx, enriched: true } : {}),
               ...(chunkEntities.length > 0 ? { entities: chunkEntities } : {}),
             },

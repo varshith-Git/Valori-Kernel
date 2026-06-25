@@ -202,4 +202,83 @@ For a full multi-node walkthrough, see
 [examples/cluster_quickstart.py](../../examples/cluster_quickstart.py).
 
 ---
+
+## 7. Valori Reranker — Hybrid Retrieval
+
+By default every `search()` call uses the **Valori Reranker**: a server-side
+two-stage pipeline that fetches a wider vector candidate pool and re-scores
+results by term frequency before returning the top-k. This dramatically
+improves accuracy on keyword-heavy queries (section names, technical terms,
+identifiers) with zero latency overhead and no external dependency.
+
+To activate it, pass `query_text` alongside the embedding vector.
+
+### Insert with text indexing
+
+```python
+from valoricore import SyncRemoteClient
+
+client = SyncRemoteClient("http://localhost:3000")
+
+# Single insert — index the raw text for reranking
+rid = client.insert(
+    [0.1, 0.2, 0.3],
+    text="Section 3.1 Training — continued pretraining with AdamW optimizer lr=1e-4",
+)
+
+# Batch insert — index each chunk's text in one round-trip
+ids = client.insert_batch(
+    vectors,                          # List[List[float]]
+    texts=[
+        "Section 3.1 Training — AdamW optimizer",
+        "Section 4.2 Agent Behavior — task completion",
+        "Section 6.1 Training Infrastructure — parallelism strategy",
+    ],
+    collection="composer2",
+)
+```
+
+### Search with hybrid reranking
+
+```python
+# Valori Reranker is on by default when query_text is provided
+hits = client.search(query_vec, k=5, query_text="what optimizer is used?")
+# The server fetches k×20 vector candidates internally, re-ranks by term
+# frequency, and returns the best 5 — no extra round-trip from your side.
+
+# Combine with collection scoping
+hits = client.search(
+    query_vec, k=5,
+    collection="composer2",
+    query_text="parallelism strategy for long contexts",
+)
+
+# Combine with recency decay
+hits = client.search(
+    query_vec, k=5,
+    query_text="optimizer",
+    decay_half_life_secs=86400,   # 1-day half-life
+)
+
+# Pure vector search — disable reranker
+hits = client.search(query_vec, k=5, rerank=False)
+```
+
+### Async version
+
+All the same parameters are available on `AsyncRemoteClient`:
+
+```python
+from valoricore import AsyncRemoteClient
+import asyncio
+
+async def main():
+    client = AsyncRemoteClient("http://localhost:3000")
+    await client.insert_batch(vectors, texts=chunk_texts)
+    hits = await client.search(query_vec, k=5, query_text="my query")
+
+asyncio.run(main())
+```
+
+---
 **Next Steps**: Check out the [API Reference](api_reference.md) for full method signatures and configuration options.

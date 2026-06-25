@@ -99,8 +99,8 @@ function Toast({ msg, ok }: { msg: string; ok: boolean }) {
     <div
       className={`fixed bottom-6 right-6 z-50 rounded-lg border px-4 py-3 text-sm shadow-xl ${
         ok
-          ? "border-emerald-700 bg-emerald-950 text-emerald-300"
-          : "border-red-800 bg-red-950 text-red-300"
+          ? "border-emerald-500/30 bg-emerald-500/15 text-emerald-700"
+          : "border-red-500/30 bg-red-500/15 text-red-700"
       }`}
     >
       {msg}
@@ -447,7 +447,7 @@ export default function SnapshotsPage() {
           </div>
 
           {autoEnabled && objectStoreDisabled && (
-            <div className="rounded-lg border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-500">
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
               Object store not configured — auto-snapshots will fail.
               Set <code>VALORI_OBJECT_STORE_URL</code> and restart the server.
             </div>
@@ -515,7 +515,7 @@ export default function SnapshotsPage() {
                 />
               </div>
               {lastAt && (
-                <p className="text-[10px] text-zinc-700">
+                <p className="text-[10px] text-muted-foreground">
                   Last triggered: {new Date(lastAt).toLocaleString(undefined, {
                     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
                   })}
@@ -534,31 +534,31 @@ export default function SnapshotsPage() {
                 <span className="text-muted-foreground">VALORI_SNAPSHOT_EVERY_EVENTS</span>
                 <span>=</span>
                 <span className="text-emerald-600">50000</span>
-                <span className="text-zinc-700 font-sans"># trigger after N events</span>
+                <span className="text-muted-foreground font-sans"># trigger after N events</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">VALORI_SNAPSHOT_EVERY_BYTES</span>
                 <span>=</span>
                 <span className="text-emerald-600">67108864</span>
-                <span className="text-zinc-700 font-sans"># trigger after 64 MB of WAL</span>
+                <span className="text-muted-foreground font-sans"># trigger after 64 MB of WAL</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">VALORI_SNAPSHOT_KEEP</span>
                 <span>=</span>
                 <span className="text-emerald-600">5</span>
-                <span className="text-zinc-700 font-sans"># keep N local snapshots</span>
+                <span className="text-muted-foreground font-sans"># keep N local snapshots</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">VALORI_OBJECT_STORE_URL</span>
                 <span>=</span>
                 <span className="text-emerald-600">s3://my-bucket/valori</span>
-                <span className="text-zinc-700 font-sans"># or file:///local/path</span>
+                <span className="text-muted-foreground font-sans"># or file:///local/path</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">VALORI_OBJECT_STORE_KEEP</span>
                 <span>=</span>
                 <span className="text-emerald-600">7</span>
-                <span className="text-zinc-700 font-sans"># keep N remote snapshots</span>
+                <span className="text-muted-foreground font-sans"># keep N remote snapshots</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">VALORI_OBJECT_STORE_REGION</span>
@@ -646,7 +646,7 @@ function Stat({
       >
         {value}
       </p>
-      {sub && <p className="text-[10px] text-zinc-700 font-mono">{sub}</p>}
+      {sub && <p className="text-[10px] text-muted-foreground font-mono">{sub}</p>}
     </div>
   );
 }
@@ -692,7 +692,7 @@ function LocalFilesCard({
             ))}
           </div>
         ) : (
-          <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-3 py-2.5">
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2.5">
             <p className="text-xs text-amber-500">
               Server has no paths configured. Set <code className="font-mono">VALORI_EVENT_LOG_PATH</code> and{" "}
               <code className="font-mono">VALORI_SNAPSHOT_PATH</code> when starting the server.
@@ -727,7 +727,7 @@ function LocalFilesCard({
           {extraDir && (
             <button
               onClick={onRemoveDir}
-              className="rounded-lg border border-red-900/50 bg-red-950/20 px-3 py-1.5 text-xs text-red-500 hover:bg-red-950/40 transition-colors"
+              className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-1.5 text-xs text-red-500 hover:bg-red-950/40 transition-colors"
               title="Stop scanning extra directory"
             >
               ✕ {extraDir}
@@ -765,7 +765,7 @@ function FileGroup({
 }) {
   const existing = files.filter((f) => f.exists);
   const total = existing.reduce((s, f) => s + f.size_bytes, 0);
-  const colorCls = color === "sky" ? "text-sky-400 border-sky-900/50 bg-sky-950/20" : "text-amber-400 border-amber-900/50 bg-amber-950/20";
+  const colorCls = color === "sky" ? "text-sky-400 border-sky-900/50 bg-sky-950/20" : "text-amber-400 border-amber-500/25 bg-amber-500/10";
   const dotCls = color === "sky" ? "bg-sky-500" : "bg-amber-500";
 
   return (
@@ -775,7 +775,7 @@ function FileGroup({
         <span className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest">
           {label}
         </span>
-        <span className="text-[10px] text-zinc-700">
+        <span className="text-[10px] text-muted-foreground">
           {existing.length} of {files.length} file{files.length !== 1 ? "s" : ""} exist · {fmtBytes(total)}
         </span>
       </div>
@@ -783,11 +783,11 @@ function FileGroup({
         {files.map((f) => (
           <div
             key={f.path}
-            className={`flex items-center gap-3 px-3 py-2.5 ${f.exists ? colorCls : "text-zinc-600 border-zinc-800/50 bg-zinc-900/20"}`}
+            className={`flex items-center gap-3 px-3 py-2.5 ${f.exists ? colorCls : "text-muted-foreground/80 border-border/50 bg-accent/20"}`}
           >
             {/* Filename + path */}
             <div className="flex-1 min-w-0">
-              <span className={`font-mono text-[12px] ${f.exists ? "text-accent-foreground" : "text-zinc-600"}`} title={f.path}>
+              <span className={`font-mono text-[12px] ${f.exists ? "text-accent-foreground" : "text-muted-foreground/80"}`} title={f.path}>
                 {f.name}
               </span>
               <p className="text-[10px] text-muted-foreground/50 font-mono truncate">{f.path}</p>
@@ -810,7 +810,7 @@ function FileGroup({
                 </span>
               </>
             ) : (
-              <span className="text-[11px] text-zinc-600 w-48 text-right flex-shrink-0">
+              <span className="text-[11px] text-muted-foreground/80 w-48 text-right flex-shrink-0">
                 not created yet
               </span>
             )}
@@ -848,7 +848,7 @@ function SnapshotRow({
           {shortKey}
         </p>
         <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="text-[10px] font-mono text-zinc-700">{shortHash}…</span>
+          <span className="text-[10px] font-mono text-muted-foreground">{shortHash}…</span>
           <CopyBtn text={snap.state_hash} />
         </div>
       </div>
@@ -866,7 +866,7 @@ function SnapshotRow({
           title={confirming ? "Click again to confirm restore" : "Restore this snapshot"}
           className={`text-[11px] px-3 py-1.5 rounded-lg border transition-all ${
             confirming
-              ? "border-amber-700 bg-amber-950/50 text-amber-400 animate-pulse"
+              ? "border-amber-700 bg-amber-950/50 text-amber-700 animate-pulse"
               : "border-input text-muted-foreground hover:border-ring hover:text-card-foreground"
           } disabled:opacity-40`}
         >

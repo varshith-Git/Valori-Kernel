@@ -131,7 +131,7 @@ export default function SettingsPage() {
                     {serverConfig?.api_url ?? "…"}
                   </span>
                   {serverConfig?.cluster_mode && (
-                    <span className="rounded bg-blue-950 border border-blue-800 px-2 py-0.5 text-[10px] text-blue-400">
+                    <span className="rounded bg-blue-500/15 border border-blue-500/30 px-2 py-0.5 text-[10px] text-blue-400">
                       cluster mode
                     </span>
                   )}
@@ -228,7 +228,7 @@ export default function SettingsPage() {
                     value={rerankerApiKey}
                     onChange={(e) => saveReranker({ apiKey: e.target.value })}
                     placeholder="co-..."
-                    className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-zinc-500"
+                    className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-ring"
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
@@ -236,7 +236,7 @@ export default function SettingsPage() {
                   <select
                     value={rerankerModel}
                     onChange={(e) => saveReranker({ model: e.target.value })}
-                    className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-zinc-500"
+                    className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-ring"
                   >
                     <option>rerank-english-v3.0</option>
                     <option>rerank-multilingual-v3.0</option>
@@ -253,7 +253,7 @@ export default function SettingsPage() {
                   value={rerankerEndpoint}
                   onChange={(e) => saveReranker({ endpoint: e.target.value })}
                   placeholder="http://localhost:8080/rerank"
-                  className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-zinc-500"
+                  className="bg-accent border border-input text-accent-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-ring"
                 />
                 <p className="text-[11px] text-muted-foreground">Must accept <code className="font-mono">{"{ query, documents }"}</code> and return <code className="font-mono">{"{ scores: number[] }"}</code>.</p>
               </div>

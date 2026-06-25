@@ -32,10 +32,10 @@ function parseEvent(line: string): ParsedEvent {
 }
 
 const TYPE_COLORS: Record<ParsedEvent["type"], string> = {
-  INSERT: "bg-emerald-950 text-emerald-400 border-emerald-900",
-  DELETE: "bg-red-950 text-red-400 border-red-900",
-  SOFT_DELETE: "bg-amber-950 text-amber-400 border-amber-900",
-  NODE: "bg-blue-950 text-blue-400 border-blue-900",
+  INSERT: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30",
+  DELETE: "bg-red-500/15 text-red-700 border-red-500/30",
+  SOFT_DELETE: "bg-amber-500/15 text-amber-700 border-amber-500/30",
+  NODE: "bg-blue-500/15 text-blue-700 border-blue-500/30",
   EDGE: "bg-purple-950 text-purple-400 border-purple-900",
   UNKNOWN: "bg-card text-muted-foreground border-border",
 };
@@ -93,12 +93,12 @@ export default function AuditPage() {
     return (
       <div className="max-w-2xl">
         <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
-        <div className="mt-6 rounded-xl border border-amber-900 bg-amber-950 p-6">
+        <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-6">
           <p className="text-sm font-medium text-amber-400">
             Event log not enabled on this node
           </p>
           <p className="mt-2 text-xs text-amber-600">
-            Restart Valori with <code className="font-mono bg-amber-900 px-1 rounded">VALORI_EVENT_LOG_PATH</code> set:
+            Restart Valori with <code className="font-mono bg-amber-500/20 px-1 rounded">VALORI_EVENT_LOG_PATH</code> set:
           </p>
           <pre className="mt-3 rounded bg-background px-4 py-3 text-xs text-accent-foreground font-mono">
 {`VALORI_DIM=4 \\
@@ -149,7 +149,7 @@ cargo run -p valori-node`}
             onClick={() => setFilter(t)}
             className={`rounded-full px-3 py-1 text-xs transition-colors border ${
               filter === t
-                ? "bg-zinc-100 text-zinc-900 border-zinc-100"
+                ? "bg-accent text-foreground border-border"
                 : "border-border text-muted-foreground hover:border-muted hover:text-accent-foreground"
             }`}
           >

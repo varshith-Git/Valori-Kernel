@@ -6,9 +6,9 @@ import type { ToastPayload } from "@/lib/toast";
 const DURATION_MS = 4500;
 
 const STYLES: Record<string, string> = {
-  error:   "bg-red-950 border-red-800 text-red-200",
-  success: "bg-emerald-950 border-emerald-800 text-emerald-200",
-  warning: "bg-amber-950 border-amber-800 text-amber-200",
+  error:   "bg-red-500/15 border-red-500/30 text-red-700",
+  success: "bg-emerald-500/15 border-emerald-500/30 text-emerald-700",
+  warning: "bg-amber-500/15 border-amber-500/30 text-amber-700",
 };
 
 const ICONS: Record<string, string> = {

@@ -36,7 +36,7 @@ async fn test_batch_ingest_success() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None }).unwrap()))
+        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None, texts: None }).unwrap()))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();
@@ -66,7 +66,7 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None }).unwrap()))
+        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None, texts: None }).unwrap()))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();

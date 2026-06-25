@@ -427,7 +427,7 @@ export function CodePanel({
         <div className="flex items-center gap-2 px-4 py-3 border-t border-border flex-shrink-0 flex-wrap">
           <CopyBtn text={code} label="copy code" />
           <CopyBtn text={fullVecJSON(queryVector)} label={`copy full vector (${queryVector.length} dims)`} />
-          <span className="ml-auto text-[10px] text-zinc-700 font-mono">
+          <span className="ml-auto text-[10px] text-muted-foreground font-mono">
             {collection}
           </span>
         </div>

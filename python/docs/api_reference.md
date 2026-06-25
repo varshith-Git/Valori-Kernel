@@ -44,17 +44,79 @@ These clients wrap the base clients to provide seamless handling of text, embedd
 
 These clients expose the raw power of the Valori Kernel. All methods on `SyncRemoteClient` are identical to `LocalClient`. `AsyncRemoteClient` has the exact same methods, but they are `async`.
 
+### Node Health
+
+- **`health() -> str`**
+  - Returns the node health status string, e.g. `"ok"`.
+  - Useful for liveness checks before starting inserts.
+
+  ```python
+  assert client.health() == "ok"
+  ```
+
 ### Vector Operations
-- **`insert(vector: List[float], tag: int = 0) -> int`**
-  - Inserts a dense vector.
-- **`insert_batch(vectors: List[List[float]]) -> List[int]`**
-  - Inserts multiple vectors in a single transaction.
-- **`insert_with_proof(vector: List[float], tag: int = 0) -> Tuple[int, str]`**
-  - Inserts a vector and returns the `record_id` along with the cryptographically secure BLAKE3 Merkle Proof (hex string).
+
+- **`insert(vector: List[float], tag: int = 0, collection: str = "default", text: Optional[str] = None, idempotency_key: Optional[bytes] = None) -> int`**
+  - Inserts a dense vector and returns the new `record_id`.
+  - **`text`** *(str, optional)*: Raw text to index alongside the vector. When provided, the server tokenises and stores it so that future `search()` calls with `query_text` can re-score results by term frequency (Valori Reranker, Phase C5). Pass the section title + body for document chunks.
+
+  ```python
+  rid = client.insert([0.1, 0.2, 0.3])
+  rid = client.insert([0.1, 0.2, 0.3], text="Section 3.1 Training — AdamW optimizer lr=1e-4")
+  rid = client.insert([0.1, 0.2, 0.3], collection="my-tenant", text="chunk body")
+  ```
+
+- **`insert_batch(batch: List[List[float]], collection: str = "default", metadata: Optional[List[Optional[str]]] = None, request_ids: Optional[List[Optional[str]]] = None, texts: Optional[List[Optional[str]]] = None) -> List[int]`**
+  - Inserts multiple vectors in one round-trip. Returns a list of `record_id`s in insertion order.
+  - **`texts`** *(List[str | None], optional)*: Per-vector text strings for the Valori Reranker. Must be the same length as `batch`. Use `None` entries to skip indexing for specific vectors.
+  - **`metadata`**: Per-vector JSON strings committed into the BLAKE3 audit chain.
+  - **`request_ids`**: Per-vector idempotency keys (hex strings) — a duplicate key is skipped and the existing ID is returned.
+
+  ```python
+  ids = client.insert_batch(vectors)
+  ids = client.insert_batch(
+      vectors,
+      texts=["Section 3.1 Training", "Section 4.2 Agent Behavior", None],
+      collection="composer2",
+  )
+  ```
+
+- **`insert_with_proof(vector: List[float], tag: int = 0, collection: str = "default") -> Tuple[int, bytes]`**
+  - Inserts a vector and returns `(record_id, proof_bytes)` — the BLAKE3 Merkle proof for the vector.
+
+- **`soft_delete(record_id: int) -> None`**
+  - Marks a record inactive without physically removing it. The record is excluded from search results and its text is removed from the Valori Reranker index.
+
 - **`delete(record_id: int) -> None`**
-  - Permanently and physically removes a record from the vector index and the RecordPool.
-- **`search(query_vector: List[float], k: int = 5, filter_tag: Optional[int] = None) -> List[dict]`**
-  - Performs an exhaustive, deterministic L2 nearest neighbor search.
+  - Permanently removes a record from the vector index and the RecordPool.
+
+- **`search(query: List[float], k: int, filter_tag: Optional[int] = None, consistency: Optional[str] = None, collection: str = "default", as_of: Optional[str] = None, as_of_log_index: Optional[int] = None, decay_half_life_secs: Optional[int] = None, rerank: bool = True, query_text: Optional[str] = None) -> List[dict]`**
+  - K-nearest-neighbour search. Returns `[{"id": int, "score": float}, ...]`.
+  - **`rerank`** *(bool, default `True`)*: Enable the Valori Reranker. When `True` and `query_text` is set, the server fetches a wider candidate pool and re-ranks by a blend of vector similarity + term-frequency score before returning the top-k. Set to `False` for pure vector ranking.
+  - **`query_text`** *(str, optional)*: The human-readable query string used for term-frequency scoring. Required for the Valori Reranker to activate. Pass the same string you would show to the user.
+  - **`decay_half_life_secs`** *(int, optional)*: Recency-aware ranking (Phase C4.1). A record one half-life old has its distance doubled, so fresh near-matches rise above stale ones. Each hit gains `decay_factor` and `age_secs` fields. Ignored for `as_of` queries.
+  - **`consistency`** *(str, optional)*: Cluster mode only — `"linearizable"` (default, reads through the leader) or `"local"` (fast, may lag).
+  - **`as_of`** *(str, optional)*: ISO 8601 UTC timestamp — search the vector state as it existed at that moment. Returns the full response dict including `as_of_log_index`, `as_of_timestamp_iso`, `as_of_state_hash`.
+  - **`as_of_log_index`** *(int, optional)*: Search after exactly this many committed events. Takes precedence over `as_of`.
+
+  ```python
+  # Pure vector search
+  hits = client.search(query_vec, k=5)
+
+  # Valori Reranker — hybrid vector + term-frequency (recommended for document RAG)
+  hits = client.search(query_vec, k=5, query_text="what optimizer is used?")
+  # → re-ranks top-20 vector candidates by term frequency, returns best 5
+
+  # Disable reranker explicitly
+  hits = client.search(query_vec, k=5, rerank=False)
+
+  # Recency-aware
+  hits = client.search(query_vec, k=5, query_text="optimizer", decay_half_life_secs=86400)
+
+  # Point-in-time
+  resp = client.search(query_vec, k=5, as_of="2026-01-01T00:00:00Z")
+  # → {"results": [...], "as_of_log_index": 42, "as_of_state_hash": "..."}
+  ```
 
 ### Knowledge Graph — Fluent API *(recommended)*
 

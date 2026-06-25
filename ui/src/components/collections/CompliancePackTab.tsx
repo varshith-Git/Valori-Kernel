@@ -412,7 +412,7 @@ export function CompliancePackTab({
                     <span className="ml-auto font-mono text-muted-foreground">{shortHash(e.certificate_hash, 14)}</span>
                   </div>
                 ))}
-                <div className="px-3 py-1.5 text-[10px] text-zinc-700">
+                <div className="px-3 py-1.5 text-[10px] text-muted-foreground">
                   {pack.erasures.total_records_erased} total records erased across {pack.erasures.count} events
                 </div>
               </div>
@@ -430,7 +430,7 @@ export function CompliancePackTab({
                   <div key={i} className="flex items-center gap-3 px-3 py-2 text-[11px]">
                     <span className="text-accent-foreground truncate flex-1">{r.question}</span>
                     <span className="text-muted-foreground">{r.chunks.length} chunks</span>
-                    <span className="font-mono text-zinc-700">{shortHash(r.receipt_sha256, 10)}</span>
+                    <span className="font-mono text-muted-foreground">{shortHash(r.receipt_sha256, 10)}</span>
                   </div>
                 ))}
               </div>

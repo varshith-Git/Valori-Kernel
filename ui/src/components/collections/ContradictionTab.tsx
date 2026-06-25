@@ -227,7 +227,7 @@ function PairCard({ pair }: { pair: ContradictionPair }) {
             {(pair.strength * 100).toFixed(0)}%
           </span>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-zinc-700 font-mono">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
           <span>#{pair.a.id} ↔ #{pair.b.id}</span>
           <button
             onClick={() => setExpanded((v) => !v)}
@@ -367,7 +367,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
               />
               <span className="text-sm font-mono text-accent-foreground w-8">{scanLimit}</span>
             </div>
-            <p className="text-[10px] text-zinc-700">
+            <p className="text-[10px] text-muted-foreground">
               Each record needs one embed + one search call
             </p>
           </div>
@@ -400,7 +400,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
             onClick={startScan}
             className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
               scanning
-                ? "bg-muted text-accent-foreground hover:bg-red-900/60 hover:text-red-300"
+                ? "bg-muted text-accent-foreground hover:bg-red-500/15 hover:text-red-700"
                 : "bg-primary text-primary-foreground hover:bg-primary/90"
             }`}
           >
@@ -428,7 +428,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
           {progress.total > 0 && (
             <div className="h-1.5 bg-accent rounded-full overflow-hidden">
               <div
-                className="h-full bg-zinc-400 transition-all duration-300"
+                className="h-full bg-muted-foreground/50 transition-all duration-300"
                 style={{ width: `${(progress.done / progress.total) * 100}%` }}
               />
             </div>
@@ -451,7 +451,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
         <div className="flex items-center gap-4 px-1 text-xs text-muted-foreground">
           <span>Scanned {summary.scanned} records with text</span>
           {summary.skipped > 0 && (
-            <span className="text-zinc-700">· skipped {summary.skipped} without metadata</span>
+            <span className="text-muted-foreground">· skipped {summary.skipped} without metadata</span>
           )}
           <span>·</span>
           <span className={pairs.length > 0 ? "text-amber-500" : "text-muted-foreground"}>
@@ -464,7 +464,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
       {pairs.length === 0 && summary && !scanning && (
         <div className="rounded-xl border border-border bg-card py-10 text-center">
           <p className="text-muted-foreground text-sm">No contradictions found</p>
-          <p className="text-zinc-700 text-xs mt-1">
+          <p className="text-muted-foreground text-xs mt-1">
             Try lowering the threshold or ensuring records use the same embedding model
           </p>
         </div>
@@ -477,7 +477,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
               {pairs.length} contradicting pair{pairs.length !== 1 ? "s" : ""}
               {scanning && <span className="text-muted-foreground"> · scanning…</span>}
             </p>
-            <p className="text-[10px] text-zinc-700">sorted by strength ↓</p>
+            <p className="text-[10px] text-muted-foreground">sorted by strength ↓</p>
           </div>
           {pairs.map((pair) => (
             <PairCard key={`${pair.a.id}-${pair.b.id}`} pair={pair} />

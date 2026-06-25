@@ -345,7 +345,7 @@ function CertSection({
                 onClick={() => setView(v)}
                 className={`px-3 py-1 text-xs rounded transition-colors ${
                   view === v
-                    ? "bg-zinc-600 text-foreground"
+                    ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-accent-foreground"
                 }`}
               >
@@ -442,7 +442,7 @@ function CertSection({
                 <p className="text-[9px] text-muted-foreground font-mono">
                   Valori Kernel · deterministic · Q16.16 · BLAKE3-chained
                 </p>
-                <p className="text-[9px] text-zinc-700 font-mono">
+                <p className="text-[9px] text-muted-foreground font-mono">
                   ID: {(cert.certificate_hash ?? "").slice(7, 15).toUpperCase()}
                 </p>
               </div>
@@ -582,7 +582,7 @@ function TamperSection({ namespace }: { namespace: string }) {
             {baseline && (
               <button
                 onClick={() => { clearBaseline(namespace); setBaseline(null); }}
-                className="text-[10px] text-zinc-700 hover:text-red-400 transition-colors"
+                className="text-[10px] text-muted-foreground hover:text-red-400 transition-colors"
               >
                 clear
               </button>
@@ -621,14 +621,14 @@ function TamperSection({ namespace }: { namespace: string }) {
                 value={baselineNote}
                 onChange={(e) => setBaselineNote(e.target.value)}
                 placeholder="Optional note (e.g. before migration)"
-                className="text-xs bg-accent border border-input rounded px-2 py-1.5 text-accent-foreground placeholder:text-muted-foreground focus:outline-none focus:border-zinc-500"
+                className="text-xs bg-accent border border-input rounded px-2 py-1.5 text-accent-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
               />
             )}
             <div className="flex gap-2">
               <button
                 onClick={saveAsBaseline}
                 disabled={!current?.ns_hash || loading}
-                className="flex-1 text-xs py-1.5 rounded bg-muted text-foreground hover:bg-zinc-600 disabled:opacity-40 transition-colors"
+                className="flex-1 text-xs py-1.5 rounded bg-muted text-foreground hover:bg-muted disabled:opacity-40 transition-colors"
               >
                 {baseline ? "Update baseline" : "Save as baseline"}
               </button>

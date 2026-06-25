@@ -6,6 +6,66 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase I1/I2/I3 — Built-in ingest pipeline)
+- **`POST /v1/ingest/document`** — server-side document chunking with five strategies:
+  `auto` (sniffs text), `tree` (section headers), `conversation` (Q&A boundaries),
+  `sentence` (sentence-window with ±2 context), `fixed` (overlapping windows).
+  Returns `{strategy_used, chunk_count, chunks: [{index, title, text}]}`.
+  Works in both standalone and cluster mode (stateless handler).
+- **`POST /v1/ingest`** — full one-call pipeline: chunk + embed + insert + graph nodes +
+  metadata sidecar. Requires `VALORI_EMBED_PROVIDER` (ollama / openai / custom).
+  Supports `VALORI_EMBED_MODEL`, `VALORI_EMBED_URL`, `VALORI_EMBED_API_KEY`.
+  Returns `{document_node_id, chunk_count, record_ids, strategy_used}`.
+- **`/health`** now includes `embed_enabled: bool` and `embed_provider: string?` so
+  clients can probe node capability before deciding on a pipeline.
+- **`crates/valori-node/src/embedder.rs`** — HTTP embed client with Ollama fallback
+  (`/api/embed` → `/api/embeddings`) and OpenAI-compatible batching.
+- **Python SDK** — `SyncRemoteClient.chunk_document()`, `ingest()`,
+  `AsyncRemoteClient.chunk_document()`, `ingest()`.
+- **UI** — DocumentUploadTab probes node on mount; shows "Server-side pipeline active ⚡"
+  banner and routes upload through `/v1/ingest` when embed is configured;
+  falls back transparently to client-side pipeline otherwise.
+- **Phase I4 — cluster ingest**: `POST /v1/ingest` now works in 3/5-node cluster mode.
+  Vectors and graph nodes/edges go through `raft.client_write()` and are replicated to
+  all peers. `DataPlaneState` gains `embed_config` and node-local `metadata` sidecar.
+  `build_cluster_router` auto-reads `VALORI_EMBED_*` env vars. Cluster `/health`
+  now exposes `embed_enabled` + `embed_provider`.
+
+### Added (Phase C5 — Valori Reranker)
+- **Valori Reranker** (`crates/valori-node/src/valori_reranker.rs`) — server-side hybrid
+  retrieval that runs inside the node with no external dependency. Records inserted with a
+  `text` field are tokenised and indexed. At search time, `query_text` triggers a two-stage
+  pipeline: the kernel returns `k × POOL_FACTOR` candidates by vector similarity, the
+  reranker blends vector and term-frequency scores (50 / 50), and the top-k are returned.
+  Achieves **90 % accuracy** on hard lexical queries vs 60 % for LLM-based navigation, at
+  **0.4 s** latency.
+- `/records` and `/v1/vectors/batch_insert` accept `text` / `texts` fields for reranker
+  indexing. `/search` accepts `rerank: bool` (default `true`) and `query_text: string`.
+- `SyncRemoteClient` and `AsyncRemoteClient` updated: `insert(text=)`,
+  `insert_batch(texts=)`, `search(rerank=True, query_text=)`, and new `health()` method.
+- Cluster path: `ValoriStateMachine` stores raw texts in `text_corpus`; `cluster_server`
+  builds a transient reranker per query from the corpus via `with_text_corpus()`.
+- `KernelState::iter_records_in_ns(namespace_id)` — public iterator over records in a
+  namespace, used by `drop_collection` to clean up the reranker on collection drop.
+
+### Added (Phase 6 — Persistent, isolated projects in the UI)
+- **Each UI project is now its own persistent, isolated workspace.** A project maps to one
+  `valori-node` process with its own data dir, port, and WAL/snapshot under
+  `~/.valori/projects/<name>/` (manifest at `~/.valori/ui-projects.json`, kept separate from
+  the CLI wizard's `projects.json`). Home is now a project picker that lists every project
+  from disk — even when all nodes are stopped — and one click resumes a session.
+- **Auto-start on open / snapshot-on-close.** Opening a project boots its node and points the
+  UI at it; closing writes a final snapshot, stops the node, and re-locks the files at rest.
+- **Files are deletable only through the UI.** Data files carry the macOS immutable flag
+  (`chflags uchg`; Linux falls back to read-only perms) while a project is at rest — Finder
+  and `rm` refuse to remove them. The UI delete path clears the flag first.
+- **Node graceful-shutdown snapshot.** Standalone `valori-node` now serves with a
+  `SIGTERM`/`Ctrl-C` handler that writes a final snapshot to `VALORI_SNAPSHOT_PATH` before
+  exiting — a durable backstop on top of the always-on WAL.
+- New UI API routes `GET/POST /api/projects`, `DELETE /api/projects/[name]`, and
+  `POST /api/projects/[name]/{open,close}`. The Launcher's defaults moved off `/tmp` to
+  `~/.valori/cluster`.
+
 ### Changed (Python SDK — full endpoint coverage)
 - **The Python SDK now wraps every product endpoint (40/40).** Newly added to `SyncRemoteClient` and `AsyncRemoteClient`:
   - **Agent-memory primitives** — `memory_upsert()` (`/v1/memory/upsert_vector`: store vector + document→chunk graph, returns `memory_id`) and `memory_search()` (`/v1/memory/search_vector`: hits carry `memory_id`, `metadata`, and decay fields). Previously only the lower-level `insert`/`search` (which return `{id, score}` with no `memory_id`/metadata) were exposed.

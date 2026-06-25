@@ -19,6 +19,7 @@ by what you're doing — running a cluster, integrating the SDK, or auditing a l
 | [CLUSTER.md](CLUSTER.md) | **Multi-node operations** — wizard, `valori cluster` CLI, endpoints, grow/recover |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topologies, Docker, EC2, single-node and cluster |
 | [MULTINODE_ROADMAP.md](MULTINODE_ROADMAP.md) | The Phase-2 cluster roadmap and what each phase delivered |
+| [SHARDING.md](SHARDING.md) | **Design / roadmap** — horizontal scale via per-shard chains + Merkle-root proof (not yet implemented) |
 | [authentication.md](authentication.md) | Bearer-token auth on the HTTP API |
 | [remote-mode.md](remote-mode.md) | Talking to a node over HTTP vs the embedded engine |
 

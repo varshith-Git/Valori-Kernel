@@ -223,7 +223,7 @@ export async function POST(req: NextRequest) {
       const searchRes = await fetch(`${getApiUrl()}/search`, {
         method: "POST",
         headers: apiHeaders(),
-        body: JSON.stringify({ query: query_vector, k: fetchK, collection }),
+        body: JSON.stringify({ query: query_vector, k: fetchK, collection, query_text: question ?? undefined }),
       });
       if (!searchRes.ok) {
         return NextResponse.json({ error: "search failed" }, { status: 502 });
@@ -411,10 +411,11 @@ export async function POST(req: NextRequest) {
     let synthesis_error: string | null = null;
 
     if (llm && (rankedResults.length > 0)) {
-      // Truncate each chunk to 1000 chars max before sending to the LLM.
-      // This prevents context overflow in small models (gemma:2b, llama3.2:3b etc.)
-      // which have 8k token windows — 5 × 4000-char chunks would eat it entirely.
-      const MAX_CHUNK_CHARS = 1000;
+      // Truncate each chunk before sending to the LLM.
+      // 1500 chars keeps the answer tail of dense chunks (e.g. "AdamW optimizer."
+      // appears at char ~1100 of chunk 7). 3 chunks × 1500 = ~4500 chars, well
+      // within llama3.2:3b's 8k token window.
+      const MAX_CHUNK_CHARS = 1500;
       const MAX_CHUNKS_FOR_LLM = 3;
 
       const topChunks = rankedResults
@@ -448,13 +449,16 @@ export async function POST(req: NextRequest) {
 
       const systemPrompt =
         "You are a precise document Q&A assistant. " +
-        "Your ONLY job is to answer the question using the source context provided below. " +
-        "Do NOT add any information that is not explicitly stated in the source context. " +
-        "If the answer is not in the context, say: 'The provided documents do not contain information about this.' " +
-        "Quote or paraphrase directly from the source. Mention which chunk number you are drawing from.";
+        "IMPORTANT RULES:\n" +
+        "1. Read EVERY source chunk carefully before answering.\n" +
+        "2. If ANY chunk contains even a partial answer, quote that exact text and answer based on it.\n" +
+        "3. Short fragments like 'AdamW optimizer.' or 'Context Parallelism (CP)' ARE valid answers — quote them.\n" +
+        "4. Only say the answer is missing if you read all chunks and found zero relevant text.\n" +
+        "5. Never say 'not mentioned' or 'not explicitly stated' if the exact words appear in any chunk.\n" +
+        "6. Keep your answer short: 1-3 sentences quoting the source.";
 
       const userMessage = question
-        ? `Question: ${question}\n\nSource context:\n${primaryContext}${expandedContext}\n\nAnswer using ONLY the above source context. Do not guess or add outside knowledge.`
+        ? `Question: ${question}\n\nSource chunks (read all of them):\n${primaryContext}${expandedContext}\n\nFind the answer in the chunks above and quote it directly.`
         : `Summarize the information in these records:\n${primaryContext}${expandedContext}`;
 
       try {

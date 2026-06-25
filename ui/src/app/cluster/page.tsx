@@ -37,7 +37,7 @@ export default function ClusterPage() {
     return (
       <div className="max-w-2xl">
         <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
-        <div className="mt-6 rounded-xl border border-red-900 bg-red-950 p-5">
+        <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 p-5">
           <p className="text-sm text-red-400">Backend unreachable</p>
           <p className="mt-1 text-xs text-red-700">{String(error)}</p>
         </div>
@@ -85,8 +85,8 @@ export default function ClusterPage() {
           <div
             className={`flex items-center gap-1.5 text-xs rounded-full px-3 py-1.5 border ${
               converged
-                ? "bg-emerald-950 text-emerald-400 border-emerald-900"
-                : "bg-amber-950 text-amber-400 border-amber-900"
+                ? "bg-emerald-500/15 text-emerald-700 border-emerald-500/30"
+                : "bg-amber-500/15 text-amber-700 border-amber-500/30"
             }`}
           >
             <span
@@ -147,7 +147,7 @@ export default function ClusterPage() {
 
       {/* Lag warning */}
       {lag != null && lag > 10 && (
-        <div className="rounded-xl border border-amber-900 bg-amber-950 px-5 py-4">
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
           <p className="text-sm text-amber-400 font-medium">
             Apply lag: {lag} entries behind committed log
           </p>

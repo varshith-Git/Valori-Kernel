@@ -67,6 +67,67 @@ curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
 
 ---
 
+## Built-in Ingest Pipeline (Phase I1/I2/I3)
+
+Two endpoints that handle chunking and optionally embedding entirely on the node.
+
+### Chunking only — `POST /v1/ingest/document`
+
+Splits raw text into chunks using server-side intelligence. No vectors are inserted.
+
+```bash
+curl -X POST http://localhost:3000/v1/ingest/document \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "1 Introduction\nThis paper explores...\n2 Methods\n...",
+    "strategy": "auto",
+    "collection": "default",
+    "source": "paper.pdf",
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+  }'
+# → {"strategy_used":"tree","chunk_count":12,
+#    "chunks":[{"index":0,"title":"1 Introduction","text":"..."},...]}
+```
+
+Strategies: `auto` (sniffs text), `tree` (section headers), `conversation` (Q&A boundaries), `sentence` (±2 sentence window), `fixed` (overlapping windows).
+
+### Full pipeline — `POST /v1/ingest`
+
+Requires `VALORI_EMBED_PROVIDER` (ollama / openai / custom). Chunks + embeds + inserts + creates graph nodes + stores metadata sidecar. One call replaces the entire client-side pipeline.
+
+```bash
+# Start node with embedding configured:
+VALORI_EMBED_PROVIDER=ollama VALORI_EMBED_MODEL=nomic-embed-text \
+  cargo run -p valori-node
+
+curl -X POST http://localhost:3000/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text":"...","source":"annual_report.pdf","strategy":"tree","collection":"finance"}'
+# → {"ok":true,"document_node_id":1,"strategy_used":"tree",
+#    "chunk_count":31,"record_ids":[1,2,...31],"collection":"finance"}
+# → 422 if VALORI_EMBED_PROVIDER not set
+```
+
+### Env vars for on-node embedding
+
+| Var | Default | Purpose |
+|---|---|---|
+| `VALORI_EMBED_PROVIDER` | — | `ollama` / `openai` / `custom`; absent = embedding disabled |
+| `VALORI_EMBED_MODEL` | provider default | e.g. `nomic-embed-text`, `text-embedding-3-small` |
+| `VALORI_EMBED_URL` | provider default | Base URL; Ollama: `http://localhost:11434`, OpenAI: `https://api.openai.com` |
+| `VALORI_EMBED_API_KEY` | — | Required for OpenAI / custom if auth needed |
+
+### Health probe
+
+`/health` now includes `"embed_enabled": true` and `"embed_provider": "ollama"` when embedding is configured. The UI uses this to auto-detect which pipeline to use.
+
+### Cluster mode (Phase I4)
+
+`POST /v1/ingest` works identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. The node-local metadata sidecar (chunk text, source) is currently not Raft-replicated (advisory data only).
+
+---
+
 ## Vector Operations
 
 All endpoints accept an optional `"collection"` field. If the named collection
@@ -74,9 +135,9 @@ does not exist the request is rejected with `400 Bad Request`.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/records` | `POST` | Insert a single vector. |
-| `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors in one call. |
-| `/search` | `POST` | K-nearest-neighbour search. Supports `as_of` / `as_of_log_index` for point-in-time reads, and `decay_half_life_secs` for recency-aware ranking (Phase C4.1). |
+| `/records` | `POST` | Insert a single vector. Optional `text` field indexes the record for hybrid retrieval (Phase C5). |
+| `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors. Optional `texts` array indexes each record for hybrid retrieval (Phase C5). |
+| `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Also supports `as_of` / `as_of_log_index` for point-in-time reads and `decay_half_life_secs` for recency-aware ranking (Phase C4.1). |
 | `/v1/delete` | `POST` | Soft-delete a record by ID. |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 
@@ -255,6 +316,45 @@ for a server default (a per-request value, including `0` to disable, wins).
 Not applied to `as_of` queries. Standalone only in v1 (cluster accepts the field
 but treats it as neutral — see `docs/phases/phase-C4.1-decay.md`).
 
+### Valori Reranker — hybrid retrieval (Phase C5)
+
+The Valori Reranker runs inside the node after vector search. When a record is
+inserted with a `text` field, the server tokenises and indexes it. At query
+time, passing `rerank=true` (the default) and a `query_text` string triggers a
+two-stage retrieval:
+
+1. Kernel returns `k × POOL_FACTOR` candidates by vector similarity.
+2. The reranker scores each candidate by term frequency against `query_text`
+   and blends the two scores (50 % vector + 50 % term score).
+3. The top-k from the blended ranking are returned.
+
+No external process, no LLM call, no network hop — the reranker is pure Rust
+inside the same binary.
+
+```bash
+# Insert with text for hybrid indexing
+curl -X POST http://localhost:3000/records \
+  -H "Content-Type: application/json" \
+  -d '{"values": [0.1, 0.2, 0.3], "text": "Section 3.1 Training — AdamW optimizer"}'
+
+# Search with hybrid reranking (rerank=true is the default)
+curl -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3], "k": 5, "query_text": "what optimizer is used?"}'
+```
+
+Python SDK:
+
+```python
+c.insert(vector, text="Section 3.1 Training — AdamW optimizer")
+c.insert_batch(vectors, texts=["Section 3.1 ...", "Section 4.2 ...", ...])
+hits = c.search(query_vec, k=5, query_text="what optimizer is used?")
+```
+
+Set `rerank=false` (or omit `query_text`) to fall back to pure vector ranking.
+The reranker state is in-memory and rebuilt from inserts — it does not persist
+across restarts today (see Phase C6 follow-ups).
+
 ---
 
 ## Snapshots & Recovery
@@ -274,6 +374,11 @@ curl -X POST http://localhost:3000/v1/snapshot/save \
   -H "Content-Type: application/json" \
   -d '{"path": "./backup.snap"}'
 ```
+
+**Snapshot on shutdown.** In standalone mode the server runs with a graceful-shutdown
+handler: on `SIGTERM` or `Ctrl-C` it writes a final snapshot to `VALORI_SNAPSHOT_PATH`
+(when set) before exiting, so the next start is instant. The event log already guarantees
+durability — this only avoids a full replay. No configuration required.
 
 ---
 

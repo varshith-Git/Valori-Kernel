@@ -252,7 +252,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
 
       {/* Error */}
       {error && (
-        <div className="rounded-lg border border-red-900 bg-red-950 px-4 py-3 text-sm text-red-400">
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
@@ -308,7 +308,7 @@ function SemanticInput({
           onClick={() => setSubMode("text")}
           className={`px-3 py-1 text-xs rounded transition-colors ${
             subMode === "text"
-              ? "bg-zinc-600 text-foreground"
+              ? "bg-muted text-foreground"
               : "text-muted-foreground hover:text-accent-foreground"
           }`}
         >
@@ -318,7 +318,7 @@ function SemanticInput({
           onClick={() => setSubMode("vector")}
           className={`px-3 py-1 text-xs rounded transition-colors font-mono ${
             subMode === "vector"
-              ? "bg-zinc-600 text-foreground"
+              ? "bg-muted text-foreground"
               : "text-muted-foreground hover:text-accent-foreground"
           }`}
         >
@@ -337,7 +337,7 @@ function SemanticInput({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun();
             }}
             placeholder="Ask anything — e.g. what is the refund policy?"
-            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 resize-none focus:outline-none focus:border-zinc-500"
+            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 resize-none focus:outline-none focus:border-ring"
           />
           <p className="text-[10px] text-muted-foreground mt-1">
             Will embed with <span className="text-muted-foreground">{embedLabel}</span> · ⌘↵ to search
@@ -353,7 +353,7 @@ function SemanticInput({
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun();
             }}
             placeholder={`0.1, 0.2, 0.3${dim ? ` ... (${dim} values)` : ""}`}
-            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 font-mono resize-none focus:outline-none focus:border-zinc-500"
+            className="w-full rounded-lg bg-accent border border-input text-sm text-foreground placeholder:text-muted-foreground px-3 py-2 font-mono resize-none focus:outline-none focus:border-ring"
           />
           <p className="text-[10px] text-muted-foreground mt-1">Comma-separated floats{dim ? ` · ${dim} values` : ""} · ⌘↵ to search</p>
         </div>

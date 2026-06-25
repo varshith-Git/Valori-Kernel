@@ -429,9 +429,9 @@ export function GraphTab({ namespace }: { namespace: string }) {
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">
             <span className="text-foreground font-medium">{nodes.length}</span> nodes
-            <span className="mx-1.5 text-zinc-700">·</span>
+            <span className="mx-1.5 text-muted-foreground">·</span>
             <span className="text-blue-400">{docNodes.length}</span> docs
-            <span className="mx-1.5 text-zinc-700">·</span>
+            <span className="mx-1.5 text-muted-foreground">·</span>
             <span className="text-violet-400">{chunkNodes.length}</span> chunks
           </span>
         </div>

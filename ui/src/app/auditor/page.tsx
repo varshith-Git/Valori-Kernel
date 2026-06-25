@@ -51,10 +51,10 @@ function parseEvent(line: string): ParsedEvent {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  INSERT: "bg-emerald-950 text-emerald-400 border-emerald-900",
-  DELETE: "bg-red-950 text-red-400 border-red-900",
-  SOFT_DELETE: "bg-amber-950 text-amber-400 border-amber-900",
-  NODE: "bg-blue-950 text-blue-400 border-blue-900",
+  INSERT: "bg-emerald-500/15 text-emerald-700 border-emerald-500/30",
+  DELETE: "bg-red-500/15 text-red-700 border-red-500/30",
+  SOFT_DELETE: "bg-amber-500/15 text-amber-700 border-amber-500/30",
+  NODE: "bg-blue-500/15 text-blue-700 border-blue-500/30",
   EDGE: "bg-purple-950 text-purple-400 border-purple-900",
   UNKNOWN: "bg-card text-muted-foreground border-border",
 };
@@ -77,7 +77,7 @@ function ProofBanner() {
           <p className="font-mono text-xs text-accent-foreground break-all">{data.final_state_hash}</p>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="rounded border border-emerald-800 bg-emerald-950 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+          <span className="rounded border border-emerald-500/25 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
             VERIFIABLE
           </span>
           {data.event_count !== undefined && (
@@ -262,7 +262,7 @@ function WhyPanel() {
 
       {/* LLM synthesis */}
       {synthesis && (
-        <div className="rounded-xl border border-emerald-900 bg-emerald-950/20 p-5">
+        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-5">
           <p className="text-xs text-emerald-600 uppercase tracking-widest mb-2">
             {llmCfg.provider}/{llmCfg.model}
           </p>
@@ -270,7 +270,7 @@ function WhyPanel() {
         </div>
       )}
       {synthesisError && (
-        <div className="rounded-lg border border-amber-900 bg-amber-950/20 px-4 py-3">
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3">
           <p className="text-xs text-amber-500 font-medium">LLM synthesis failed</p>
           <p className="text-xs text-amber-700 font-mono mt-1">{synthesisError}</p>
           <a href="/settings" className="text-xs text-amber-700 hover:text-amber-400 transition-colors">
@@ -291,7 +291,7 @@ function WhyPanel() {
                 )}
                 {r.metadata?.source && (
                   <>
-                    <span className="text-zinc-700">·</span>
+                    <span className="text-muted-foreground">·</span>
                     <span className="text-xs text-blue-400 font-medium">{r.metadata.source}</span>
                     {r.metadata.chunk_index !== undefined && (
                       <span className="text-xs text-muted-foreground">
@@ -302,7 +302,7 @@ function WhyPanel() {
                 )}
                 {r.metadata?.collection && (
                   <>
-                    <span className="text-zinc-700">·</span>
+                    <span className="text-muted-foreground">·</span>
                     <span className="text-xs font-mono text-muted-foreground">{r.metadata.collection}</span>
                   </>
                 )}
@@ -319,7 +319,7 @@ function WhyPanel() {
               )}
 
               {r.metadata?.ingested_at && (
-                <p className="text-[10px] text-zinc-700 mt-2 font-mono">
+                <p className="text-[10px] text-muted-foreground mt-2 font-mono">
                   ingested {new Date(r.metadata.ingested_at).toLocaleString()}
                   {r.metadata.document_node_id !== undefined && (
                     <> · doc node #{r.metadata.document_node_id}</>
@@ -370,7 +370,7 @@ export default function AuditorPage() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-xl font-semibold text-foreground">Auditor Portal</h1>
-            <span className="rounded border border-blue-800 bg-blue-950 px-2 py-0.5 text-[10px] font-medium text-blue-400 uppercase tracking-widest">
+            <span className="rounded border border-blue-500/25 bg-blue-500/12 px-2 py-0.5 text-[10px] font-medium text-blue-700 uppercase tracking-widest">
               read-only view
             </span>
           </div>
@@ -416,7 +416,7 @@ export default function AuditorPage() {
                 onClick={() => setFilter(t)}
                 className={`rounded-full px-3 py-1 text-xs transition-colors border ${
                   filter === t
-                    ? "bg-zinc-100 text-zinc-900 border-zinc-100"
+                    ? "bg-accent text-foreground border-border"
                     : "border-border text-muted-foreground hover:border-muted hover:text-accent-foreground"
                 }`}
               >
@@ -436,7 +436,7 @@ export default function AuditorPage() {
               {[1, 2, 3, 4].map((i) => <div key={i} className="h-12 rounded-lg bg-accent" />)}
             </div>
           ) : eventsError === "event-log-disabled" ? (
-            <div className="rounded-xl border border-amber-900 bg-amber-950/40 p-5">
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/12 p-5">
               <p className="text-sm text-amber-400">Event log not enabled.</p>
               <p className="text-xs text-amber-700 mt-1">
                 Set <code className="font-mono">VALORI_EVENT_LOG_PATH</code> and restart.

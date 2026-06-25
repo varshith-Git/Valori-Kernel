@@ -277,7 +277,7 @@ export function AskTab({
         </span>
         {useLLM && (
           <>
-            <span className="text-zinc-700">·</span>
+            <span className="text-muted-foreground">·</span>
             <span className="text-muted-foreground">LLM:</span>
             <span className={`font-mono ${llmReady ? "text-accent-foreground" : "text-amber-500"}`}>
               {llmCfg.provider}/{llmCfg.model || "—"}
@@ -315,9 +315,9 @@ export function AskTab({
 
       {/* Not ready */}
       {!embeddingReady && (
-        <div className="rounded-lg border border-amber-900 bg-amber-950/30 px-4 py-3 text-xs text-amber-500">
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-500">
           Configure an embedding model in{" "}
-          <Link href="/settings" className="underline hover:text-amber-300">Settings</Link>{" "}
+          <Link href="/settings" className="underline hover:text-amber-600">Settings</Link>{" "}
           to enable question answering. You must use the same model that was used during ingestion.
         </div>
       )}
@@ -350,37 +350,42 @@ export function AskTab({
         </div>
       )}
 
-      {/* Current result */}
+      {/* Current result (fresh ask this session) */}
       {result && (
         <ResultCard result={result} />
       )}
 
-      {/* History */}
-      {history.length > 1 && (
-        <div className="flex flex-col gap-3 mt-2">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
-              History · {history.length - 1} earlier question{history.length - 1 !== 1 ? "s" : ""}
-            </p>
-            <button
-              onClick={() => {
-                const confirmed = window.confirm("Clear all question history for this collection?");
-                if (confirmed) {
-                  localStorage.removeItem(historyKey(namespace));
-                  setHistory([]);
-                  setResult(null);
-                }
-              }}
-              className="text-[10px] text-zinc-700 hover:text-red-500 transition-colors"
-            >
-              clear history
-            </button>
+      {/* History — all past Q&A from localStorage, excluding the one already
+          shown above as the current result (matched by askedAt timestamp). */}
+      {(() => {
+        const pastItems = history.filter((r) => r !== result);
+        if (pastItems.length === 0) return null;
+        return (
+          <div className="flex flex-col gap-3 mt-2">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+                History · {pastItems.length} earlier question{pastItems.length !== 1 ? "s" : ""}
+              </p>
+              <button
+                onClick={() => {
+                  const confirmed = window.confirm("Clear all question history for this collection?");
+                  if (confirmed) {
+                    localStorage.removeItem(historyKey(namespace));
+                    setHistory([]);
+                    setResult(null);
+                  }
+                }}
+                className="text-[10px] text-muted-foreground hover:text-red-500 transition-colors"
+              >
+                clear history
+              </button>
+            </div>
+            {pastItems.map((r, i) => (
+              <ResultCard key={`${r.askedAt}-${i}`} result={r} collapsed />
+            ))}
           </div>
-          {history.slice(1).map((r, i) => (
-            <ResultCard key={`${r.askedAt}-${i}`} result={r} collapsed />
-          ))}
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -584,7 +589,7 @@ function ProofReceipt({ receipt }: { receipt: AnswerReceipt }) {
             <div className="divide-y divide-border/60">
               {receipt.chunks.map((c, i) => (
                 <div key={c.record_id} className="flex items-center gap-2 px-3 py-1.5 text-[10px]">
-                  <span className="text-zinc-700 font-mono w-4">{i + 1}</span>
+                  <span className="text-muted-foreground font-mono w-4">{i + 1}</span>
                   <span className="text-muted-foreground font-mono w-14">#{c.record_id}</span>
                   {c.source && <span className="text-blue-500/70 truncate max-w-[120px]">{c.source}</span>}
                   <span className="ml-auto font-mono text-muted-foreground break-all">
@@ -634,7 +639,7 @@ function ProofReceipt({ receipt }: { receipt: AnswerReceipt }) {
             </pre>
           )}
 
-          <p className="text-[10px] text-zinc-700 leading-relaxed">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
             {receipt.verification}
           </p>
         </div>
@@ -671,7 +676,7 @@ function ResultCard({ result, collapsed = false }: { result: AskResult; collapse
         <div className="flex items-center gap-2 flex-shrink-0">
           <CopyBtn text={result.question} label="copy Q" />
           {timeLabel && (
-            <span className="text-[10px] text-zinc-700 tabular-nums">{timeLabel}</span>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{timeLabel}</span>
           )}
           <button
             onClick={() => setExpanded((v) => !v)}
@@ -692,7 +697,7 @@ function ResultCard({ result, collapsed = false }: { result: AskResult; collapse
                 <span className="font-mono"> · {result.llmModel ?? "retrieval only"}</span>
               )}
               {result.topK != null && (
-                <span className="text-zinc-600"> · top-{result.topK}</span>
+                <span className="text-muted-foreground/80"> · top-{result.topK}</span>
               )}
             </span>
             <CopyBtn text={buildCopyText(result)} label="copy all" />
@@ -747,7 +752,7 @@ function ResultCard({ result, collapsed = false }: { result: AskResult; collapse
                         })()}
                         {s.source && (
                           <>
-                            <span className="text-zinc-700">·</span>
+                            <span className="text-muted-foreground">·</span>
                             <span className="text-xs text-blue-400">{s.source}</span>
                           </>
                         )}
@@ -756,7 +761,7 @@ function ResultCard({ result, collapsed = false }: { result: AskResult; collapse
                             chunk {s.chunk_index + 1}/{s.total_chunks ?? "?"}
                           </span>
                         )}
-                        <span className="ml-auto text-[10px] font-mono text-zinc-700">
+                        <span className="ml-auto text-[10px] font-mono text-muted-foreground">
                           rec #{s.record_id}
                         </span>
                       </div>
@@ -770,7 +775,7 @@ function ResultCard({ result, collapsed = false }: { result: AskResult; collapse
                           </div>
                         </div>
                       ) : (
-                        <p className="text-xs text-zinc-700 italic">no text metadata</p>
+                        <p className="text-xs text-muted-foreground italic">no text metadata</p>
                       )}
                     </div>
                   ))}

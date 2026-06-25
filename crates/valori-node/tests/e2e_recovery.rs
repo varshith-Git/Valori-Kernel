@@ -223,6 +223,56 @@ fn test_metadata_persists_through_event_log_recovery() {
     }
 }
 
+// ── Test 4b: collections (namespaces) survive event-log recovery ──────────────
+//
+// Regression for the UI bug: after a hard restart, projects were visible (from
+// the UI manifest) but their collections vanished. Root cause: collection names
+// live only in `engine.namespaces`, which the event log does not carry and the
+// event-log recovery path did not rebuild. The fix mirrors the metadata sidecar:
+// `create_collection` writes `namespaces.json`, and `try_recover()` loads it.
+
+#[test]
+fn test_collections_persist_through_event_log_recovery() {
+    let dir = tempdir().unwrap();
+    let cfg = make_cfg(dir.path(), 4);
+
+    // Phase 1: create collections, insert a record into one, then "crash".
+    {
+        let mut engine = Engine::new(&cfg);
+        engine.try_recover();
+
+        let id_a = engine.create_collection("proj--docs").expect("create docs");
+        let _id_b = engine.create_collection("proj--notes").expect("create notes");
+
+        // Put a record in one collection so the event log is non-empty and the
+        // recovery path is EventLog (not Fresh).
+        engine.insert_record_from_f32_ns(&[1.0, 0.0, 0.0, 0.0], id_a)
+            .expect("insert into collection");
+        // Drop → event log flushed; namespace sidecar already written.
+    }
+
+    // Phase 2: new engine recovers; collection names must come back.
+    {
+        let mut engine2 = Engine::new(&cfg);
+        let mode = engine2.try_recover();
+        assert!(
+            matches!(mode, RecoveryMode::EventLog(_)),
+            "expected EventLog recovery, got {:?}", mode
+        );
+
+        let names: Vec<String> = engine2.list_collections()
+            .into_iter().map(|(n, _)| n).collect();
+        assert!(names.contains(&"proj--docs".to_string()),
+            "collection 'proj--docs' must survive restart, got {:?}", names);
+        assert!(names.contains(&"proj--notes".to_string()),
+            "collection 'proj--notes' must survive restart, got {:?}", names);
+
+        // Names must still resolve to the same ids (so existing records map back).
+        assert!(engine2.namespaces.resolve(Some("proj--docs")).is_some(),
+            "'proj--docs' must resolve after recovery");
+    }
+}
+
 // ── Test 5: search index is rebuilt correctly after recovery ──────────────────
 
 #[test]
