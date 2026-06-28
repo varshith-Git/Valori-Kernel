@@ -45,15 +45,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install maturin
-        run: pip install maturin
+      - name: Create virtualenv and install maturin
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install maturin
 
       - name: Build and install valoricore wheel
-        # maturin develop compiles the Rust extension and installs it into the
-        # active Python environment in one step — no glob-expansion issues from
-        # matching multiple wheel files, and no path-relativity bugs.
+        # maturin develop installs into the active venv in one step -
+        # no glob-expansion issues, no path-relativity bugs.
         working-directory: python
-        run: maturin develop --release
+        run: ../.venv/bin/maturin develop --release
 
       - name: Run E2E tracer
-        run: python scripts/valori_e2e_tracer.py
+        run: .venv/bin/python scripts/valori_e2e_tracer.py
