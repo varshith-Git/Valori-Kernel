@@ -6,7 +6,7 @@
 
 ### The Official Python SDK for **Valori-Kernel**
 
-*AI Memory That Is Cryptographically Auditable — By Design*
+*AI Memory That Is Cryptographically Auditable - By Design*
 
 <br/>
 
@@ -20,13 +20,13 @@
 
 ---
 
-`valoricore` is the official Python SDK for [**Valori-Kernel**](https://github.com/varshith-Git/Valori-Kernel) — a `no_std` Rust engine that makes AI memory **reproducible and provable**.
+`valoricore` is the official Python SDK for [**Valori-Kernel**](https://github.com/varshith-Git/Valori-Kernel) - a `no_std` Rust engine that makes AI memory **reproducible and provable**.
 
-Standard vector databases use floating-point arithmetic, which produces different search results on different CPUs. When a regulator or auditor asks you to replay an AI decision, you cannot guarantee the replay produces the same result on different hardware — or even on the same hardware after a library upgrade.
+Standard vector databases use floating-point arithmetic, which produces different search results on different CPUs. When a regulator or auditor asks you to replay an AI decision, you cannot guarantee the replay produces the same result on different hardware - or even on the same hardware after a library upgrade.
 
-Valori fixes this by unifying **Vector Memory** and **Knowledge Graphs** using **Q16.16 fixed-point arithmetic**, producing bit-identical results across x86, ARM, and RISC-V. Every insert is recorded in a BLAKE3-chained event log. The entire state is summarised in a single **Merkle root hash** you can store, compare, and prove — without touching the database.
+Valori fixes this by unifying **Vector Memory** and **Knowledge Graphs** using **Q16.16 fixed-point arithmetic**, producing bit-identical results across x86, ARM, and RISC-V. Every insert is recorded in a BLAKE3-chained event log. The entire state is summarised in a single **Merkle root hash** you can store, compare, and prove - without touching the database.
 
-**The core use case:** any system where the AI's memory must be reproducible, tamper-evident, and independently verifiable. Finance, legal tech, autonomous systems, or any regulated environment where "trust, but verify" is a legal requirement — not an aspiration.
+**The core use case:** any system where the AI's memory must be reproducible, tamper-evident, and independently verifiable. Finance, legal tech, autonomous systems, or any regulated environment where "trust, but verify" is a legal requirement - not an aspiration.
 
 ---
 
@@ -46,27 +46,27 @@ Valori fixes this by unifying **Vector Memory** and **Knowledge Graphs** using *
 
 ## For Compliance & Audit Teams
 
-Valori is not a black box. Every state change is written to a BLAKE3-chained append-only event log. An auditor or compliance officer can independently verify what data an AI system saw — without accessing the production database, without trusting the server, and without re-running the model.
+Valori is not a black box. Every state change is written to a BLAKE3-chained append-only event log. An auditor or compliance officer can independently verify what data an AI system saw - without accessing the production database, without trusting the server, and without re-running the model.
 
 ```python
 from valoricore import ingest_embedding, generate_proof, verify_embedding
 
-# Step 1 — AI system ingests a vector in production and stores the proof
+# Step 1 - AI system ingests a vector in production and stores the proof
 vector      = [0.142, 0.897, 0.334, 0.561]   # e.g. an embedding of a document
 fixed_vals  = ingest_embedding(vector)         # convert to deterministic Q16.16
-proof_hex   = generate_proof(fixed_vals)       # BLAKE3 Merkle node — store this
+proof_hex   = generate_proof(fixed_vals)       # BLAKE3 Merkle node - store this
 
 print(f"Proof: {proof_hex}")
 # → "a3f2c1d9..." (64-char hex)
 
-# Step 2 — Auditor verifies it independently, months later, on any machine
+# Step 2 - Auditor verifies it independently, months later, on any machine
 is_valid = verify_embedding(floats=vector, claimed_hash=proof_hex)
-print(f"Verified: {is_valid}")   # True — math doesn't lie
+print(f"Verified: {is_valid}")   # True - math doesn't lie
 ```
 
-The proof is computed entirely in Rust (via the embedded FFI) with no network calls. It is deterministic because the underlying arithmetic is fixed-point — no floating-point rounding, no hardware-dependent results.
+The proof is computed entirely in Rust (via the embedded FFI) with no network calls. It is deterministic because the underlying arithmetic is fixed-point - no floating-point rounding, no hardware-dependent results.
 
-**What the state hash proves:** that the database contained exactly these records, in exactly this order, at the time the hash was recorded. Any tampering — insert, delete, or reorder — produces a different hash.
+**What the state hash proves:** that the database contained exactly these records, in exactly this order, at the time the hash was recorded. Any tampering - insert, delete, or reorder - produces a different hash.
 
 ---
 
@@ -119,7 +119,7 @@ from valoricore.embeddings import SentenceTransformerEmbedder
 embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
 client   = MemoryClient(path="./my_valori_db")
 
-# Insert a document — chunked, embedded, and stored in the Knowledge Graph
+# Insert a document - chunked, embedded, and stored in the Knowledge Graph
 client.add_document(
     text  = "Loan approved for application #A-20241107 at 14:32 UTC.",
     embed = embedder,
@@ -132,15 +132,15 @@ hits = client.semantic_search("loan approval decisions", embed=embedder, k=3)
 # Every insert changes this hash deterministically.
 # Run this on Apple Silicon, Intel, or ARM: the output is identical.
 print(f"State hash: {client.get_state_hash()}")
-# → e3b0c44298fc1c149afb...  (64-char BLAKE3 hex — the same on every machine)
+# → e3b0c44298fc1c149afb...  (64-char BLAKE3 hex - the same on every machine)
 ```
 
-This hash is your cryptographic receipt. Store it in a database, a blockchain, or an audit log. Anyone holding this hash and the original data can verify the state independently — no network connection, no trust in the server required.
+This hash is your cryptographic receipt. Store it in a database, a blockchain, or an audit log. Anyone holding this hash and the original data can verify the state independently - no network connection, no trust in the server required.
 
 ### Interactive Colab Notebooks
 
 Test Valoricore in your browser with zero local setup:
-- [**End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) — Determinism, Knowledge Graph, Crypto Proofs
+- [**End-to-End Demo**](https://colab.research.google.com/drive/1QO1yQMQoGbp9fwrb00KVKTq5bYVGXgJv#scrollTo=hM-PiglYd20l) - Determinism, Knowledge Graph, Crypto Proofs
 - [**LangChain Integration**](https://colab.research.google.com/drive/1HezK4l-Hbc6AdHxJNLwSqAgzr8WaKhiq#scrollTo=Hxcyq4OkN0MO)
 - [**LlamaIndex Integration**](https://colab.research.google.com/drive/1Q72ANZxBm1fthNpgVW-FftS8sZz6uCr3#scrollTo=XHFOODSTVE6N)
 
@@ -182,11 +182,11 @@ from valoricore.embeddings import OpenAIEmbedder
 
 embedder = OpenAIEmbedder()
 
-# MemoryClient — high-level, same API as local embedded
+# MemoryClient - high-level, same API as local embedded
 client = MemoryClient(remote="http://my-valori-node:3000")
 result = client.add_document(text="Remote deployment with full audit trail.", embed=embedder)
 
-# SyncRemoteClient — lower-level, direct access to all endpoints
+# SyncRemoteClient - lower-level, direct access to all endpoints
 from valoricore import SyncRemoteClient, NotLeaderError
 
 node = SyncRemoteClient("http://my-valori-node:3000", max_retries=5, retry_backoff=0.3)
@@ -198,7 +198,7 @@ if not node.cluster_health():
 status = node.cluster_status()
 print(f"Leader: node {status['leader']}  Term: {status['term']}")
 
-# Insert — redirects to the leader automatically
+# Insert - redirects to the leader automatically
 record_id = node.insert([0.1, 0.2, 0.3, 0.4])
 
 # Linearizable read: reflects every write committed before this read (default in cluster mode)
@@ -208,14 +208,14 @@ hits = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="linearizable")
 hits_local = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="local")
 ```
 
-### 2b · Tree-RAG — navigate to the right *section* (not just similar text)
+### 2b · Tree-RAG - navigate to the right *section* (not just similar text)
 
 Two retrieval styles ship side by side; pick whichever fits the query:
 
-- **Vector search** (`search`) — "find me text *similar* to this embedding".
-- **Tree-RAG** (`tree_build` → `tree_query`) — "read the table of contents and
+- **Vector search** (`search`) - "find me text *similar* to this embedding".
+- **Tree-RAG** (`tree_build` → `tree_query`) - "read the table of contents and
   jump to the *right section*", with a breadcrumb + line citation and a
-  **replayable BLAKE3 receipt**. Deterministic — no embeddings, no LLM.
+  **replayable BLAKE3 receipt**. Deterministic - no embeddings, no LLM.
 
 Tree-RAG shines on documents with vocabulary-overlapping sections, where plain
 vector search confuses neighbours (e.g. *Annual Leave* vs *Sick Leave*).
@@ -227,17 +227,17 @@ node = SyncRemoteClient("http://my-valori-node:3000")
 
 handbook = open("employee_handbook.md").read()
 
-# 1. Build the navigable tree once (stateless — you hold the returned tree)
+# 1. Build the navigable tree once (stateless - you hold the returned tree)
 built = node.tree_build(handbook, doc_name="handbook")
 print(built["node_count"], "sections")
 
-# 2. Ask — lands on the right section, returns a citation + receipt
+# 2. Ask - lands on the right section, returns a citation + receipt
 ans = node.tree_query(built["tree"], "how many sick days do I get?")
 print(ans["answer"])                     # the verbatim Sick Leave section
 print(ans["citations"][0]["breadcrumb"]) # "Acme Corp Employee Handbook > 2. Leave > 2.2 Sick Leave"
 print(ans["citations"][0]["lines"])      # e.g. [40, 42]
 
-# 3. Prove it wasn't tampered with — replay the receipt
+# 3. Prove it wasn't tampered with - replay the receipt
 assert node.tree_verify(built["tree"], ans["receipt"]) is True
 
 # Chain receipts across questions: pass the prior receipt_hash
@@ -277,7 +277,7 @@ Valori supports up to **1 024 named collections** (namespaces). Every data
 operation accepts an optional `collection` parameter. The `"default"` collection
 always exists and cannot be dropped.
 
-Records in different collections are **fully isolated** — a search scoped to
+Records in different collections are **fully isolated** - a search scoped to
 `"tenant-acme"` never returns records from `"tenant-beta"` or the default
 collection, and vice versa.
 
@@ -290,7 +290,7 @@ client = SyncRemoteClient("http://localhost:3000")
 result = client.create_collection("tenant-acme")
 # {"name": "tenant-acme", "id": 1, "created": True}
 
-# Idempotent — same name returns the existing ID
+# Idempotent - same name returns the existing ID
 result2 = client.create_collection("tenant-acme")
 # {"name": "tenant-acme", "id": 1, "created": False}
 
@@ -311,12 +311,12 @@ batch_ids = client.insert_batch(
 # Only "tenant-acme" records are considered.
 hits = client.search([0.1, 0.2, 0.3, 0.4], k=5, collection="tenant-acme")
 
-# Default search — never includes "tenant-acme" records.
+# Default search - never includes "tenant-acme" records.
 default_hits = client.search([0.1, 0.2, 0.3, 0.4], k=5)
 
 # ── Drop ──────────────────────────────────────────────────────────────────────
 client.drop_collection("tenant-acme")   # 204, removes all scoped records
-# client.drop_collection("default")    # raises ValueError — default is protected
+# client.drop_collection("default")    # raises ValueError - default is protected
 ```
 
 Collections work identically in async mode:
@@ -345,7 +345,7 @@ client at any node; the SDK follows the redirect automatically.
 ```python
 from valoricore import SyncRemoteClient
 
-# Any node — redirects to leader for writes
+# Any node - redirects to leader for writes
 node = SyncRemoteClient("http://cluster-node-1:3000")
 
 # Create the collection (leader-only, 307-redirect handled automatically)
@@ -356,7 +356,7 @@ for url in ["http://cluster-node-1:3000", "http://cluster-node-2:3000"]:
     c = SyncRemoteClient(url)
     c.insert([0.1, 0.2, 0.3, 0.4], collection="tenant-acme")
 
-# Search on any node — linearizable consistency ensures it reflects all writes
+# Search on any node - linearizable consistency ensures it reflects all writes
 hits = node.search([0.1, 0.2, 0.3, 0.4], k=5,
                    collection="tenant-acme",
                    consistency="linearizable")
@@ -417,7 +417,7 @@ async def pipeline():
 A **Record** is a dense Q16.16 fixed-point vector stored in the kernel's `RecordPool`. Every insert returns an integer `record_id` and a BLAKE3 Merkle proof.
 
 ### Nodes & Edges (Knowledge Graph)
-A **Node** is a named entity that optionally points to a Record. An **Edge** is a directed relationship between two Nodes. Both live in the same memory space as the vector pool — no separate database.
+A **Node** is a named entity that optionally points to a Record. An **Edge** is a directed relationship between two Nodes. Both live in the same memory space as the vector pool - no separate database.
 
 ### Node Kinds
 
@@ -449,7 +449,7 @@ from valoricore import (
 
 ## Step-by-Step Usage Guide
 
-### Step 1 — Initialize
+### Step 1 - Initialize
 
 ```python
 from valoricore import MemoryClient
@@ -464,7 +464,7 @@ client = MemoryClient(
 # client = MemoryClient(remote="http://my-node:3000")
 ```
 
-### Step 2 — Ingest Documents
+### Step 2 - Ingest Documents
 
 ```python
 # From a string
@@ -483,7 +483,7 @@ result = client.add_document(text=load_text_from_file("report.pdf"), embed=embed
 result = client.upsert_vector(vector=[0.1, 0.2, ...])
 ```
 
-### Step 3 — Batch Insert
+### Step 3 - Batch Insert
 
 ```python
 # Batch insert (high-throughput)
@@ -496,7 +496,7 @@ for record_id, proof_bytes in results:
     print(f"id={record_id}  proof={proof_bytes.hex()[:16]}...")
 ```
 
-### Step 4 — Semantic Search
+### Step 4 - Semantic Search
 
 ```python
 hits = client.semantic_search(
@@ -510,17 +510,17 @@ for hit in hits:
     print(f"L2 Score  : {hit['score']}")   # lower = closer
 ```
 
-### Step 5 — Tag-Filtered Search
+### Step 5 - Tag-Filtered Search
 
 ```python
 # Insert with tags to segment by tenant, user, or document type
 client._db.insert([0.1] * 384, tag=42)
 
-# Search within a specific tag only — O(1) overhead, 100% accuracy
+# Search within a specific tag only - O(1) overhead, 100% accuracy
 hits = client._db.search([0.1] * 384, k=5, filter_tag=42)
 ```
 
-### Step 6 — Knowledge Graph (Fluent API)
+### Step 6 - Knowledge Graph (Fluent API)
 
 Valoricore ships a high-level **fluent API** so you never have to manage raw integer IDs.
 `db.node()`, `node.link_to()`, and `db.build_document()` handle everything in one or two lines.
@@ -533,7 +533,7 @@ from valoricore.kinds import NODE_DOCUMENT, NODE_CHUNK, EDGE_PARENT_OF, EDGE_REF
 
 client = MemoryClient(path="./my_db", dim=384)
 
-# Insert the embedding AND create the node in a single call — no manual ID juggling
+# Insert the embedding AND create the node in a single call - no manual ID juggling
 doc   = client.node(NODE_DOCUMENT)
 chunk = client.node(NODE_CHUNK, vector=my_embedding)  # inserts + creates, returns Node
 
@@ -557,7 +557,7 @@ children = doc.children(EDGE_PARENT_OF)
 # → [Node(id=1, ...), Node(id=2, ...), Node(id=3, ...)]
 ```
 
-#### `build_document` context manager — the RAG pattern in 3 lines
+#### `build_document` context manager - the RAG pattern in 3 lines
 
 ```python
 embeddings = [embed(chunk) for chunk in text_chunks]   # your embedding function
@@ -568,13 +568,13 @@ with client.build_document(title="Q4 Report") as builder:
 
 # After the block:
 doc_node   = builder.document    # root Node object
-chunk_rids = builder.record_ids  # [0, 1, 2, …]  — pass to search for RAG retrieval
+chunk_rids = builder.record_ids  # [0, 1, 2, …]  - pass to search for RAG retrieval
 ```
 
 #### Before vs After
 
 ```python
-# ── BEFORE (low-level — works, but tedious) ──────────────────────────────────
+# ── BEFORE (low-level - works, but tedious) ──────────────────────────────────
 rid1   = client._db.insert(emb1)
 rid2   = client._db.insert(emb2)
 doc_id = client.create_node(kind=NODE_DOCUMENT)
@@ -583,7 +583,7 @@ ch2    = client.create_node(kind=NODE_CHUNK, record_id=rid2)
 client.create_edge(from_id=doc_id, to_id=ch1, kind=EDGE_PARENT_OF)
 client.create_edge(from_id=doc_id, to_id=ch2, kind=EDGE_PARENT_OF)
 
-# ── AFTER (fluent — identical performance, far less code) ────────────────────
+# ── AFTER (fluent - identical performance, far less code) ────────────────────
 doc = client.node(NODE_DOCUMENT)
 doc.link_to([
     client.node(NODE_CHUNK, vector=emb1),
@@ -596,7 +596,7 @@ doc.link_to([
 ```python
 from valoricore.kinds import NODE_AGENT, NODE_DOCUMENT, EDGE_BY_AGENT
 
-# Agent node (no vector — it's a logical entity)
+# Agent node (no vector - it's a logical entity)
 agent = client.node(NODE_AGENT)
 
 # Document node linked to an embedding
@@ -605,7 +605,7 @@ doc = client.node(NODE_DOCUMENT, vector=my_embedding)
 # Wire the relationship
 agent.link_to(doc, EDGE_BY_AGENT)
 
-# Traversal — everything returned as Node objects
+# Traversal - everything returned as Node objects
 visited = agent.walk(max_depth=2)         # [Node, Node, …]
 rids    = agent.record_ids(max_depth=2)   # [0, 1, …]  for vector lookup
 
@@ -616,7 +616,7 @@ doc.delete()
 #### Low-level API (still fully supported)
 
 ```python
-# Raw integer IDs still work — the two styles mix freely
+# Raw integer IDs still work - the two styles mix freely
 raw_nid = client.create_node(kind=NODE_DOCUMENT)
 raw_eid = client.create_edge(from_id=raw_nid, to_id=chunk.id, kind=EDGE_PARENT_OF)
 
@@ -625,7 +625,7 @@ client.edge(doc, chunk, EDGE_REFERS_TO)    # Node objects
 client.edge(3, 7, EDGE_REFERS_TO)          # raw ints
 ```
 
-### Step 7 — Metadata
+### Step 7 - Metadata
 
 ```python
 import json
@@ -639,7 +639,7 @@ meta = json.loads(raw)
 print(meta["source"])   # "report.pdf"
 ```
 
-### Step 8 — Lifecycle
+### Step 8 - Lifecycle
 
 ```python
 # Permanently remove record from pool and search index
@@ -653,7 +653,7 @@ client.soft_delete(record_id=1)
 print(f"Active records: {client.record_count()}")
 ```
 
-### Step 9 — Snapshot, Restore, and Audit
+### Step 9 - Snapshot, Restore, and Audit
 
 ```python
 # Snapshot full kernel state to bytes
@@ -661,7 +661,7 @@ snap = client.snapshot()
 with open("state.snap", "wb") as f:
     f.write(snap)
 
-# Restore to a fresh engine — bit-exact
+# Restore to a fresh engine - bit-exact
 fresh = MemoryClient(path="./restored_db")
 fresh.restore(snap)
 
@@ -673,14 +673,14 @@ for event in client.get_timeline():
     print(event)
 ```
 
-### Step 10 — Cryptographic Proof Verification (Offline)
+### Step 10 - Cryptographic Proof Verification (Offline)
 
 ```python
 from valoricore import ingest_embedding, generate_proof, verify_embedding
 
 my_vector = [0.1] * 384
 
-# Generate a standalone proof — no DB connection required
+# Generate a standalone proof - no DB connection required
 fixed_values = ingest_embedding(my_vector)   # float → Q16.16
 proof_hex    = generate_proof(fixed_values)  # BLAKE3 Merkle node
 
@@ -689,16 +689,16 @@ is_valid = verify_embedding(floats=my_vector, claimed_hash=proof_hex)
 print(f"Proof valid: {is_valid}")   # True
 ```
 
-### Step 11 — Offline Event Log Verification
+### Step 11 - Offline Event Log Verification
 
 Replay an `events.log` through the same deterministic kernel and independently
-confirm the final state hash — **no running server, no Rust toolchain**. Works
+confirm the final state hash - **no running server, no Rust toolchain**. Works
 entirely in-process via the compiled extension that ships inside the wheel.
 
 ```python
 from valoricore.verify import verify_log
 
-# The live node's hash — recorded at close-of-business and stored in your audit DB
+# The live node's hash - recorded at close-of-business and stored in your audit DB
 expected = client.get_state_hash()   # 64-char BLAKE3 hex
 
 # Hours/days/months later, on any machine, with only pip install valoricore:
@@ -710,14 +710,14 @@ report = verify_log(
 
 print(report.verdict)           # "verified"
 print(report.events_replayed)   # e.g. 12 847
-print(report.state_hash)        # matches expected — math doesn't lie
+print(report.state_hash)        # matches expected - math doesn't lie
 ```
 
 If the log was tampered with, the `verdict` is one of:
-- `tampered_chain` — a BLAKE3 chain link breaks at a specific event (reports exact event number, byte offset, and commit timestamp)
-- `tampered_structural` — an entry failed to decode (truncation, bit-flip)
-- `tampered_semantic` — entry decoded but the kernel rejected it
-- `tampered_content` — chain is intact but final state hash differs from expected
+- `tampered_chain` - a BLAKE3 chain link breaks at a specific event (reports exact event number, byte offset, and commit timestamp)
+- `tampered_structural` - an entry failed to decode (truncation, bit-flip)
+- `tampered_semantic` - entry decoded but the kernel rejected it
+- `tampered_content` - chain is intact but final state hash differs from expected
 
 ```python
 from valoricore.verify import verify_log, TamperDetected
@@ -745,7 +745,7 @@ print(report.checkpoints_seen)
 
 ## Framework Integrations
 
-Both adapters live in `valoricore.integrations` — a single import, no adapter boilerplate,
+Both adapters live in `valoricore.integrations` - a single import, no adapter boilerplate,
 works in **local embedded** and **remote HTTP** modes without changing any code.
 
 ### LangChain
@@ -766,7 +766,7 @@ store = ValoricoreLangChain(
     index_kind = "hnsw",          # "bruteforce" | "hnsw" | "ivf"
 )
 
-# Add texts — batch embedded + batch inserted in one call
+# Add texts - batch embedded + batch inserted in one call
 store.add_texts(
     texts     = ["Valoricore is deterministic.", "Fixed-point arithmetic rocks."],
     metadatas = [{"source": "intro"}, {"source": "math"}],
@@ -827,7 +827,7 @@ answer = chain.run("What is deterministic AI memory?")
 # Insert records tagged by tenant
 store.add_texts(["tenant A doc"], metadatas=[{"tenant": "A"}])
 
-# Search only within a tag — O(1) overhead, 100% accuracy
+# Search only within a tag - O(1) overhead, 100% accuracy
 docs = store.similarity_search("query", k=5, filter_tag=42)
 ```
 
@@ -892,8 +892,8 @@ vector_store.restore(snap)             # bit-exact restore
 
 ```python
 from valoricore import (
-    ValoricoreError,       # base — catch all SDK errors
-    AuthenticationError,   # HTTP 401/403 — missing or invalid token
+    ValoricoreError,       # base - catch all SDK errors
+    AuthenticationError,   # HTTP 401/403 - missing or invalid token
     ValidationError,       # bad vector dimension / FXP out-of-range
     ConnectionError,       # remote node unreachable
     IntegrityError,        # BLAKE3 proof mismatch
@@ -985,7 +985,7 @@ Set these to boot a node as a Raft cluster member instead of standalone.
 
 | Variable | Description |
 |---|---|
-| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` — presence activates cluster mode. Example: `1=10.0.0.1:3100/10.0.0.1:3000,2=10.0.0.2:3100/10.0.0.2:3000` |
+| `VALORI_CLUSTER_MEMBERS` | `id=raft_addr/api_addr,…` - presence activates cluster mode. Example: `1=10.0.0.1:3100/10.0.0.1:3000,2=10.0.0.2:3100/10.0.0.2:3000` |
 | `VALORI_NODE_ID` | This node's integer ID (must appear in `VALORI_CLUSTER_MEMBERS`). |
 | `VALORI_RAFT_BIND` | gRPC consensus listener address (default `0.0.0.0:3100`). |
 | `VALORI_CLUSTER_INIT` | Set to `1` on exactly one node of a brand-new cluster to bootstrap it. |
@@ -1032,7 +1032,7 @@ Set these to boot a node as a Raft cluster member instead of standalone.
 | `get_state_hash()` | 64-char BLAKE3 hex digest of the entire kernel state |
 | `get_timeline()` | Chronological list of all state transitions from the event log |
 
-#### Knowledge Graph — Fluent API *(recommended)*
+#### Knowledge Graph - Fluent API *(recommended)*
 | Method | Returns | Description |
 |---|---|---|
 | `node(kind, vector=None, tag=0)` | `Node` | Create a node; optionally insert a vector and link it in one call |
@@ -1058,7 +1058,7 @@ Set these to boot a node as a Raft cluster member instead of standalone.
 | `builder.chunks` | Ordered list of chunk `Node` objects |
 | `builder.record_ids` | List of vector record IDs in insertion order |
 
-#### Knowledge Graph — Low-Level API *(still fully supported)*
+#### Knowledge Graph - Low-Level API *(still fully supported)*
 | Method | Description |
 |---|---|
 | `create_node(kind, record_id)` | Create a graph node; returns integer node ID |
@@ -1098,15 +1098,15 @@ No client-side chunking or embedding required when the node has `VALORI_EMBED_PR
 
 | Method | Returns | Description |
 |---|---|---|
-| `chunk_document(text, strategy, collection, source, chunk_size, chunk_overlap)` | `{"strategy_used", "chunk_count", "chunks": [{"index","title","text"}]}` | Server-side chunking only — no vectors inserted. `strategy`: `auto\|tree\|conversation\|sentence\|fixed` |
+| `chunk_document(text, strategy, collection, source, chunk_size, chunk_overlap)` | `{"strategy_used", "chunk_count", "chunks": [{"index","title","text"}]}` | Server-side chunking only - no vectors inserted. `strategy`: `auto\|tree\|conversation\|sentence\|fixed` |
 | `ingest(text, source, strategy, collection, chunk_size, chunk_overlap)` | `{"ok", "document_node_id", "strategy_used", "chunk_count", "record_ids", "collection"}` | Full pipeline: chunk + embed + insert + graph nodes + metadata. Requires `VALORI_EMBED_PROVIDER` on node. Returns `422` if not configured. |
 
 ```python
-# Chunking only (no embed step — works without VALORI_EMBED_PROVIDER)
+# Chunking only (no embed step - works without VALORI_EMBED_PROVIDER)
 result = client.chunk_document(text, strategy="tree", collection="research")
 # → {"strategy_used": "tree", "chunk_count": 31, "chunks": [...]}
 
-# Full pipeline — node handles chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
+# Full pipeline - node handles chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
 result = client.ingest(text, source="paper.pdf", strategy="auto", collection="research")
 # → {"ok": True, "document_node_id": 42, "chunk_count": 31,
 #    "record_ids": [1,2,...31], "strategy_used": "tree", "collection": "research"}
@@ -1132,12 +1132,12 @@ proof = generate_proof(fixed)               # → hex string (BLAKE3 Merkle root
 ok    = verify_embedding([0.1, 0.2, 0.3], proof)  # → bool
 ```
 
-These functions are implemented in Rust (via PyO3) and work offline — no running engine required.
+These functions are implemented in Rust (via PyO3) and work offline - no running engine required.
 
 ---
 
 ## License
 
-MIT OR Apache-2.0 — see [LICENSE-MIT](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE-MIT).
+MIT OR Apache-2.0 - see [LICENSE-MIT](https://github.com/varshith-Git/Valori-Kernel/blob/main/LICENSE-MIT).
 
 You may use Valoricore in proprietary, commercial, and on-premise deployments without any copyleft obligations. For enterprise support, SLA agreements, or custom deployment assistance, contact: varshith.gudur17@gmail.com
