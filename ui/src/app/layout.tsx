@@ -30,6 +30,7 @@ export default function RootLayout({
       /* Start in dark — the inline script below immediately corrects to the
          stored preference before first paint, preventing flash of wrong theme. */
       className={`${geistSans.variable} ${geistMono.variable} h-full dark antialiased`}
+      suppressHydrationWarning
     >
       <head>
         {/* FOUC prevention: runs synchronously before CSS is parsed.
