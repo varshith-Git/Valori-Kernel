@@ -1112,6 +1112,30 @@ result = client.ingest(text, source="paper.pdf", strategy="auto", collection="re
 #    "record_ids": [1,2,...31], "strategy_used": "tree", "collection": "research"}
 ```
 
+#### Community layer (GraphRAG global sensemaking)
+
+| Method | Returns | Description |
+|---|---|---|
+| `community_detect(namespace=, max_iter=)` | `{"community_count", "node_count", "communities", "receipt"}` | Run Label Propagation on the graph to assign every node a community. Must be called before the other two methods. |
+| `community_search(vector, k=, namespace=, depth=, drill_in=)` | `{"communities", "total_communities_searched"}` | Score a query vector against community centroids and return top-k communities. |
+| `community_overview()` | `{"community_count", "node_count", "receipt", "communities"}` | Return all communities sorted by size (largest first), each with its centroid vector, member count, and sample node IDs. No LLM required. |
+| `extract_entities(text, namespace=, entity_types=, model=)` | `{"entities", "edges", "record_ids"}` | Extract entity nodes and relationship edges from text via LLM. Requires `VALORI_EMBED_PROVIDER`. |
+
+```python
+# 1. Detect communities from the current graph
+result = client.community_detect()
+print(result["community_count"])   # e.g. 7
+
+# 2. Global overview - what themes exist across the knowledge base?
+overview = client.community_overview()
+for c in overview["communities"]:
+    print(f"Community {c['community_id']}: {c['member_count']} nodes")
+    # centroid vector is in c["centroid"] - use it for your own similarity
+
+# 3. Semantic community search - which communities match this query?
+hits = client.community_search([0.1, 0.2, ...], k=3, drill_in=True)
+```
+
 #### Cluster
 
 | Method | Returns | Description |
