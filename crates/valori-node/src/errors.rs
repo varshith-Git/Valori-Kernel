@@ -29,6 +29,14 @@ impl IntoResponse for EngineError {
                 KernelError::InvalidOperation => (StatusCode::BAD_REQUEST, "Invalid operation".to_string()),
                 KernelError::Overflow => (StatusCode::INTERNAL_SERVER_ERROR, "Numeric overflow".to_string()),
                 KernelError::InvalidInput => (StatusCode::BAD_REQUEST, "Invalid input".to_string()),
+                KernelError::MetadataTooLarge => (StatusCode::BAD_REQUEST, "Metadata too large (max 4 KB)".to_string()),
+                KernelError::DimensionMismatch { expected, found } => (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Dimension mismatch: node expects {expected}-element vectors, got {found}. \
+                         Use VALORI_DIM={expected} when starting the node, or send {expected}-element vectors."
+                    ),
+                ),
                 _ => (StatusCode::INTERNAL_SERVER_ERROR, "Kernel error".to_string()),
             },
             EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),

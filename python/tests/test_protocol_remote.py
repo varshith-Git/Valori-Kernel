@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 import unittest
 from unittest.mock import MagicMock, patch
 from valoricore.protocol import ProtocolClient, ProtocolError

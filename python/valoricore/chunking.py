@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 from typing import List
 
 def split_by_sentences(text: str, max_chars: int = 512) -> List[str]:

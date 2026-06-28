@@ -385,4 +385,4 @@ SIFT1M vectors should be placed at `data/sift/sift/sift_base.fvecs`.
 
 ## License
 
-AGPLv3 — see the root `LICENSE` file.
+MIT OR Apache-2.0 — see `LICENSE-MIT` and `LICENSE-APACHE` at the repo root.

@@ -1,8 +1,8 @@
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 import time
 import uuid
 import logging
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
