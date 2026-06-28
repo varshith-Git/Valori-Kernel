@@ -7,7 +7,7 @@ name = "valoricore"
 dynamic = ["version"]
 description = "Deterministic Knowledge Graph & Vector Engine with Bit-Exact Audit Trails"
 authors = [
-    { name = "Varshith Gudur" }
+    { name = "Varshith Gudur", email = "varshith.gudur17@gmail.com" }
 ]
 readme = "valoricore_readme.md"
 requires-python = ">=3.8"
