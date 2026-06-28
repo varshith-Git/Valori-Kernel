@@ -398,10 +398,24 @@ impl ValoriHNSW {
             )));
         }
 
-        // 2. Setup
+        // 2. Setup — hard caps prevent OOM from crafted snapshots (H-3).
+        const MAX_VECTORS: usize = 10_000_000;
+        const MAX_DIM: usize = 65_536;
         let count = reader.read_u64::<LittleEndian>().map_err(KernelError::IoError)? as usize;
         let dim = reader.read_u32::<LittleEndian>().map_err(KernelError::IoError)? as usize;
-        
+        if count > MAX_VECTORS {
+            return Err(KernelError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("snapshot vector count {count} exceeds cap {MAX_VECTORS}"),
+            )));
+        }
+        if dim > MAX_DIM {
+            return Err(KernelError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("snapshot dim {dim} exceeds cap {MAX_DIM}"),
+            )));
+        }
+
         let mut vectors = Vec::with_capacity(count * dim);
         let mut external_ids = Vec::with_capacity(count);
         let mut metadata = Vec::with_capacity(count);
@@ -434,15 +448,34 @@ impl ValoriHNSW {
             }
         }
 
-        // 4. Graph Structure
+        // 4. Graph Structure — cap layers/neighbors to prevent OOM (H-3).
+        const MAX_LAYERS: usize = 20;
         let num_layers = reader.read_u32::<LittleEndian>().map_err(KernelError::IoError)? as usize;
+        if num_layers > MAX_LAYERS {
+            return Err(KernelError::IoError(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("snapshot layer count {num_layers} exceeds cap {MAX_LAYERS}"),
+            )));
+        }
         let mut layers = Vec::with_capacity(num_layers);
-        
+
         for _ in 0..num_layers {
             let node_count = reader.read_u32::<LittleEndian>().map_err(KernelError::IoError)? as usize;
+            if node_count > MAX_VECTORS {
+                return Err(KernelError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "snapshot node_count per layer exceeds cap",
+                )));
+            }
             let mut layer = Vec::with_capacity(node_count);
             for _ in 0..node_count {
                  let n_count = reader.read_u32::<LittleEndian>().map_err(KernelError::IoError)? as usize;
+                 if n_count > M_MAX * 2 {
+                     return Err(KernelError::IoError(std::io::Error::new(
+                         std::io::ErrorKind::InvalidData,
+                         format!("snapshot neighbor count {n_count} exceeds cap"),
+                     )));
+                 }
                  let mut neighbors = Vec::with_capacity(n_count);
                  for _ in 0..n_count {
                      neighbors.push(reader.read_u32::<LittleEndian>().map_err(KernelError::IoError)?);

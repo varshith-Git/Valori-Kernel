@@ -29,6 +29,76 @@ use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
 
+/// Validate that a user-supplied path is safe to use for file operations.
+///
+/// Rules (C-1 / C-2 / M-3):
+/// - No `..` components (directory traversal).
+/// - If `allowed_dir` is Some, the resolved path must be a child of it.
+/// - If `allowed_dir` is None and the path is absolute, it is rejected.
+/// Post-filter search hits against a metadata predicate.
+/// Fetches each record's metadata from the store and drops non-matching hits.
+fn apply_metadata_filter(
+    hits: impl Iterator<Item = (u32, f32)>,
+    filter: Option<&serde_json::Map<String, serde_json::Value>>,
+    meta_store: &crate::metadata::MetadataStore,
+    limit: usize,
+) -> Vec<(u32, f32)> {
+    match filter {
+        None => hits.take(limit).collect(),
+        Some(f) => hits
+            .filter(|(id, _)| {
+                let key = format!("rec:{id}");
+                match meta_store.get(&key) {
+                    Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                    None => false,
+                }
+            })
+            .take(limit)
+            .collect(),
+    }
+}
+
+fn safe_path(
+    raw: &str,
+    allowed_dir: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, EngineError> {
+    let p = std::path::Path::new(raw);
+    // Reject any ".." component.
+    for comp in p.components() {
+        if comp == std::path::Component::ParentDir {
+            return Err(EngineError::InvalidInput(
+                "path traversal ('..') is not allowed".into(),
+            ));
+        }
+    }
+    match allowed_dir {
+        Some(dir) => {
+            // Build the candidate: if raw is relative, join to dir; if absolute, check prefix.
+            let candidate = if p.is_absolute() { p.to_path_buf() } else { dir.join(p) };
+            // Canonicalize dir so symlinks don't escape.
+            let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+            let canon_cand = candidate.canonicalize().unwrap_or(candidate.clone());
+            if !canon_cand.starts_with(&canon_dir) {
+                return Err(EngineError::InvalidInput(format!(
+                    "path must be inside the configured data directory ({})",
+                    canon_dir.display()
+                )));
+            }
+            Ok(candidate)
+        }
+        None => {
+            // No configured dir — reject absolute paths entirely.
+            if p.is_absolute() {
+                return Err(EngineError::InvalidInput(
+                    "absolute paths are not allowed when no data directory is configured; \
+                     set VALORI_SNAPSHOT_PATH or VALORI_EVENT_LOG_PATH".into(),
+                ));
+            }
+            Ok(p.to_path_buf())
+        }
+    }
+}
+
 async fn auth_guard_v2(
     Extension(auth): Extension<Arc<AuthState>>,
     req: AxumRequest,
@@ -59,9 +129,10 @@ async fn auth_guard_v2(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Legacy static token fallback — treated as admin.
+    // Legacy static token fallback — constant-time compare to prevent timing oracle (H-1).
     if let Some(ref legacy) = auth.legacy_token {
-        if token == legacy {
+        use subtle::ConstantTimeEq;
+        if token.as_bytes().ct_eq(legacy.as_bytes()).into() {
             return Ok(next.run(req).await);
         }
     }
@@ -69,9 +140,25 @@ async fn auth_guard_v2(
     Err(StatusCode::UNAUTHORIZED)
 }
 
-fn make_cors_layer(origin: &Option<String>) -> Option<CorsLayer> {
+/// Build the CORS layer.
+///
+/// H-5: `VALORI_CORS_ORIGIN=*` with auth enabled is a misconfiguration —
+/// it lets any website make authenticated cross-origin requests. Callers
+/// must pass the legacy token / key store to allow this check.
+fn make_cors_layer(
+    origin: &Option<String>,
+    has_auth: bool,
+) -> Option<CorsLayer> {
     let origin = origin.as_deref()?;
     let layer = if origin == "*" {
+        if has_auth {
+            panic!(
+                "FATAL: VALORI_CORS_ORIGIN=* is set together with authentication. \
+                 This allows any website to make authenticated requests to Valori (H-5). \
+                 Use a specific origin (e.g. VALORI_CORS_ORIGIN=http://localhost:3000) \
+                 or disable auth for a fully local-only deployment."
+            );
+        }
         CorsLayer::permissive()
     } else {
         let hv: axum::http::HeaderValue = origin
@@ -164,6 +251,16 @@ pub fn build_router_with_keys(
         .route("/v1/index/config", axum::routing::get(index_config_handler))
         // Built-in document ingestion — Phase 1: chunking only
         .route("/v1/ingest/document", post(crate::ingest::ingest_document))
+        // Tree-RAG — stateful (cache) + stateless verify
+        .route("/v1/tree/build",         post(tree_build))
+        .route("/v1/tree/query",         post(tree_query))
+        .route("/v1/tree/hybrid",        post(tree_hybrid))
+        .route("/v1/tree/verify",        post(crate::tree_rag::tree_verify))
+        .route("/v1/tree/chain-verify",  post(crate::tree_rag::tree_chain_verify))
+        // Phase I6: Community layer — detection, search, entity extraction
+        .route("/v1/community/detect",          post(community_detect))
+        .route("/v1/community/search",          post(community_search))
+        .route("/v1/ingest/extract-entities",   post(extract_entities))
         // Built-in document ingestion — Phase 2: chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
         .route("/v1/ingest", post(crate::ingest::ingest))
         .merge(key_routes)
@@ -173,7 +270,8 @@ pub fn build_router_with_keys(
         key_store: key_store.clone(),
         legacy_token: auth_token,
     });
-    if auth.has_any_auth() {
+    let has_auth = auth.has_any_auth();
+    if has_auth {
         tracing::info!("Auth Enabled");
     } else {
         tracing::warn!("Auth Disabled: no token or keys configured");
@@ -185,8 +283,14 @@ pub fn build_router_with_keys(
         .layer(axum::middleware::from_fn(auth_guard_v2))
         .layer(Extension(auth));
 
-    let mut router = Router::new().merge(public).merge(protected);
-    if let Some(cors) = make_cors_layer(&cors_origin) {
+    // H-2: Global body size limit — prevent OOM via unbounded request bodies.
+    // Snapshot upload (binary) legitimately needs more room; everything else
+    // uses JSON that should never exceed 32 MB.
+    let mut router = Router::new()
+        .merge(public)
+        .merge(protected)
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(32 * 1024 * 1024));
+    if let Some(cors) = make_cors_layer(&cors_origin, has_auth) {
         tracing::info!("CORS enabled: origin = {:?}", cors_origin);
         router = router.layer(cors);
     }
@@ -242,12 +346,20 @@ async fn snapshot_save(
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
     let engine = state.read().await;
-    let path = req.path.map(std::path::PathBuf::from);
+    // If the request supplies a path, validate it against the configured snapshot dir.
+    let path = req.path.as_deref().map(|raw| {
+        let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
+        safe_path(raw, allowed)
+    }).transpose()?.map(std::path::PathBuf::from);
     let used_path = engine.save_snapshot(path.as_deref())?;
-    
+    // Return only the filename, not the full filesystem path (L-1).
+    let filename = used_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "snapshot".into());
     Ok(Json(SnapshotSaveResponse {
         success: true,
-        path: used_path.to_string_lossy().to_string(),
+        path: filename,
     }))
 }
 
@@ -256,15 +368,14 @@ async fn snapshot_restore(
     Json(req): Json<SnapshotRestoreRequest>,
 ) -> Result<Json<SnapshotRestoreResponse>, EngineError> {
     let mut engine = state.write().await;
-    let path = std::path::PathBuf::from(req.path);
-    
+    // Validate path against configured snapshot directory.
+    let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
+    let path = safe_path(&req.path, allowed)?;
     if !path.exists() {
-        return Err(EngineError::InvalidInput(format!("Snapshot not found at {:?}", path)));
+        return Err(EngineError::InvalidInput(format!("snapshot not found: {}", path.display())));
     }
-    
     let data = tokio::fs::read(&path).await.map_err(|e| EngineError::InvalidInput(e.to_string()))?;
     engine.restore(&data)?;
-    
     Ok(Json(SnapshotRestoreResponse { success: true }))
 }
 
@@ -360,28 +471,38 @@ async fn search(
     // disable), else the server default. 0 / None => pure distance ranking.
     let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
 
+    // When metadata_filter is set, over-fetch a wider pool so post-filtering
+    // has enough candidates to fill k results.
+    let mf = payload.metadata_filter.as_ref();
+    let base_k = if mf.is_some() {
+        payload.k.saturating_mul(10).max(100).min(5000)
+    } else {
+        payload.k
+    };
+
     if half_life == 0 {
         let use_rerank = payload.rerank && payload.query_text.is_some()
             && !engine.reranker.is_empty();
         let fetch_k = if use_rerank {
-            (payload.k * crate::valori_reranker::POOL_FACTOR).max(payload.k)
+            (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
         } else {
-            payload.k
+            base_k
         };
         let hits = if ns == 0 {
             engine.search_l2(&payload.query, fetch_k)?
         } else {
             engine.search_l2_ns(&payload.query, fetch_k, ns)?
         };
-        let final_hits = if use_rerank {
+        let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, payload.k);
+        let final_hits = if use_rerank && mf.is_none() {
             let query_text = payload.query_text.as_deref().unwrap_or("");
-            let candidates: Vec<(u64, f32)> = hits.iter().map(|(id, s)| (*id as u64, *s)).collect();
+            let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
             let reranked = engine.reranker.rerank(query_text, candidates);
             reranked.into_iter().take(payload.k)
                 .map(|(id, score)| SearchHit { id: id as u32, score, decay_factor: None, age_secs: None })
                 .collect()
         } else {
-            hits.into_iter().take(payload.k)
+            filtered.into_iter()
                 .map(|(id, score)| SearchHit { id, score, decay_factor: None, age_secs: None })
                 .collect()
         };
@@ -390,7 +511,7 @@ async fn search(
 
     // Decay path: over-fetch a bounded pool, re-rank by decayed distance,
     // then trim to k. This lets a fresh near-match overtake a stale better one.
-    let pool = payload.k.saturating_mul(4).max(50).min(1000);
+    let pool = base_k.saturating_mul(4).max(50).min(5000);
     let raw = if ns == 0 {
         engine.search_l2(&payload.query, pool)?
     } else {
@@ -406,8 +527,20 @@ async fn search(
             created_at: engine.record_created_at(id),
         })
         .collect();
-    let results = crate::decay::rerank(candidates, now, half_life, payload.k)
-        .into_iter()
+    let decayed = crate::decay::rerank(candidates, now, half_life, pool);
+    let results: Vec<SearchHit> = decayed.into_iter()
+        .filter(|h| {
+            if let Some(f) = mf {
+                let key = format!("rec:{}", h.id);
+                match engine.metadata.get(&key) {
+                    Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                    None => false,
+                }
+            } else {
+                true
+            }
+        })
+        .take(payload.k)
         .map(|h| SearchHit {
             id: h.id,
             score: h.distance,
@@ -504,7 +637,7 @@ async fn search_as_of(
         replay.search_l2_ns(&fxp_query, &mut results_buf, ns)
     };
     let results: Vec<SearchHit> = results_buf[..found].iter().map(|r| {
-        let score = r.score.0 as f32 / (SCALE as f32 * SCALE as f32);
+        let score = r.score as f32 / (SCALE as f32 * SCALE as f32);
         // Decay is a "now"-relative re-rank; it is intentionally NOT applied to
         // point-in-time (as_of) queries, which reconstruct a historical state.
         SearchHit { id: r.id.0, score, decay_factor: None, age_secs: None }
@@ -1119,8 +1252,17 @@ async fn create_collection_handler(
     Json(payload): Json<CreateCollectionRequest>,
 ) -> Result<Json<CreateCollectionResponse>, EngineError> {
     let name = payload.name.trim().to_string();
+    // M-2: Restrict to safe identifier characters to prevent path/injection issues.
     if name.is_empty() {
         return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
+    }
+    if name.len() > 64 {
+        return Err(EngineError::InvalidInput("collection name must be 64 characters or fewer".into()));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(EngineError::InvalidInput(
+            "collection name may only contain [a-zA-Z0-9_-]".into(),
+        ));
     }
     let mut engine = state.write().await;
     let already_exists = engine.namespaces.map.contains_key(&name) || name == "default";
@@ -1358,18 +1500,25 @@ async fn archive_wal_segment(
         )
     })?;
 
-    let local_path = std::path::Path::new(&req.path);
+    // Validate path against the configured event log directory (C-2).
+    let allowed_dir = {
+        let eng = state.read().await;
+        eng.event_committer.as_ref()
+            .map(|c| c.event_log().path().parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
+            .or_else(|| eng.wal_path.as_deref().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+    };
+    let local_path = safe_path(&req.path, allowed_dir.as_deref())?;
     if !local_path.exists() {
         return Err(EngineError::InvalidInput(format!(
             "segment not found: {}",
-            req.path
+            local_path.display()
         )));
     }
-    let size_bytes = std::fs::metadata(local_path)
+    let size_bytes = std::fs::metadata(&local_path)
         .map(|m| m.len())
         .unwrap_or(0);
     let key = os
-        .archive_wal_segment(local_path)
+        .archive_wal_segment(&local_path)
         .await
         .map_err(|e| EngineError::InvalidInput(format!("archive failed: {e}")))?;
 
@@ -1537,4 +1686,383 @@ async fn index_config_handler(
         None
     };
     Json(IndexConfigResponse { index_type: index_type.into(), hnsw })
+}
+
+// ── Phase I5: Tree-RAG stateful handlers ──────────────────────────────────────
+
+/// `POST /v1/tree/build` — parse markdown into a tree index and cache it.
+/// Returns the full tree + a `cache_key` (BLAKE3 of the input text) that can
+/// be passed to subsequent `/v1/tree/query` or `/v1/tree/hybrid` calls so the
+/// caller doesn't have to re-transmit the full tree on every request.
+async fn tree_build(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::tree_rag::BuildRequest>,
+) -> Json<crate::tree_rag::BuildResponse> {
+    let doc_name = payload.doc_name.unwrap_or_else(|| "document".into());
+    let tree = crate::tree_rag::TreeIndex::from_markdown(&payload.text, &doc_name);
+    let cache_key = engine.write().await.cache_tree(&payload.text, tree.clone());
+    Json(crate::tree_rag::BuildResponse {
+        cache_key,
+        doc_name: tree.doc_name.clone(),
+        node_count: tree.nodes.len(),
+        structure_map: tree.structure_map(),
+        tree,
+    })
+}
+
+/// `POST /v1/tree/query` — navigate the tree and answer with citations + receipt.
+/// Accepts either a full `tree` object (backward-compat) or a `cache_key`
+/// returned by `/v1/tree/build` — the cache lookup avoids re-transmitting the tree.
+async fn tree_query(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::tree_rag::QueryRequest>,
+) -> Result<Json<crate::tree_rag::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
+    let prev = payload.prev_hash.as_deref().unwrap_or(crate::tree_rag::GENESIS);
+    let k = payload.k.max(1);
+
+    let tree: crate::tree_rag::TreeIndex = if let Some(t) = payload.tree {
+        t
+    } else if let Some(ref key) = payload.cache_key {
+        let eng = engine.read().await;
+        eng.get_cached_tree(key).cloned().ok_or_else(|| {
+            let msg = serde_json::json!({
+                "error": "tree not in cache — re-send the full tree or call /v1/tree/build first",
+                "cache_key": key
+            });
+            (StatusCode::NOT_FOUND, Json(msg))
+        })?
+    } else {
+        let msg = serde_json::json!({ "error": "provide either 'tree' or 'cache_key'" });
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(msg)));
+    };
+
+    Ok(Json(tree.answer(&payload.query, k, prev)))
+}
+
+/// `POST /v1/tree/hybrid` — fuse tree-RAG navigation with vector search.
+///
+/// **Tree path**: term-frequency navigation over the section tree; scores are
+/// normalised to \[0, 1\] (max raw score = 1.0).
+///
+/// **Vector path**: if `VALORI_EMBED_PROVIDER` is configured, the query is
+/// embedded and the top-K nearest vectors in `namespace` are retrieved. Their
+/// L2 distances are converted to similarity scores in \[0, 1\] by
+/// `score = 1 − dist / (max_dist + ε)`.
+///
+/// **Fusion**: combined score = `tree_weight × tree_score + (1 − tree_weight) × vec_score`.
+/// Results are sorted best-first; the top `k` hits are returned.
+/// If no embed provider is set, only tree hits are returned (with `tree_weight = 1.0`).
+async fn tree_hybrid(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::tree_rag::HybridRequest>,
+) -> Result<Json<crate::tree_rag::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::tree_rag::{HybridHit, HybridResponse, TreeIndex, GENESIS};
+
+    let k = payload.k.max(1);
+    let tw = payload.tree_weight.clamp(0.0, 1.0);
+    let vw = 1.0 - tw;
+    let prev = payload.prev_hash.as_deref().unwrap_or(GENESIS);
+
+    // ── Resolve tree ──────────────────────────────────────────────────────────
+    let tree: TreeIndex = if let Some(t) = payload.tree {
+        t
+    } else if let Some(ref key) = payload.cache_key {
+        match engine.read().await.get_cached_tree(key).cloned() {
+            Some(t) => t,
+            None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": "tree not in cache — re-send text or cache_key from /v1/tree/build"
+            })))),
+        }
+    } else if let Some(ref text) = payload.text {
+        let doc_name = payload.doc_name.as_deref().unwrap_or("document");
+        let t = TreeIndex::from_markdown(text, doc_name);
+        // Cache it for subsequent calls.
+        let _ = engine.write().await.cache_tree(text, t.clone());
+        t
+    } else {
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+            "error": "provide 'text', 'tree', or 'cache_key'"
+        }))));
+    };
+
+    // ── Tree hits ─────────────────────────────────────────────────────────────
+    let tree_ranked = tree.rank_nodes_normalized(&payload.query, k * 2);
+    let mut hits: Vec<HybridHit> = tree_ranked.iter().map(|(nid, norm_score)| {
+        let n = &tree.nodes[nid];
+        HybridHit {
+            source: "tree".into(),
+            score: tw * norm_score,
+            node_id: Some(nid.clone()),
+            title: Some(n.title.clone()),
+            breadcrumb: Some(tree.breadcrumb(nid)),
+            text: Some(n.own_text.clone()),
+            lines: Some([n.start_line, n.end_line]),
+            record_id: None,
+            distance: None,
+        }
+    }).collect();
+    let tree_hit_count = tree_ranked.len();
+
+    // ── Vector hits (if embed provider configured) ────────────────────────────
+    let mut vector_hit_count = 0usize;
+    let mut reasoning_extra = String::new();
+
+    if vw > 0.0 {
+        // Resolve namespace
+        let ns_name = payload.namespace.as_deref();
+        let (embed_cfg, ns_id) = {
+            let eng = engine.read().await;
+            let ns = eng.resolve_collection(ns_name).unwrap_or(0);
+            (eng.embed_config.clone(), ns)
+        };
+
+        if let Some(embed_cfg) = embed_cfg {
+            let http = reqwest::Client::new();
+            match crate::embedder::embed_batch(&[payload.query.clone()], &embed_cfg, &http).await {
+                Ok(vecs) if !vecs.is_empty() => {
+                    let q_vec = &vecs[0];
+                    let raw_hits = {
+                        let eng = engine.read().await;
+                        eng.search_l2_ns(q_vec, k * 2, ns_id).unwrap_or_default()
+                    };
+
+                    let max_dist = raw_hits.iter().map(|(_, d)| *d).fold(f32::NEG_INFINITY, f32::max).max(1e-6);
+                    for (rid, dist) in &raw_hits {
+                        let norm_sim = 1.0 - (dist / max_dist) as f64;
+                        hits.push(HybridHit {
+                            source: "vector".into(),
+                            score: vw * norm_sim,
+                            node_id: None, title: None, breadcrumb: None, text: None, lines: None,
+                            record_id: Some(*rid),
+                            distance: Some(*dist),
+                        });
+                        vector_hit_count += 1;
+                    }
+                }
+                Ok(_) => { reasoning_extra = " (embed returned empty)".into(); }
+                Err(e) => { reasoning_extra = format!(" (embed error: {e})"); }
+            }
+        } else {
+            reasoning_extra = " (no embed provider — vector path skipped)".into();
+        }
+    }
+
+    // ── Fuse + rank ───────────────────────────────────────────────────────────
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(k);
+    for (i, h) in hits.iter_mut().enumerate() {
+        let _ = i; // rank is implicit from position
+    }
+
+    // ── Tree answer for receipt ───────────────────────────────────────────────
+    let tree_answer = if tree_hit_count > 0 {
+        Some(tree.answer(&payload.query, k.min(tree_hit_count), prev))
+    } else {
+        None
+    };
+
+    let reasoning = format!(
+        "{} tree hits, {} vector hits{}",
+        tree_hit_count, vector_hit_count, reasoning_extra
+    );
+
+    Ok(Json(HybridResponse {
+        query: payload.query,
+        hits,
+        tree_hit_count,
+        vector_hit_count,
+        tree_answer,
+        reasoning,
+    }))
+}
+
+// ── Phase I6: Community handlers (standalone) ─────────────────────────────────
+
+/// `POST /v1/community/detect`
+///
+/// Runs Label Propagation on the current graph to assign every node a
+/// `community_id`, computes a centroid vector per community (average of
+/// member record FxpVectors), and produces a BLAKE3 receipt proving the
+/// assignment. The result is cached in the engine for subsequent
+/// `/v1/community/search` calls.
+async fn community_detect(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::community::DetectRequest>,
+) -> Json<crate::community::DetectResponse> {
+    let (community_count, node_count, receipt, communities) = {
+        let mut eng = engine.write().await;
+
+        let ns_id = payload.namespace.as_deref()
+            .and_then(|n| eng.namespaces.resolve(Some(n)));
+
+        let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
+
+        let raw = crate::community::label_propagation(&eng.state, ns_id, max_iter);
+        let store = crate::community::build_community_store(&eng.state, raw);
+
+        let communities: Vec<crate::community::CommunitySummary> = store.members.iter()
+            .map(|(&cid, members)| crate::community::CommunitySummary {
+                community_id: cid,
+                member_count: members.len(),
+                centroid_record_id: None,
+            })
+            .collect();
+
+        let out = (store.community_count, store.node_count, store.receipt.clone(), communities);
+        eng.community_store = Some(store);
+        out
+    };
+
+    Json(crate::community::DetectResponse {
+        community_count,
+        node_count,
+        communities,
+        receipt,
+    })
+}
+
+/// `POST /v1/community/search`
+///
+/// Scores a query vector against all community centroids (cosine similarity),
+/// returns the top-k communities ranked best-first with their member node_ids
+/// and optional BFS subgraph expansion.
+async fn community_search(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::community::SearchRequest>,
+) -> Result<Json<crate::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let eng = engine.read().await;
+
+    let store = eng.community_store.as_ref().ok_or_else(|| {
+        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+            "error": "community index not built — call POST /v1/community/detect first"
+        })))
+    })?;
+
+    let ranked = crate::community::rank_communities(store, &payload.vector, payload.k);
+    let total = store.centroids.len();
+
+    let communities: Vec<crate::community::CommunityHit> = ranked.into_iter()
+        .map(|(cid, score)| {
+            let members = store.members.get(&cid).map(|v| v.as_slice()).unwrap_or(&[]);
+            let sample: Vec<u32> = members.iter().copied().take(20).collect();
+            crate::community::CommunityHit {
+                community_id: cid,
+                score,
+                member_count: members.len(),
+                sample_node_ids: sample,
+            }
+        })
+        .collect();
+
+    Ok(Json(crate::community::SearchResponse {
+        communities,
+        total_communities_searched: total,
+    }))
+}
+
+/// `POST /v1/ingest/extract-entities`
+///
+/// Sends `text` to the configured LLM (reusing `VALORI_EMBED_PROVIDER`
+/// credentials) to extract entities and relationships, embeds entity
+/// descriptions as record vectors, inserts them as `Concept` graph nodes,
+/// and adds relationship edges. Requires `VALORI_EMBED_PROVIDER` to be set.
+async fn extract_entities(
+    State(engine): State<SharedEngine>,
+    Json(payload): Json<crate::community::ExtractEntitiesRequest>,
+) -> Result<Json<crate::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // Validate embed config available.
+    let embed_cfg = {
+        let eng = engine.read().await;
+        eng.embed_config.clone()
+    }.ok_or_else(|| (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+        "error": "VALORI_EMBED_PROVIDER not configured — entity extraction requires an LLM provider"
+    }))))?;
+
+    let http = reqwest::Client::new();
+
+    // Call LLM to extract entities + relationships.
+    let extracted = crate::community::extract_entities_via_llm(
+        &payload.text,
+        &payload.entity_types,
+        &embed_cfg,
+        payload.model.as_deref(),
+        &http,
+    ).await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))))?;
+
+    // Resolve namespace.
+    let ns_id = {
+        let eng = engine.read().await;
+        eng.namespaces.resolve(payload.namespace.as_deref()).unwrap_or(0)
+    };
+
+    // Embed entity descriptions → insert records → create Concept nodes.
+    let descriptions: Vec<String> = extracted.entities.iter()
+        .map(|e| e.description.clone())
+        .collect();
+    let vecs = crate::embedder::embed_batch(&descriptions, &embed_cfg, &http)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
+
+    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut inserted_entities: Vec<crate::community::InsertedEntity> = Vec::new();
+
+    {
+        let mut eng = engine.write().await;
+        for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {
+            let record_id = eng.insert_record_from_f32_ns(vec, ns_id)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+            let node_id = eng.create_node_for_record(
+                Some(record_id),
+                valori_kernel::types::enums::NodeKind::Concept as u8,
+                ns_id,
+            ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+            entity_name_to_node_id.insert(entity.name.clone(), node_id);
+            inserted_entities.push(crate::community::InsertedEntity {
+                name: entity.name.clone(),
+                kind: entity.kind.clone(),
+                description: entity.description.clone(),
+                node_id,
+                record_id: Some(record_id),
+            });
+        }
+    }
+
+    // Create edges for relationships.
+    let mut inserted_rels: Vec<crate::community::InsertedRelationship> = Vec::new();
+    let mut skipped = 0usize;
+
+    {
+        let mut eng = engine.write().await;
+        for rel in &extracted.relationships {
+            let from = entity_name_to_node_id.get(&rel.source).copied();
+            let to   = entity_name_to_node_id.get(&rel.target).copied();
+            match (from, to) {
+                (Some(from_id), Some(to_id)) => {
+                    use valori_kernel::types::enums::EdgeKind;
+                    let edge_id = eng.create_edge(from_id, to_id, EdgeKind::Relation as u8)
+                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+                    inserted_rels.push(crate::community::InsertedRelationship {
+                        source_name: rel.source.clone(),
+                        target_name: rel.target.clone(),
+                        description: rel.description.clone(),
+                        edge_id,
+                    });
+                }
+                _ => { skipped += 1; }
+            }
+        }
+    }
+
+    let entity_count = inserted_entities.len();
+    let relationship_count = inserted_rels.len();
+
+    Ok(Json(crate::community::ExtractEntitiesResponse {
+        entities: inserted_entities,
+        relationships: inserted_rels,
+        entity_count,
+        relationship_count,
+        skipped_relationships: skipped,
+    }))
 }

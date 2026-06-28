@@ -202,8 +202,24 @@ impl KeyStore {
         let Some(ref path) = self.path else { return };
         let bh = self.by_hash.read().unwrap();
         let records: Vec<&ApiKeyRecord> = bh.values().collect();
-        if let Ok(json) = serde_json::to_vec_pretty(&records) {
-            let _ = std::fs::write(path, json);
+        let json = match serde_json::to_vec_pretty(&records) {
+            Ok(j) => j,
+            Err(e) => { tracing::error!("key store serialize failed: {e}"); return; }
+        };
+        // M-5: Atomic write (temp + rename) so a crash mid-write never corrupts the file.
+        // Set 0600 permissions so other users on the system cannot read token hashes.
+        let tmp = path.with_extension("tmp");
+        if let Err(e) = std::fs::write(&tmp, &json) {
+            tracing::error!("key store write failed: {e}");
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            tracing::error!("key store atomic rename failed: {e}");
         }
     }
 }
@@ -212,10 +228,12 @@ impl KeyStore {
 
 /// Determine the minimum scope required for a request based on method + path.
 pub fn required_scope(method: &axum::http::Method, path: &str) -> ApiScope {
-    // Admin-only: key management, snapshot operations, storage operations.
+    // Admin-only: key management, snapshot operations, storage operations,
+    // and replication endpoints (H-4: replication streams expose ALL namespaces).
     if path.starts_with("/v1/keys")
         || path.starts_with("/v1/snapshot")
         || path.starts_with("/v1/storage")
+        || path.starts_with("/v1/replication")
     {
         return ApiScope::Admin;
     }
@@ -281,25 +299,9 @@ fn simple_id() -> String {
 
 fn os_random_32() -> [u8; 32] {
     let mut buf = [0u8; 32];
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut f| f.read_exact(&mut buf).map(|_| ()))
-            .expect("/dev/urandom unavailable — cannot generate secure token");
-    }
-    #[cfg(not(unix))]
-    {
-        // Non-unix fallback (Windows dev environment): hash of time + pid.
-        // Production deployments MUST run on Linux/macOS.
-        let seed = format!(
-            "{:?}{}{}",
-            SystemTime::now(),
-            std::process::id(),
-            buf[0] // just noise
-        );
-        let h = blake3::hash(seed.as_bytes());
-        buf.copy_from_slice(h.as_bytes());
-    }
+    // getrandom uses the OS CSPRNG on all platforms (urandom, BCryptGenRandom,
+    // getentropy, …). No fallback to time+pid (H-3).
+    getrandom::getrandom(&mut buf)
+        .expect("OS CSPRNG unavailable — cannot generate secure token");
     buf
 }

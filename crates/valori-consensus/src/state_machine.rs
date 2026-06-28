@@ -109,9 +109,10 @@ impl AuditSink for MemoryAuditSink {
 }
 
 /// Dedup table capacity. FIFO eviction beyond this point — a retry that
-/// arrives 65k writes after its original is no longer recognised, which is
-/// a deliberate trade against unbounded memory. Phase 2.10 revisits.
-const MAX_DEDUP_ENTRIES: usize = 65_536;
+/// arrives after this many writes is no longer recognised and may double-apply.
+/// At 45 events/min the 1M window gives ~15 days; at 10k/s it gives ~100 sec.
+/// If retries can be older than this window, increase or add a persistent table.
+const MAX_DEDUP_ENTRIES: usize = 1_048_576;
 
 // Keys within the SM_META table (prefixed "sm_" to avoid collisions with
 // log-store keys in the same redb file).
@@ -121,18 +122,25 @@ const KEY_SM_SNAPSHOT_META: &str = "sm_snapshot_meta";
 const KEY_SM_SNAPSHOT_DATA: &str = "sm_snapshot_data";
 
 /// What travels inside a Raft snapshot, beyond openraft's own meta.
+/// V2: adds `created_at` and `text_corpus` so decay ranking and BM25
+/// reranking work correctly on a restored follower (M-1 fix).
 #[derive(Serialize, Deserialize)]
 struct SnapshotPayload {
-    /// Phase 1.3 V5 kernel snapshot bytes (format byte included).
+    /// Phase 1.3 V6 kernel snapshot bytes (format byte included).
     kernel: Vec<u8>,
     /// The dedup table — replicated so a restored follower makes the same
     /// dedup decisions as the leader.
     dedup: Vec<[u8; 16]>,
-    /// BLAKE3 state hash the kernel bytes must decode to. The V5 format has
+    /// BLAKE3 state hash the kernel bytes must decode to. The V6 format has
     /// no internal checksum (finding from Phase 2.3 testing: a flipped byte
     /// mid-payload decodes "successfully" into corrupt state), so the
     /// payload is self-verifying: install recomputes and refuses a mismatch.
     state_hash: [u8; 32],
+    /// Unix-second creation timestamps keyed by record id. Needed for
+    /// decay-based search reranking; omitted from hash (derived, not kernel state).
+    created_at: Vec<(u32, u64)>,
+    /// BM25 text corpus: record_id → body text indexed at insert time.
+    text_corpus: Vec<(u64, String)>,
 }
 
 struct StateMachineInner {
@@ -220,11 +228,18 @@ impl StateMachineInner {
         // Same sizing formula valori-node uses for its own snapshots.
         let total_slots = self.state.total_record_slots();
         let dim = self.state.dim.unwrap_or(0);
-        let size = 64
-            + total_slots * (18 + dim * 4)
-            + self.state.node_count() * 25
-            + self.state.edge_count() * 29
-            + 2 * 1024 * 1024;
+        // M-4: guard against corrupted state causing OOM via overflow.
+        const MAX_SNAPSHOT_BYTES: usize = 1 << 30; // 1 GB sanity cap
+        let size = 64usize
+            .saturating_add(total_slots.saturating_mul(18usize.saturating_add(dim.saturating_mul(4))))
+            .saturating_add(self.state.node_count().saturating_mul(25))
+            .saturating_add(self.state.edge_count().saturating_mul(29))
+            .saturating_add(2 * 1024 * 1024);
+        if size > MAX_SNAPSHOT_BYTES {
+            return Err(io_err(format!(
+                "snapshot buffer estimate {size} bytes exceeds 1 GB cap — kernel state may be corrupt"
+            )));
+        }
         let mut buf = vec![0u8; size];
         let len = encode_state(&self.state, &mut buf)
             .map_err(|e| io_err(format!("kernel snapshot encode failed: {e:?}")))?;
@@ -349,7 +364,7 @@ impl ValoriStateMachine {
         //   was compacted, requests a snapshot from the leader). Either way the state
         //   is rebuilt correctly. Audit writes are suppressed for entries up to
         //   `persisted_last_applied`, preventing duplicates.
-        let (state, dedup_set, dedup_order, current_snapshot, last_applied) = match snapshot {
+        let (state, dedup_set, dedup_order, created_at, text_corpus, current_snapshot, last_applied) = match snapshot {
             Some((meta, bytes)) => {
                 let (payload, _): (SnapshotPayload, usize) =
                     bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
@@ -366,17 +381,20 @@ impl ValoriStateMachine {
                 }
                 let dedup_set: HashSet<[u8; 16]> = payload.dedup.iter().copied().collect();
                 let dedup_order: VecDeque<[u8; 16]> = payload.dedup.into();
+                // M-1: restore decay timestamps and BM25 corpus from snapshot.
+                let created_at: HashMap<u32, u64> = payload.created_at.into_iter().collect();
+                let text_corpus: std::collections::HashMap<u64, String> = payload.text_corpus.into_iter().collect();
                 // Use the snapshot's own last_log_id, NOT the separately persisted
                 // last_applied. Openraft will replay snapshot.last_log_id+1 onward.
                 let last_applied = meta.last_log_id;
-                (state, dedup_set, dedup_order, Some((meta, bytes)), last_applied)
+                (state, dedup_set, dedup_order, created_at, text_corpus, Some((meta, bytes)), last_applied)
             }
             None => {
                 // No snapshot: start from scratch. Returning last_applied=None
                 // tells openraft to replay the full committed log so the
                 // in-memory KernelState is rebuilt from real entries rather than
                 // being left empty with a stale last_applied pointer.
-                (KernelState::new(), HashSet::new(), VecDeque::new(), None, None)
+                (KernelState::new(), HashSet::new(), VecDeque::new(), HashMap::new(), std::collections::HashMap::new(), None, None)
             }
         };
 
@@ -392,8 +410,8 @@ impl ValoriStateMachine {
                 snapshot_seq: 0,
                 db: Some(db),
                 replay_until,
-                created_at: HashMap::new(),
-                text_corpus: std::collections::HashMap::new(),
+                created_at,
+                text_corpus,
             })),
         })
     }
@@ -481,15 +499,32 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     });
                 }
                 EntryPayload::Normal(req) => {
-                    // Version gate — refuse entries from a newer leader this
-                    // node doesn't understand. Returning StorageError halts
-                    // replication; the operator must upgrade the node binary.
+                    // H-4: Version gate — entries from a newer leader schema are
+                    // rejected at the application layer (not StorageError) so the
+                    // node stays alive and replication continues. A StorageError here
+                    // would permanently halt the node, allowing a single crafted entry
+                    // to take down a cluster node. The operator warning drives the upgrade.
                     if req.schema_version > CURRENT_SCHEMA_VERSION {
-                        return Err(io_err(format!(
-                            "log index {log_index}: entry schema version {} exceeds this node's max \
-                             ({CURRENT_SCHEMA_VERSION}) — upgrade this node to resume replication",
-                            req.schema_version
-                        )));
+                        tracing::error!(
+                            log_index,
+                            schema_version = req.schema_version,
+                            current = CURRENT_SCHEMA_VERSION,
+                            "log entry schema version too new — entry REJECTED, node needs upgrade"
+                        );
+                        inner.last_applied = Some(entry.log_id);
+                        replies.push(ClientResponse {
+                            log_index,
+                            state_hash: hash_state_blake3(&inner.state),
+                            deduplicated: false,
+                            rejected: Some(format!(
+                                "schema version {} exceeds this node's max ({CURRENT_SCHEMA_VERSION})",
+                                req.schema_version
+                            )),
+                            allocated_record_id: None,
+                            allocated_node_id: None,
+                            allocated_edge_id: None,
+                        });
+                        continue;
                     }
 
                     // 1. Dedup — replicated decision, identical on all nodes.
@@ -645,6 +680,9 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
         inner.membership = meta.last_membership.clone();
         inner.dedup_set = payload.dedup.iter().copied().collect();
         inner.dedup_order = payload.dedup.into();
+        // M-1: restore decay timestamps and BM25 corpus from snapshot.
+        inner.created_at = payload.created_at.into_iter().collect();
+        inner.text_corpus = payload.text_corpus.into_iter().collect();
         inner.current_snapshot = Some((meta.clone(), bytes));
         inner.persist_snapshot()?;
         Ok(())
@@ -665,10 +703,14 @@ impl RaftSnapshotBuilder<TypeConfig> for ValoriStateMachine {
     async fn build_snapshot(&mut self) -> Result<Snapshot<TypeConfig>, StorageError<NodeId>> {
         let mut inner = self.inner.lock().await;
 
+        // M-1: include created_at and text_corpus so a restored follower has
+        // the same decay-ranking and BM25 data as the leader.
         let payload = SnapshotPayload {
             kernel: inner.encode_kernel()?,
             dedup: inner.dedup_order.iter().copied().collect(),
             state_hash: hash_state_blake3(&inner.state),
+            created_at: inner.created_at.iter().map(|(&k, &v)| (k, v)).collect(),
+            text_corpus: inner.text_corpus.iter().map(|(&k, v)| (k, v.clone())).collect(),
         };
         let bytes = bincode::serde::encode_to_vec(&payload, bincode::config::standard())
             .map_err(|e| io_err(format!("snapshot payload encode failed: {e}")))?;

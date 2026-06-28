@@ -6,6 +6,79 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase I7 — Metadata filtering)
+- **`metadata_filter` on `POST /search`** — optional JSON predicate that restricts
+  results to records whose stored metadata satisfies all specified key-value conditions.
+  Supports exact equality for strings/booleans/null and range operators (`gt`, `gte`,
+  `lt`, `lte`, `eq`) for numeric fields. Example:
+  `{"author": "Alice", "year": {"gte": 2020}}`. Both standalone and cluster paths
+  are covered. When a filter is present the server over-fetches `k×10` candidates
+  (capped at 5000) before post-filtering to ensure `k` results are returned.
+- **Python SDK** — `SyncRemoteClient.search()` and `AsyncRemoteClient.search()` both
+  accept `metadata_filter: Optional[Dict[str, Any]] = None`. `ClusterClient` and
+  `AsyncClusterClient` inherit via `**kwargs`.
+
+### Added (Phase I6 — Community layer: global sensemaking + entity extraction)
+- **`POST /v1/community/detect`** — Label Propagation on the existing GraphNode
+  adjacency list (pure Rust, zero LLM). Assigns every node a `community_id`,
+  computes an f32 centroid vector per community (average of member FxpVectors),
+  and emits a BLAKE3 receipt over the sorted `(node_id, community_id)` map —
+  a tamper-evident proof of community structure at that point in time.
+  Community store cached in-process; accessible by subsequent search calls.
+- **`POST /v1/community/search`** — Cosine-similarity search over community
+  centroids. Returns top-k communities ranked best-first with `member_count`
+  and a `sample_node_ids` list. Answers "what are the themes across all
+  documents?" — the global-sensemaking query that vector RAG cannot handle.
+- **`POST /v1/ingest/extract-entities`** — Sends text to the configured LLM
+  (reuses `VALORI_EMBED_PROVIDER` credentials — no new env vars). Parses
+  `(entity, type, description)` tuples and `(source, target, description,
+  strength)` relationships. Embeds entity descriptions and inserts them as
+  `Concept` graph nodes with `Relation` edges — bridges a document graph into
+  a true entity knowledge graph.
+- All three endpoints exist in both **standalone** (`server.rs`) and **cluster**
+  (`cluster_server.rs`) paths, following the mandatory dual-path rule.
+- `valori-kernel`: added `incoming_edges()` on `KernelState` so Label
+  Propagation can traverse both directions of the adjacency list.
+- Python SDK: `community_detect()`, `community_search()`, `extract_entities()`
+  on both `SyncRemoteClient` and `AsyncRemoteClient`.
+
+### Added (Phase I5 — Tree-RAG: hierarchical retrieval with provable receipts)
+- **`POST /v1/tree/build`** — parse a structured/markdown document into a
+  navigable table-of-contents tree (sections, parent/child, line ranges).
+  Deterministic, zero-LLM, zero-embedding. Returns `{node_count, structure_map, tree}`.
+- **`POST /v1/tree/query`** — navigate the tree to the *right section* and answer
+  with a breadcrumb + line-range citation and a BLAKE3-chained **retrieval receipt**.
+  Distinguishes vocabulary-overlapping sections (e.g. "sick days" → *Sick Leave*,
+  not *Annual Leave*) where plain vector search fails. Supports `prev_hash` to
+  chain receipts.
+- **`POST /v1/tree/verify`** — replay a receipt against the tree; `valid: false`
+  proves the stored content was altered after retrieval (tamper detection).
+- All three are stateless handlers — identical in standalone and cluster mode.
+- Python SDK: `tree_build` / `tree_query` / `tree_verify` on both
+  `SyncRemoteClient` and `AsyncRemoteClient`.
+
+### Added (Phase I5 gap-fill — server-side tree cache + hybrid retrieval)
+- **Server-side tree cache** — `Engine` (standalone) and `DataPlaneState` (cluster) now
+  hold a `HashMap<String, TreeIndex>` keyed by `BLAKE3(text)`. `/v1/tree/build` stores the
+  parsed tree and returns `cache_key` in the response. Subsequent `/v1/tree/query` and
+  `/v1/tree/hybrid` calls accept `cache_key` instead of re-transmitting the full tree.
+- **`POST /v1/tree/hybrid`** — single-call hybrid retrieval fusing tree-RAG section scores
+  (term-frequency, normalized to [0,1]) with vector-search similarity scores (if
+  `VALORI_EMBED_PROVIDER` is set). Configurable `tree_weight` (default 0.6). Returns merged,
+  re-ranked hits with per-hit `source` tag (`"tree"` or `"vector"`), BLAKE3 receipt for the
+  tree path, and a human-readable `reasoning` string. Available on both standalone and cluster.
+- **`/v1/tree/build` and `/v1/tree/query`** are now stateful (take engine state for cache
+  read/write); `/v1/tree/verify` remains stateless (no cache dependency).
+- Python SDK: `tree_hybrid()` added to both `SyncRemoteClient` and `AsyncRemoteClient`.
+
+### Added (Phase I4.1 — replicated metadata sidecar)
+- **`KernelEvent::SetMeta { key, value }`** — new kernel event storing a
+  replicated `meta` map on `KernelState`. Cluster ingest now writes the chunk/
+  document metadata sidecar via `raft.client_write(SetMeta)` so **all** peers
+  share it (previously node-local on the ingesting node only).
+- **`/v1/memory/meta/set` + `/v1/memory/meta/get`** added to the cluster router,
+  reading/writing through the kernel (`sm.with_state`) instead of a node-local map.
+
 ### Added (Phase I1/I2/I3 — Built-in ingest pipeline)
 - **`POST /v1/ingest/document`** — server-side document chunking with five strategies:
   `auto` (sniffs text), `tree` (section headers), `conversation` (Q&A boundaries),

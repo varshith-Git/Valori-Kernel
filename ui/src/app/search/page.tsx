@@ -12,9 +12,28 @@ export default function SearchPage() {
   const [k, setK] = useState(10);
   const [collection, setCollection] = useState("");
   const [consistency, setConsistency] = useState<"local" | "linearizable">("local");
+  const [filterRaw, setFilterRaw] = useState("");
+  const [filterError, setFilterError] = useState<string | null>(null);
   const { dim } = useHealth();
   const { projects } = useProjects();
   const { results, stateHash, queriedAt, isLoading, error, search } = useSearch();
+
+  const parseFilter = (raw: string): Record<string, unknown> | undefined => {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed !== "object" || Array.isArray(parsed)) {
+        setFilterError("Must be a JSON object: {\"key\": \"value\"}");
+        return undefined;
+      }
+      setFilterError(null);
+      return parsed as Record<string, unknown>;
+    } catch {
+      setFilterError("Invalid JSON");
+      return undefined;
+    }
+  };
 
   const run = () => {
     const nums = input
@@ -22,11 +41,14 @@ export default function SearchPage() {
       .map(Number)
       .filter((n) => !isNaN(n));
     if (nums.length === 0) return;
+    const metadataFilter = parseFilter(filterRaw);
+    if (filterRaw.trim() && filterError) return;
     search({
       vector: nums,
       k,
       collection: collection || undefined,
       consistency,
+      metadataFilter,
     });
   };
 
@@ -120,6 +142,32 @@ export default function SearchPage() {
               ))}
             </div>
           </div>
+        </div>
+
+        {/* Metadata filter */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] text-muted-foreground uppercase tracking-widest font-medium">
+            Metadata filter
+            <span className="ml-1.5 normal-case tracking-normal font-normal text-muted-foreground">
+              — optional JSON predicate
+            </span>
+          </label>
+          <input
+            type="text"
+            value={filterRaw}
+            onChange={(e) => {
+              setFilterRaw(e.target.value);
+              if (!e.target.value.trim()) setFilterError(null);
+            }}
+            placeholder='{"author": "Alice"} or {"year": {"gte": 2020}}'
+            className={cn(
+              "rounded-lg border bg-background px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--v-accent-ring)] transition-shadow",
+              filterError ? "border-red-500/60" : "border-input"
+            )}
+          />
+          {filterError && (
+            <p className="text-[10px] text-red-400">{filterError}</p>
+          )}
         </div>
 
         {/* Action row */}

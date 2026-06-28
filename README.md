@@ -88,6 +88,7 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
 | **Valori Reranker** | Server-side hybrid retrieval — vector top-K pooled then re-scored by term frequency; 90% accuracy on hard lexical queries, 0.4 s latency, no external dependency |
 | **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
+| **Tree-RAG** | `POST /v1/tree/{build,query,verify}` — navigate a doc's table-of-contents to the right section with breadcrumb + line citations and a replayable BLAKE3 retrieval receipt; deterministic, no embeddings, catches tampering |
 | **Self-maintaining memory** | `consolidate` (supersede a memory) and `contradict` (flag conflicts) commit `Supersedes`/`Contradicts` edges to the audit chain |
 | **Multi-tenancy** | Up to 1 024 named collections; per-tenant API keys with RBAC |
 | **Point-in-time reads** | Replay to any past state hash or log index |
@@ -133,9 +134,11 @@ VALORI_SNAPSHOT_PATH=./data/snapshot.bin \
 from valoricore import SyncRemoteClient
 db = SyncRemoteClient("http://localhost:3000")
 db.insert([0.1, 0.2, ...], text="section title and body")   # index for reranking
-hits = db.search([0.1, 0.2, ...], k=5)                             # vector only
-hits = db.search([0.1, 0.2, ...], k=5, query_text="my query")     # hybrid rerank (default)
-hits = db.search([0.1, 0.2, ...], k=5, decay_half_life_secs=86400) # recency-aware
+hits = db.search([0.1, 0.2, ...], k=5)                                          # vector only
+hits = db.search([0.1, 0.2, ...], k=5, query_text="my query")                  # hybrid rerank (default)
+hits = db.search([0.1, 0.2, ...], k=5, decay_half_life_secs=86400)             # recency-aware
+hits = db.search([0.1, 0.2, ...], k=5, metadata_filter={"author": "Alice"})    # metadata filter
+hits = db.search([0.1, 0.2, ...], k=5, metadata_filter={"year": {"gte": 2020}}) # range filter
 ```
 
 ### Option 3 — One-call document ingest (chunk + embed on-node)
@@ -161,6 +164,16 @@ print(f"{result['chunk_count']} chunks inserted, doc node {result['document_node
 # Chunking only (no embed step):
 chunks = db.chunk_document(text, strategy="tree")
 # → {"strategy_used": "tree", "chunk_count": 31, "chunks": [...]}
+```
+
+**Tree-RAG — jump to the right *section* instead of similar text.** Separate from
+vector `search`; deterministic, with a breadcrumb citation + replayable receipt:
+
+```python
+built = db.tree_build(handbook_markdown, doc_name="handbook")
+ans   = db.tree_query(built["tree"], "how many sick days do I get?")
+print(ans["answer"], "—", ans["citations"][0]["breadcrumb"])  # lands on "… > Sick Leave"
+assert db.tree_verify(built["tree"], ans["receipt"])          # proves it wasn't altered
 ```
 
 ### Option 3 — 3-node cluster

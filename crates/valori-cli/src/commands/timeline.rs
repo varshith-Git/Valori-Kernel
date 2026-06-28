@@ -182,5 +182,10 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             format!("ns={namespace_id} key={}  tag={tag}  (id assigned at apply)",
                 key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
         ),
+
+        KernelEvent::SetMeta { key, value } => (
+            Cell::new("SetMeta").fg(Color::White),
+            format!("key={key:?}  value={value:?}"),
+        ),
     }
 }

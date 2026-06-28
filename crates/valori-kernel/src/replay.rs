@@ -5,7 +5,7 @@
 use crate::state::kernel::KernelState;
 use crate::state::command::Command;
 use crate::error::{Result, KernelError};
-use crate::verify::kernel_state_hash;
+use crate::snapshot::blake3::hash_state_blake3;
 use crate::snapshot::decode::decode_state;
 
 /// WAL Header structure (16 bytes)
@@ -25,10 +25,10 @@ impl WalHeader {
             return Err(KernelError::InvalidInput);
         }
         
-        let version = u32::from_le_bytes(buf[0..4].try_into().unwrap());
-        let encoding_version = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let dim = u32::from_le_bytes(buf[8..12].try_into().unwrap());
-        let checksum_len = u32::from_le_bytes(buf[12..16].try_into().unwrap());
+        let version      = u32::from_le_bytes([buf[0],  buf[1],  buf[2],  buf[3]]);
+        let encoding_version = u32::from_le_bytes([buf[4],  buf[5],  buf[6],  buf[7]]);
+        let dim          = u32::from_le_bytes([buf[8],  buf[9],  buf[10], buf[11]]);
+        let checksum_len = u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]);
         
         Ok((Self {
             version,
@@ -94,6 +94,6 @@ pub fn replay_and_hash(
         }
     }
 
-    // 4. Compute Hash
-    Ok(kernel_state_hash(&state))
+    // 4. Compute Hash — use the canonical function (domain-separated, covers tag + metadata)
+    Ok(hash_state_blake3(&state))
 }

@@ -130,6 +130,14 @@ struct DataPlaneState {
     /// Mirrors the standalone Engine::metadata field. Not Raft-replicated —
     /// chunk text/source metadata is advisory and node-local.
     metadata: Arc<crate::metadata::MetadataStore>,
+    /// Phase I5: node-local tree cache keyed by BLAKE3(text). Derived from
+    /// build requests; not replicated via Raft (trees are deterministic from
+    /// their source text, so any peer can rebuild them locally).
+    tree_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, crate::tree_rag::TreeIndex>>>,
+    /// Phase I6: last community detection result on this node.
+    /// Node-local (not Raft-replicated) — communities are derived from the
+    /// graph which IS replicated, so any peer can re-derive an identical store.
+    community_store: Arc<tokio::sync::RwLock<Option<crate::community::CommunityStore>>>,
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -207,7 +215,8 @@ async fn cluster_auth_guard(
     }
 
     if let Some(ref legacy) = auth.legacy_token {
-        if token == legacy {
+        use subtle::ConstantTimeEq;
+        if token.as_bytes().ct_eq(legacy.as_bytes()).into() {
             return Ok(next.run(req).await);
         }
     }
@@ -249,6 +258,8 @@ pub fn build_cluster_router_with_keys(
         },
         embed_config: crate::embedder::EmbedConfig::from_node_config(node_cfg),
         metadata: Arc::new(crate::metadata::MetadataStore::new()),
+        tree_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        community_store: Arc::new(tokio::sync::RwLock::new(None)),
     };
 
     let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
@@ -282,6 +293,16 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/index/config", axum::routing::get(cluster_index_config))
         // Built-in document ingestion — chunking is stateless so standalone handler works in cluster too
         .route("/v1/ingest/document", post(crate::ingest::ingest_document))
+        // Tree-RAG — stateless handlers, identical in both routers
+        .route("/v1/tree/build",         post(cluster_tree_build))
+        .route("/v1/tree/query",         post(cluster_tree_query))
+        .route("/v1/tree/hybrid",        post(cluster_tree_hybrid))
+        .route("/v1/tree/verify",        post(crate::tree_rag::tree_verify))
+        .route("/v1/tree/chain-verify",  post(crate::tree_rag::tree_chain_verify))
+        // Phase I6: Community layer
+        .route("/v1/community/detect",        post(cluster_community_detect))
+        .route("/v1/community/search",        post(cluster_community_search))
+        .route("/v1/ingest/extract-entities", post(cluster_extract_entities))
         // Phase I4: full pipeline (chunk + embed + insert) via Raft
         .route("/v1/ingest", post(cluster_ingest))
         .route("/v1/memory/consolidate", post(cluster_memory_consolidate))
@@ -565,6 +586,11 @@ struct SearchRequest {
     /// Raw query text for BM25 scoring. Required when `rerank=true`.
     #[serde(default)]
     query_text: Option<String>,
+    /// Optional JSON object whose key-value pairs must ALL be present (and equal)
+    /// in a record's metadata for the record to be returned.
+    /// Supports range operators: `{"year": {"gte": 2020, "lte": 2024}}`.
+    #[serde(default)]
+    metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 fn default_rerank() -> bool { true }
@@ -608,14 +634,22 @@ async fn search(
 
     let k = req.k.max(1);
     let half_life = req.decay_half_life_secs.unwrap_or(0);
+    let mf = req.metadata_filter.clone();
+
+    // When metadata_filter is set, over-fetch so post-filtering has enough candidates.
+    let base_k = if mf.is_some() {
+        k.saturating_mul(10).max(100).min(5000)
+    } else {
+        k
+    };
 
     // C4.1b: when decay is requested, over-fetch and re-rank using per-record
     // creation timestamps tracked in the state machine.
     let use_rerank = req.rerank && req.query_text.is_some();
     let fetch_k = if use_rerank {
-        (k * crate::valori_reranker::POOL_FACTOR).max(k)
+        (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
     } else {
-        k
+        base_k
     };
     let query_text_owned = req.query_text.clone().unwrap_or_default();
 
@@ -627,12 +661,26 @@ async fn search(
                 let n = s.search_l2(&query, &mut buf, None);
                 buf[..n]
                     .iter()
-                    .map(|r| SearchHit { id: r.id.0, score: r.score.0 as i64 })
+                    .map(|r| SearchHit { id: r.id.0, score: r.score })
                     .collect()
             })
             .await;
-        if use_rerank && !raw.is_empty() {
-            let candidates: Vec<(u64, f32)> = raw.iter()
+        // Post-filter by metadata predicate before reranking/trimming.
+        let filtered: Vec<SearchHit> = if let Some(ref f) = mf {
+            raw.into_iter()
+                .filter(|h| {
+                    let key = format!("rec:{}", h.id);
+                    match state.metadata.get(&key) {
+                        Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                        None => false,
+                    }
+                })
+                .collect()
+        } else {
+            raw
+        };
+        if use_rerank && !filtered.is_empty() && mf.is_none() {
+            let candidates: Vec<(u64, f32)> = filtered.iter()
                 .map(|h| (h.id as u64, h.score as f32))
                 .collect();
             let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
@@ -650,14 +698,14 @@ async fn search(
                     .collect()
             }).await
         } else {
-            raw.into_iter().take(k).collect()
+            filtered.into_iter().take(k).collect()
         }
     } else {
-        let pool = k.saturating_mul(4).max(50).min(1000);
+        let pool = base_k.saturating_mul(4).max(50).min(5000);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs()).unwrap_or(0);
-        state
+        let decayed: Vec<crate::decay::DecayedHit> = state
             .sm
             .with_state_and_timestamps(|s, created_at| {
                 let mut buf = vec![KernelSearchResult::default(); pool];
@@ -666,16 +714,28 @@ async fn search(
                     .iter()
                     .map(|r| crate::decay::DecayHit {
                         id: r.id.0,
-                        distance: r.score.0 as f32,
+                        distance: r.score as f32,
                         created_at: created_at.get(&r.id.0).copied(),
                     })
                     .collect();
-                crate::decay::rerank(candidates, now, half_life, k)
-                    .into_iter()
-                    .map(|h| SearchHit { id: h.id, score: h.distance as i64 })
-                    .collect()
+                crate::decay::rerank(candidates, now, half_life, pool)
             })
-            .await
+            .await;
+        decayed.into_iter()
+            .filter(|h| {
+                if let Some(ref f) = mf {
+                    let key = format!("rec:{}", h.id);
+                    match state.metadata.get(&key) {
+                        Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                        None => false,
+                    }
+                } else {
+                    true
+                }
+            })
+            .take(k)
+            .map(|h| SearchHit { id: h.id, score: h.distance as i64 })
+            .collect::<Vec<_>>()
     };
 
     (StatusCode::OK, Json(serde_json::json!({ "results": results }))).into_response()
@@ -1171,7 +1231,7 @@ async fn cluster_graphrag(
             let mut buf = vec![KernelSearchResult::default(); k];
             let n = s.search_l2(&query, &mut buf, None);
             let hits: Vec<(u32, i64)> =
-                buf[..n].iter().map(|r| (r.id.0, r.score.0 as i64)).collect();
+                buf[..n].iter().map(|r| (r.id.0, r.score)).collect();
 
             let record_ids: Vec<u32> = hits.iter().map(|(id, _)| *id).collect();
             let seed_map = crate::graph_rag::resolve_seed_nodes(s, &record_ids);
@@ -1786,6 +1846,353 @@ async fn cluster_ingest(
         record_ids,
         collection,
     }).into_response()
+}
+
+// ── Phase I5: Tree-RAG stateful handlers (cluster path) ───────────────────────
+
+async fn cluster_tree_build(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::tree_rag::BuildRequest>,
+) -> Json<crate::tree_rag::BuildResponse> {
+    let doc_name = payload.doc_name.unwrap_or_else(|| "document".into());
+    let tree = crate::tree_rag::TreeIndex::from_markdown(&payload.text, &doc_name);
+    let cache_key = crate::tree_rag::hash_text(&payload.text);
+    s.tree_cache.write().await.insert(cache_key.clone(), tree.clone());
+    Json(crate::tree_rag::BuildResponse {
+        cache_key,
+        doc_name: tree.doc_name.clone(),
+        node_count: tree.nodes.len(),
+        structure_map: tree.structure_map(),
+        tree,
+    })
+}
+
+async fn cluster_tree_query(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::tree_rag::QueryRequest>,
+) -> Result<Json<crate::tree_rag::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
+    let prev = payload.prev_hash.as_deref().unwrap_or(crate::tree_rag::GENESIS);
+    let k = payload.k.max(1);
+
+    let tree = if let Some(t) = payload.tree {
+        t
+    } else if let Some(ref key) = payload.cache_key {
+        s.tree_cache.read().await.get(key).cloned().ok_or_else(|| {
+            let msg = serde_json::json!({
+                "error": "tree not in cache — re-send the full tree or call /v1/tree/build first",
+                "cache_key": key
+            });
+            (StatusCode::NOT_FOUND, Json(msg))
+        })?
+    } else {
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+            "error": "provide either 'tree' or 'cache_key'"
+        }))));
+    };
+
+    Ok(Json(tree.answer(&payload.query, k, prev)))
+}
+
+async fn cluster_tree_hybrid(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::tree_rag::HybridRequest>,
+) -> Result<Json<crate::tree_rag::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
+    use crate::tree_rag::{HybridHit, HybridResponse, TreeIndex, GENESIS};
+
+    let k = payload.k.max(1);
+    let tw = payload.tree_weight.clamp(0.0, 1.0);
+    let vw = 1.0 - tw;
+    let prev = payload.prev_hash.as_deref().unwrap_or(GENESIS);
+
+    // ── Resolve tree ──────────────────────────────────────────────────────────
+    let tree: TreeIndex = if let Some(t) = payload.tree {
+        t
+    } else if let Some(ref key) = payload.cache_key {
+        s.tree_cache.read().await.get(key).cloned().ok_or_else(|| {
+            (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": "tree not in cache — re-send text or cache_key from /v1/tree/build"
+            })))
+        })?
+    } else if let Some(ref text) = payload.text {
+        let doc_name = payload.doc_name.as_deref().unwrap_or("document");
+        let t = TreeIndex::from_markdown(text, doc_name);
+        let key = crate::tree_rag::hash_text(text);
+        s.tree_cache.write().await.insert(key, t.clone());
+        t
+    } else {
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+            "error": "provide 'text', 'tree', or 'cache_key'"
+        }))));
+    };
+
+    // ── Tree hits ─────────────────────────────────────────────────────────────
+    let tree_ranked = tree.rank_nodes_normalized(&payload.query, k * 2);
+    let mut hits: Vec<HybridHit> = tree_ranked.iter().map(|(nid, norm_score)| {
+        let n = &tree.nodes[nid];
+        HybridHit {
+            source: "tree".into(),
+            score: tw * norm_score,
+            node_id: Some(nid.clone()),
+            title: Some(n.title.clone()),
+            breadcrumb: Some(tree.breadcrumb(nid)),
+            text: Some(n.own_text.clone()),
+            lines: Some([n.start_line, n.end_line]),
+            record_id: None,
+            distance: None,
+        }
+    }).collect();
+    let tree_hit_count = tree_ranked.len();
+
+    // ── Vector hits ───────────────────────────────────────────────────────────
+    let mut vector_hit_count = 0usize;
+    let mut reasoning_extra = String::new();
+
+    if vw > 0.0 {
+        if let Some(ref embed_cfg) = s.embed_config {
+            match crate::embedder::embed_batch(&[payload.query.clone()], embed_cfg, &s.http).await {
+                Ok(vecs) if !vecs.is_empty() => {
+                    let q_vec = vecs[0].clone();
+                    let ns_name = payload.namespace.as_deref();
+                    let ns_id = s.namespaces.lock().unwrap()
+                        .resolve(ns_name)
+                        .unwrap_or(0);
+                    let fetch = k * 2;
+                    let raw_hits: Vec<(u32, f32)> = s.sm.with_state(move |kernel| {
+                        use valori_kernel::fxp::qformat::SCALE;
+                        use valori_kernel::types::scalar::FxpScalar;
+                        use valori_kernel::types::vector::FxpVector;
+                        use valori_kernel::index::SearchResult;
+                        let fxp_data: Vec<FxpScalar> = q_vec.iter()
+                            .map(|&v| FxpScalar((v * SCALE as f32) as i32))
+                            .collect();
+                        let fxp_q = FxpVector { data: fxp_data };
+                        let mut results = vec![SearchResult::default(); fetch];
+                        let found = kernel.search_l2_ns(&fxp_q, &mut results, ns_id);
+                        results[..found].iter().map(|r| {
+                            let dist = r.score as f32 / (SCALE as f32 * SCALE as f32);
+                            (r.id.0, dist)
+                        }).collect::<Vec<_>>()
+                    }).await;
+                    let max_dist = raw_hits.iter().map(|(_, d)| *d).fold(f32::NEG_INFINITY, f32::max).max(1e-6);
+                    for (rid, dist) in &raw_hits {
+                        let norm_sim = 1.0 - (dist / max_dist) as f64;
+                        hits.push(HybridHit {
+                            source: "vector".into(),
+                            score: vw * norm_sim,
+                            node_id: None, title: None, breadcrumb: None, text: None, lines: None,
+                            record_id: Some(*rid),
+                            distance: Some(*dist),
+                        });
+                        vector_hit_count += 1;
+                    }
+                }
+                Ok(_) => { reasoning_extra = " (embed returned empty)".into(); }
+                Err(e) => { reasoning_extra = format!(" (embed error: {e})"); }
+            }
+        } else {
+            reasoning_extra = " (no embed provider — vector path skipped)".into();
+        }
+    }
+
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(k);
+
+    let tree_answer = if tree_hit_count > 0 {
+        Some(tree.answer(&payload.query, k.min(tree_hit_count), prev))
+    } else {
+        None
+    };
+
+    Ok(Json(HybridResponse {
+        query: payload.query,
+        hits,
+        tree_hit_count,
+        vector_hit_count,
+        tree_answer,
+        reasoning: format!("{} tree hits, {} vector hits{}", tree_hit_count, vector_hit_count, reasoning_extra),
+    }))
+}
+
+// ── Phase I6: Community handlers (cluster path) ───────────────────────────────
+
+async fn cluster_community_detect(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::community::DetectRequest>,
+) -> Json<crate::community::DetectResponse> {
+    let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
+
+    // Run detection on the current kernel snapshot and cache the result.
+    let (community_count, node_count, receipt, communities) = {
+        let store = s.sm.with_state(move |kernel| {
+            // Cluster path: no namespace filter yet (namespace registry is node-local,
+            // not replicated; a follow-up will add cluster-wide namespace metadata).
+            let raw = crate::community::label_propagation(kernel, None, max_iter);
+            crate::community::build_community_store(kernel, raw)
+        }).await;
+
+        let summary: Vec<crate::community::CommunitySummary> = store.members.iter()
+            .map(|(&cid, members)| crate::community::CommunitySummary {
+                community_id: cid,
+                member_count: members.len(),
+                centroid_record_id: None,
+            })
+            .collect();
+
+        let out = (store.community_count, store.node_count, store.receipt.clone(), summary);
+        *s.community_store.write().await = Some(store);
+        out
+    };
+
+    Json(crate::community::DetectResponse {
+        community_count,
+        node_count,
+        communities,
+        receipt,
+    })
+}
+
+async fn cluster_community_search(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::community::SearchRequest>,
+) -> Result<Json<crate::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let store_guard = s.community_store.read().await;
+    let store = store_guard.as_ref().ok_or_else(|| {
+        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+            "error": "community index not built — call POST /v1/community/detect first"
+        })))
+    })?;
+
+    let ranked = crate::community::rank_communities(store, &payload.vector, payload.k);
+    let total  = store.centroids.len();
+
+    let communities: Vec<crate::community::CommunityHit> = ranked.into_iter()
+        .map(|(cid, score)| {
+            let members = store.members.get(&cid).map(|v| v.as_slice()).unwrap_or(&[]);
+            crate::community::CommunityHit {
+                community_id: cid,
+                score,
+                member_count: members.len(),
+                sample_node_ids: members.iter().copied().take(20).collect(),
+            }
+        })
+        .collect();
+
+    Ok(Json(crate::community::SearchResponse {
+        communities,
+        total_communities_searched: total,
+    }))
+}
+
+async fn cluster_extract_entities(
+    State(s): State<DataPlaneState>,
+    Json(payload): Json<crate::community::ExtractEntitiesRequest>,
+) -> Result<Json<crate::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let embed_cfg = s.embed_config.clone().ok_or_else(|| {
+        (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
+            "error": "VALORI_EMBED_PROVIDER not configured — entity extraction requires an LLM provider"
+        })))
+    })?;
+
+    let extracted = crate::community::extract_entities_via_llm(
+        &payload.text,
+        &payload.entity_types,
+        &embed_cfg,
+        payload.model.as_deref(),
+        &s.http,
+    ).await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))))?;
+
+    // Embed entity descriptions.
+    let descriptions: Vec<String> = extracted.entities.iter().map(|e| e.description.clone()).collect();
+    let vecs = crate::embedder::embed_batch(&descriptions, &embed_cfg, &s.http)
+        .await
+        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
+
+    // Insert records + nodes via Raft.
+    let ns_id: u16 = s.namespaces.lock().unwrap()
+        .resolve(payload.namespace.as_deref())
+        .unwrap_or(0);
+
+    use valori_kernel::fxp::qformat::SCALE;
+    use valori_kernel::types::scalar::FxpScalar;
+    use valori_kernel::types::enums::{NodeKind, EdgeKind};
+
+    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut inserted_entities: Vec<crate::community::InsertedEntity> = Vec::new();
+
+    use valori_kernel::event::KernelEvent;
+    use valori_kernel::types::vector::FxpVector;
+    use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
+    use valori_consensus::types::ClientRequest;
+
+    for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {
+        let fxp_data: Vec<FxpScalar> = vec.iter()
+            .map(|&v| FxpScalar((v * SCALE as f32) as i32))
+            .collect();
+        let fxp_vec = FxpVector { data: fxp_data };
+
+        // Snapshot current IDs before submitting to Raft.
+        let (record_id, node_id) = s.sm.with_state(|k| {
+            (k.next_record_id().0, k.node_count() as u32)
+        }).await;
+
+        let rec_event = KernelEvent::AutoInsertRecord {
+            vector: fxp_vec,
+            metadata: None,
+            tag: 0,
+        };
+        let node_event = KernelEvent::AutoCreateNode {
+            kind: NodeKind::Concept,
+            record: Some(RecordId(record_id)),
+        };
+
+        let _ = s.raft.client_write(ClientRequest { event: rec_event,  request_id: None, schema_version: 0 }).await;
+        let _ = s.raft.client_write(ClientRequest { event: node_event, request_id: None, schema_version: 0 }).await;
+
+        entity_name_to_node_id.insert(entity.name.clone(), node_id);
+        inserted_entities.push(crate::community::InsertedEntity {
+            name: entity.name.clone(),
+            kind: entity.kind.clone(),
+            description: entity.description.clone(),
+            node_id,
+            record_id: Some(record_id),
+        });
+    }
+
+    // Create edges.
+    let mut inserted_rels: Vec<crate::community::InsertedRelationship> = Vec::new();
+    let mut skipped = 0usize;
+
+    for rel in &extracted.relationships {
+        match (entity_name_to_node_id.get(&rel.source), entity_name_to_node_id.get(&rel.target)) {
+            (Some(&from_id), Some(&to_id)) => {
+                let edge_id = s.sm.with_state(|k| k.next_edge_id().0).await;
+                let ev = KernelEvent::AutoCreateEdge {
+                    from: NodeId(from_id),
+                    to: NodeId(to_id),
+                    kind: EdgeKind::Relation,
+                };
+                let _ = s.raft.client_write(ClientRequest { event: ev, request_id: None, schema_version: 0 }).await;
+                inserted_rels.push(crate::community::InsertedRelationship {
+                    source_name: rel.source.clone(),
+                    target_name: rel.target.clone(),
+                    description: rel.description.clone(),
+                    edge_id,
+                });
+            }
+            _ => { skipped += 1; }
+        }
+    }
+
+    let entity_count = inserted_entities.len();
+    let relationship_count = inserted_rels.len();
+
+    Ok(Json(crate::community::ExtractEntitiesResponse {
+        entities: inserted_entities,
+        relationships: inserted_rels,
+        entity_count,
+        relationship_count,
+        skipped_relationships: skipped,
+    }))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

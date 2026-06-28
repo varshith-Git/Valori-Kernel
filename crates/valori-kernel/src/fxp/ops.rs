@@ -46,8 +46,14 @@ pub fn fxp_mul(a: FxpScalar, b: FxpScalar) -> FxpScalar {
 /// pre-converted FxpScalar values.
 #[cfg(any(test, feature = "std"))]
 pub fn from_f32(f: f32) -> FxpScalar {
-    let raw = (f * (SCALE as f32)).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32;
-    FxpScalar(raw)
+    if !f.is_finite() {
+        return FxpScalar(if f > 0.0 { i32::MAX } else { i32::MIN });
+    }
+    // Clamp in f32 domain first to keep the product in range, then cast.
+    // i32::MAX as f32 rounds up to 2147483648.0; clamp to one ULP below.
+    let scaled = (f * (SCALE as f32)).round();
+    let clamped = scaled.clamp(i32::MIN as f32, 2_147_483_520.0_f32) as i32;
+    FxpScalar(clamped)
 }
 
 /// Helper to convert FxpScalar to f32 (TEST/FFI ONLY).

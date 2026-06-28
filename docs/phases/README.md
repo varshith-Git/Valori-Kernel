@@ -69,6 +69,9 @@ people and sessions that built it.
 | I2 — On-node embedding + full pipeline (`/v1/ingest`) | [phase-I2-on-node-embedding.md](phase-I2-on-node-embedding.md) | `main` | ✅ done |
 | I3 — UI wired through server pipeline with auto-fallback | [phase-I3-ui-server-pipeline.md](phase-I3-ui-server-pipeline.md) | `main` | ✅ done |
 | I4 — `/v1/ingest` wired into cluster mode (Raft path) | [phase-I4-cluster-ingest.md](phase-I4-cluster-ingest.md) | `main` | ✅ done |
+| I5 — Tree-RAG: hierarchical retrieval + citations + replayable receipts | [phase-I5-tree-rag.md](phase-I5-tree-rag.md) | `main` | ✅ done |
+| I6 — Community layer: Label Propagation + centroid search + entity extraction | [phase-I6-community-layer.md](phase-I6-community-layer.md) | `main` | ✅ done |
+| I7 — Metadata filtering: JSON predicate post-filter on `/search` (both paths) | [phase-I7-metadata-filter.md](phase-I7-metadata-filter.md) | `main` | ✅ done |
 
 ## Report template
 

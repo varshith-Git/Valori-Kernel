@@ -41,7 +41,7 @@ function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
       onClick={copy}
       className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-all ${
         copied
-          ? "border-emerald-700 bg-emerald-950/50 text-emerald-400"
+          ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)] text-[var(--v-accent)]"
           : "border-input bg-card text-muted-foreground hover:text-accent-foreground hover:border-ring"
       }`}
     >

@@ -31,24 +31,21 @@ fn null_vault_key_exists_is_always_false() {
 }
 
 #[test]
-#[should_panic(expected = "NullVault")]
-fn null_vault_encrypt_panics() {
+fn null_vault_encrypt_returns_err() {
     let vault = NullVault;
-    let _ = vault.encrypt(TEST_KEY_ID, b"plaintext");
+    assert!(vault.encrypt(TEST_KEY_ID, b"plaintext").is_err());
 }
 
 #[test]
-#[should_panic(expected = "NullVault")]
-fn null_vault_decrypt_panics() {
+fn null_vault_decrypt_returns_err() {
     let vault = NullVault;
-    let _ = vault.decrypt(TEST_KEY_ID, b"ciphertext");
+    assert!(vault.decrypt(TEST_KEY_ID, b"ciphertext").is_err());
 }
 
 #[test]
-#[should_panic(expected = "NullVault")]
-fn null_vault_shred_panics() {
+fn null_vault_shred_returns_err() {
     let vault = NullVault;
-    let _ = vault.shred(TEST_KEY_ID);
+    assert!(vault.shred(TEST_KEY_ID).is_err());
 }
 
 // ── Reserved KernelEvent variants ─────────────────────────────────────────────

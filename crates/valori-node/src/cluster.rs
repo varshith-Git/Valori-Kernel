@@ -268,8 +268,16 @@ pub async fn bootstrap_cluster(
             (sm, raft, startup_committed_index)
         }
         None => {
-            // In-memory log store has no durable prior state — nothing to catch
-            // up to, so the node is read-ready immediately.
+            // C-1 (consensus audit): the in-memory log store does NOT persist votes.
+            // A crash-restart allows a node to vote twice in the same Raft term,
+            // potentially electing two leaders (split-brain). This path is safe only
+            // in tests and throwaway demo environments. Set VALORI_RAFT_LOG_PATH for
+            // any deployment that must survive restarts.
+            tracing::error!(
+                "VALORI_RAFT_LOG_PATH is not set — cluster is running with an IN-MEMORY \
+                 Raft log store. Votes are NOT persisted. A crash can cause split-brain \
+                 (two leaders in the same term). Set VALORI_RAFT_LOG_PATH to a redb file path."
+            );
             let sm = ValoriStateMachine::new(audit);
             let raft = Raft::new(
                 cfg.node_id,

@@ -425,6 +425,17 @@ def verify_log(
     """
     log_path = Path(log_path)
 
+    # M-2: validate binary to prevent arbitrary code execution when the parameter
+    # comes from user input.  Accept either:
+    #   (a) a simple binary name with no path separators (looked up via PATH), or
+    #   (b) an absolute path (caller explicitly opted in to a full path).
+    binary_path = Path(binary)
+    if not binary_path.is_absolute() and os.sep in str(binary):
+        raise ValueError(
+            f"binary must be a simple name (e.g. 'valori-verify') or an absolute path; "
+            f"got {binary!r}. Relative paths with directory components are not allowed."
+        )
+
     # Write to a caller-supplied path or a temp file we clean up ourselves.
     own_temp = report_path is None
     if own_temp:

@@ -1,8 +1,15 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
 from typing import List, Dict, Optional, Any, Tuple
 import os
+import threading
 from .types import Vector, RecordId, NodeId, Proof, StateHash
 from .exceptions import ValidationError, KernelError
+
+# H-1: Process-global lock that serialises the env-var mutation → engine-init →
+# env-restore block.  Without this, two threads racing through LocalClient.__init__
+# with different `dim` values will corrupt each other's VALORI_DIM before either
+# ValoricoreEngine() call completes.
+_INIT_LOCK = threading.Lock()
 
 # Try to import FFI module.
 try:
@@ -42,21 +49,43 @@ class LocalClient:
                 "Could not load 'valoricore_ffi' module. "
                 "Ensure it is compiled and in PYTHONPATH."
             )
-        # Set env vars right before the Rust engine boots so NodeConfig::default()
-        # picks them up. This is the only way to pass capacity without a Rust ABI change.
-        if max_records > 0:
-            os.environ["VALORI_MAX_RECORDS"] = str(max_records)
-        if dim > 0:
-            os.environ["VALORI_DIM"] = str(dim)
-        if max_nodes > 0:
-            os.environ["VALORI_MAX_NODES"] = str(max_nodes)
-        if max_edges > 0:
-            os.environ["VALORI_MAX_EDGES"] = str(max_edges)
+        # H-1 fix: hold the module-level lock for the entire env-mutate → init →
+        # restore window.  This makes LocalClient.__init__ thread-safe when multiple
+        # instances are created concurrently (e.g. in a FastAPI startup handler).
+        # The lock is released even if ValoricoreEngine() raises.
+        _vars: Dict[str, Optional[str]] = {}
+        def _set_var(name: str, value: Optional[str]) -> None:
+            _vars[name] = os.environ.get(name)  # save previous value
+            if value is not None:
+                os.environ[name] = value
+            elif name in os.environ:
+                del os.environ[name]
+
         try:
-            self.kernel = _ffi.ValoricoreEngine(path, index_kind)
+            with _INIT_LOCK:
+                if max_records > 0:
+                    _set_var("VALORI_MAX_RECORDS", str(max_records))
+                if dim > 0:
+                    _set_var("VALORI_DIM", str(dim))
+                if max_nodes > 0:
+                    _set_var("VALORI_MAX_NODES", str(max_nodes))
+                if max_edges > 0:
+                    _set_var("VALORI_MAX_EDGES", str(max_edges))
+                try:
+                    self.kernel = _ffi.ValoricoreEngine(path, index_kind)
+                finally:
+                    # Always restore env to its previous state so sibling threads
+                    # and subsequent LocalClient() calls see an unmodified environment.
+                    for name, prev in _vars.items():
+                        if prev is None:
+                            os.environ.pop(name, None)
+                        else:
+                            os.environ[name] = prev
             self.path = path
             self._auto_snapshot_interval = None
             self._insert_count = 0
+        except KernelError:
+            raise
         except Exception as e:
             raise KernelError(f"Failed to initialize Valoricore Kernel at {path}: {e}")
 
@@ -185,11 +214,15 @@ class LocalClient:
         """Return immediate neighbor node IDs for a given node."""
         return [e["to_node"] for e in self.get_edges(node_id)]
 
+    # L-5: cap BFS depth to prevent unbounded memory/time on dense graphs.
+    _MAX_WALK_DEPTH = 10
+
     def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         """
         Breadth-first search traversal of the knowledge graph.
-        Returns a list of visited node IDs up to max_depth.
+        Returns a list of visited node IDs up to max_depth (capped at 10).
         """
+        max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = set([start_node])
         queue = [(start_node, 0)]
         result = []

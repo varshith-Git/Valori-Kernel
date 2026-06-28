@@ -8,6 +8,7 @@ export interface SearchQuery {
   k: number;
   collection?: string;
   consistency?: "local" | "linearizable";
+  metadataFilter?: Record<string, unknown>;
 }
 
 export interface SearchState {
@@ -35,6 +36,9 @@ export function useSearch() {
       };
       if (q.collection) body.collection = q.collection;
       if (q.consistency) body.consistency = q.consistency;
+      if (q.metadataFilter && Object.keys(q.metadataFilter).length > 0) {
+        body.metadata_filter = q.metadataFilter;
+      }
 
       const res = await fetch("/api/search", {
         method: "POST",

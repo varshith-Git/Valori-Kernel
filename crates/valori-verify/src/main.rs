@@ -413,7 +413,13 @@ fn main() -> ExitCode {
 
 fn write_report(path: &PathBuf, report: &serde_json::Value) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(report)?;
-    std::fs::write(path, json)?;
+    // L-3: write to a temp file then atomically rename so a mid-write crash
+    // never leaves a truncated/corrupt report file.
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, &json)
+        .map_err(|e| anyhow::anyhow!("cannot write temp report {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .map_err(|e| anyhow::anyhow!("cannot rename report to {}: {e}", path.display()))?;
     eprintln!("  report:     {}", path.display());
     Ok(())
 }

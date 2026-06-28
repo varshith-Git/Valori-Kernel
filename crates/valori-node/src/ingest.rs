@@ -35,6 +35,11 @@ use serde::{Deserialize, Serialize};
 use crate::server::SharedEngine;
 use crate::embedder::{EmbedConfig, embed_batch};
 
+/// M-6: Maximum accepted text length for ingest/chunk endpoints.
+/// 10 MB is generous for real documents; beyond this the chunker + embedding
+/// loops become a DoS vector (O(n) memory + one embed call per chunk).
+const MAX_INGEST_TEXT_BYTES: usize = 10 * 1024 * 1024;
+
 // ── Public request / response types ──────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -84,7 +89,11 @@ pub struct IngestDocumentResponse {
 
 pub async fn ingest_document(
     Json(payload): Json<IngestDocumentRequest>,
-) -> Json<IngestDocumentResponse> {
+) -> Response {
+    if payload.text.len() > MAX_INGEST_TEXT_BYTES {
+        let body = serde_json::json!({"error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")});
+        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+    }
     let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
     let strategy_hint  = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size     = payload.chunk_size.unwrap_or(1000);
@@ -102,7 +111,7 @@ pub async fn ingest_document(
         chunk_count: chunks.len(),
         chunks,
         collection,
-    })
+    }).into_response()
 }
 
 // ── Strategy dispatcher ───────────────────────────────────────────────────────
@@ -470,6 +479,10 @@ pub async fn ingest(
     State(state): State<SharedEngine>,
     Json(payload): Json<IngestRequest>,
 ) -> Response {
+    if payload.text.len() > MAX_INGEST_TEXT_BYTES {
+        let body = serde_json::json!({"error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")});
+        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+    }
     let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
     let source     = payload.source.clone().unwrap_or_else(|| "unknown".into());
     let strategy   = payload.strategy.as_deref().unwrap_or("auto");

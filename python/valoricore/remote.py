@@ -39,7 +39,7 @@ class SyncRemoteClient:
     """
 
     def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
-                 ui_url: Optional[str] = None):
+                 ui_url: Optional[str] = None, timeout: int = 10):
         self.base_url = base_url.rstrip("/")
         # UI layer URL — defaults to same host but port 3001
         if ui_url:
@@ -50,7 +50,13 @@ class SyncRemoteClient:
         self.session = requests.Session()
         self._auto_snapshot_interval = None
         self._insert_count = 0
-        self._snapshot_dir = "./valoricore_snapshots"
+        # M-4: default snapshot dir to ~/.valori/snapshots/ instead of CWD.
+        import os as _os
+        self._snapshot_dir = str(_os.path.join(
+            _os.path.expanduser("~"), ".valori", "snapshots"
+        ))
+        # M-3: configurable default timeout; individual methods may use a longer value.
+        self._timeout = timeout
         # Cluster resilience knobs.
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff
@@ -95,7 +101,7 @@ class SyncRemoteClient:
             base = self._leader_url or self.base_url
             url = base + path
             try:
-                resp = self.session.post(url, json=json_data, timeout=10)
+                resp = self.session.post(url, json=json_data, timeout=self._timeout)
 
                 # A 307 we did NOT auto-follow means the follower could not name
                 # a leader (no Location header) — election in flight.
@@ -288,6 +294,182 @@ class SyncRemoteClient:
             data["source"] = source
         return self._post("/v1/ingest", data)
 
+    # ── Tree-RAG: hierarchical retrieval with citations + replayable receipts ──
+
+    def tree_build(self, text: str, doc_name: Optional[str] = None) -> dict:
+        """Parse a (markdown/structured) document into a navigable tree.
+
+        Unlike vector search, the tree is a table-of-contents the server reasons
+        over to land on the *right section*. Deterministic and LLM-free.
+
+        Returns a dict with:
+            ``doc_name``      — the document name
+            ``node_count``    — number of sections in the tree
+            ``structure_map`` — nested ``{node_id, title, summary, nodes}`` (for display)
+            ``tree``          — the full tree; pass this back to ``tree_query``/``tree_verify``
+
+        Example::
+
+            built = client.tree_build(handbook_md, doc_name="handbook")
+            ans = client.tree_query(built["tree"], "how many sick days?")
+        """
+        data: dict = {"text": text}
+        if doc_name is not None:
+            data["doc_name"] = doc_name
+        return self._post("/v1/tree/build", data)
+
+    def tree_query(
+        self,
+        tree: dict,
+        query: str,
+        k: int = 2,
+        prev_hash: Optional[str] = None,
+    ) -> dict:
+        """Navigate a built tree and answer with citations + a provable receipt.
+
+        ``tree`` is the ``tree`` object returned by :meth:`tree_build`.
+        Pass ``prev_hash`` (a prior receipt's ``receipt_hash``) to chain receipts.
+
+        Returns a dict with:
+            ``answer``            — the relevant section text (verbatim, vectorless)
+            ``citations``         — ``[{node_id, title, breadcrumb, lines}]``
+            ``visited_node_ids``  — which sections were read
+            ``reasoning``         — the navigator's term-match trace
+            ``receipt``           — BLAKE3-chained receipt; replay with :meth:`tree_verify`
+        """
+        data: dict = {"tree": tree, "query": query, "k": k}
+        if prev_hash is not None:
+            data["prev_hash"] = prev_hash
+        return self._post("/v1/tree/query", data)
+
+    def tree_verify(self, tree: dict, receipt: dict) -> bool:
+        """Replay a receipt against the tree. ``False`` means stored content was
+        altered after the receipt was issued — tamper detection for retrieval."""
+        resp = self._post("/v1/tree/verify", {"tree": tree, "receipt": receipt})
+        return bool(resp.get("valid", False))
+
+    def tree_chain_verify(self, receipts: list) -> dict:
+        """Verify an ordered list of receipts forms an unbroken BLAKE3 chain.
+
+        Returns ``{"valid": True, "broken_at": None}`` if intact, or
+        ``{"valid": False, "broken_at": <index>}`` pointing to the first broken link.
+        """
+        return self._post("/v1/tree/chain-verify", {"receipts": receipts})
+
+    def tree_hybrid(
+        self,
+        query: str,
+        *,
+        text: Optional[str] = None,
+        tree: Optional[dict] = None,
+        cache_key: Optional[str] = None,
+        namespace: Optional[str] = None,
+        k: int = 5,
+        tree_weight: float = 0.6,
+        prev_hash: Optional[str] = None,
+        doc_name: Optional[str] = None,
+    ) -> dict:
+        """Hybrid tree-RAG + vector search in one call.
+
+        Resolves the document tree from *text*, *tree*, or *cache_key* (in that
+        priority order, server-side). Fuses term-frequency section scores with
+        vector similarity scores using configurable *tree_weight* (default 0.6).
+
+        Returns a dict with keys:
+          ``query``            — echoed query string
+          ``hits``             — fused hit list sorted by combined score
+          ``tree_hit_count``   — how many hits came from the tree path
+          ``vector_hit_count`` — how many hits came from the vector path
+          ``tree_answer``      — AnswerResult receipt from the tree path (or None)
+          ``reasoning``        — human-readable fusion summary
+        """
+        body: dict = {"query": query, "k": k, "tree_weight": tree_weight}
+        if text is not None:
+            body["text"] = text
+        if tree is not None:
+            body["tree"] = tree
+        if cache_key is not None:
+            body["cache_key"] = cache_key
+        if namespace is not None:
+            body["namespace"] = namespace
+        if prev_hash is not None:
+            body["prev_hash"] = prev_hash
+        if doc_name is not None:
+            body["doc_name"] = doc_name
+        return self._post("/v1/tree/hybrid", body)
+
+    # ── Phase I6: Community layer ─────────────────────────────────────────────
+
+    def community_detect(
+        self,
+        *,
+        namespace: Optional[str] = None,
+        max_iter: Optional[int] = None,
+    ) -> dict:
+        """Run Label Propagation community detection on the current graph.
+
+        Returns ``{"community_count", "node_count", "communities", "receipt"}``
+        where *receipt* is a BLAKE3 hex over the sorted assignment map — a
+        tamper-evident proof of community structure at this point in time.
+        """
+        body: dict = {}
+        if namespace is not None:
+            body["namespace"] = namespace
+        if max_iter is not None:
+            body["max_iter"] = max_iter
+        return self._post("/v1/community/detect", body)
+
+    def community_search(
+        self,
+        vector: Vector,
+        *,
+        k: int = 5,
+        namespace: Optional[str] = None,
+        depth: int = 1,
+        drill_in: bool = False,
+    ) -> dict:
+        """Score *vector* against community centroids and return top-k communities.
+
+        Returns ``{"communities": [{"community_id", "score", "member_count",
+        "sample_node_ids"}], "total_communities_searched"}``. Call
+        ``community_detect()`` first to build the index.
+        """
+        body: dict = {
+            "vector": list(vector),
+            "k": k,
+            "depth": depth,
+            "drill_in": drill_in,
+        }
+        if namespace is not None:
+            body["namespace"] = namespace
+        return self._post("/v1/community/search", body)
+
+    def extract_entities(
+        self,
+        text: str,
+        *,
+        namespace: Optional[str] = None,
+        entity_types: Optional[List[str]] = None,
+        model: Optional[str] = None,
+    ) -> dict:
+        """Extract entities and relationships from *text* via the configured LLM.
+
+        Embeds entity descriptions and inserts them as ``Concept`` graph nodes
+        with ``Relation`` edges linking related entities.
+
+        Returns ``{"entities", "relationships", "entity_count",
+        "relationship_count", "skipped_relationships"}``. Requires
+        ``VALORI_EMBED_PROVIDER`` to be configured on the server.
+        """
+        body: dict = {"text": text}
+        if namespace is not None:
+            body["namespace"] = namespace
+        if entity_types is not None:
+            body["entity_types"] = entity_types
+        if model is not None:
+            body["model"] = model
+        return self._post("/v1/ingest/extract-entities", body)
+
     def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
         """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
         import valoricore
@@ -317,6 +499,7 @@ class SyncRemoteClient:
         decay_half_life_secs: Optional[int] = None,
         rerank: bool = True,
         query_text: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nearest vectors. Returns list of hits [{'id': int, 'score': int}].
 
@@ -346,6 +529,17 @@ class SyncRemoteClient:
         provided alongside ``rerank=True``, the server re-orders vector
         candidates by exact keyword relevance before returning results. Pass
         the same human-readable query you would display to the user.
+
+        ``metadata_filter`` — optional JSON object whose key-value pairs must ALL
+        be present (and equal) in a record's metadata for it to be returned.
+        Supports range operators for numeric fields::
+
+            # Exact match
+            c.search(q, k=5, metadata_filter={"author": "Alice"})
+            # Numeric range
+            c.search(q, k=5, metadata_filter={"year": {"gte": 2020, "lte": 2024}})
+            # Combined
+            c.search(q, k=5, metadata_filter={"author": "Alice", "year": {"gt": 2019}})
         """
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
@@ -363,6 +557,8 @@ class SyncRemoteClient:
         data["rerank"] = rerank
         if query_text is not None:
             data["query_text"] = query_text
+        if metadata_filter is not None:
+            data["metadata_filter"] = metadata_filter
         resp = self._post("/search", data)
         # as-of searches return the full response dict (with proof fields).
         if as_of is not None or as_of_log_index is not None:
@@ -797,11 +993,15 @@ class SyncRemoteClient:
 
     # ─────────────────────────────────────────────────────────────────────────
 
+    # L-5: cap BFS depth to prevent unbounded memory/time on dense graphs.
+    _MAX_WALK_DEPTH = 10
+
     def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         """
         Breadth-first search traversal of the knowledge graph.
-        Returns a list of visited node IDs up to max_depth.
+        Returns a list of visited node IDs up to max_depth (capped at 10).
         """
+        max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = set([start_node])
         queue = [(start_node, 0)]
         result = []
@@ -1254,6 +1454,120 @@ class AsyncRemoteClient:
             data["source"] = source
         return await self._post("/v1/ingest", data)
 
+    # ── Tree-RAG (async) — see SyncRemoteClient for full docs ─────────────────
+
+    async def tree_build(self, text: str, doc_name: Optional[str] = None) -> dict:
+        """Async version of SyncRemoteClient.tree_build."""
+        data: dict = {"text": text}
+        if doc_name is not None:
+            data["doc_name"] = doc_name
+        return await self._post("/v1/tree/build", data)
+
+    async def tree_query(
+        self,
+        tree: dict,
+        query: str,
+        k: int = 2,
+        prev_hash: Optional[str] = None,
+    ) -> dict:
+        """Async version of SyncRemoteClient.tree_query."""
+        data: dict = {"tree": tree, "query": query, "k": k}
+        if prev_hash is not None:
+            data["prev_hash"] = prev_hash
+        return await self._post("/v1/tree/query", data)
+
+    async def tree_verify(self, tree: dict, receipt: dict) -> bool:
+        """Async version of SyncRemoteClient.tree_verify."""
+        resp = await self._post("/v1/tree/verify", {"tree": tree, "receipt": receipt})
+        return bool(resp.get("valid", False))
+
+    async def tree_chain_verify(self, receipts: list) -> dict:
+        """Async version of SyncRemoteClient.tree_chain_verify."""
+        return await self._post("/v1/tree/chain-verify", {"receipts": receipts})
+
+    async def tree_hybrid(
+        self,
+        query: str,
+        *,
+        text: Optional[str] = None,
+        tree: Optional[dict] = None,
+        cache_key: Optional[str] = None,
+        namespace: Optional[str] = None,
+        k: int = 5,
+        tree_weight: float = 0.6,
+        prev_hash: Optional[str] = None,
+        doc_name: Optional[str] = None,
+    ) -> dict:
+        """Async version of SyncRemoteClient.tree_hybrid."""
+        body: dict = {"query": query, "k": k, "tree_weight": tree_weight}
+        if text is not None:
+            body["text"] = text
+        if tree is not None:
+            body["tree"] = tree
+        if cache_key is not None:
+            body["cache_key"] = cache_key
+        if namespace is not None:
+            body["namespace"] = namespace
+        if prev_hash is not None:
+            body["prev_hash"] = prev_hash
+        if doc_name is not None:
+            body["doc_name"] = doc_name
+        return await self._post("/v1/tree/hybrid", body)
+
+    # ── Phase I6: Community layer ─────────────────────────────────────────────
+
+    async def community_detect(
+        self,
+        *,
+        namespace: Optional[str] = None,
+        max_iter: Optional[int] = None,
+    ) -> dict:
+        """Async version of SyncRemoteClient.community_detect."""
+        body: dict = {}
+        if namespace is not None:
+            body["namespace"] = namespace
+        if max_iter is not None:
+            body["max_iter"] = max_iter
+        return await self._post("/v1/community/detect", body)
+
+    async def community_search(
+        self,
+        vector: Vector,
+        *,
+        k: int = 5,
+        namespace: Optional[str] = None,
+        depth: int = 1,
+        drill_in: bool = False,
+    ) -> dict:
+        """Async version of SyncRemoteClient.community_search."""
+        body: dict = {
+            "vector": list(vector),
+            "k": k,
+            "depth": depth,
+            "drill_in": drill_in,
+        }
+        if namespace is not None:
+            body["namespace"] = namespace
+        return await self._post("/v1/community/search", body)
+
+    async def extract_entities(
+        self,
+        text: str,
+        *,
+        namespace: Optional[str] = None,
+        entity_types: Optional[List[str]] = None,
+        model: Optional[str] = None,
+    ) -> dict:
+        """Async version of SyncRemoteClient.extract_entities."""
+        body: dict = {"text": text}
+        if namespace is not None:
+            body["namespace"] = namespace
+        if entity_types is not None:
+            body["entity_types"] = entity_types
+        if model is not None:
+            body["model"] = model
+        return await self._post("/v1/ingest/extract-entities", body)
+
     async def insert_batch_with_proof(self, vectors: List[Vector], tags: Optional[List[int]] = None) -> List[Tuple[RecordId, Proof]]:
         """Insert a batch of vectors and return [(id, proof_bytes)] for each."""
         import valoricore
@@ -1282,8 +1596,9 @@ class AsyncRemoteClient:
         decay_half_life_secs: Optional[int] = None,
         rerank: bool = True,
         query_text: Optional[str] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """See SyncRemoteClient.search. ``rerank`` + ``query_text`` enable BM25 hybrid reranking."""
+        """See SyncRemoteClient.search. Supports ``metadata_filter`` for key-value post-filtering."""
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
             data["filter_tag"] = filter_tag
@@ -1300,6 +1615,8 @@ class AsyncRemoteClient:
         data["rerank"] = rerank
         if query_text is not None:
             data["query_text"] = query_text
+        if metadata_filter is not None:
+            data["metadata_filter"] = metadata_filter
         resp = await self._post("/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp

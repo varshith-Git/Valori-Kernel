@@ -5,7 +5,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::backend::NodeClient;
 use crate::receipt::{
@@ -107,14 +108,22 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({
             "name": FORGET,
             "description": "Certified erasure: destroy the encryption key for a memory key-id, rendering \
-                            its ciphertext unrecoverable (GDPR-grade). Returns the shred result as a \
+                            its ciphertext PERMANENTLY and IRREVERSIBLY unrecoverable (GDPR-grade). \
+                            THIS OPERATION CANNOT BE UNDONE. You MUST pass `\"confirmation\": true` to \
+                            confirm you understand this is destructive. Returns the shred result as a \
                             deletion certificate.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "key_id": { "type": "string", "description": "32-hex DEK id to shred." }
+                    "key_id": { "type": "string", "description": "32-hex DEK id to shred." },
+                    "confirmation": {
+                        "type": "boolean",
+                        "description": "Must be `true`. Explicit confirmation that this permanent \
+                                        erasure is intentional. Guards against prompt-injection attacks \
+                                        that may try to delete data without user intent."
+                    }
                 },
-                "required": ["key_id"]
+                "required": ["key_id", "confirmation"]
             }
         }),
         json!({
@@ -128,6 +137,27 @@ pub fn tool_definitions() -> Vec<Value> {
 
 fn now_unix() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+// H-2: rate-limit memory_fork to once per minute to prevent disk-exhaustion DoS.
+const FORK_COOLDOWN: Duration = Duration::from_secs(60);
+static LAST_FORK: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn check_fork_rate_limit() -> Result<()> {
+    let mut guard = LAST_FORK.lock().unwrap_or_else(|p| p.into_inner());
+    let now = Instant::now();
+    if let Some(last) = *guard {
+        let elapsed = now.duration_since(last);
+        if elapsed < FORK_COOLDOWN {
+            let wait = (FORK_COOLDOWN - elapsed).as_secs() + 1;
+            return Err(anyhow!(
+                "memory_fork is rate-limited to once per minute. \
+                 Please wait {wait} more second(s) before snapshotting again."
+            ));
+        }
+    }
+    *guard = Some(now);
+    Ok(())
 }
 
 fn parse_vector(args: &Value, field: &str) -> Result<Vec<f32>> {
@@ -255,13 +285,32 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
         }
 
         FORGET => {
+            // H-1: guard irreversible crypto-shred behind an explicit confirmation flag.
+            // This prevents prompt-injected agents from accidentally or maliciously
+            // destroying data without the caller explicitly acknowledging it.
+            let confirmed = args.get("confirmation").and_then(|v| v.as_bool()).unwrap_or(false);
+            if !confirmed {
+                return Err(anyhow!(
+                    "memory_forget requires `\"confirmation\": true`. \
+                     This operation is PERMANENT and IRREVERSIBLE. \
+                     Set confirmation=true only after the user has explicitly requested erasure."
+                ));
+            }
             let key_id = opt_str(args, "key_id")
                 .ok_or_else(|| anyhow!("`key_id` (32-hex DEK id) is required"))?;
+            // M-2: validate key_id is exactly 32 hex chars before URL interpolation.
+            if key_id.len() != 32 || !key_id.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(anyhow!(
+                    "`key_id` must be exactly 32 lowercase hex characters; got {:?}",
+                    key_id
+                ));
+            }
             let res = client.crypto_shred(key_id).await?;
             Ok(json!({ "deletion_certificate": res }))
         }
 
         FORK => {
+            check_fork_rate_limit()?;
             let res = client.snapshot_save().await?;
             Ok(json!({ "fork": res }))
         }
@@ -395,9 +444,25 @@ mod tests {
     #[tokio::test]
     async fn forget_returns_a_deletion_certificate() {
         let node = FakeNode::default();
-        let args = json!({ "key_id": "ab".repeat(16) });
+        let args = json!({ "key_id": "ab".repeat(16), "confirmation": true });
         let out = call_tool(&node, FORGET, &args).await.unwrap();
         assert_eq!(out["deletion_certificate"]["shredded"], true);
+    }
+
+    #[tokio::test]
+    async fn forget_without_confirmation_errors() {
+        let node = FakeNode::default();
+        let args = json!({ "key_id": "ab".repeat(16) });
+        let err = call_tool(&node, FORGET, &args).await.unwrap_err();
+        assert!(err.to_string().contains("confirmation"));
+    }
+
+    #[tokio::test]
+    async fn forget_with_invalid_key_id_errors() {
+        let node = FakeNode::default();
+        let args = json!({ "key_id": "../../../etc/passwd", "confirmation": true });
+        let err = call_tool(&node, FORGET, &args).await.unwrap_err();
+        assert!(err.to_string().contains("32 lowercase hex"));
     }
 
     #[tokio::test]

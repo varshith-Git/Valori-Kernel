@@ -75,8 +75,11 @@ pub async fn run(bind_host: &str) -> Result<()> {
     print_header();
 
     if bind_host == "0.0.0.0" {
-        println!("  ⚠  Binding to 0.0.0.0 — API ports will be reachable from the network.");
-        println!("     Make sure firewall/security-group rules allow ports 51000–51006.");
+        println!("  ⚠  Binding to 0.0.0.0 — ALL API ports will be reachable from the network.");
+        println!("     The cluster starts WITHOUT authentication or mTLS.");
+        println!("     On a cloud VM (EC2, GCP, Azure) any internet host can read/write your data.");
+        println!("     Restrict access with firewall/security-group rules BEFORE starting,");
+        println!("     or use 127.0.0.1 (default) for local development.");
         println!();
     }
 

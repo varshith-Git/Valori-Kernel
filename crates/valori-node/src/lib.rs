@@ -10,6 +10,8 @@ pub mod decay;
 pub mod server;
 /// Server-side document ingestion with built-in chunking strategies.
 pub mod ingest;
+/// Tree-RAG — hierarchical retrieval with breadcrumb citations + replayable receipts.
+pub mod tree_rag;
 /// HTTP embedding client — drives VALORI_EMBED_PROVIDER for on-node embedding.
 pub mod embedder;
 pub mod structure;
@@ -39,3 +41,4 @@ pub mod object_store;
 pub mod api_keys;
 /// Phase 3.6: AES-256-GCM vault for crypto-shredding (GDPR erasure).
 pub mod crypto_vault;
+pub mod community;

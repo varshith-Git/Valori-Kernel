@@ -208,6 +208,45 @@ hits = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="linearizable")
 hits_local = node.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="local")
 ```
 
+### 2b · Tree-RAG — navigate to the right *section* (not just similar text)
+
+Two retrieval styles ship side by side; pick whichever fits the query:
+
+- **Vector search** (`search`) — "find me text *similar* to this embedding".
+- **Tree-RAG** (`tree_build` → `tree_query`) — "read the table of contents and
+  jump to the *right section*", with a breadcrumb + line citation and a
+  **replayable BLAKE3 receipt**. Deterministic — no embeddings, no LLM.
+
+Tree-RAG shines on documents with vocabulary-overlapping sections, where plain
+vector search confuses neighbours (e.g. *Annual Leave* vs *Sick Leave*).
+
+```python
+from valoricore import SyncRemoteClient
+
+node = SyncRemoteClient("http://my-valori-node:3000")
+
+handbook = open("employee_handbook.md").read()
+
+# 1. Build the navigable tree once (stateless — you hold the returned tree)
+built = node.tree_build(handbook, doc_name="handbook")
+print(built["node_count"], "sections")
+
+# 2. Ask — lands on the right section, returns a citation + receipt
+ans = node.tree_query(built["tree"], "how many sick days do I get?")
+print(ans["answer"])                     # the verbatim Sick Leave section
+print(ans["citations"][0]["breadcrumb"]) # "Acme Corp Employee Handbook > 2. Leave > 2.2 Sick Leave"
+print(ans["citations"][0]["lines"])      # e.g. [40, 42]
+
+# 3. Prove it wasn't tampered with — replay the receipt
+assert node.tree_verify(built["tree"], ans["receipt"]) is True
+
+# Chain receipts across questions: pass the prior receipt_hash
+ans2 = node.tree_query(built["tree"], "annual leave days?",
+                       prev_hash=ans["receipt"]["receipt_hash"])
+```
+
+The same three methods exist on `AsyncRemoteClient` (`await node.tree_build(...)`).
+
 ### 3 · Async API (FastAPI / asyncio)
 
 ```python

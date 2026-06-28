@@ -1,16 +1,16 @@
 pub mod brute_force;
 
-use crate::storage::pool::RecordPool;
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::storage::pool::RecordPool;
 use crate::types::vector::FxpVector;
 use crate::types::id::RecordId;
-use crate::types::scalar::FxpScalar;
 use core::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct SearchResult {
     // Determine sort order: Score ascending, then ID ascending (stable).
-    pub score: FxpScalar,
+    // i64 to handle high-dimensional L2 without saturation at i32::MAX.
+    pub score: i64,
     pub id: RecordId,
 }
 

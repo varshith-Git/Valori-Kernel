@@ -238,6 +238,17 @@ pub struct Engine {
     /// Phase I2: on-node embedding config (populated from VALORI_EMBED_* env vars).
     /// `None` when embedding is not configured.
     pub embed_config: Option<crate::embedder::EmbedConfig>,
+
+    /// Phase I5: in-process tree cache keyed by BLAKE3(text).
+    /// Populated by `/v1/tree/build`; consumed by `/v1/tree/query` (cache_key path)
+    /// and `/v1/tree/hybrid`. Bounded informally by typical session usage —
+    /// no eviction yet; a future phase adds LRU or size cap.
+    pub tree_cache: HashMap<String, crate::tree_rag::TreeIndex>,
+
+    /// Phase I6: last community detection result.
+    /// Populated by `POST /v1/community/detect`; consumed by `/v1/community/search`.
+    /// `None` until detection has run at least once.
+    pub community_store: Option<crate::community::CommunityStore>,
 }
 
 impl Engine {
@@ -382,6 +393,8 @@ impl Engine {
             decay_half_life_secs: cfg.decay_half_life_secs,
             reranker: crate::valori_reranker::ValoriReranker::new(),
             embed_config: crate::embedder::EmbedConfig::from_node_config(cfg),
+            tree_cache: HashMap::new(),
+            community_store: None,
         }
     }
 
@@ -1273,6 +1286,21 @@ impl Engine {
         Ok(())
     }
 
+    // ── Phase I5: tree cache ──────────────────────────────────────────────────
+
+    /// Store a tree under `BLAKE3(text)` and return the cache key.
+    pub fn cache_tree(&mut self, text: &str, tree: crate::tree_rag::TreeIndex) -> String {
+        let key = crate::tree_rag::hash_text(text);
+        self.tree_cache.insert(key.clone(), tree);
+        key
+    }
+
+    /// Look up a cached tree by key. Returns `None` if not in cache (e.g. after
+    /// a server restart — the caller must re-send the full tree in that case).
+    pub fn get_cached_tree(&self, key: &str) -> Option<&crate::tree_rag::TreeIndex> {
+        self.tree_cache.get(key)
+    }
+
     /// Add a namespace-scoped search method.
     pub fn search_l2_ns(&self, query: &[f32], k: usize, namespace_id: u16) -> Result<Vec<(u32, f32)>, EngineError> {
         use valori_kernel::index::SearchResult;
@@ -1294,7 +1322,7 @@ impl Engine {
         let found = self.state.search_l2_ns(&fxp_query, &mut results, namespace_id);
 
         Ok(results[..found].iter().map(|r| {
-            let score = r.score.0 as f32 / (SCALE as f32 * SCALE as f32);
+            let score = r.score as f32 / (SCALE as f32 * SCALE as f32);
             (r.id.0, score)
         }).collect())
     }

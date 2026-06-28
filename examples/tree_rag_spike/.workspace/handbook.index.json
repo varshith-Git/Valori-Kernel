@@ -1,0 +1,192 @@
+{
+  "doc_name": "employee_handbook.md",
+  "roots": [
+    "0001"
+  ],
+  "nodes": {
+    "0001": {
+      "node_id": "0001",
+      "title": "Acme Corp Employee Handbook",
+      "level": 1,
+      "start_line": 1,
+      "end_line": 5,
+      "own_text": "Welcome to Acme Corp. This handbook explains the policies that apply to all\nfull-time employees. Keep it handy — it is the source of truth for how we work.",
+      "summary": "Welcome to Acme Corp.",
+      "parent": null,
+      "children": [
+        "0002",
+        "0005",
+        "0009",
+        "0013"
+      ]
+    },
+    "0002": {
+      "node_id": "0002",
+      "title": "1. Working Hours and Remote Work",
+      "level": 2,
+      "start_line": 6,
+      "end_line": 9,
+      "own_text": "This section covers when and where you are expected to work.",
+      "summary": "This section covers when and where you are expected to work.",
+      "parent": "0001",
+      "children": [
+        "0003",
+        "0004"
+      ]
+    },
+    "0003": {
+      "node_id": "0003",
+      "title": "1.1 Core Hours",
+      "level": 3,
+      "start_line": 10,
+      "end_line": 15,
+      "own_text": "Standard working hours are 9:00 to 17:00, Monday to Friday. Core hours during\nwhich all employees must be reachable are 10:00 to 16:00. Outside core hours you\nmay flex your start and end times by up to two hours.",
+      "summary": "Standard working hours are 9:00 to 17:00, Monday to Friday.",
+      "parent": "0002",
+      "children": []
+    },
+    "0004": {
+      "node_id": "0004",
+      "title": "1.2 Remote Work Policy",
+      "level": 3,
+      "start_line": 16,
+      "end_line": 21,
+      "own_text": "Employees may work remotely up to 3 days per week. Working remotely for more\nthan 3 days per week requires written approval from your manager. Fully remote\narrangements are decided case by case and must be renewed every 12 months.",
+      "summary": "Employees may work remotely up to 3 days per week.",
+      "parent": "0002",
+      "children": []
+    },
+    "0005": {
+      "node_id": "0005",
+      "title": "2. Leave and Time Off",
+      "level": 2,
+      "start_line": 22,
+      "end_line": 25,
+      "own_text": "Acme offers several distinct categories of leave. Each has its own allowance.",
+      "summary": "Acme offers several distinct categories of leave.",
+      "parent": "0001",
+      "children": [
+        "0006",
+        "0007",
+        "0008"
+      ]
+    },
+    "0006": {
+      "node_id": "0006",
+      "title": "2.1 Annual Leave",
+      "level": 3,
+      "start_line": 26,
+      "end_line": 31,
+      "own_text": "Every full-time employee is entitled to 25 days of paid annual leave per\ncalendar year, in addition to public holidays. Up to 5 unused annual leave days\nmay be carried over into the following year.",
+      "summary": "Every full-time employee is entitled to 25 days of paid annual leave per calendar year, in addition to public holidays.",
+      "parent": "0005",
+      "children": []
+    },
+    "0007": {
+      "node_id": "0007",
+      "title": "2.2 Sick Leave",
+      "level": 3,
+      "start_line": 32,
+      "end_line": 37,
+      "own_text": "Employees receive 10 paid sick days per year. A doctor's note is required for\nany sick absence longer than 3 consecutive days. Unused paid sick days do not\ncarry over and are not paid out on departure.",
+      "summary": "Employees receive 10 paid sick days per year.",
+      "parent": "0005",
+      "children": []
+    },
+    "0008": {
+      "node_id": "0008",
+      "title": "2.3 Parental Leave",
+      "level": 3,
+      "start_line": 38,
+      "end_line": 43,
+      "own_text": "New parents are entitled to 16 weeks of paid parental leave, which may be taken\nany time within the first 12 months after birth or adoption. Parental leave is\nseparate from, and does not reduce, your annual leave allowance.",
+      "summary": "New parents are entitled to 16 weeks of paid parental leave, which may be taken any time within the first 12 months after birth or adoption.",
+      "parent": "0005",
+      "children": []
+    },
+    "0009": {
+      "node_id": "0009",
+      "title": "3. Compensation and Benefits",
+      "level": 2,
+      "start_line": 44,
+      "end_line": 47,
+      "own_text": "This section describes how and when you are paid, and your benefits.",
+      "summary": "This section describes how and when you are paid, and your benefits.",
+      "parent": "0001",
+      "children": [
+        "0010",
+        "0011",
+        "0012"
+      ]
+    },
+    "0010": {
+      "node_id": "0010",
+      "title": "3.1 Salary and Payroll",
+      "level": 3,
+      "start_line": 48,
+      "end_line": 53,
+      "own_text": "Salaries are paid monthly, on the last working day of each month. Payslips are\navailable in the employee portal. Overtime is not paid for salaried roles but is\ncompensated with time off in lieu.",
+      "summary": "Salaries are paid monthly, on the last working day of each month.",
+      "parent": "0009",
+      "children": []
+    },
+    "0011": {
+      "node_id": "0011",
+      "title": "3.2 Health Insurance",
+      "level": 3,
+      "start_line": 54,
+      "end_line": 58,
+      "own_text": "Acme covers 100% of the premium for employee health insurance and 50% of the\npremium for dependents. Coverage begins on your first day of employment.",
+      "summary": "Acme covers 100% of the premium for employee health insurance and 50% of the premium for dependents.",
+      "parent": "0009",
+      "children": []
+    },
+    "0012": {
+      "node_id": "0012",
+      "title": "3.3 Retirement Plan",
+      "level": 3,
+      "start_line": 59,
+      "end_line": 63,
+      "own_text": "Acme matches employee retirement contributions up to 6% of base salary.\nContributions vest after two years of continuous service.",
+      "summary": "Acme matches employee retirement contributions up to 6% of base salary.",
+      "parent": "0009",
+      "children": []
+    },
+    "0013": {
+      "node_id": "0013",
+      "title": "4. Code of Conduct",
+      "level": 2,
+      "start_line": 64,
+      "end_line": 67,
+      "own_text": "All employees are expected to uphold the following standards.",
+      "summary": "All employees are expected to uphold the following standards.",
+      "parent": "0001",
+      "children": [
+        "0014",
+        "0015"
+      ]
+    },
+    "0014": {
+      "node_id": "0014",
+      "title": "4.1 Confidentiality",
+      "level": 3,
+      "start_line": 68,
+      "end_line": 72,
+      "own_text": "Confidential information must not be shared outside the company. This obligation\ncontinues for 2 years after your employment ends.",
+      "summary": "Confidential information must not be shared outside the company.",
+      "parent": "0013",
+      "children": []
+    },
+    "0015": {
+      "node_id": "0015",
+      "title": "4.2 Expense Policy",
+      "level": 3,
+      "start_line": 73,
+      "end_line": 77,
+      "own_text": "Business expenses must be submitted within 30 days with a valid receipt.\nExpenses over 200 USD require pre-approval from your manager.",
+      "summary": "Business expenses must be submitted within 30 days with a valid receipt.",
+      "parent": "0013",
+      "children": []
+    }
+  }
+}

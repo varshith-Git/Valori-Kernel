@@ -78,19 +78,35 @@ def _ensure_keys(d: dict, keys):
         
 import json
 
+# H-2: custom auth class that redacts itself in __repr__/__str__ so bearer tokens
+# do not appear in tracebacks, Sentry reports, or Python logging output.
+class _BearerAuth(requests.auth.AuthBase):
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
+        r.headers["Authorization"] = f"Bearer {self._token}"
+        return r
+
+    def __repr__(self) -> str:
+        return "<BearerAuth [REDACTED]>"
+
+
 class ProtocolRemoteClient:
     def __init__(self, base_url: str, embed_fn, expected_dim: int, api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.session = requests.Session()
-        if api_key:
-            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+        # H-2: use per-request auth (via __call__) rather than session-level default
+        # headers, so the token is not captured in session.__repr__ or tracebacks.
+        self._auth = _BearerAuth(api_key) if api_key else None
         self._embed = embed_fn
+        # M-1: 0 means "skip client-side dim check; let the server enforce it".
         self.expected_dim = expected_dim
 
-    def _post(self, path: str, json_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, path: str, json_data: Dict[str, Any], timeout: int = 10) -> Dict[str, Any]:
         # Robust URL construction
         url = f"{self.base_url}/{path.lstrip('/')}"
-        resp = self.session.post(url, json=json_data, timeout=10)
+        resp = self.session.post(url, json=json_data, auth=self._auth, timeout=timeout)
         
         if not resp.ok:
             # Handle Auth Errors specifically
@@ -112,20 +128,22 @@ class ProtocolRemoteClient:
 
     def snapshot(self) -> bytes:
         url = f"{self.base_url}/v1/snapshot/download"
-        resp = self.session.get(url, timeout=10)
+        # M-3: snapshots can be hundreds of MB — use a longer timeout.
+        resp = self.session.get(url, auth=self._auth, timeout=120)
         resp.raise_for_status()
         return resp.content
 
     def restore(self, data: bytes) -> None:
         url = f"{self.base_url}/v1/snapshot/upload"
-        # Binary body with explicit Content-Type
         headers = {"Content-Type": "application/octet-stream"}
-        resp = self.session.post(url, data=data, headers=headers, timeout=10)
-
+        # M-3: uploads can be large — use a longer timeout.
+        resp = self.session.post(url, data=data, headers=headers, auth=self._auth, timeout=120)
         resp.raise_for_status()
 
     def upsert_vector(self, vector: List[float], attach_to_document_node: Optional[int]=None, **kwargs):
-        if len(vector) != self.expected_dim:
+        # M-1: only check dim client-side when explicitly configured (non-zero).
+        # When expected_dim=0 the server enforces the dimension at insert time.
+        if self.expected_dim > 0 and len(vector) != self.expected_dim:
             raise ValueError(f"Embedding must be {self.expected_dim}-dimensional")
             
         # Validate Input Range
@@ -140,17 +158,17 @@ class ProtocolRemoteClient:
         
         res = self._post("/v1/memory/upsert_vector", payload)
         
-        # Support older nodes that don't return proof hash by calculating it locally
-        if "proof_hash" not in res:
-            import valoricore
-            fixed = valoricore.ingest_embedding(vector)
-            res["proof_hash"] = valoricore.generate_proof(fixed)
-            
-        _ensure_keys(res, ("memory_id", "record_id", "document_node_id", "chunk_node_id", "proof_hash"))
+        # L-2: do NOT fabricate a local proof when the server doesn't return one.
+        # A client-side proof hash was never committed to the audit chain and
+        # would give users false assurance that the data is auditable.
+        # If the server omits proof_hash it means the node predates the proof
+        # endpoint — treat proof_hash as optional rather than manufacturing it.
+        _ensure_keys(res, ("memory_id", "record_id", "document_node_id", "chunk_node_id"))
         return res
 
     def search_vector(self, vector: List[float], k: int = 5):
-        if len(vector) != self.expected_dim:
+        # M-1: only check dim client-side when explicitly configured.
+        if self.expected_dim > 0 and len(vector) != self.expected_dim:
             raise ValueError(f"Embedding must be {self.expected_dim}-dimensional")
             
         # Validate Input Range
@@ -259,12 +277,15 @@ class ProtocolClient:
         api_key: Optional[str] = None,
         index_kind: str = "bruteforce",
         quantization: str = "none",
+        expected_dim: int = 0,
     ) -> None:
         self._embed = embed
-        
+
         if remote and (remote.startswith("http://") or remote.startswith("https://")):
-            # Use Remote Protocol Client
-            self._impl = ProtocolRemoteClient(remote, embed, EXPECTED_DIM, api_key=api_key)
+            # M-1: pass expected_dim=0 by default so the server enforces dimension,
+            # not the SDK. Callers that want client-side validation can pass expected_dim
+            # explicitly (e.g. expected_dim=384 for MiniLM, 1536 for OpenAI).
+            self._impl = ProtocolRemoteClient(remote, embed, expected_dim, api_key=api_key)
         else:
             # Use Local/FFI Memory Client
             self._impl = None

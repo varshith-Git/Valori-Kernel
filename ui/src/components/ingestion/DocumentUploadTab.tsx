@@ -287,7 +287,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
         >
           {status === "ingesting" ? (
             <span className="flex items-center gap-2">
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-zinc-900" />
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
               Ingesting…
             </span>
           ) : (
@@ -298,25 +298,25 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
 
       {/* Result */}
       {status === "done" && result && (
-        <div className="rounded-xl border border-emerald-800 bg-emerald-950/40 p-5">
+        <div className="rounded-xl border border-border bg-card p-5">
           <div className="flex items-start justify-between">
             <div>
-              <p className="font-medium text-emerald-400">
+              <p className="font-medium text-[var(--v-accent)]">
                 ✓ Ingested {result.ingested} chunk{result.ingested !== 1 ? "s" : ""}
               </p>
-              <p className="text-xs text-emerald-700 mt-1 font-mono">
+              <p className="text-xs text-muted-foreground mt-1 font-mono">
                 document node: #{result.document_node_id}
                 {result.strategy_used && (
-                  <span className="ml-2 text-emerald-800">· {result.strategy_used}</span>
+                  <span className="ml-2">· {result.strategy_used}</span>
                 )}
                 {result.pipeline === "server" && (
-                  <span className="ml-2 text-emerald-800">· server pipeline ⚡</span>
+                  <span className="ml-2">· server pipeline ⚡</span>
                 )}
               </p>
             </div>
             <button
               onClick={() => setShowChunks((v) => !v)}
-              className="text-xs text-emerald-700 hover:text-emerald-400 transition-colors"
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
               {showChunks ? "hide chunks" : "show chunks"}
             </button>
@@ -327,10 +327,10 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
               {result.chunks.slice(0, 10).map((c) => (
                 <div
                   key={c.record_id}
-                  className="rounded-lg border border-emerald-900 bg-background px-3 py-2"
+                  className="rounded-lg border border-border bg-background px-3 py-2"
                 >
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-mono text-emerald-700">
+                    <span className="text-[10px] font-mono text-muted-foreground">
                       chunk {c.chunk_index} · rec #{c.record_id} · node #{c.chunk_node_id}
                     </span>
                   </div>
@@ -347,9 +347,9 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
 
           {/* Question suggester */}
           {onAskQuestion && (
-            <div className="mt-4 pt-4 border-t border-emerald-900/40">
+            <div className="mt-4 pt-4 border-t border-border">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-medium text-emerald-600">AI-suggested questions</p>
+                <p className="text-xs font-medium text-foreground">AI-suggested questions</p>
                 {!suggestedQuestions && !suggestingQuestions && (
                   <button
                     onClick={async () => {
@@ -379,21 +379,21 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
                         setSuggestingQuestions(false);
                       }
                     }}
-                    className="text-xs px-3 py-1.5 rounded border border-emerald-800/60 text-emerald-600 hover:text-emerald-400 hover:border-emerald-700 transition-all"
+                    className="text-xs px-3 py-1.5 rounded border border-input text-muted-foreground hover:text-foreground hover:border-ring transition-all"
                   >
                     ✦ Generate 8 questions
                   </button>
                 )}
                 {suggestingQuestions && (
-                  <span className="text-xs text-emerald-700 flex items-center gap-1.5">
-                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-800 border-t-emerald-500" />
+                  <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-foreground" />
                     Thinking…
                   </span>
                 )}
                 {suggestedQuestions && (
                   <button
                     onClick={() => setSuggestedQuestions(null)}
-                    className="text-[10px] text-muted-foreground hover:text-muted-foreground transition-colors"
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                   >
                     regenerate
                   </button>
@@ -414,7 +414,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
                       <p className="text-xs text-muted-foreground leading-relaxed flex-1">{q}</p>
                       <button
                         onClick={() => onAskQuestion(q)}
-                        className="flex-shrink-0 text-[10px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-emerald-700 hover:text-emerald-400 hover:bg-emerald-950/30 transition-all whitespace-nowrap opacity-0 group-hover:opacity-100"
+                        className="flex-shrink-0 text-[10px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-ring hover:text-foreground hover:bg-muted transition-all whitespace-nowrap opacity-0 group-hover:opacity-100"
                       >
                         Ask →
                       </button>
@@ -432,7 +432,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
               setSuggestedQuestions(null);
               setSuggestError(null);
             }}
-            className="mt-4 text-xs text-emerald-700 hover:text-emerald-400 transition-colors"
+            className="mt-4 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             + ingest another
           </button>

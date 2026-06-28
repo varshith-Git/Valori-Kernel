@@ -36,7 +36,7 @@ fn populated() -> KernelState {
 }
 
 fn search(state: &KernelState, query: &FxpVector, k: usize, filter: Option<u64>) -> Vec<u32> {
-    let mut buf = vec![SearchResult { id: RecordId(0), score: FxpScalar(i32::MAX) }; k];
+    let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
     let found = state.search_l2(query, &mut buf, filter);
     buf.truncate(found);
     buf.iter().map(|r| r.id.0).collect()

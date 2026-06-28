@@ -84,23 +84,29 @@ pub trait KeyVault: Send + Sync {
 
 /// Stub vault — panics on any call.
 ///
-/// Used as the default until a real vault is configured. Ensures that no
-/// `InsertRecordEncrypted` event can reach the engine before encryption is
-/// actually implemented; the panic surfaces the misconfiguration immediately
-/// rather than silently writing unencrypted data under an "encrypted" event.
+/// Used as the default until a real vault is configured. Returns `Err` on any
+/// call — this surfaces the misconfiguration as a recoverable error rather than
+/// crashing the node (which could be used as a DoS vector in a cluster where
+/// all replicas must replay the same Raft log).
 pub struct NullVault;
 
 impl KeyVault for NullVault {
     fn encrypt(&self, _: KeyId, _: &[u8]) -> Result<alloc::vec::Vec<u8>, CryptoError> {
-        panic!("NullVault: crypto-shredding is not yet implemented (Phase 1.5 stub)")
+        Err(CryptoError::BackendError(
+            alloc::string::String::from("no vault configured — wire a real KeyVault before using encrypted records"),
+        ))
     }
 
     fn decrypt(&self, _: KeyId, _: &[u8]) -> Result<alloc::vec::Vec<u8>, CryptoError> {
-        panic!("NullVault: crypto-shredding is not yet implemented (Phase 1.5 stub)")
+        Err(CryptoError::BackendError(
+            alloc::string::String::from("no vault configured"),
+        ))
     }
 
     fn shred(&self, _: KeyId) -> Result<(), CryptoError> {
-        panic!("NullVault: crypto-shredding is not yet implemented (Phase 1.5 stub)")
+        Err(CryptoError::BackendError(
+            alloc::string::String::from("no vault configured"),
+        ))
     }
 
     fn key_exists(&self, _: &KeyId) -> bool {

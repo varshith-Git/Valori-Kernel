@@ -304,28 +304,49 @@ async fn main() -> anyhow::Result<()> {
                 batch_size,
                 resume,
                 token,
-            } => import::run_qdrant(import::QdrantImportArgs {
-                qdrant_url: url,
-                source_collection: collection,
-                target_url,
-                target_collection,
-                batch_size,
-                resume,
-                token,
-            }),
+            } => {
+                // H-2: --token via CLI arg is visible in `ps aux` / /proc/PID/cmdline.
+                // Warn the operator and fall back to VALORI_AUTH_TOKEN if the flag
+                // was not supplied, so the env-var path is always available.
+                if token.is_some() {
+                    eprintln!(
+                        "Warning: --token is visible in process listings. \
+                         Prefer VALORI_AUTH_TOKEN env var to pass credentials securely."
+                    );
+                }
+                let token = token.or_else(|| std::env::var("VALORI_AUTH_TOKEN").ok());
+                import::run_qdrant(import::QdrantImportArgs {
+                    qdrant_url: url,
+                    source_collection: collection,
+                    target_url,
+                    target_collection,
+                    batch_size,
+                    resume,
+                    token,
+                })
+            }
             ImportSource::Jsonl {
                 file,
                 target_url,
                 target_collection,
                 batch_size,
                 token,
-            } => import::run_jsonl(import::JsonlImportArgs {
-                file,
-                target_url,
-                target_collection,
-                batch_size,
-                token,
-            }),
+            } => {
+                if token.is_some() {
+                    eprintln!(
+                        "Warning: --token is visible in process listings. \
+                         Prefer VALORI_AUTH_TOKEN env var to pass credentials securely."
+                    );
+                }
+                let token = token.or_else(|| std::env::var("VALORI_AUTH_TOKEN").ok());
+                import::run_jsonl(import::JsonlImportArgs {
+                    file,
+                    target_url,
+                    target_collection,
+                    batch_size,
+                    token,
+                })
+            }
         },
     }
 }

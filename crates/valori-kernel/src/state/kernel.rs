@@ -12,7 +12,6 @@ use crate::graph::node::GraphNode;
 use crate::graph::adjacency::{add_edge, OutEdgeIterator};
 use crate::types::id::{RecordId, NodeId, EdgeId};
 use crate::types::vector::FxpVector;
-use crate::types::scalar::FxpScalar;
 use crate::storage::record::Record;
 use crate::math::l2::fxp_l2_sq;
 
@@ -100,6 +99,10 @@ impl KernelState {
         self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
 
+    pub fn incoming_edges<'a>(&'a self, node_id: NodeId) -> Option<crate::graph::adjacency::InEdgeIterator<'a>> {
+        self.nodes.get(node_id).map(|node| crate::graph::adjacency::InEdgeIterator::new(&self.edges, node.first_in_edge))
+    }
+
     /// Iterate over all live graph nodes (excludes deleted/hole slots).
     pub fn iter_nodes(&self) -> impl Iterator<Item = &crate::graph::node::GraphNode> {
         self.nodes.nodes.iter().filter_map(|slot| slot.as_ref())
@@ -154,7 +157,7 @@ impl KernelState {
         }
 
         for r in results.iter_mut() {
-            *r = SearchResult { score: FxpScalar(i32::MAX), id: RecordId(u32::MAX) };
+            *r = SearchResult { score: i64::MAX, id: RecordId(u32::MAX) };
         }
 
         let mut found = 0usize;
@@ -335,6 +338,11 @@ impl KernelState {
                 }
                 if self.records.next_id() != *id {
                     return Err(KernelError::InvalidOperation);
+                }
+                // Reject oversized ciphertext (MAX_METADATA_SIZE plaintext + 28 B AEAD overhead).
+                use crate::config::MAX_METADATA_SIZE;
+                if ciphertext.len() > MAX_METADATA_SIZE + 28 {
+                    return Err(KernelError::MetadataTooLarge);
                 }
                 // Dim must be set; use zero vector (not searchable).
                 let dim = self.dim.ok_or(KernelError::InvalidOperation)?;

@@ -1,8 +1,8 @@
 "use client";
 
-import { use, useEffect, useState, useCallback } from "react";
+import { use, useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, AlertTriangle, ArrowLeft, Square, RotateCcw } from "lucide-react";
+import { Loader2, AlertTriangle, ArrowLeft, Square, RotateCcw, RefreshCw } from "lucide-react";
 
 /**
  * Wraps every `/projects/<name>/*` route. On mount (and whenever the project
@@ -21,9 +21,11 @@ export default function ProjectLayout({
   const project = decodeURIComponent(name);
   const router = useRouter();
 
-  const [state,     setState]     = useState<"opening" | "ready" | "failed">("opening");
+  const [state,      setState]      = useState<"opening" | "ready" | "failed">("opening");
   const [nodeStatus, setNodeStatus] = useState<"running" | "stopped" | "error">("running");
   const [actionBusy, setActionBusy] = useState(false);
+  const [startLogs,  setStartLogs]  = useState<string[]>([]);
+  const logsRef = useRef<HTMLDivElement>(null);
 
   const openProject = useCallback(async (): Promise<boolean> => {
     const r = await fetch(`/api/projects/${encodeURIComponent(project)}/open`, { method: "POST" });
@@ -36,10 +38,24 @@ export default function ProjectLayout({
   useEffect(() => {
     let cancelled = false;
     setState("opening");
+    setStartLogs([]);
     openProject().then(ok => {
       if (cancelled) return;
       setState(ok ? "ready" : "failed");
       setNodeStatus(ok ? "running" : "error");
+      if (!ok) {
+        // Pull the last few startup log lines so the user can diagnose.
+        fetch(`/api/launch/logs?nodeId=3010`)
+          .then(r => r.text())
+          .then(raw => {
+            const lines = raw.split("\n")
+              .filter(l => l.startsWith("data:"))
+              .map(l => { try { return JSON.parse(l.slice(5).trim()) as string; } catch { return ""; } })
+              .filter(Boolean)
+              .slice(-20);
+            if (!cancelled) setStartLogs(lines);
+          }).catch(() => {});
+      }
     }).catch(() => {
       if (!cancelled) { setState("failed"); setNodeStatus("error"); }
     });
@@ -81,7 +97,16 @@ export default function ProjectLayout({
     setActionBusy(true);
     const ok = await openProject();
     setNodeStatus(ok ? "running" : "error");
+    if (ok && state === "failed") setState("ready");
     setActionBusy(false);
+  };
+
+  const handleRetry = async () => {
+    setState("opening");
+    setStartLogs([]);
+    const ok = await openProject();
+    setState(ok ? "ready" : "failed");
+    setNodeStatus(ok ? "running" : "error");
   };
 
   if (state === "opening") {
@@ -96,20 +121,58 @@ export default function ProjectLayout({
 
   if (state === "failed") {
     return (
-      <div className="flex flex-col items-center justify-center gap-4 py-32">
-        <AlertTriangle size={22} className="text-amber-600" />
-        <div className="text-center">
-          <p className="text-sm font-medium text-foreground">Couldn&apos;t start &quot;{project}&quot;</p>
-          <p className="mt-1 text-xs text-muted-foreground max-w-xs">
-            The node didn&apos;t come up in time. The data is safe — try opening again from Home.
-          </p>
+      <div className="flex flex-col gap-4 py-16 max-w-xl mx-auto">
+        <div className="flex items-start gap-3">
+          <AlertTriangle size={18} className="text-amber-500 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-foreground">
+              Couldn&apos;t start &quot;{project}&quot;
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              The node didn&apos;t respond in time. Your data is safe — the WAL is durable.
+              Try retrying; if it fails again check the logs below.
+            </p>
+          </div>
         </div>
-        <button
-          onClick={() => router.push("/")}
-          className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-        >
-          <ArrowLeft size={14} /> Back to projects
-        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRetry}
+            className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm hover:bg-primary/90 transition-colors"
+          >
+            <RefreshCw size={13} /> Retry
+          </button>
+          <button
+            onClick={() => router.push("/")}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          >
+            <ArrowLeft size={13} /> Back to projects
+          </button>
+        </div>
+
+        {startLogs.length > 0 && (
+          <div className="rounded-lg border border-border bg-card overflow-hidden">
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-3 py-2 border-b border-border">
+              Startup logs
+            </p>
+            <div
+              ref={logsRef}
+              className="max-h-48 overflow-y-auto px-3 py-2 flex flex-col gap-0.5"
+            >
+              {startLogs.map((line, i) => (
+                <code key={i} className="text-[11px] font-mono text-muted-foreground whitespace-pre-wrap break-all">
+                  {line}
+                </code>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          Common causes: port conflict, binary not yet compiled (run{" "}
+          <code className="text-[10px] bg-muted px-1 rounded">cargo build -p valori-node --release</code>
+          ), or a large WAL replay taking longer than 60 s.
+        </p>
       </div>
     );
   }

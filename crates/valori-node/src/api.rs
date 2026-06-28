@@ -91,9 +91,71 @@ pub struct SearchRequest {
     /// Ignored when `rerank=false`.
     #[serde(default)]
     pub query_text: Option<String>,
+    /// Optional JSON object whose key-value pairs must ALL be present (and equal)
+    /// in a record's metadata for the record to be returned.
+    /// Numeric values support optional range operators: `{"gte": 2020, "lte": 2024}`.
+    /// Example: `{"author": "Alice", "year": {"gte": 2020}}`
+    #[serde(default)]
+    pub metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 fn default_rerank() -> bool { true }
+
+/// Returns true when every key in `filter` is present in `meta` with a matching value.
+/// Supports exact equality for strings/booleans/null, and range operators
+/// (`eq`, `gt`, `gte`, `lt`, `lte`) for numbers.
+pub fn matches_metadata_filter(
+    meta: &serde_json::Value,
+    filter: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let obj = match meta.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+    for (key, expected) in filter {
+        let actual = match obj.get(key) {
+            Some(v) => v,
+            None => return false,
+        };
+        if !value_matches(actual, expected) {
+            return false;
+        }
+    }
+    true
+}
+
+fn value_matches(actual: &serde_json::Value, expected: &serde_json::Value) -> bool {
+    // If expected is an object with range operators, apply numeric comparison.
+    if let Some(ops) = expected.as_object() {
+        let has_op = ops.contains_key("eq")
+            || ops.contains_key("gt") || ops.contains_key("gte")
+            || ops.contains_key("lt") || ops.contains_key("lte");
+        if has_op {
+            let num = match actual.as_f64() {
+                Some(n) => n,
+                None => return false,
+            };
+            if let Some(v) = ops.get("eq") {
+                if actual != v { return false; }
+            }
+            if let Some(v) = ops.get("gt").and_then(|v| v.as_f64()) {
+                if !(num > v) { return false; }
+            }
+            if let Some(v) = ops.get("gte").and_then(|v| v.as_f64()) {
+                if !(num >= v) { return false; }
+            }
+            if let Some(v) = ops.get("lt").and_then(|v| v.as_f64()) {
+                if !(num < v) { return false; }
+            }
+            if let Some(v) = ops.get("lte").and_then(|v| v.as_f64()) {
+                if !(num <= v) { return false; }
+            }
+            return true;
+        }
+    }
+    // Exact equality for all other types.
+    actual == expected
+}
 
 #[derive(Serialize)]
 pub struct SearchHit {

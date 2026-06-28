@@ -191,14 +191,22 @@ pub fn generate_keypair(out_dir: &Path) -> Result<()> {
 
     std::fs::write(&sk_path, to_hex(signing_key.as_bytes()))
         .with_context(|| format!("cannot write {}", sk_path.display()))?;
+    // H-1: restrict signing key to owner-read-only immediately after writing.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sk_path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("cannot chmod 0600 {}", sk_path.display()))?;
+    }
     std::fs::write(&vk_path, to_hex(verifying_key.as_bytes()))
         .with_context(|| format!("cannot write {}", vk_path.display()))?;
 
     println!("signing key → {}", sk_path.display());
     println!("public key  → {}", vk_path.display());
     println!();
-    println!("IMPORTANT: keep signing.key secret.");
-    println!("           distribute verify.pub to auditors/customers so they");
+    println!("IMPORTANT: signing.key is chmod 0600 (owner-read-only).");
+    println!("           Keep it secret — anyone with this file can forge anchors.");
+    println!("           Distribute verify.pub to auditors/customers so they");
     println!("           can verify anchors without access to your private key.");
     Ok(())
 }

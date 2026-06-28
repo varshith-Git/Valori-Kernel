@@ -193,7 +193,7 @@ fn floats_to_fxp(floats: &[f64]) -> FxpVector {
 }
 
 fn search(engine: &ForensicEngine, query: &FxpVector, k: usize) -> Vec<SearchResult> {
-    let mut buf = vec![SearchResult { id: RecordId(0), score: FxpScalar(i32::MAX) }; k];
+    let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
     let found   = engine.state.search_l2(query, &mut buf, None);
     buf.truncate(found);
     buf

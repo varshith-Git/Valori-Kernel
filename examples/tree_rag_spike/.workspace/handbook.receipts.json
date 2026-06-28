@@ -1,0 +1,72 @@
+{
+  "hash_algo": "blake3",
+  "receipts": [
+    {
+      "query": "How many paid sick days do I get?",
+      "query_hash": "587a7678b7ed49fd63e65b5a5566748f7c9d1db94e90f8d48875ec2f8649dc48",
+      "visited_node_ids": [
+        "0007",
+        "0006"
+      ],
+      "fetched_ranges": [
+        [
+          32,
+          37
+        ],
+        [
+          26,
+          31
+        ]
+      ],
+      "evidence_hash": "721fd67d20ca63f198f65fb0b3c4dfc3f3b15d030b2ed9daa4846444b59fc8a6",
+      "answer_hash": "721fd67d20ca63f198f65fb0b3c4dfc3f3b15d030b2ed9daa4846444b59fc8a6",
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "receipt_hash": "9250a0575b5f030987d7875e2e6852d0b1b1b006ddc0b7e2b98be719a72a1dbe",
+      "hash_algo": "blake3",
+      "timestamp": 1782462736.919
+    },
+    {
+      "query": "Can I work from home, and how often?",
+      "query_hash": "ee4260e7afec6f185703a48b02ea0ba374263a976cfee2283312f51f6b26ea03",
+      "visited_node_ids": [
+        "0004",
+        "0002"
+      ],
+      "fetched_ranges": [
+        [
+          16,
+          21
+        ],
+        [
+          6,
+          9
+        ]
+      ],
+      "evidence_hash": "929f1506e757a9806cc524d1d4fe98e4c23a776e54cfe3455f01bcce87534b29",
+      "answer_hash": "929f1506e757a9806cc524d1d4fe98e4c23a776e54cfe3455f01bcce87534b29",
+      "prev_hash": "9250a0575b5f030987d7875e2e6852d0b1b1b006ddc0b7e2b98be719a72a1dbe",
+      "receipt_hash": "0c56cfc953150db5f8455851774e2ee056f481c36927ab33a366aa3121914dee",
+      "hash_algo": "blake3",
+      "timestamp": 1782462736.919
+    },
+    {
+      "query": "What is the retirement contribution match?",
+      "query_hash": "17677b982ffa798dc20b2a5a84a4e20b2e2901126351c0154f3d7480e1b525b9",
+      "visited_node_ids": [
+        "0012"
+      ],
+      "fetched_ranges": [
+        [
+          59,
+          63
+        ]
+      ],
+      "evidence_hash": "eb5a85419051ff0d84741fe2c8a603c58c5d46c90bf7d1b62342834a6c38bbce",
+      "answer_hash": "eb5a85419051ff0d84741fe2c8a603c58c5d46c90bf7d1b62342834a6c38bbce",
+      "prev_hash": "0c56cfc953150db5f8455851774e2ee056f481c36927ab33a366aa3121914dee",
+      "receipt_hash": "50b742f6686b501387b05de879160ff411c47440b5f362de2d0cf31fd8af5829",
+      "hash_algo": "blake3",
+      "timestamp": 1782462736.92
+    }
+  ]
+}

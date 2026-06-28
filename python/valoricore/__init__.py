@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 """
 valoricore – The Official Python SDK for Valori-Kernel
 =======================================================
@@ -67,7 +67,7 @@ except ImportError:
 
 __version__ = "0.1.11"
 __author__  = "Varshith Gudur"
-__license__ = "AGPL-3.0"
+__license__ = "MIT OR Apache-2.0"
 
 __all__ = [
     # ── Factories ─────────────────────────────────────────────────

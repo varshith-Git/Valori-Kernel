@@ -12,37 +12,20 @@
 use anyhow::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-// ── Random key (no uuid crate needed) ────────────────────────────────────────
+// ── Random key ────────────────────────────────────────────────────────────────
 
-/// 16 bytes from OS randomness — used as per-record idempotency keys.
+/// 16 cryptographically random bytes from the OS — used as per-record
+/// idempotency keys. Uses getrandom so this is safe on Windows/non-unix
+/// (the old time+counter fallback was predictable and could false-dedup
+/// on concurrent or resumed imports — H-1 fix).
 fn random_key() -> [u8; 16] {
-    #[cfg(unix)]
-    {
-        let mut key = [0u8; 16];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut key);
-        }
-        key
-    }
-    #[cfg(not(unix))]
-    {
-        // Fallback: mix SystemTime nanos with a per-call counter.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static CTR: AtomicU64 = AtomicU64::new(0);
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
-        let c = CTR.fetch_add(1, Ordering::Relaxed);
-        let mut key = [0u8; 16];
-        key[..8].copy_from_slice(&t.to_le_bytes());
-        key[8..].copy_from_slice(&c.to_le_bytes());
-        key
-    }
+    let mut key = [0u8; 16];
+    getrandom::getrandom(&mut key).expect("OS CSPRNG unavailable");
+    key
 }
 
 // ── Sidecar (resumability state) ──────────────────────────────────────────────
@@ -63,8 +46,21 @@ struct ImportState {
     updated_at: String,
 }
 
+/// M-3: write the sidecar to ~/.valori/ instead of the current working
+/// directory. The cwd is world-readable on shared machines; ~/.valori/ is
+/// chmod 0700 (set at creation). If home-dir resolution fails, fall back to cwd.
 fn sidecar_path(target_collection: &str, source_kind: &str) -> PathBuf {
-    PathBuf::from(format!(".valori-import-{source_kind}-{target_collection}.json"))
+    let name = format!(".valori-import-{source_kind}-{target_collection}.json");
+    let dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".valori");
+    let _ = std::fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    dir.join(name)
 }
 
 fn load_state(path: &PathBuf) -> Option<ImportState> {
@@ -74,7 +70,16 @@ fn load_state(path: &PathBuf) -> Option<ImportState> {
 
 fn save_state(path: &PathBuf, state: &ImportState) {
     if let Ok(json) = serde_json::to_vec_pretty(state) {
-        let _ = std::fs::write(path, json);
+        // Write to a temp file then rename (atomic) and set 0600.
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = std::fs::rename(&tmp, path);
+        }
     }
 }
 

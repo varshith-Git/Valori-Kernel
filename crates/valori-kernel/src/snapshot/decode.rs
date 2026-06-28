@@ -126,7 +126,12 @@ pub fn decode_state(
 
             // V6: namespace_id + linked-list pointers
             let (namespace_id, next_in_ns, prev_in_ns) = if schema_ver >= 6 {
-                (read_u16(buf, &mut offset)?, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
+                let ns = read_u16(buf, &mut offset)?;
+                use crate::types::id::MAX_NAMESPACES;
+                if ns as usize >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
+                (ns, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
             } else {
                 (0u16, NS_LIST_NIL, NS_LIST_NIL)
             };
@@ -194,7 +199,12 @@ pub fn decode_state(
         }
         // V6: namespace_id + linked-list pointers
         let (node_namespace_id, node_next_in_ns, node_prev_in_ns) = if schema_ver >= 6 {
-            (read_u16(buf, &mut offset)?, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
+            let ns = read_u16(buf, &mut offset)?;
+            use crate::types::id::MAX_NAMESPACES;
+            if ns as usize >= MAX_NAMESPACES {
+                return Err(KernelError::InvalidOperation);
+            }
+            (ns, read_u32(buf, &mut offset)?, read_u32(buf, &mut offset)?)
         } else {
             (0u16, NS_LIST_NIL, NS_LIST_NIL)
         };

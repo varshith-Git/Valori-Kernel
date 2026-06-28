@@ -68,7 +68,31 @@ Primitive search.
 *   **Body**: `{"query": [...], "k": 5}`
 *   **Response**: `{"results": [{"id": 123, "score": 4500}]}`
 
-### 3. State Management
+### 3. Tree-RAG (Hierarchical retrieval with receipts)
+
+Navigate a document's table-of-contents to the *right section* instead of
+returning vector-similar text. Deterministic (no embeddings, no LLM). All three
+handlers are stateless and behave identically in standalone and cluster mode.
+This is **separate from** `/search` — use whichever fits the query.
+
+#### `POST /v1/tree/build`
+Parse a structured/markdown document into a navigable tree.
+*   **Body**: `{ "text": "<document>", "doc_name": "handbook" }` (`doc_name` optional)
+*   **Response**: `{ "doc_name", "node_count", "structure_map": [...], "tree": {...} }`
+    The `tree` object is passed back into `query`/`verify` (the caller holds it).
+
+#### `POST /v1/tree/query`
+Navigate the tree and answer with citations + a replayable receipt.
+*   **Body**: `{ "tree": {...}, "query": "how many sick days?", "k": 2, "prev_hash": "<optional prior receipt_hash>" }`
+*   **Response**: `{ "answer", "citations": [{ "node_id", "title", "breadcrumb", "lines" }], "visited_node_ids", "reasoning", "receipt": {...} }`
+    Pass a receipt's `receipt_hash` as the next call's `prev_hash` to chain receipts.
+
+#### `POST /v1/tree/verify`
+Replay a receipt against the tree to prove the stored content was not altered.
+*   **Body**: `{ "tree": {...}, "receipt": {...} }`
+*   **Response**: `{ "valid": true|false }` — `false` means the cited section changed after retrieval.
+
+### 4. State Management
 
 #### `POST /snapshot`
 Download the full state of the kernel.

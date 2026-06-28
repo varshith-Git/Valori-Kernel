@@ -124,7 +124,52 @@ curl -X POST http://localhost:3000/v1/ingest \
 
 ### Cluster mode (Phase I4)
 
-`POST /v1/ingest` works identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. The node-local metadata sidecar (chunk text, source) is currently not Raft-replicated (advisory data only).
+`POST /v1/ingest` works identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
+
+---
+
+## Tree-RAG — hierarchical retrieval with provable receipts (Phase I5)
+
+PageIndex-style retrieval that navigates a document's table-of-contents to the
+*right section* instead of returning vector-similar text — plus a BLAKE3
+receipt that makes every retrieval replayable and tamper-evident. Deterministic:
+no embeddings, no LLM. All three handlers are stateless, so they behave
+identically in standalone and cluster mode.
+
+| Endpoint | Method | Body | Returns |
+|---|---|---|---|
+| `/v1/tree/build` | `POST` | `{text, doc_name?}` | `{cache_key, doc_name, node_count, structure_map, tree}` |
+| `/v1/tree/query` | `POST` | `{tree?, cache_key?, query, k?, prev_hash?}` | `{answer, citations, visited_node_ids, reasoning, receipt}` |
+| `/v1/tree/hybrid` | `POST` | `{text?, tree?, cache_key?, query, namespace?, k?, tree_weight?, prev_hash?, doc_name?}` | `{query, hits, tree_hit_count, vector_hit_count, tree_answer?, reasoning}` |
+| `/v1/tree/verify` | `POST` | `{tree, receipt}` | `{valid}` |
+| `/v1/community/detect` | `POST` | `{namespace?, max_iter?}` | `{community_count, node_count, communities, receipt}` |
+| `/v1/community/search` | `POST` | `{vector, k?, namespace?, depth?, drill_in?}` | `{communities, total_communities_searched}` |
+| `/v1/ingest/extract-entities` | `POST` | `{text, namespace?, entity_types?, model?}` | `{entities, relationships, entity_count, relationship_count, skipped_relationships}` |
+
+`/v1/tree/build` stores the parsed tree in a server-side cache and returns `cache_key` (BLAKE3 of the input text). Pass `cache_key` to subsequent `/v1/tree/query` or `/v1/tree/hybrid` calls instead of re-transmitting the full `tree` object. The full `tree` is still accepted for backward compatibility.
+
+`/v1/tree/hybrid` fuses tree-navigation scores with vector similarity scores (requires `VALORI_EMBED_PROVIDER`). `tree_weight` (default 0.6) controls the blend. Results include a `source` tag (`"tree"` or `"vector"`) per hit.
+
+Each `query` (or `hybrid`) returns a `receipt`; pass its `receipt_hash` as the next call's `prev_hash` to chain receipts. `verify` returns `valid: false` if the stored section was altered.
+
+```bash
+# Build once, cache server-side
+RESP=$(curl -s localhost:3000/v1/tree/build \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"# Handbook\n## Annual Leave\n25 days.\n## Sick Leave\n10 days.\n","doc_name":"hb"}')
+CACHE_KEY=$(echo "$RESP" | jq -r '.cache_key')
+
+# Query by cache_key (no re-transmit)
+curl -s localhost:3000/v1/tree/query \
+  -H 'Content-Type: application/json' \
+  -d "{\"cache_key\":\"$CACHE_KEY\",\"query\":\"how many sick days?\"}"
+# → answer cites "Handbook > Sick Leave", lines [N, M], with a receipt
+
+# Hybrid: tree + vector (needs embed provider)
+curl -s localhost:3000/v1/tree/hybrid \
+  -H 'Content-Type: application/json' \
+  -d "{\"cache_key\":\"$CACHE_KEY\",\"query\":\"sick leave policy\",\"k\":5,\"tree_weight\":0.6}"
+```
 
 ---
 
@@ -137,7 +182,7 @@ does not exist the request is rejected with `400 Bad Request`.
 |---|---|---|
 | `/records` | `POST` | Insert a single vector. Optional `text` field indexes the record for hybrid retrieval (Phase C5). |
 | `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors. Optional `texts` array indexes each record for hybrid retrieval (Phase C5). |
-| `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Also supports `as_of` / `as_of_log_index` for point-in-time reads and `decay_half_life_secs` for recency-aware ranking (Phase C4.1). |
+| `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Supports `as_of` / `as_of_log_index` for point-in-time reads, `decay_half_life_secs` for recency-aware ranking (Phase C4.1), and `metadata_filter` for JSON predicate post-filtering (Phase I7). |
 | `/v1/delete` | `POST` | Soft-delete a record by ID. |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 

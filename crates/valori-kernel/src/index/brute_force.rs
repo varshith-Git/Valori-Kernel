@@ -5,7 +5,6 @@ use crate::index::{SearchResult, VectorIndex};
 use crate::storage::pool::RecordPool;
 use crate::types::vector::FxpVector;
 use crate::types::id::RecordId;
-use crate::types::scalar::FxpScalar;
 use crate::math::l2::fxp_l2_sq;
 
 /// A stateless brute-force index that scans the RecordPool.
@@ -35,7 +34,7 @@ impl VectorIndex for BruteForceIndex {
 
         // Initialize results with worst possible
         for r in results.iter_mut() {
-            *r = SearchResult { score: FxpScalar(i32::MAX), id: RecordId(u32::MAX) };
+            *r = SearchResult { score: i64::MAX, id: RecordId(u32::MAX) };
         }
 
         let mut count = 0;

@@ -60,6 +60,6 @@ The metadata sidecar is node-local by design — it's advisory display data (sam
 
 ## Follow-ups
 
-- Metadata sidecar replication: add `KernelEvent::SetMeta { key, value }` so all nodes share the chunk text sidecar. Currently only the node that received the ingest request has it.
+- ~~Metadata sidecar replication: add `KernelEvent::SetMeta { key, value }` so all nodes share the chunk text sidecar.~~ **DONE (Phase I4.1):** `SetMeta` added to `KernelEvent` + `KernelState.meta`; cluster ingest writes the sidecar via `raft.client_write(SetMeta)`, and `/v1/memory/meta/{set,get}` were added to the cluster router reading through the kernel. All peers now share the sidecar.
 - `build_cluster_router_with_keys` now has a `node_cfg` parameter — callers that pass custom auth tokens (e.g. tests) may need updating if they call it directly.
 - Batch Raft writes: currently one `client_write` per chunk. Grouping all chunks into a single Raft log entry would reduce round-trips for large documents.

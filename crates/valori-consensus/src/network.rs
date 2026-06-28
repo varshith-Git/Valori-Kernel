@@ -302,10 +302,19 @@ impl RaftService for RaftRpcService {
 /// Bind the Raft gRPC server on `addr` and serve until the task is dropped.
 /// Returns the actually-bound address (so `…:0` works in tests) and the
 /// server task handle.
+///
+/// H-2: This path uses **no authentication**. Any host that can reach the
+/// Raft port can inject AppendEntries, Vote, or InstallSnapshot RPCs.
+/// Use [`serve_raft_tls`] with mTLS in any non-loopback environment.
 pub async fn serve_raft(
     raft: Raft,
     addr: &str,
 ) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
+    tracing::warn!(
+        addr,
+        "Raft gRPC starting WITHOUT TLS — any host on the network can inject cluster state. \
+         Set VALORI_TLS_CA/CERT/KEY to enable mTLS."
+    );
     serve_raft_inner(raft, addr, None).await
 }
 

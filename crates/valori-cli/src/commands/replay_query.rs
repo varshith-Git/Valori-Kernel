@@ -66,7 +66,7 @@ pub fn run(
 
         let query_fxp = floats_to_fxp(&floats);
         let top_k     = top_k.max(1);
-        let mut buf   = vec![SearchResult { id: RecordId(0), score: FxpScalar(i32::MAX) }; top_k];
+        let mut buf   = vec![SearchResult { id: RecordId(0), score: i64::MAX }; top_k];
 
         let qt = Instant::now();
         let found = engine.state.search_l2(&query_fxp, &mut buf, None);
@@ -88,7 +88,7 @@ pub fn run(
             res_table.add_row(vec![
                 Cell::new(rank + 1),
                 Cell::new(r.id.0).fg(Color::Cyan),
-                Cell::new(r.score.0),
+                Cell::new(r.score),
             ]);
         }
 

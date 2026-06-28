@@ -102,30 +102,35 @@ impl EventCommitter {
         self
     }
 
-    /// Commit an event (the ONLY way to mutate state)
+    /// Commit an event (the ONLY way to mutate state).
+    ///
+    /// Order: shadow-apply → persist → live-apply.
+    /// This guarantees the audit log never contains a phantom event (an event
+    /// that was written to disk but rejected by the state machine). If shadow
+    /// apply fails, the log is untouched and we return the error cleanly.
     pub fn commit_event(&mut self, event: KernelEvent) -> Result<CommitResult> {
-        // Step 1: Persist to disk FIRST (crash safety)
+        // Step 1: Shadow apply — validate WITHOUT mutating live state.
+        // If the event is invalid (dup ID, wrong dim, etc.) we bail here,
+        // before touching the audit log.
+        let mut shadow = self.live_state.clone();
+        shadow.apply_event(&event).map_err(CommitError::ShadowApply)?;
+
+        // Step 2: Persist to disk (event is now known-good).
         let entry = crate::events::event_log::LogEntry::Event(event.clone());
         self.event_log.append(&entry)?;
-        // Step 2: Add to journal buffer
-        self.journal.append_buffered(event.clone());
 
-        // Step 3 & 4: Execute on live state
-        match self.live_state.apply_event(&event) {
-            Ok(_) => {
-                // Success: Commit the buffer
-                self.journal.commit_buffer();
-                tracing::debug!("Event committed: {:?}", event.event_type());
-                self.maybe_rotate();
-                Ok(CommitResult::Committed)
-            }
-            Err(e) => {
-                // Failure: rollback the buffer, state is unmodified
-                tracing::warn!("Apply failed: {:?}. Rolling back buffer.", e);
-                self.journal.rollback_buffer();
-                Err(CommitError::LiveApply(e))
-            }
-        }
+        // Step 3: Live apply — must succeed because shadow passed on an
+        // identical state snapshot. Panic here is a programming error.
+        self.live_state
+            .apply_event(&event)
+            .expect("live apply after shadow-pass must succeed");
+
+        // Step 4: Commit journal.
+        self.journal.append_buffered(event.clone());
+        self.journal.commit_buffer();
+        tracing::debug!("Event committed: {:?}", event.event_type());
+        self.maybe_rotate();
+        Ok(CommitResult::Committed)
     }
 
     /// Explicitly flush the event log buffer to disk
@@ -180,37 +185,39 @@ impl EventCommitter {
         }
     }
 
-    /// Batch commit multiple events
+    /// Batch commit multiple events.
+    ///
+    /// Same shadow-first guarantee as `commit_event`: all events are shadow-applied
+    /// on a clone of live state before any log write. If any event fails shadow
+    /// apply, the log is untouched.
     pub fn commit_batch(&mut self, events: Vec<KernelEvent>) -> Result<CommitResult> {
         if events.is_empty() {
             return Ok(CommitResult::Committed);
         }
 
-        // Step 1: Persist ALL events to disk first
+        // Step 1: Shadow apply the entire batch on a state clone.
+        let mut shadow = self.live_state.clone();
+        for event in &events {
+            shadow.apply_event(event).map_err(CommitError::ShadowApply)?;
+        }
+
+        // Step 2: Persist all events (batch is now known-good).
         let log_entries: Vec<_> = events.iter()
             .map(|e| crate::events::event_log::LogEntry::Event(e.clone()))
             .collect();
-            
         self.event_log.append_batch(&log_entries)?;
 
-        // Step 2: Add all to buffer
+        // Step 3: Live apply (must succeed — shadow passed on identical state).
+        for event in &events {
+            self.live_state
+                .apply_event(event)
+                .expect("live apply after shadow-pass must succeed");
+        }
+
+        // Step 4: Commit journal.
         for event in &events {
             self.journal.append_buffered(event.clone());
         }
-
-        // Step 3 & 4: Execute on live state
-        for event in &events {
-            match self.live_state.apply_event(event) {
-                Ok(_) => continue,
-                Err(e) => {
-                    tracing::warn!("Apply failed in batch: {:?}. Rolling back {} events.", e, events.len());
-                    self.journal.rollback_buffer();
-                    return Err(CommitError::LiveApply(e));
-                }
-            }
-        }
-
-        // Success: Commit the buffer
         self.journal.commit_buffer();
         tracing::debug!("Batch committed: {} events", events.len());
         self.maybe_rotate();

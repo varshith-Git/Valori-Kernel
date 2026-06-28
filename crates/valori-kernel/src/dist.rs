@@ -20,7 +20,7 @@ pub fn euclidean_distance_squared(a: &[i32], b: &[i32]) -> i64 {
     for (x, y) in a.iter().zip(b.iter()) {
         let diff = (*x as i64) - (*y as i64);
         // Use saturating multiplication for extreme edge cases (overflow test)
-        sum = sum.wrapping_add(diff.saturating_mul(diff));
+        sum = sum.saturating_add(diff.saturating_mul(diff));
     }
 
     sum
@@ -48,7 +48,7 @@ pub fn dot_product(a: &[i32], b: &[i32]) -> i64 {
     let mut sum: i64 = 0;
     for (x, y) in a.iter().zip(b.iter()) {
         let term = (*x as i64) * (*y as i64);
-        sum = sum.wrapping_add(term);
+        sum = sum.saturating_add(term);
     }
     sum
 }

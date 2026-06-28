@@ -15,6 +15,8 @@ import { GdprTab } from "@/components/collections/GdprTab";
 import { DiffTab } from "@/components/collections/DiffTab";
 import { ContradictionTab } from "@/components/collections/ContradictionTab";
 import { CompliancePackTab } from "@/components/collections/CompliancePackTab";
+import { CommunityTab } from "@/components/collections/CommunityTab";
+import { EntityExtractionTab } from "@/components/collections/EntityExtractionTab";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { makeNs } from "@/lib/hooks/useCollections";
 import { cn } from "@/lib/utils";
@@ -31,6 +33,8 @@ const PRIMARY_TABS = [
 
 /** Power-user tabs hidden behind the overflow menu */
 const OVERFLOW_TABS = [
+  { value: "community",  label: "Communities",   tip: "Label Propagation community detection + centroid search — find themes across the entire graph" },
+  { value: "entities",   label: "Entity Extract",tip: "LLM extracts named entities + relationships from text and inserts them as graph nodes + edges" },
   { value: "graph",      label: "Graph",         tip: "Visualise Document→Chunk relationships and entity links" },
   { value: "verify",     label: "Verify",        tip: "Compute SHA-256 namespace proof hash — reproducible from events.log" },
   { value: "eval",       label: "Eval",          tip: "Score retrieval quality with ground-truth QA pairs: Precision@K, MRR" },
@@ -177,6 +181,12 @@ export default function CollectionPage({
         </TabsContent>
         <TabsContent value="docs" className="mt-5">
           <DocumentsTab namespace={namespace} />
+        </TabsContent>
+        <TabsContent value="community" className="mt-5">
+          <CommunityTab namespace={namespace} />
+        </TabsContent>
+        <TabsContent value="entities" className="mt-5">
+          <EntityExtractionTab namespace={namespace} />
         </TabsContent>
         <TabsContent value="graph" className="mt-5">
           <GraphTab namespace={namespace} />
