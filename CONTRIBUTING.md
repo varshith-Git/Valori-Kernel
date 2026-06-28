@@ -7,7 +7,7 @@ This guide gets you from a fresh clone to a running node in under 10 minutes.
 Run this once after cloning. It installs Rust, the wasm32 target, Python SDK, and UI dependencies, then builds the workspace:
 
 ```bash
-bash scripts/dev-setup.sh
+bash dev-setup.sh
 ```
 
 Works on macOS and Linux. If you prefer to install things manually, follow the steps below.
@@ -80,9 +80,9 @@ VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \
 VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
 cargo run -p valori-node
 
-# Custom port
+# Custom port (e.g. 8080 — default is 3000)
 VALORI_DIM=128 \
-VALORI_BIND=0.0.0.0:8080 \
+VALORI_BIND=0.0.0.0:3000 \
 cargo run -p valori-node
 
 # With embedding provider (enables POST /v1/ingest — chunk+embed+insert in one call)
@@ -139,7 +139,7 @@ maturin develop        # compiles and installs into your active Python env
 # Node.js 18+ required
 cd ui
 npm install
-npm run dev      # starts at http://localhost:4000
+npm run dev      # starts at http://localhost:3001
 ```
 
 The UI reverse-proxies API calls to the node, so **start the node first** (step 2). No extra config needed for local dev.

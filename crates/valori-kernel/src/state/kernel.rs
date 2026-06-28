@@ -54,6 +54,19 @@ impl KernelState {
         }
     }
 
+    /// Create a kernel pre-seeded with an expected dimension from config.
+    ///
+    /// Use this when VALORI_DIM is known at startup. The first insert will be
+    /// validated against this dim rather than silently locking to whatever length
+    /// the first vector happens to be.
+    pub fn with_dim(dim: usize) -> Self {
+        let mut s = Self::new();
+        if dim > 0 {
+            s.dim = Some(dim);
+        }
+        s
+    }
+
     // ── Crypto-shredding (Phase 3.6) ─────────────────────────────────────────
 
     /// Destroy a Data Encryption Key and mark all records encrypted under it as
@@ -402,7 +415,7 @@ impl KernelState {
                 let d = vector.len();
                 if let Some(dim) = self.dim {
                     if d != dim {
-                        return Err(KernelError::InvalidOperation);
+                        return Err(KernelError::DimensionMismatch { expected: dim, found: d });
                     }
                 } else {
                     self.dim = Some(d);

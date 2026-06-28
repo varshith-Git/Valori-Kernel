@@ -25,7 +25,7 @@ The fundamental atomic unit of memory.
 *   **What it is**: A dense fixed-point vector (e.g., 16-dim or 1536-dim) representing meaning.
 *   **Storage**: Stored in a heap-allocated, dynamic memory pool that grows on demand.
 *   **Addressing**: Identified by a `RecordId` (integer).
-*   **Self-Describing**: The kernel auto-detects vector dimensions from the first ingestion, making it model-agnostic (Zero-Config).
+*   **Fixed dimension**: Set `VALORI_DIM` when starting the node (e.g. `VALORI_DIM=384`). The kernel locks in the dimension from the first insert and rejects any vector of a different length with a clear error. Immutable for the lifetime of a data directory.
 *   **Metadata**: Optional binary blob (up to 64KB). Deterministically hashed and snapshotted.
 
 ### 2. The Knowlege Graph

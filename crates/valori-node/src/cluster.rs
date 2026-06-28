@@ -202,6 +202,7 @@ impl ClusterHandle {
 pub async fn bootstrap_cluster(
     cfg: &ClusterConfig,
     audit: Box<dyn AuditSink>,
+    dim: usize,
 ) -> Result<ClusterHandle, std::io::Error> {
     // Snapshot cadence is an explicit, operator-tunable policy — not openraft's
     // implicit default. A snapshot is built every `snapshot_every` applied
@@ -251,7 +252,7 @@ pub async fn bootstrap_cluster(
             let mut store = valori_consensus::RedbLogStore::open(path)
                 .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
             let db = store.db();
-            let sm = ValoriStateMachine::with_db(audit, db)
+            let sm = ValoriStateMachine::with_db(audit, db, dim)
                 .map_err(|e| std::io::Error::other(format!("state machine restore failed: {e}")))?;
             // The committed index this node durably knew before (re)start. The
             // data plane refuses reads until apply catches back up to it, so a
@@ -278,7 +279,7 @@ pub async fn bootstrap_cluster(
                  Raft log store. Votes are NOT persisted. A crash can cause split-brain \
                  (two leaders in the same term). Set VALORI_RAFT_LOG_PATH to a redb file path."
             );
-            let sm = ValoriStateMachine::new(audit);
+            let sm = ValoriStateMachine::new(audit, dim);
             let raft = Raft::new(
                 cfg.node_id,
                 raft_config,

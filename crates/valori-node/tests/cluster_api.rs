@@ -31,7 +31,7 @@ async fn boot(node_id: u64, init: bool) -> ClusterHandle {
         raft_log_path: None,
         tls: None,
     };
-    bootstrap_cluster(&cfg, Box::new(NullAuditSink)).await.unwrap()
+    bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap()
 }
 
 async fn wait_for_leader(h: &ClusterHandle, id: u64) {

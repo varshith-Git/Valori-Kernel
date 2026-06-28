@@ -96,7 +96,7 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(audit)).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Box::new(audit), 0).await.unwrap();
 
     handle
         .raft
@@ -149,7 +149,7 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
         .await
         .unwrap();
     handle
@@ -189,7 +189,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
 
     // ── Life 1: write 5 records, record the hash, then crash ─────────────────
     let hash_before = {
-        let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+        let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
             .await
             .unwrap();
         handle
@@ -222,7 +222,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     // ── Life 2: same redb file, fresh everything else ────────────────────────
     // init: true is safe — openraft refuses a second initialize and the
     // bootstrap treats that as "fine" (membership is in the log).
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
         .await
         .unwrap();
     handle
@@ -273,7 +273,7 @@ async fn raft_metrics_appear_in_prometheus_output() {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink))
+    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
         .await
         .unwrap();
     handle

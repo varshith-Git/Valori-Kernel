@@ -312,7 +312,7 @@ impl Engine {
              match EventLogWriter::open(path, Some(cfg.dim as u32)) {
                  Ok(log_writer) => {
                      let journal = EventJournal::new();
-                     let live_state = KernelState::new();
+                     let live_state = KernelState::with_dim(cfg.dim);
                      let mut committer = EventCommitter::new(log_writer, journal, live_state);
                      if let Some(limit) = cfg.event_log_rotation_bytes {
                          committer = committer.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
@@ -341,7 +341,7 @@ impl Engine {
             .map(|p| p.with_extension("namespaces.json"));
 
         Self {
-            state: KernelState::new(),
+            state: KernelState::with_dim(cfg.dim),
             metadata: crate::metadata::MetadataStore::new(),
             index,
             quant,

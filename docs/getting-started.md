@@ -1,87 +1,115 @@
 # Getting Started with Valori
 
-This guide will take you from zero to running your first Deterministic Memory Engine.
+Zero to running in under 10 minutes.
 
 ## Prerequisites
-*   **Python 3.8+**
-*   **Rust** (only if compiling from source)
+
+- **Python 3.9+**
+- **Rust 1.80+** (only for building from source; skip if you only use the remote SDK)
 
 ---
 
-## 1. Installation
+## Pick your path
 
-### From PyPI (Recommended)
+### Path A — Embedded (no server, local process)
+
+Install the SDK with local embedding support:
+
 ```bash
-pip install valori
+pip install "valoricore[local]"
 ```
-
-### From Source (For Contributors)
-```bash
-git clone https://github.com/varshith-Git/Valori-Kernel
-cd Valori-Kernel
-
-# Build the Python bindings
-cd ffi
-maturin develop --release
-```
-
----
-
-# 2. Your First Memory (Local Mode)
-
-Valori is now **Zero-Config**. You don't need to declare vector dimensions or pool sizes upfront—the kernel auto-detects them on the first insertion.
-
-Create a file `memory_test.py`:
 
 ```python
-from valori import ProtocolClient
+from valoricore import MemoryClient
+from valoricore.embeddings import SentenceTransformerEmbedder
 
-# 1. Define an embedder (SentenceTransformers example)
-def my_embed(text):
-    # This returns 384 dimensions. Valori adapts automatically.
-    return [0.0] * 384 
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")  # downloads ~90 MB once
+db = MemoryClient(path="./my_db", dim=384)
 
-# 2. Init Client
-client = ProtocolClient(embed=my_embed)
-
-# 3. Upsert
-print("Storing memory...")
-client.upsert_text("My contact email is varshith.gudur17@gmail.com")
-
-# 4. Search
-print("Searching...")
-hits = client.search_text("email")
-print(f"Found: {hits}")
+db.add_document(text="The patient presented with hypertension.", embed=embedder)
+hits = db.semantic_search("blood pressure", embed=embedder, k=5)
+print(db.get_state_hash())   # 64-char BLAKE3 hex — reproducible on any machine
 ```
 
-Run it:
+`MemoryClient` opens (or creates) a local database directory. The state hash is identical
+on every machine that applied the same events in the same order.
+
+---
+
+### Path B — HTTP server (standalone node)
+
+Build and start the server:
+
 ```bash
-python memory_test.py
+VALORI_DIM=128 cargo run --release -p valori-node
+# Listening on http://0.0.0.0:3000
+```
+
+Connect with the remote SDK:
+
+```bash
+pip install valoricore
+```
+
+```python
+from valoricore.remote import SyncRemoteClient
+
+db = SyncRemoteClient("http://localhost:3000")
+print(db.health())           # → "ok"
+
+db.insert([0.1, 0.2, 0.3])  # vector length must equal VALORI_DIM
+hits = db.search([0.1, 0.2, 0.3], k=5)
+print(db.get_state_hash())
+```
+
+The node is in-memory by default. Enable durability:
+
+```bash
+VALORI_DIM=128 \
+VALORI_EVENT_LOG_PATH=./data/events.log \
+VALORI_SNAPSHOT_PATH=./data/snapshot.bin \
+  cargo run --release -p valori-node
 ```
 
 ---
 
-## 3. Moving to Production (Remote Mode)
+### Path C — One-call ingest (chunk + embed on-node)
 
-When you are ready to scale, run the Valori Node server.
+Start the node with an embedding provider so clients can POST raw text:
 
-1.  **Start the Server**:
-    ```bash
-    cargo run -p valori-node --release
-    # Server running on http://127.0.0.1:3000
-    ```
+```bash
+VALORI_DIM=768 \
+VALORI_EMBED_PROVIDER=ollama \
+VALORI_EMBED_MODEL=nomic-embed-text \
+VALORI_EMBED_URL=http://localhost:11434 \
+  cargo run --release -p valori-node
+```
 
-2.  **Update your Script**:
-    Change one line:
-    ```python
-    client = ProtocolClient(embed=my_embed, remote="http://127.0.0.1:3000")
-    ```
+```python
+from valoricore.remote import SyncRemoteClient
 
-3.  **Run**:
-    Only the `client` logic changes. The data now lives in the `valori-node` process!
+db = SyncRemoteClient("http://localhost:3000")
+result = db.ingest("Full text of a research paper...", source="paper.pdf")
+print(f"{result['chunk_count']} chunks — doc node {result['document_node_id']}")
+```
 
-## Next Steps
+---
 
-*   [Core Concepts](./core-concepts.md) - Learn about Determinism, Fixed-Point Math, and Snapshots.
-*   [Remote Mode Guide](./remote-mode.md) - Detailed production guide.
-*   [API Reference](./api-reference.md) - HTTP endpoints for the Node server.
+## Interactive setup wizard
+
+The `valori` CLI walks you through single-node and cluster setup:
+
+```bash
+cargo install --path crates/valori-cli
+valori setup
+```
+
+---
+
+## Next steps
+
+- [Core concepts](./core-concepts.md) — determinism, fixed-point math, snapshots
+- [Cluster setup](./CLUSTER.md) — 3/5-node Raft with `docker compose` or raw terminals
+- [Python SDK reference](./python-reference.md) — all 40 SDK methods
+- [API reference](./api-reference.md) — HTTP endpoints
+- [MCP agent memory](../crates/valori-mcp/README.md) — Claude Desktop integration

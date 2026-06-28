@@ -1,97 +1,100 @@
 # Valori Remote Mode Guide
 
-Valori is designed to be **"Local First, Remote Ready"**. This means you can write your application code *once* using the `ProtocolClient`, and switch between embedded execution and client-server architecture just by modifying the configuration.
+In remote mode, `valori-node` runs as a standalone HTTP server and your application
+talks to it over JSON/HTTP via `SyncRemoteClient` or `AsyncRemoteClient`.
 
 ---
 
-## 🏗️ Architecture Comparison
+## Architecture comparison
 
-| Feature | Local Mode (FFI) | Remote Mode (HTTP) |
-| :--- | :--- | :--- |
-| **Where it runs** | Inside your Python process (as a C library) | In a separate process / server / docker container |
-| **Communication** | Direct Memory Access (Zero latency) | HTTP / JSON over Network |
-| **Concurrency** | Single Process Lock | Multi-Client Concurrent Access |
-| **Best For** | Scripts, CLI tools, Embedded Agents | Web Apps, Cloud Backends, Multi-Agent Swarms |
-
----
-
-## 1. Starting the Server
-
-The `valori-node` binary is a high-performance HTTP server powered by **Axum** (Rust).
-
-### Build & Run
-```bash
-# Production build
-cargo build -p valori-node --release
-
-# Run (default port 3000)
-./target/release/valori-node
-```
-
-### Configuration
-You can configure the node via environment variables:
-*   `VALORI_MAX_RECORDS`: Max vector capacity (default: 1024).
-*   `VALORI_SNAPSHOT_INTERVAL`: Seconds between auto-saves (default: `None` (Disabled)).
-*   `VALORI_AUTH_TOKEN`: Bearer Token for Security (default: `None` (Public)).
-*   `VALORI_BIND`: Address to listen on (default: `127.0.0.1:3000`).
-
-## Authentication
-
-When `VALORI_AUTH_TOKEN` is set, clients must send `Authorization: Bearer <token>`.
-
-Example:
-```bash
-VALORI_BIND=0.0.0.0:8080 VALORI_MAX_RECORDS=100000 ./valori-node
-```
+| | Embedded (`MemoryClient`) | Remote (`SyncRemoteClient`) |
+|---|---|---|
+| **Where it runs** | Inside your Python process (PyO3 FFI) | Separate process / container |
+| **Latency** | Zero (direct memory) | Network RTT |
+| **Concurrency** | Single process | Multi-client |
+| **Best for** | Scripts, CLI tools, offline | Web apps, multi-agent, cloud |
 
 ---
 
-## 2. Connecting the Client
+## 1. Start the server
 
-Install the Python package:
 ```bash
-pip install valori
+VALORI_DIM=128 cargo run --release -p valori-node
+# Listening on http://0.0.0.0:3000
 ```
 
-Usage:
+Key environment variables:
+
+| Var | Default | Purpose |
+|---|---|---|
+| `VALORI_DIM` | 128 | Vector dimension (immutable after first insert) |
+| `VALORI_MAX_RECORDS` | 1 000 000 | Slab capacity |
+| `VALORI_BIND` | 0.0.0.0:3000 | HTTP listen address |
+| `VALORI_EVENT_LOG_PATH` | — | Audit log path (omit = no persistence) |
+| `VALORI_SNAPSHOT_PATH` | — | Snapshot file path |
+| `VALORI_AUTH_TOKEN` | — | Bearer token (omit = no auth) |
+
+See [CLAUDE.md](../CLAUDE.md) for the full env var reference.
+
+---
+
+## 2. Connect the client
+
+```bash
+pip install valoricore
+```
 
 ```python
-from valori import ProtocolClient
+from valoricore.remote import SyncRemoteClient
 
-def dummy_embed(text):
-    return [0.0] * 16  # Replace with real embedding logic
+client = SyncRemoteClient("http://localhost:3000")
+print(client.health())   # → "ok"
 
-# Connect to the remote server
-client = ProtocolClient(embed=dummy_embed, remote="http://localhost:3000")
-
-# Now just use the standard API
-# Text is chunked LOCALLY, then vectors are sent to the server.
-client.upsert_text("Hello from the client!")
+# Insert (vector length must equal VALORI_DIM)
+rid = client.insert([0.1, 0.2, 0.3], text="some content to index for reranking")
 
 # Search
-hits = client.search_text("Hello")
-print(hits)
+hits = client.search([0.1, 0.2, 0.3], k=5)
+# [{"id": 0, "score": 0.0, "metadata": "some content..."}]
+
+# Cryptographic proof — same hex on every replica
+print(client.get_state_hash())
 ```
 
 ---
 
-## 3. Remote Capabilities
-
-### 💾 Snapshot & Restore
-You can download the entire database state as a binary blob and save it (e.g., to S3).
+## 3. Async client
 
 ```python
-# Download snapshot (binary)
-backup_bytes = client.snapshot() 
-with open("backup.bin", "wb") as f:
-    f.write(backup_bytes)
+import asyncio
+from valoricore.remote import AsyncRemoteClient
 
-# Restore snapshot to a fresh server
-client.restore(backup_bytes)
+async def main():
+    async with AsyncRemoteClient("http://localhost:3000") as client:
+        rid = await client.insert([0.1, 0.2, 0.3])
+        hits = await client.search([0.1, 0.2, 0.3], k=5)
+
+asyncio.run(main())
 ```
 
-### 🧠 Distributed Memory
-Multiple agents can share the same memory:
-*   **Agent A** writes to `http://valori-cloud:3000`.
-*   **Agent B** reads from `http://valori-cloud:3000`.
-*   They instantly share context without any sync code.
+---
+
+## 4. Authenticated connection
+
+```python
+client = SyncRemoteClient("http://localhost:3000", token="your-secret-token")
+```
+
+See [authentication.md](./authentication.md) for how to set `VALORI_AUTH_TOKEN` server-side.
+
+---
+
+## 5. Multi-agent shared memory
+
+Multiple processes can connect to the same node simultaneously:
+
+- **Agent A** inserts memories via `http://valori:3000`.
+- **Agent B** reads from the same address.
+- The BLAKE3 state hash verifies both see identical data — no sync code required.
+
+For write-heavy multi-agent workloads, use a 3-node cluster instead. See [CLUSTER.md](./CLUSTER.md).

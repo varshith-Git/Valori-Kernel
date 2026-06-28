@@ -21,9 +21,9 @@ check:
 test:
 	cargo test --workspace --exclude valori-embedded --exclude valori-ffi
 
-## Run a single standalone node as an HTTP server on 0.0.0.0:8080
+## Run a single standalone node as an HTTP server on 0.0.0.0:3000
 server:
-	VALORI_BIND=0.0.0.0:8080 cargo run --release -p valori-node
+	VALORI_BIND=0.0.0.0:3000 cargo run --release -p valori-node
 
 ## Bring up a 3-node Raft cluster in Docker
 cluster:

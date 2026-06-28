@@ -56,3 +56,32 @@ fn test_input_bounds_validation() {
     // Out-of-range search query must also be rejected.
     assert!(engine.search_l2(&[1.0, 1.0, 33000.0, 1.0], 2).is_err());
 }
+
+// Regression test: VALORI_DIM must be enforced from the first insert.
+// Before the fix, a node started with dim=4 would silently accept a 6-element
+// vector as the first insert and lock to dim=6, rejecting all subsequent
+// correctly-sized vectors.
+#[test]
+fn test_dim_enforced_from_config() {
+    let cfg = make_cfg(4);
+    let mut engine = Engine::new(&cfg);
+
+    // A wrong-size vector on the very first insert must be rejected.
+    let result = engine.insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert!(
+        result.is_err(),
+        "6-element vector must be rejected when VALORI_DIM=4, got: {result:?}"
+    );
+
+    // A correctly-sized vector must be accepted.
+    assert!(
+        engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).is_ok(),
+        "4-element vector must be accepted when VALORI_DIM=4"
+    );
+
+    // And a second wrong-size vector after a correct insert must also be rejected.
+    assert!(
+        engine.insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).is_err(),
+        "6-element vector must still be rejected after a valid insert"
+    );
+}

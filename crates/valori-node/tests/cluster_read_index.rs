@@ -34,7 +34,7 @@ async fn boot(id: NodeId) -> Node {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink)).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
     let (api, task) = serve_cluster_api(&handle, "127.0.0.1:0", None).await.unwrap();
     Node { handle, api_addr: api.to_string(), _http_task: task }
 }

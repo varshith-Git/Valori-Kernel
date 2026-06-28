@@ -238,7 +238,7 @@ pub async fn make_cluster(
     let mut sms = Vec::new();
 
     for i in 1..=(n as NodeId) {
-        let sm = ValoriStateMachine::new(Box::new(MemoryAuditSink::new()));
+        let sm = ValoriStateMachine::new(Box::new(MemoryAuditSink::new()), 0);
         let factory = PartitionNetworkFactory::new(i, partition.clone(), registry.clone());
         let raft = Raft::new(i, config.clone(), factory, ValoriLogStore::new(), sm.clone())
             .await

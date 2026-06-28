@@ -278,15 +278,15 @@ pub struct ValoriStateMachine {
 
 impl Default for ValoriStateMachine {
     fn default() -> Self {
-        Self::new(Box::new(NullAuditSink))
+        Self::new(Box::new(NullAuditSink), 0)
     }
 }
 
 impl ValoriStateMachine {
-    pub fn new(audit: Box<dyn AuditSink>) -> Self {
+    pub fn new(audit: Box<dyn AuditSink>, dim: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(StateMachineInner {
-                state: KernelState::new(),
+                state: KernelState::with_dim(dim),
                 last_applied: None,
                 membership: StoredMembership::default(),
                 dedup_set: HashSet::new(),
@@ -311,6 +311,7 @@ impl ValoriStateMachine {
     pub fn with_db(
         audit: Box<dyn AuditSink>,
         db: Arc<Database>,
+        dim: usize,
     ) -> Result<Self, StorageError<NodeId>> {
         // Read persisted state machine metadata.
         let txn = db.begin_read().map_err(|e| io_err(format!("sm_meta read txn: {e}")))?;
@@ -394,7 +395,7 @@ impl ValoriStateMachine {
                 // tells openraft to replay the full committed log so the
                 // in-memory KernelState is rebuilt from real entries rather than
                 // being left empty with a stale last_applied pointer.
-                (KernelState::new(), HashSet::new(), VecDeque::new(), HashMap::new(), std::collections::HashMap::new(), None, None)
+                (KernelState::with_dim(dim), HashSet::new(), VecDeque::new(), HashMap::new(), std::collections::HashMap::new(), None, None)
             }
         };
 

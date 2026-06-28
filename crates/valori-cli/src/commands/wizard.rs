@@ -253,7 +253,7 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
             tls: None,
         };
 
-        let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink))
+        let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)
             .await
             .with_context(|| format!("node {node_id} failed — is port {raft_port} free?"))?;
 
@@ -481,7 +481,7 @@ async fn add_local_node(
         tls: None,
     };
 
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink))
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)
         .await
         .with_context(|| format!("node {next_id} failed — is port {raft_port} free?"))?;
 

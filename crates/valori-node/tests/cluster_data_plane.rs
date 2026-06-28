@@ -25,7 +25,7 @@ async fn boot_leader() -> ClusterHandle {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink)).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -146,7 +146,7 @@ async fn write_to_a_follower_redirects_with_location() {
         raft_log_path: None,
         tls: None,
     };
-    let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink)).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink), 0).await.unwrap();
 
     h1.raft
         .add_learner(

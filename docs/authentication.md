@@ -1,72 +1,40 @@
 # Authentication & Security
 
-Valori is designed to be secure-by-default when running in Remote Mode.
-
 ## Enabling Authentication
 
-By default, `valori-node` runs without authentication for local development convenience. To enable authentication for production:
-
-1.  **Set the `VALORI_AUTH_TOKEN` environment variable** when running the server.
+By default, `valori-node` runs without authentication for local development. To enable it:
 
 ```bash
-export VALORI_AUTH_TOKEN="your-secure-secret-token"
-./valori-node
+export VALORI_AUTH_TOKEN="$(openssl rand -hex 32)"
+cargo run --release -p valori-node
 ```
 
-When this variable is set, the server will **reject** any request that does not include the correct `Authorization` header.
-
-### How to Generate a Secure Key
-
-You can use any secure random string. A quick way to generate one is using `openssl`:
-
-```bash
-# Generate a 32-byte hex string
-openssl rand -hex 32
-```
+Any request without a matching `Authorization: Bearer <token>` header is rejected with 401.
 
 ## Connecting with Authentication
 
-The Python client supports authentication seamlessly via the `api_key` parameter.
-
-### Using `Valori` Interface
-
 ```python
-from valori import Valori
+from valoricore.remote import SyncRemoteClient
 
-# Connect to a secure remote node
-client = Valori(remote="http://localhost:3000", api_key="your-secure-secret-token")
+client = SyncRemoteClient("http://localhost:3000", token="your-secure-secret-token")
 
-# All operations are now authenticated
-client.upsert_vector([0.1, ...])
+# All calls now include Authorization: Bearer <token>
+client.health()
+client.insert([0.1, 0.2, 0.3])
 ```
 
-### Using `ProtocolClient` Directly
+The `token` parameter sets `Authorization: Bearer <value>` on every request.
 
-```python
-from valori import ProtocolClient
+## curl example
 
-client = ProtocolClient(
-    remote="http://localhost:3000", 
-    api_key="your-secure-secret-token",
-    embed=my_embed_fn
-)
+```bash
+curl -H "Authorization: Bearer your-secure-secret-token" \
+     http://localhost:3000/health
 ```
 
-### Using Adapters
+## Security best practices
 
-Adapters also accept the `api_key`.
-
-```python
-from valori.adapters.base import ValoriAdapter
-
-adapter = ValoriAdapter(
-    base_url="http://localhost:3000",
-    api_key="your-secure-secret-token"
-)
-```
-
-## Security Best Practices
-
-1.  **Use HTTPS**: In production, always put `valori-node` behind a reverse proxy (like Nginx or generic Cloud Load Balancer) that terminates TLS/SSL. The node itself speaks HTTP.
-2.  **Rotation**: You can rotate the `VALORI_AUTH_TOKEN` by restarting the `valori-node` service with a new env var.
-3.  **Network Isolation**: Even with Auth, it is recommended to run Valori inside a VPC or private network, exposing it only to your application services.
+1. **HTTPS in production** — put `valori-node` behind a TLS-terminating reverse proxy (Nginx, AWS ALB, Cloudflare). The node speaks plain HTTP.
+2. **Key rotation** — restart `valori-node` with a new `VALORI_AUTH_TOKEN` value. Existing connections are severed; clients must re-authenticate.
+3. **Network isolation** — run Valori inside a VPC or private subnet, accessible only from your application tier. Auth is defence-in-depth, not a perimeter.
+4. **mTLS for cluster** — inter-node Raft traffic can be protected with `VALORI_TLS_CA` / `VALORI_TLS_CERT` / `VALORI_TLS_KEY`. See [CLUSTER.md](./CLUSTER.md).

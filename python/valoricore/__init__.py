@@ -1,19 +1,49 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 """
-valoricore – The Official Python SDK for Valori-Kernel
-=======================================================
+valoricore — Python SDK for Valori
+====================================
 
-Quick-start::
+**Start here — pick one client:**
+
++----------------------+----------------------------------------------+------------------------------+
+| Client               | Import                                       | Use when                     |
++======================+==============================================+==============================+
+| ``MemoryClient``     | ``from valoricore import MemoryClient``      | Local process, no server     |
+|                      |                                              | (PyO3 FFI, offline-capable)  |
++----------------------+----------------------------------------------+------------------------------+
+| ``SyncRemoteClient`` | ``from valoricore.remote import             | Running valori-node over     |
+|                      | SyncRemoteClient``                           | HTTP (standalone or cluster) |
++----------------------+----------------------------------------------+------------------------------+
+| ``AsyncRemoteClient``| ``from valoricore.remote import             | Same as above, async/await   |
+|                      | AsyncRemoteClient``                          | (FastAPI, asyncio)           |
++----------------------+----------------------------------------------+------------------------------+
+| ``ClusterClient``    | ``from valoricore.remote import             | 3/5-node Raft cluster,       |
+|                      | ClusterClient``                              | automatic leader failover    |
++----------------------+----------------------------------------------+------------------------------+
+
+Everything else (``Valoricore``, ``AsyncValoricore``, ``ValoricoreAdapter``,
+``LocalClient``) is an advanced wrapper or legacy alias — you do not need them
+to get started.
+
+Embedded quick-start (no server)::
 
     from valoricore import MemoryClient
     from valoricore.embeddings import SentenceTransformerEmbedder
 
-    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
-    client   = MemoryClient(path="./my_db")
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")  # pip install "valoricore[local]"
+    db = MemoryClient(path="./my_db", dim=384)
+    db.add_document(text="Hello world", embed=embedder)
+    hits = db.semantic_search("Hello", embed=embedder, k=5)
+    print(db.get_state_hash())   # 64-char BLAKE3 hex — reproducible on any machine
 
-    result = client.add_document(text="Hello world", embed=embedder)
-    hits   = client.semantic_search("Hello", embed=embedder, k=5)
-    print(client.get_state_hash())   # 64-char BLAKE3 audit root
+Remote quick-start (valori-node running on :3000)::
+
+    from valoricore.remote import SyncRemoteClient
+
+    db = SyncRemoteClient("http://localhost:3000")
+    db.insert([0.1, 0.2, 0.3])
+    hits = db.search([0.1, 0.2, 0.3], k=5)
+    print(db.get_state_hash())
 """
 
 from .local import LocalClient
@@ -65,7 +95,11 @@ except ImportError:
     generate_proof   = None   # type: ignore[assignment]
     verify_embedding = None   # type: ignore[assignment]
 
-__version__ = "0.1.11"
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("valoricore")
+except Exception:
+    __version__ = "0.0.0"   # fallback: package not installed (editable dev, docs build)
 __author__  = "Varshith Gudur"
 __license__ = "MIT OR Apache-2.0"
 

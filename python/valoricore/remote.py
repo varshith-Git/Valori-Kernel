@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Varshith Gudur. Licensed under AGPLv3.
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 import time
 import requests
 import warnings
@@ -39,7 +39,8 @@ class SyncRemoteClient:
     """
 
     def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
-                 ui_url: Optional[str] = None, timeout: int = 10):
+                 ui_url: Optional[str] = None, timeout: int = 10,
+                 token: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         # UI layer URL — defaults to same host but port 3001
         if ui_url:
@@ -48,6 +49,8 @@ class SyncRemoteClient:
             import re
             self.ui_url = re.sub(r":\d+$", ":3001", self.base_url)
         self.session = requests.Session()
+        if token:
+            self.session.headers["Authorization"] = f"Bearer {token}"
         self._auto_snapshot_interval = None
         self._insert_count = 0
         # M-4: default snapshot dir to ~/.valori/snapshots/ instead of CWD.
@@ -1312,7 +1315,7 @@ class AsyncRemoteClient:
     """
 
     def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
-                 ui_url: Optional[str] = None):
+                 ui_url: Optional[str] = None, token: Optional[str] = None):
         import httpx
         self.base_url = base_url.rstrip("/")
         if ui_url:
@@ -1320,10 +1323,11 @@ class AsyncRemoteClient:
         else:
             import re
             self.ui_url = re.sub(r":\d+$", ":3001", self.base_url)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
         # follow_redirects=True is essential for clusters: writes to a follower
         # answer 307 + Location pointing at the leader. httpx does NOT follow
         # redirects by default, so without this every write to a non-leader fails.
-        self.client = httpx.AsyncClient(timeout=10.0, follow_redirects=True)
+        self.client = httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers)
         self._auto_snapshot_interval = None
         self._insert_count = 0
         self._snapshot_dir = "./valoricore_snapshots"
@@ -2184,7 +2188,7 @@ class ClusterClient:
             "http://node1:3000",
             "http://node2:3000",
             "http://node3:3000",
-        ])
+        ], token="your-auth-token")
 
         rid = c.insert([0.1, 0.2, 0.3, 0.4])
         hits = c.search([0.1, 0.2, 0.3, 0.4], k=5, consistency="local")
@@ -2197,11 +2201,13 @@ class ClusterClient:
         max_retries: int = 3,
         retry_backoff: float = 0.5,
         ui_url: Optional[str] = None,
+        token: Optional[str] = None,
     ):
         if not nodes:
             raise ValueError("ClusterClient requires at least one node URL")
         self._clients = [
-            SyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff, ui_url=ui_url)
+            SyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff,
+                             ui_url=ui_url, token=token)
             for url in nodes
         ]
         self._rr_idx = 0
@@ -2374,11 +2380,13 @@ class AsyncClusterClient:
         max_retries: int = 3,
         retry_backoff: float = 0.5,
         ui_url: Optional[str] = None,
+        token: Optional[str] = None,
     ):
         if not nodes:
             raise ValueError("AsyncClusterClient requires at least one node URL")
         self._clients = [
-            AsyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff, ui_url=ui_url)
+            AsyncRemoteClient(url, max_retries=max_retries, retry_backoff=retry_backoff,
+                              ui_url=ui_url, token=token)
             for url in nodes
         ]
         self._rr_idx = 0

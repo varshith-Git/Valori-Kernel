@@ -184,7 +184,7 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         }
     };
 
-    let handle = bootstrap_cluster(&cluster_cfg, audit_sink)
+    let handle = bootstrap_cluster(&cluster_cfg, audit_sink, node_cfg.dim)
         .await
         .unwrap_or_else(|e| {
             eprintln!("FATAL: cluster bootstrap failed: {e}");

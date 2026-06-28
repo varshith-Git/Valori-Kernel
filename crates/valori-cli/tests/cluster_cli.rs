@@ -27,7 +27,7 @@ async fn serve_node() -> (String, tokio::task::JoinHandle<()>) {
         raft_log_path: None,
         tls: None,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink)).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
