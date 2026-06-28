@@ -93,9 +93,8 @@ impl ValoricoreEngine {
         }
         let fxp_vec = FxpVector { data: fxp_data };
 
-        let rid = engine.state.next_record_id();
-
         if let Some(ref mut committer) = engine.event_committer {
+            let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec, metadata: None, tag };
             // C-1: commit_event() already applies the event to live_state internally
             // (shadow-apply → persist → live-apply).  Do NOT call apply_committed_event again.
@@ -159,9 +158,12 @@ impl ValoricoreEngine {
         let k = NodeKind::from_u8(kind)
             .ok_or_else(|| PyValueError::new_err(format!("invalid NodeKind: {}", kind)))?;
 
-        let next_id = engine.state.next_node_id();
-
         if let Some(ref mut committer) = engine.event_committer {
+            // Must read next_node_id from the committer's live_state, not engine.state.
+            // engine.state is never mutated when a committer is present — only
+            // committer.live_state is. Using engine.state gives a stale (always-0)
+            // ID after the first node, causing ShadowApply(InvalidOperation).
+            let next_id = committer.live_state().next_node_id();
             let event = KernelEvent::CreateNode { id: next_id, kind: k, record: rid };
             // C-1: commit_event applies internally; do NOT call apply_committed_event.
             committer.commit_event(event).map_err(|e| {
@@ -275,10 +277,10 @@ impl ValoricoreEngine {
             let proof_bytes = generate_proof_bytes(&fixed_values);
             let proof_hex = hex::encode(&proof_bytes);
 
-            let rid = engine.state.next_record_id();
             let tag = tags[i];
 
             if let Some(ref mut committer) = engine.event_committer {
+                let rid = committer.live_state().next_record_id();
                 let event = KernelEvent::InsertRecord {
                     id: rid,
                     vector: fxp_vec,
@@ -432,9 +434,8 @@ impl ValoricoreEngine {
             }
         }
 
-        let rid = engine.state.next_record_id();
-
         if let Some(ref mut committer) = engine.event_committer {
+            let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord {
                 id: rid,
                 vector: fxp_vec,

@@ -1,8 +1,10 @@
 import os
-import time
+import shutil
 import math
 # pyrefly: ignore [missing-import]
 from valoricore import MemoryClient
+
+DB_PATH = "./test_e2e_db"
 
 def mock_embed(text: str):
     """
@@ -10,7 +12,6 @@ def mock_embed(text: str):
     Used to bypass heavy ML model downloads in CI/CD environments.
     """
     base = sum(ord(c) for c in text)
-    # Generate 384 deterministic floats between -1.0 and 1.0
     return [math.sin(base + i) for i in range(384)]
 
 def print_header(title):
@@ -20,10 +21,15 @@ def print_header(title):
 
 def main():
     print_header("VALORI KERNEL: END-TO-END WORKFLOW TRACER")
-    
+
+    # Always start with a clean slate so replayed WAL events don't collide with
+    # the IDs this run expects.
+    if os.path.exists(DB_PATH):
+        shutil.rmtree(DB_PATH)
+
     # 1. Initialize MemoryClient
     print("\n[STEP 1] Initialization")
-    client = MemoryClient(path="./test_e2e_db", dim=384)
+    client = MemoryClient(path=DB_PATH, dim=384)
     print(f"✅ Client initialized.")
     print(f"🔐 Initial State Hash: {client.get_state_hash()}")
     
@@ -75,6 +81,10 @@ def main():
     print("\n" + "="*60)
     print("🎉 END TO END WORKFLOW COMPLETE")
     print("="*60 + "\n")
+
+    # Clean up test database
+    if os.path.exists(DB_PATH):
+        shutil.rmtree(DB_PATH)
 
 if __name__ == "__main__":
     main()
