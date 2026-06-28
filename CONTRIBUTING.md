@@ -2,6 +2,16 @@
 
 This guide gets you from a fresh clone to a running node in under 10 minutes.
 
+## Quickstart — automated setup
+
+Run this once after cloning. It installs Rust, the wasm32 target, Python SDK, and UI dependencies, then builds the workspace:
+
+```bash
+bash scripts/dev-setup.sh
+```
+
+Works on macOS and Linux. If you prefer to install things manually, follow the steps below.
+
 ---
 
 ## Prerequisites
@@ -85,33 +95,16 @@ VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
 cargo run -p valori-node
 ```
 
-The node listens on **`http://localhost:3000`** by default. Smoke-test it:
+The node listens on **`http://localhost:3000`** by default.
 
+> **`VALORI_DIM` is immutable after the first insert.** Set it once and never change it for the same data directory.
+
+Wipe and start fresh (persisted node):
 ```bash
-curl http://localhost:3000/health
-# → "ok"
-
-# Insert a record
-curl -s -X POST http://localhost:3000/records \
-  -H "Content-Type: application/json" \
-  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]}'
-
-# Search
-curl -s -X POST http://localhost:3000/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}' | jq .
-
-# Proof — BLAKE3 state hash (same on every machine for the same data)
-curl -s http://localhost:3000/v1/proof/state | jq .
-
-# List collections
-curl -s http://localhost:3000/v1/namespaces | jq .
-
-# Wipe and start fresh (in-memory node: just restart; persisted node: delete files)
 rm -f /tmp/valori-events.log /tmp/valori.snap
 ```
 
-> **`VALORI_DIM` is immutable after the first insert.** Set it once and never change it for the same data directory.
+For the full curl reference of every endpoint see [Section 13](#13-curl-reference--all-endpoints) below.
 
 ---
 
@@ -383,6 +376,431 @@ Before opening a pull request:
 - [ ] UI: no hardcoded dark colors — use semantic CSS tokens (`--background`, `--foreground`, `--border`, `--v-accent`, etc.)
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`
 - [ ] If a new phase: phase doc created in `docs/phases/` and status table in `docs/phases/README.md` updated
+
+---
+
+## 13. Curl reference — all endpoints
+
+All examples assume the node is running on `http://localhost:3000`.
+If you set `VALORI_AUTH_TOKEN`, add `-H "Authorization: Bearer <token>"` to every request.
+
+### Health & info
+
+```bash
+# Health check
+curl http://localhost:3000/health
+# → "ok"
+
+# Version
+curl http://localhost:3000/version
+
+# Index config (brute or hnsw, current dim)
+curl http://localhost:3000/v1/index/config | jq .
+
+# Prometheus metrics
+curl http://localhost:3000/metrics
+```
+
+### Collections (namespaces)
+
+```bash
+# List all collections
+curl http://localhost:3000/v1/namespaces | jq .
+
+# Create a collection
+curl -s -X POST http://localhost:3000/v1/namespaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-collection"}' | jq .
+
+# Drop a collection (deletes all records inside it)
+curl -s -X DELETE http://localhost:3000/v1/namespaces/my-collection | jq .
+```
+
+### CRUD — Records
+
+> **No update endpoint by design.** The kernel is an append-only audit chain. To replace a record, use `POST /v1/memory/consolidate` — it soft-deletes the old one, inserts the new vector, and commits a `Supersedes` edge to the BLAKE3 chain.
+
+```bash
+# CREATE — insert a single record (8-dim example — match your VALORI_DIM)
+curl -s -X POST http://localhost:3000/records \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]}' | jq .
+# → {"id": 0}
+
+# CREATE — insert into a specific collection
+curl -s -X POST http://localhost:3000/records \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "collection": "my-collection"}' | jq .
+
+# CREATE — insert with text (indexed for BM25 hybrid reranking)
+curl -s -X POST http://localhost:3000/records \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "text": "AdamW optimizer learning rate 3e-4"}' | jq .
+
+# CREATE — batch insert
+curl -s -X POST http://localhost:3000/v1/vectors/batch_insert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vectors": [
+      [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+      [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2]
+    ],
+    "collection": "my-collection"
+  }' | jq .
+
+# READ — records have no direct GET-by-ID endpoint; use search or metadata
+# Get metadata attached to a record
+curl -s "http://localhost:3000/v1/memory/meta/get?target_id=rec:0" | jq .
+
+# READ — find a record by similarity (nearest neighbour to itself = exact lookup)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 1}' | jq .
+
+# UPDATE — replace a record (soft-delete old + insert new + Supersedes edge in audit chain)
+curl -s -X POST http://localhost:3000/v1/memory/consolidate \
+  -H "Content-Type: application/json" \
+  -d '{"old_record_id": 0, "new_vector": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]}' | jq .
+# → {"old_record_id": 0, "new_record_id": 1, "supersedes_edge_id": 0, "state_hash": "..."}
+
+# DELETE — soft-delete a record by id
+curl -s -X POST http://localhost:3000/v1/delete \
+  -H "Content-Type: application/json" \
+  -d '{"id": 0}' | jq .
+# → {"success": true}
+```
+
+### CRUD — Collections
+
+```bash
+# CREATE
+curl -s -X POST http://localhost:3000/v1/namespaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-collection"}' | jq .
+# → {"name": "my-collection"}
+
+# READ — list all collections
+curl -s http://localhost:3000/v1/namespaces | jq .
+# → ["default", "my-collection"]
+
+# UPDATE — no rename; drop and recreate instead
+
+# DELETE — drops the collection and all records inside it
+curl -s -X DELETE http://localhost:3000/v1/namespaces/my-collection | jq .
+# → {"success": true}
+```
+
+### CRUD — Graph nodes
+
+```bash
+# CREATE
+curl -s -X POST http://localhost:3000/graph/node \
+  -H "Content-Type: application/json" \
+  -d '{"record_id": 0, "kind": 1, "collection": "my-collection"}' | jq .
+# → {"node_id": 0}
+# kind: 0=Document, 1=Chunk
+
+# READ — get one node
+curl -s http://localhost:3000/graph/node/0 | jq .
+# → {"kind": 1, "record_id": 0, "namespace_id": 0}
+
+# READ — list all nodes in a collection
+curl -s "http://localhost:3000/graph/nodes?collection=my-collection" | jq .
+
+# UPDATE — no in-place update; delete and recreate
+
+# DELETE
+curl -s -X DELETE http://localhost:3000/graph/node/0 | jq .
+# → {"success": true}
+```
+
+### CRUD — Graph edges
+
+```bash
+# CREATE
+curl -s -X POST http://localhost:3000/graph/edge \
+  -H "Content-Type: application/json" \
+  -d '{"from": 0, "to": 1, "kind": 0}' | jq .
+# → {"edge_id": 0}
+# kind: 0=ParentOf, 1=Supersedes, 2=Contradicts
+
+# READ — get all outgoing edges from a node
+curl -s http://localhost:3000/graph/edges/0 | jq .
+# → {"edges": [{"edge_id": 0, "to_node": 1, "kind": 0}]}
+
+# READ — get subgraph (node + all reachable nodes up to depth)
+curl -s "http://localhost:3000/graph/subgraph?root=0&depth=2" | jq .
+
+# UPDATE — no in-place update
+
+# DELETE — no individual edge delete; delete the source node to remove its edges
+```
+
+### CRUD — Metadata
+
+```bash
+# CREATE / UPDATE — upsert metadata for any target id
+curl -s -X POST http://localhost:3000/v1/memory/meta/set \
+  -H "Content-Type: application/json" \
+  -d '{"target_id": "rec:0", "metadata": {"author": "Alice", "year": 2024, "tags": ["ml"]}}' | jq .
+# → {"success": true}
+# target_id format: "rec:<record_id>", "document:<node_id>", or any string key
+
+# READ
+curl -s "http://localhost:3000/v1/memory/meta/get?target_id=rec:0" | jq .
+# → {"target_id": "rec:0", "metadata": {"author": "Alice", "year": 2024}}
+
+# UPDATE — same as CREATE (upsert, overwrites existing value)
+
+# DELETE — set metadata to null to clear it
+curl -s -X POST http://localhost:3000/v1/memory/meta/set \
+  -H "Content-Type: application/json" \
+  -d '{"target_id": "rec:0", "metadata": null}' | jq .
+```
+
+### Search
+
+```bash
+# Basic k-NN search (k=5)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}' | jq .
+
+# Search within a collection
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "collection": "my-collection"}' | jq .
+
+# Hybrid rerank — vector top-K re-scored by term frequency (Valori Reranker)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "rerank": true, "query_text": "AdamW optimizer"}' | jq .
+
+# Recency-aware search — older records decay in ranking (1-day half-life)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "decay_half_life_secs": 86400}' | jq .
+
+# Metadata filter — exact match (all keys must match)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "metadata_filter": {"author": "Alice"}}' | jq .
+
+# Metadata filter — range operator (gte, gt, lte, lt, eq)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "metadata_filter": {"year": {"gte": 2020}}}' | jq .
+
+# Point-in-time search (replay to a past state hash)
+curl -s -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "as_of": "a3f1..."}' | jq .
+```
+
+### GraphRAG
+
+```bash
+# k-NN + connected subgraph in one call
+curl -s -X POST http://localhost:3000/v1/graphrag \
+  -H "Content-Type: application/json" \
+  -d '{"query_vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5, "depth": 2}' | jq .
+
+# Subgraph around a known node (depth 2)
+curl -s "http://localhost:3000/graph/subgraph?root=0&depth=2" | jq .
+```
+
+### Graph primitives
+
+```bash
+# Create a graph node (kind 0=Document, 1=Chunk)
+curl -s -X POST http://localhost:3000/graph/node \
+  -H "Content-Type: application/json" \
+  -d '{"record_id": 0, "kind": 1}' | jq .
+
+# Get a node by id
+curl -s http://localhost:3000/graph/node/0 | jq .
+
+# Delete a node
+curl -s -X DELETE http://localhost:3000/graph/node/0 | jq .
+
+# List all nodes (optionally scoped to a collection)
+curl -s "http://localhost:3000/graph/nodes?collection=my-collection" | jq .
+
+# Create an edge between two nodes (kind 0=ParentOf, 1=Supersedes, 2=Contradicts)
+curl -s -X POST http://localhost:3000/graph/edge \
+  -H "Content-Type: application/json" \
+  -d '{"from": 0, "to": 1, "kind": 0}' | jq .
+
+# Get all outgoing edges from a node
+curl -s http://localhost:3000/graph/edges/0 | jq .
+```
+
+### Agent memory
+
+```bash
+# Upsert a memory vector (creates document + chunk nodes, optional metadata)
+curl -s -X POST http://localhost:3000/v1/memory/upsert_vector \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "metadata": {"role": "note", "text": "reminder"}}' | jq .
+
+# Search memory (returns memory_id, record_id, score, metadata)
+curl -s -X POST http://localhost:3000/v1/memory/search_vector \
+  -H "Content-Type: application/json" \
+  -d '{"query_vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}' | jq .
+
+# Consolidate — supersede an old memory with a new vector
+curl -s -X POST http://localhost:3000/v1/memory/consolidate \
+  -H "Content-Type: application/json" \
+  -d '{"old_record_id": 0, "new_vector": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]}' | jq .
+
+# Contradict — flag two memories as contradictory (if cosine ≥ threshold)
+curl -s -X POST http://localhost:3000/v1/memory/contradict \
+  -H "Content-Type: application/json" \
+  -d '{"record_a": 0, "record_b": 1, "threshold": 0.9}' | jq .
+```
+
+### Metadata sidecar
+
+```bash
+# Set metadata for any target (record, document node, etc.)
+curl -s -X POST http://localhost:3000/v1/memory/meta/set \
+  -H "Content-Type: application/json" \
+  -d '{"target_id": "rec:0", "metadata": {"author": "Alice", "year": 2024}}' | jq .
+
+# Get metadata
+curl -s "http://localhost:3000/v1/memory/meta/get?target_id=rec:0" | jq .
+```
+
+### Proof & audit
+
+```bash
+# Current BLAKE3 state hash
+curl -s http://localhost:3000/v1/proof/state | jq .
+
+# Full event-log proof (hash of the WAL file + committed height)
+curl -s http://localhost:3000/v1/proof/event-log | jq .
+
+# Audit timeline (all committed events)
+curl -s http://localhost:3000/v1/timeline | jq .
+```
+
+### Ingest pipeline (requires VALORI_EMBED_PROVIDER)
+
+```bash
+# Chunk only — no embedding, returns chunks with titles
+curl -s -X POST http://localhost:3000/v1/ingest/document \
+  -H "Content-Type: application/json" \
+  -d '{"text": "# Introduction\n\nThis is the intro.\n\n# Methods\n\nThis is methods.", "strategy": "auto"}' | jq .
+
+# Full ingest — chunk + embed + insert + graph nodes (needs embed provider configured)
+curl -s -X POST http://localhost:3000/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Your document text here...", "source": "my-doc.pdf", "collection": "research"}' | jq .
+```
+
+### Tree-RAG
+
+```bash
+# Build a tree index from markdown
+curl -s -X POST http://localhost:3000/v1/tree/build \
+  -H "Content-Type: application/json" \
+  -d '{"text": "# Section 1\n\nContent here.\n\n# Section 2\n\nMore content.", "doc_name": "handbook"}' | jq .
+
+# Query the tree (returns answer + breadcrumb citations + receipt)
+curl -s -X POST http://localhost:3000/v1/tree/query \
+  -H "Content-Type: application/json" \
+  -d '{"tree": <tree-from-build>, "query": "what is in section 2?"}' | jq .
+
+# Verify a receipt
+curl -s -X POST http://localhost:3000/v1/tree/verify \
+  -H "Content-Type: application/json" \
+  -d '{"tree": <tree>, "receipt": <receipt-from-query>}' | jq .
+
+# Hybrid tree + vector search
+curl -s -X POST http://localhost:3000/v1/tree/hybrid \
+  -H "Content-Type: application/json" \
+  -d '{"query": "section 2 content", "doc_name": "handbook"}' | jq .
+```
+
+### Community detection (GraphRAG layer)
+
+```bash
+# Run label propagation to detect communities (must call before community_search)
+curl -s -X POST http://localhost:3000/v1/community/detect \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "my-collection", "max_iter": 20}' | jq .
+
+# Search communities by vector
+curl -s -X POST http://localhost:3000/v1/community/search \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}' | jq .
+
+# Extract entities from text via LLM (requires VALORI_EMBED_PROVIDER)
+curl -s -X POST http://localhost:3000/v1/ingest/extract-entities \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Alice works at Acme Corp in New York.", "namespace": "my-collection"}' | jq .
+```
+
+### Snapshots
+
+```bash
+# Save a snapshot to the configured VALORI_SNAPSHOT_PATH
+curl -s -X POST http://localhost:3000/v1/snapshot/save \
+  -H "Content-Type: application/json" \
+  -d '{}' | jq .
+
+# Download the current snapshot as binary (pipe to file)
+curl -s http://localhost:3000/v1/snapshot/download -o snapshot.bin
+
+# Upload a snapshot to restore from (binary body)
+curl -s -X POST http://localhost:3000/v1/snapshot/upload \
+  --data-binary @snapshot.bin | jq .
+```
+
+### Crypto shredding (GDPR erasure)
+
+```bash
+# Insert an encrypted record (key_id ties it to a DEK)
+curl -s -X POST http://localhost:3000/v1/records/encrypted \
+  -H "Content-Type: application/json" \
+  -d '{"vector": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "key_id": "user-123"}' | jq .
+
+# Shred a DEK — O(1) erasure, audit chain stays intact
+curl -s -X DELETE http://localhost:3000/v1/crypto/shred/user-123 | jq .
+
+# Check shred status
+curl -s http://localhost:3000/v1/crypto/status/user-123 | jq .
+```
+
+### Object store (requires VALORI_OBJECT_STORE_URL)
+
+```bash
+# Upload current snapshot to S3/MinIO/R2
+curl -s -X POST http://localhost:3000/v1/storage/snapshots/upload | jq .
+
+# List remote snapshots
+curl -s http://localhost:3000/v1/storage/snapshots | jq .
+
+# Restore from a remote snapshot
+curl -s -X POST http://localhost:3000/v1/storage/snapshots/restore \
+  -H "Content-Type: application/json" \
+  -d '{"key": "snapshots/state-2024-01-15.snap"}' | jq .
+```
+
+### API key management
+
+```bash
+# Create an API key
+curl -s -X POST http://localhost:3000/v1/keys \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-runner", "scopes": ["read", "write"]}' | jq .
+
+# List all keys
+curl -s http://localhost:3000/v1/keys | jq .
+
+# Revoke a key
+curl -s -X DELETE http://localhost:3000/v1/keys/<key-id> | jq .
+```
 
 ---
 
