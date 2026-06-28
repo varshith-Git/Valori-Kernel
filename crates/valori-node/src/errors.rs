@@ -24,20 +24,73 @@ impl IntoResponse for EngineError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             EngineError::Kernel(k_err) => match k_err {
-                KernelError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
-                KernelError::CapacityExceeded => (StatusCode::INSUFFICIENT_STORAGE, "Capacity exceeded".to_string()),
-                KernelError::InvalidOperation => (StatusCode::BAD_REQUEST, "Invalid operation".to_string()),
-                KernelError::Overflow => (StatusCode::INTERNAL_SERVER_ERROR, "Numeric overflow".to_string()),
-                KernelError::InvalidInput => (StatusCode::BAD_REQUEST, "Invalid input".to_string()),
-                KernelError::MetadataTooLarge => (StatusCode::BAD_REQUEST, "Metadata too large (max 4 KB)".to_string()),
+                KernelError::NotFound => (
+                    StatusCode::NOT_FOUND,
+                    "Record, node, or edge not found".to_string(),
+                ),
+                KernelError::CapacityExceeded => (
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    "Record pool is full — increase VALORI_MAX_RECORDS and restart".to_string(),
+                ),
                 KernelError::DimensionMismatch { expected, found } => (
                     StatusCode::BAD_REQUEST,
                     format!(
                         "Dimension mismatch: node expects {expected}-element vectors, got {found}. \
-                         Use VALORI_DIM={expected} when starting the node, or send {expected}-element vectors."
+                         Check GET /health for the locked dimension, or set VALORI_DIM={expected}."
                     ),
                 ),
-                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Kernel error".to_string()),
+                KernelError::InvalidOperation => (
+                    StatusCode::BAD_REQUEST,
+                    "Invalid operation: record ID out of sequence or duplicate insert. \
+                     Each record ID must equal the current record count at insert time."
+                    .to_string(),
+                ),
+                KernelError::InvalidInput => (
+                    StatusCode::BAD_REQUEST,
+                    "Invalid input: vector values are out of the Q16.16 fixed-point range \
+                     (−32768.0 to +32767.9999847412)."
+                    .to_string(),
+                ),
+                KernelError::MetadataTooLarge => (
+                    StatusCode::BAD_REQUEST,
+                    "Metadata too large (max 4 KB per record)".to_string(),
+                ),
+                KernelError::QueryOutOfRange(v) => (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Query vector value {v} is out of the Q16.16 fixed-point range \
+                         (−32768.0 to +32767.9999847412). Normalise the query vector before sending."
+                    ),
+                ),
+                KernelError::InvalidPayloadLength { expected, found } => (
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Payload length mismatch: expected {expected} bytes, got {found}. \
+                         The record may be corrupt."
+                    ),
+                ),
+                KernelError::InvalidCommand(code) => (
+                    StatusCode::BAD_REQUEST,
+                    format!("Unknown kernel command code {code:#04x} — client/server version mismatch."),
+                ),
+                KernelError::Overflow => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Numeric overflow in Q16.16 arithmetic — vector values are too large".to_string(),
+                ),
+                KernelError::DistanceOverflow => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Distance computation overflowed Q16.16 range — vectors are too dissimilar \
+                     or contain extreme values."
+                    .to_string(),
+                ),
+                KernelError::NotImplemented => (
+                    StatusCode::NOT_IMPLEMENTED,
+                    "This operation is not implemented in the current kernel version".to_string(),
+                ),
+                KernelError::IoError(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Kernel I/O error: {e}"),
+                ),
             },
             EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
             EngineError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),

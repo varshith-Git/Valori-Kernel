@@ -13,6 +13,6 @@ export async function GET() {
     const data = await res.json().catch(() => []);
     return NextResponse.json(data, { status: res.status });
   } catch {
-    return NextResponse.json({ error: "backend unreachable" }, { status: 503 });
+    return NextResponse.json([], { status: 503 });
   }
 }

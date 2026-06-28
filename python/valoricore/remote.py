@@ -5,12 +5,25 @@ import warnings
 from typing import List, Dict, Optional, Any, Tuple
 from uuid import uuid4
 from .types import Vector, RecordId, NodeId, Proof
-from .exceptions import ConnectionError, ValidationError, NotFoundError, NotLeaderError
+from .exceptions import AuthenticationError, ConnectionError, ValidationError, NotFoundError, NotLeaderError
 
 
 class _Retryable(Exception):
     """Internal marker for a transient cluster condition worth retrying."""
     pass
+
+
+def _raise_for_status(resp: "requests.Response", path: str = "") -> None:
+    """Like ``resp.raise_for_status()`` but converts 401/403 to :class:`AuthenticationError`
+    so they are never misreported as connection failures."""
+    if resp.status_code in (401, 403):
+        action = "set token=" if resp.status_code == 401 else "check token permissions for"
+        raise AuthenticationError(
+            f"[HTTP {resp.status_code}] Authentication failed{' for ' + path if path else ''} — "
+            f"{action} this operation. "
+            f"Pass token= to the client or set VALORI_AUTH_TOKEN on the node."
+        )
+    resp.raise_for_status()
 
 
 def _base_of(final_url: str, path: str) -> Optional[str]:
@@ -116,7 +129,24 @@ class SyncRemoteClient:
                     raise _Retryable("node reports no leader (503)")
                 if resp.status_code == 404:
                     raise NotFoundError(f"Resource not found: {path}")
-                resp.raise_for_status()
+                if resp.status_code in (401, 403):
+                    action = "set token=" if resp.status_code == 401 else "check token permissions for"
+                    raise AuthenticationError(
+                        f"[HTTP {resp.status_code}] Authentication failed for {path} — "
+                        f"{action} this operation. "
+                        f"Pass token= to the client or set VALORI_AUTH_TOKEN on the node."
+                    )
+                if resp.status_code in (400, 409, 413, 422):
+                    # Client error — not a connection problem, not retryable.
+                    # Extract the server's message if it sent {"error": "..."}.
+                    try:
+                        detail = resp.json().get("error") or resp.text
+                    except Exception:
+                        detail = resp.text
+                    raise ValidationError(
+                        f"[HTTP {resp.status_code}] {detail}"
+                    )
+                _raise_for_status(resp)
 
                 # Learn the leader if requests followed a redirect to get here.
                 if resp.history:
@@ -130,6 +160,8 @@ class SyncRemoteClient:
                 if attempt < self._max_retries:
                     time.sleep(self._retry_backoff * (2 ** attempt))
                     continue
+            except (AuthenticationError, ValidationError, NotFoundError):
+                raise  # already the right type — don't wrap as ConnectionError
             except requests.exceptions.RequestException as e:
                 raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
 
@@ -166,7 +198,7 @@ class SyncRemoteClient:
         if text is not None:
             data["text"] = text
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
-        resp = self._post("/records", data, idempotency_key=key)
+        resp = self._post("/v1/records", data, idempotency_key=key)
         self._check_auto_snapshot(1)
         return resp["id"]
 
@@ -212,7 +244,7 @@ class SyncRemoteClient:
             data["request_ids"] = request_ids
         if texts is not None:
             data["texts"] = texts
-        resp = self._post("/v1/vectors/batch_insert", data)
+        resp = self._post("/v1/vectors/batch-insert", data)
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
@@ -562,7 +594,7 @@ class SyncRemoteClient:
             data["query_text"] = query_text
         if metadata_filter is not None:
             data["metadata_filter"] = metadata_filter
-        resp = self._post("/search", data)
+        resp = self._post("/v1/search", data)
         # as-of searches return the full response dict (with proof fields).
         if as_of is not None or as_of_log_index is not None:
             return resp
@@ -682,7 +714,7 @@ class SyncRemoteClient:
             data["metadata"] = metadata
         if tags is not None:
             data["tags"] = tags
-        return self._post("/v1/memory/upsert_vector", data)
+        return self._post("/v1/memory/upsert", data)
 
     def memory_search(
         self,
@@ -706,7 +738,7 @@ class SyncRemoteClient:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
-        return self._post("/v1/memory/search_vector", data)["results"]
+        return self._post("/v1/memory/search", data)["results"]
 
     # ── Proof / provenance ──────────────────────────────────────────────────────
 
@@ -722,17 +754,17 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/proof/event-log"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get event-log proof: {e}")
 
     def get_version(self) -> str:
         """Return the node's software version (``CARGO_PKG_VERSION``)."""
-        url = self.base_url + "/version"
+        url = self.base_url + "/v1/version"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.text.strip()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get version: {e}")
@@ -743,11 +775,11 @@ class SyncRemoteClient:
         Returns ``{"nodes": [{"node_id", "kind", "record_id", "namespace_id"}],
         "count"}``.
         """
-        url = self.base_url + "/graph/nodes"
+        url = self.base_url + "/v1/graph/nodes"
         params = {} if collection == "default" else {"collection": collection}
         try:
             resp = self.session.get(url, params=params, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list nodes: {e}")
@@ -779,7 +811,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/storage/snapshots"
         try:
             resp = self.session.get(url, timeout=15)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list remote snapshots: {e}")
@@ -804,7 +836,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/storage/wal"
         try:
             resp = self.session.get(url, timeout=15)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list remote WAL: {e}")
@@ -837,41 +869,41 @@ class SyncRemoteClient:
         if collection:
             params["collection"] = collection
         resp = self.session.get(f"{self.base_url}/v1/timeline", params=params)
-        resp.raise_for_status()
+        _raise_for_status(resp)
         return resp.json()
 
     def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
         """Create a graph node. Returns Node ID."""
         data = {"kind": kind, "record_id": record_id}
-        resp = self._post("/graph/node", data)
+        resp = self._post("/v1/graph/node", data)
         return resp["node_id"]
 
     def create_edge(self, from_id: int, to_id: int, kind: int) -> int:
         """Create a graph edge. Returns Edge ID."""
         data = {"from": from_id, "to": to_id, "kind": kind}
-        resp = self._post("/graph/edge", data)
+        resp = self._post("/v1/graph/edge", data)
         return resp["edge_id"]
 
     def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
         """Fetch node data (kind, record_id)."""
-        url = self.base_url + f"/graph/node/{node_id}"
+        url = self.base_url + f"/v1/graph/node/{node_id}"
         try:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
     def get_edges(self, node_id: int) -> List[Dict[str, Any]]:
         """Fetch all outgoing edges for a given node."""
-        url = self.base_url + f"/graph/edges/{node_id}"
+        url = self.base_url + f"/v1/graph/edges/{node_id}"
         try:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 return []
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("edges", [])
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
@@ -895,7 +927,7 @@ class SyncRemoteClient:
         url = self.base_url + "/health"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("status", "unknown")
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to reach node: {e}")
@@ -908,7 +940,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/namespaces"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("collections", [])
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list collections: {e}")
@@ -923,7 +955,7 @@ class SyncRemoteClient:
             resp = self.session.delete(url, timeout=5)
             if resp.status_code == 400:
                 raise ValueError(resp.json().get("error", resp.text))
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
@@ -962,7 +994,7 @@ class SyncRemoteClient:
         url = self.base_url + f"/v1/crypto/shred/{key_id}"
         try:
             resp = self.session.delete(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to shred key '{key_id}': {e}")
@@ -975,7 +1007,7 @@ class SyncRemoteClient:
         url = self.base_url + f"/v1/crypto/status/{key_id}"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to check key status '{key_id}': {e}")
@@ -989,7 +1021,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/index/config"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get index config: {e}")
@@ -1056,7 +1088,7 @@ class SyncRemoteClient:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 raise ConnectionError("node is not running in cluster mode (/v1/cluster/status not found)")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch cluster status from {url}: {e}")
@@ -1088,7 +1120,7 @@ class SyncRemoteClient:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 raise ConnectionError("node is not running in cluster mode (/v1/cluster/role not found)")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("role", "unknown")
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
@@ -1126,7 +1158,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/keys"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("keys", [])
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list keys: {e}")
@@ -1141,7 +1173,7 @@ class SyncRemoteClient:
             resp = self.session.delete(url, timeout=5)
             if resp.status_code == 404:
                 raise NotFoundError(f"Key not found: {key_id}")
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to revoke key '{key_id}': {e}")
 
@@ -1152,7 +1184,7 @@ class SyncRemoteClient:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
+            _raise_for_status(resp)
             data = resp.json()
             val = data.get("value")
             return val.encode() if val else None
@@ -1171,7 +1203,7 @@ class SyncRemoteClient:
         """Get the total record count from the remote node."""
         try:
             resp = self.session.get(f"{self.base_url}/health", timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("record_count", 0)
         except requests.exceptions.RequestException:
             return 0
@@ -1186,7 +1218,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/snapshot/download"
         try:
             resp = self.session.get(url, timeout=30)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.content
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to download snapshot: {e}")
@@ -1197,7 +1229,7 @@ class SyncRemoteClient:
         headers = {"Content-Type": "application/octet-stream"}
         try:
             resp = self.session.post(url, data=data, headers=headers, timeout=60)
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to restore snapshot: {e}")
 
@@ -1206,7 +1238,7 @@ class SyncRemoteClient:
         url = self.base_url + "/v1/proof/state"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             hash_array = resp.json()["final_state_hash"]
             if isinstance(hash_array, list):
                 return bytes(hash_array).hex()
@@ -1219,12 +1251,12 @@ class SyncRemoteClient:
         Reads the underlying events.log directly from the remote engine and returns a chronological
         list of all append-only state transitions.
         """
-        url = self.base_url + "/timeline"
+        url = self.base_url + "/v1/timeline"
         try:
             resp = self.session.get(url, timeout=10)
             if resp.status_code == 404:
                 raise NotFoundError("Timeline endpoint not found on remote node.")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
@@ -1241,10 +1273,10 @@ class SyncRemoteClient:
         NodeKind: 0=Record, 1=Concept, 5=Document, 6=Chunk
         EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
         """
-        url = self.base_url + f"/graph/subgraph?root={root_node}&depth={depth}"
+        url = self.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
         try:
             resp = self.session.get(url, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"subgraph failed: {e}")
@@ -1274,7 +1306,7 @@ class SyncRemoteClient:
         url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
         try:
             resp = self.session.get(url, timeout=10)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"list_contradictions failed: {e}")
@@ -1301,7 +1333,7 @@ class SyncRemoteClient:
         url = self.ui_url + "/api/contradictions"
         try:
             resp = self.session.post(url, json={"id": contradiction_id, "action": action}, timeout=5)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"resolve_contradiction failed: {e}")
@@ -1364,7 +1396,20 @@ class AsyncRemoteClient:
                     raise _Retryable("node reports no leader (503)")
                 if resp.status_code == 404:
                     raise NotFoundError(f"Resource not found: {path}")
-                resp.raise_for_status()
+                if resp.status_code in (401, 403):
+                    action = "set token=" if resp.status_code == 401 else "check token permissions for"
+                    raise AuthenticationError(
+                        f"[HTTP {resp.status_code}] Authentication failed for {path} — "
+                        f"{action} this operation. "
+                        f"Pass token= to the client or set VALORI_AUTH_TOKEN on the node."
+                    )
+                if resp.status_code in (400, 409, 413, 422):
+                    try:
+                        detail = resp.json().get("error") or resp.text
+                    except Exception:
+                        detail = resp.text
+                    raise ValidationError(f"[HTTP {resp.status_code}] {detail}")
+                _raise_for_status(resp)
                 if resp.history:
                     self._leader_url = _base_of(str(resp.url), path)
                 return resp.json()
@@ -1374,6 +1419,8 @@ class AsyncRemoteClient:
                 if attempt < self._max_retries:
                     await asyncio.sleep(self._retry_backoff * (2 ** attempt))
                     continue
+            except (AuthenticationError, ValidationError, NotFoundError):
+                raise
             except httpx.HTTPError as e:
                 raise ConnectionError(f"Failed to connect to Valoricore node at {url}: {e}")
         raise NotLeaderError(
@@ -1387,7 +1434,7 @@ class AsyncRemoteClient:
             data["collection"] = collection
         if text is not None:
             data["text"] = text
-        resp = await self._post("/records", data)
+        resp = await self._post("/v1/records", data)
         await self._check_auto_snapshot(1)
         return resp["id"]
 
@@ -1417,7 +1464,7 @@ class AsyncRemoteClient:
             data["request_ids"] = request_ids
         if texts is not None:
             data["texts"] = texts
-        resp = await self._post("/v1/vectors/batch_insert", data)
+        resp = await self._post("/v1/vectors/batch-insert", data)
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
@@ -1621,7 +1668,7 @@ class AsyncRemoteClient:
             data["query_text"] = query_text
         if metadata_filter is not None:
             data["metadata_filter"] = metadata_filter
-        resp = await self._post("/search", data)
+        resp = await self._post("/v1/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp
         return resp["results"]
@@ -1703,7 +1750,7 @@ class AsyncRemoteClient:
             data["metadata"] = metadata
         if tags is not None:
             data["tags"] = tags
-        return await self._post("/v1/memory/upsert_vector", data)
+        return await self._post("/v1/memory/upsert", data)
 
     async def memory_search(
         self,
@@ -1720,7 +1767,7 @@ class AsyncRemoteClient:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
-        resp = await self._post("/v1/memory/search_vector", data)
+        resp = await self._post("/v1/memory/search", data)
         return resp["results"]
 
     # ── Proof / provenance ──────────────────────────────────────────────────────
@@ -1731,22 +1778,22 @@ class AsyncRemoteClient:
         "snapshot_hash"?, "event_count", "committed_height"}``."""
         url = self.base_url + "/v1/proof/event-log"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     async def get_version(self) -> str:
         """Return the node's software version."""
-        url = self.base_url + "/version"
+        url = self.base_url + "/v1/version"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return (await resp.text()).strip()
 
     async def list_nodes(self, collection: str = "default") -> Dict[str, Any]:
         """List graph nodes in a collection. Returns ``{"nodes": [...], "count"}``."""
-        url = self.base_url + "/graph/nodes"
+        url = self.base_url + "/v1/graph/nodes"
         params = {} if collection == "default" else {"collection": collection}
         async with self.session.get(url, params=params) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     # ── Snapshot / object-store offload ─────────────────────────────────────────
@@ -1768,7 +1815,7 @@ class AsyncRemoteClient:
         """List snapshots in the object store. Returns ``{"snapshots", "count"}``."""
         url = self.base_url + "/v1/storage/snapshots"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     async def upload_snapshot_to_store(self) -> Dict[str, Any]:
@@ -1785,7 +1832,7 @@ class AsyncRemoteClient:
         ``{"segments", "count"}``."""
         url = self.base_url + "/v1/storage/wal"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     async def archive_wal_segment(self, path: str) -> Dict[str, Any]:
@@ -1809,19 +1856,19 @@ class AsyncRemoteClient:
             params["collection"] = collection
         try:
             resp = await self.client.get(f"{self.base_url}/v1/timeline", params=params)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"Failed to fetch timeline: {e}")
 
     async def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
         data = {"kind": kind, "record_id": record_id}
-        resp = await self._post("/graph/node", data)
+        resp = await self._post("/v1/graph/node", data)
         return resp["node_id"]
 
     async def create_edge(self, from_id: int, to_id: int, kind: int) -> int:
         data = {"from": from_id, "to": to_id, "kind": kind}
-        resp = await self._post("/graph/edge", data)
+        resp = await self._post("/v1/graph/edge", data)
         return resp["edge_id"]
 
     async def create_collection(self, name: str) -> Dict[str, Any]:
@@ -1833,7 +1880,7 @@ class AsyncRemoteClient:
         url = self.base_url + "/v1/namespaces"
         try:
             resp = await self.client.get(url)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("collections", [])
         except Exception as e:
             raise ConnectionError(f"Failed to list collections: {e}")
@@ -1845,28 +1892,28 @@ class AsyncRemoteClient:
             resp = await self.client.delete(url)
             if resp.status_code == 400:
                 raise ValueError(resp.json().get("error", resp.text))
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except Exception as e:
             raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
     async def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
-        url = self.base_url + f"/graph/node/{node_id}"
+        url = self.base_url + f"/v1/graph/node/{node_id}"
         try:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
     async def get_edges(self, node_id: int) -> List[Dict[str, Any]]:
-        url = self.base_url + f"/graph/edges/{node_id}"
+        url = self.base_url + f"/v1/graph/edges/{node_id}"
         try:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 return []
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("edges", [])
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
@@ -1899,21 +1946,21 @@ class AsyncRemoteClient:
         """Async version of :meth:`SyncRemoteClient.shred_key`."""
         url = self.base_url + f"/v1/crypto/shred/{key_id}"
         async with self.session.delete(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     async def shred_key_status(self, key_id: str) -> Dict[str, Any]:
         """Async version of :meth:`SyncRemoteClient.shred_key_status`."""
         url = self.base_url + f"/v1/crypto/status/{key_id}"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     async def get_index_config(self) -> Dict[str, Any]:
         """Async version of :meth:`SyncRemoteClient.get_index_config`."""
         url = self.base_url + "/v1/index/config"
         async with self.session.get(url) as resp:
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return await resp.json()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1962,7 +2009,7 @@ class AsyncRemoteClient:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 raise ConnectionError("node is not running in cluster mode (/v1/cluster/status not found)")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except httpx.HTTPError as e:
             raise ConnectionError(f"Failed to fetch cluster status from {url}: {e}")
@@ -1987,7 +2034,7 @@ class AsyncRemoteClient:
         """List all API keys (masked).  Requires admin credentials."""
         try:
             resp = await self.client.get(f"{self.base_url}/v1/keys")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("keys", [])
         except Exception as e:
             raise ConnectionError(f"Failed to list keys: {e}")
@@ -1998,7 +2045,7 @@ class AsyncRemoteClient:
             resp = await self.client.delete(f"{self.base_url}/v1/keys/{key_id}")
             if resp.status_code == 404:
                 raise NotFoundError(f"Key not found: {key_id}")
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except Exception as e:
             raise ConnectionError(f"Failed to revoke key '{key_id}': {e}")
 
@@ -2023,7 +2070,7 @@ class AsyncRemoteClient:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 raise ConnectionError("node is not running in cluster mode (/v1/cluster/role not found)")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("role", "unknown")
         except Exception as e:
             raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
@@ -2034,7 +2081,7 @@ class AsyncRemoteClient:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 return None
-            resp.raise_for_status()
+            _raise_for_status(resp)
             data = resp.json()
             val = data.get("value")
             return val.encode() if val else None
@@ -2051,7 +2098,7 @@ class AsyncRemoteClient:
     async def record_count(self) -> int:
         try:
             resp = await self.client.get(f"{self.base_url}/health")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json().get("record_count", 0)
         except Exception:
             return 0
@@ -2066,7 +2113,7 @@ class AsyncRemoteClient:
         url = self.base_url + "/v1/snapshot/download"
         try:
             resp = await self.client.get(url)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.content
         except Exception as e:
             raise ConnectionError(f"Failed to download snapshot: {e}")
@@ -2077,7 +2124,7 @@ class AsyncRemoteClient:
         headers = {"Content-Type": "application/octet-stream"}
         try:
             resp = await self.client.post(url, content=data, headers=headers)
-            resp.raise_for_status()
+            _raise_for_status(resp)
         except Exception as e:
             raise ConnectionError(f"Failed to restore snapshot: {e}")
 
@@ -2086,7 +2133,7 @@ class AsyncRemoteClient:
         url = self.base_url + "/v1/proof/state"
         try:
             resp = await self.client.get(url)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             hash_array = resp.json()["final_state_hash"]
             if isinstance(hash_array, list):
                 return bytes(hash_array).hex()
@@ -2099,12 +2146,12 @@ class AsyncRemoteClient:
         Reads the underlying events.log directly from the remote engine and returns a chronological
         list of all append-only state transitions.
         """
-        url = self.base_url + "/timeline"
+        url = self.base_url + "/v1/timeline"
         try:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 raise NotFoundError("Timeline endpoint not found on remote node.")
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
@@ -2117,10 +2164,10 @@ class AsyncRemoteClient:
         NodeKind: 0=Record, 1=Concept, 5=Document, 6=Chunk
         EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
         """
-        url = self.base_url + f"/graph/subgraph?root={root_node}&depth={depth}"
+        url = self.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
         try:
             resp = await self.client.get(url)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"subgraph failed: {e}")
@@ -2143,7 +2190,7 @@ class AsyncRemoteClient:
         url = self.ui_url + f"/api/contradictions?collection={collection}&status={status}"
         try:
             resp = await self.client.get(url)
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"list_contradictions failed: {e}")
@@ -2164,7 +2211,7 @@ class AsyncRemoteClient:
         url = self.ui_url + "/api/contradictions"
         try:
             resp = await self.client.post(url, json={"id": contradiction_id, "action": action})
-            resp.raise_for_status()
+            _raise_for_status(resp)
             return resp.json()
         except Exception as e:
             raise ConnectionError(f"resolve_contradiction failed: {e}")

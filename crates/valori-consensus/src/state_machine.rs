@@ -422,6 +422,12 @@ impl ValoriStateMachine {
         hash_state_blake3(&self.inner.lock().await.state)
     }
 
+    /// The dimension the kernel has actually locked to (set on first insert).
+    /// Returns `None` if no records have been inserted yet.
+    pub async fn locked_dim(&self) -> Option<usize> {
+        self.inner.lock().await.state.dim
+    }
+
     /// Run a read-only closure against the kernel state (Phase 2.5 uses
     /// this for serving reads without copying the state out).
     pub async fn with_state<T>(&self, f: impl FnOnce(&KernelState) -> T) -> T {

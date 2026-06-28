@@ -97,7 +97,18 @@ async fn main() {
         tracing::info!("Node starting in LEADER mode.");
     }
 
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
+        let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
+            format!(
+                "Port {} is already in use — set VALORI_BIND to a free port (e.g. VALORI_BIND=0.0.0.0:3001)",
+                addr
+            )
+        } else {
+            format!("Cannot bind to {addr}: {e}")
+        };
+        eprintln!("FATAL: {msg}");
+        std::process::exit(1);
+    });
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(shared_state.clone(), cfg.snapshot_path.clone()))
         .await
@@ -196,6 +207,17 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
     let addr = node_cfg.bind_addr;
     tracing::info!("HTTP API listening on {addr}");
 
-    let listener = TcpListener::bind(addr).await.unwrap();
+    let listener = TcpListener::bind(addr).await.unwrap_or_else(|e| {
+        let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
+            format!(
+                "Port {} is already in use — set VALORI_BIND to a free port (e.g. VALORI_BIND=0.0.0.0:3001)",
+                addr
+            )
+        } else {
+            format!("Cannot bind to {addr}: {e}")
+        };
+        eprintln!("FATAL: {msg}");
+        std::process::exit(1);
+    });
     axum::serve(listener, app).await.unwrap();
 }

@@ -386,6 +386,21 @@ class VerifyReport:
 
 # ── verify_log ────────────────────────────────────────────────────────────────
 
+def _verify_via_ffi(log_path: Path, expected_hash: Optional[str]) -> Optional["VerifyReport"]:
+    """
+    Try to run verification through the in-process FFI extension (.so).
+
+    Returns a VerifyReport on success, or None if the FFI is not available
+    (e.g. pip install without the compiled wheel).
+    """
+    try:
+        from valoricore_ffi import verify_log_file as _ffi_verify  # type: ignore[import]
+        json_str = _ffi_verify(str(log_path), expected_hash)
+        return VerifyReport.from_dict(json.loads(json_str))
+    except ImportError:
+        return None
+
+
 def verify_log(
     log_path: Union[str, Path],
     expected_hash: Optional[str] = None,
@@ -396,21 +411,30 @@ def verify_log(
     raise_on_tamper: bool = False,
 ) -> VerifyReport:
     """
-    Spawn ``valori-verify`` as a subprocess, capture its ``--report`` JSON,
-    and return a :class:`VerifyReport`.
+    Replay an ``events.log`` file and return a :class:`VerifyReport`.
+
+    **No binary required for pip users.** When the compiled FFI extension
+    (``valoricore_ffi``) is present in the process — which it is after a
+    standard ``pip install valoricore`` — verification runs entirely in-process
+    through the already-loaded ``.so``.  The ``valori-verify`` subprocess is
+    only tried as a fallback (e.g. when running against a plain source checkout
+    without having built the wheel).
 
     :param log_path:        Path to the ``events.log`` file.
     :param expected_hash:   64-char hex BLAKE3 state hash to compare against
                             (e.g. from ``client.get_state_hash()``).
-    :param report_path:     Where to write the JSON report (optional; a temp
-                            file is used and cleaned up if omitted).
-    :param binary:          Path to the ``valori-verify`` binary.  Defaults to
-                            ``"valori-verify"`` (must be on PATH).
-    :param trace:           Pass ``--trace`` to print each event as it replays.
+    :param report_path:     If given, the JSON report is also written here.
+                            Ignored when the FFI path is used (report is
+                            returned in-memory only).
+    :param binary:          Path to the ``valori-verify`` binary.  Only used
+                            when the FFI is unavailable.  Defaults to
+                            ``"valori-verify"`` (must be on PATH in that case).
+    :param trace:           When using the subprocess fallback, pass ``--trace``
+                            to print each event as it replays.
     :param raise_on_tamper: If ``True``, call :meth:`VerifyReport.raise_if_tampered`
                             before returning so callers need not check the verdict.
 
-    :raises FileNotFoundError: if the binary is not found.
+    :raises FileNotFoundError: if neither the FFI nor the binary is available.
     :raises RuntimeError:      if the binary exits without producing a valid report.
     :raises TamperDetected:    if ``raise_on_tamper=True`` and tampering is found.
 
@@ -425,10 +449,42 @@ def verify_log(
     """
     log_path = Path(log_path)
 
+    # ── Fast path: in-process FFI (always available after pip install) ─────────
+    ffi_report = _verify_via_ffi(log_path, expected_hash)
+    if ffi_report is not None:
+        if report_path is not None:
+            with open(report_path, "w") as fh:
+                json.dump(
+                    {
+                        "schema_version": ffi_report.schema_version,
+                        "verdict": ffi_report.verdict,
+                        "log": {
+                            "path": ffi_report.log_path,
+                            "size_bytes": ffi_report.log_size_bytes,
+                            "format_version": ffi_report.format_version,
+                            "dim": ffi_report.dim,
+                        },
+                        "replay": {
+                            "events_replayed": ffi_report.events_replayed,
+                            "checkpoints_seen": ffi_report.checkpoints_seen,
+                            "state_hash": ffi_report.state_hash,
+                            "chain_head": ffi_report.chain_head,
+                        },
+                        "expected_hash": ffi_report.expected_hash,
+                        "generated_at": ffi_report.generated_at,
+                        "generated_at_unix": ffi_report.generated_at_unix,
+                    },
+                    fh,
+                    indent=2,
+                )
+        if raise_on_tamper:
+            ffi_report.raise_if_tampered()
+        return ffi_report
+
+    # ── Fallback: subprocess (source-checkout / CI without wheel) ─────────────
+
     # M-2: validate binary to prevent arbitrary code execution when the parameter
-    # comes from user input.  Accept either:
-    #   (a) a simple binary name with no path separators (looked up via PATH), or
-    #   (b) an absolute path (caller explicitly opted in to a full path).
+    # comes from user input.  Accept a simple name (PATH lookup) or absolute path.
     binary_path = Path(binary)
     if not binary_path.is_absolute() and os.sep in str(binary):
         raise ValueError(
@@ -436,7 +492,6 @@ def verify_log(
             f"got {binary!r}. Relative paths with directory components are not allowed."
         )
 
-    # Write to a caller-supplied path or a temp file we clean up ourselves.
     own_temp = report_path is None
     if own_temp:
         fd, tmp = tempfile.mkstemp(suffix=".json", prefix="valori_report_")
@@ -456,9 +511,18 @@ def verify_log(
         subprocess.run(cmd, check=False)  # non-zero exit = tampered, handled below
     except FileNotFoundError:
         raise FileNotFoundError(
-            f"valori-verify binary not found at {binary!r}.\n"
-            "Build it with:  cargo build -p valori-verify --release\n"
-            "Then add target/release to PATH, or pass binary= explicitly."
+            "The valoricore FFI extension is not loaded and the valori-verify binary "
+            f"was not found at {binary!r}.\n"
+            "\n"
+            "For pip users — reinstall with the compiled wheel:\n"
+            "    pip install --force-reinstall valoricore\n"
+            "\n"
+            "For source-checkout users — build the binary once:\n"
+            "    cargo build -p valori-verify --release\n"
+            "    export PATH=$PATH:$(pwd)/target/release\n"
+            "\n"
+            "Or pass the full path explicitly:\n"
+            "    verify_log(path, binary='/path/to/valori-verify')"
         )
 
     try:

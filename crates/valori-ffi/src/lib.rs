@@ -111,9 +111,17 @@ impl ValoricoreEngine {
     fn search(&self, vector: Vec<f32>, k: usize, filter_tag: Option<u64>) -> PyResult<Vec<(u32, i64)>> {
         let engine = lock_engine!(self);
 
-        // H-3: Reject dimension mismatches for search too; the kernel silently truncates
-        // to min(query.len(), record.len()) which produces wrong distances, not errors.
-        if let Some(dim) = engine.state.dim {
+        // When a committer is active, engine.state is never mutated — reads must
+        // go to live_state.  Fall back to engine.state in the no-committer path.
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+
+        // H-3: Reject dimension mismatches; the kernel silently truncates to
+        // min(query.len(), record.len()) which produces wrong distances, not errors.
+        if let Some(dim) = state_ref.dim {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
                     "dimension mismatch: engine expects {dim}, got {}", vector.len()
@@ -128,7 +136,7 @@ impl ValoricoreEngine {
         let fxp_vec = FxpVector { data: fxp_data };
 
         let mut results = vec![valori_kernel::index::SearchResult::default(); k];
-        let count = engine.state.search_l2(&fxp_vec, &mut results, filter_tag);
+        let count = state_ref.search_l2(&fxp_vec, &mut results, filter_tag);
 
         let mut py_results = Vec::with_capacity(count);
         for i in 0..count {
@@ -530,11 +538,36 @@ fn verify_embedding(floats: Vec<f32>, claimed_hash: String) -> PyResult<bool> {
     Ok(computed_hash == claimed_hash)
 }
 
+/// Replay an event log file in-process and return a JSON verification report string.
+///
+/// This is identical to `valori-verify --report` but runs inside the already-loaded
+/// `.so` — no subprocess, no binary on PATH, no Rust toolchain required for pip users.
+///
+/// Args:
+///     log_path:      Path to the events.log file.
+///     expected_hash: Optional 64-char hex BLAKE3 state hash to compare against.
+///
+/// Returns:
+///     JSON string with the same schema as `valori-verify --report`.
+///
+/// Raises:
+///     RuntimeError: if the file cannot be read or has a corrupt header.
+#[pyfunction]
+#[pyo3(signature = (log_path, expected_hash = None))]
+fn verify_log_file(log_path: String, expected_hash: Option<String>) -> PyResult<String> {
+    use std::path::Path;
+    let path = Path::new(&log_path);
+    let result = valori_verify::verify_log_file(path, expected_hash.as_deref())
+        .map_err(|e| PyRuntimeError::new_err(e))?;
+    serde_json::to_string(&result).map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
 #[pymodule]
 fn valoricore_ffi(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ValoricoreEngine>()?;
     m.add_function(wrap_pyfunction!(ingest_embedding, m)?)?;
     m.add_function(wrap_pyfunction!(generate_proof, m)?)?;
     m.add_function(wrap_pyfunction!(verify_embedding, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_log_file, m)?)?;
     Ok(())
 }

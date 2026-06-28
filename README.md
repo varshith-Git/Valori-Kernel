@@ -104,6 +104,10 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 
 > **New contributor?** `bash dev-setup.sh` — one script installs Rust, the wasm32 target, Python SDK, and UI deps with OS detection and version gates. See [Build from Source](#build-from-source) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
+**Not writing code?** → [Option 2 — Web dashboard](#option-2--web-dashboard-no-code-60-seconds) is the fastest path. Point-and-click project management, no terminal after the first `docker compose up`.
+
+**Writing code?** Pick a client:
+
 **Which client should I use?**
 
 | Client | Install / import | Use when |
@@ -191,7 +195,27 @@ print(db.get_state_hash())
 
 The Rust kernel runs inside your Python process via PyO3 — no server, no Docker, no Rust toolchain needed.
 
-### Option 2 — Docker (~60 seconds, prebuilt image)
+### Option 2 — Web dashboard (no code, ~60 seconds)
+
+The fastest path if you're not writing code — a full point-and-click UI over your Valori node.
+
+```bash
+docker compose up -d              # start the node (port 3000)
+cd ui && npm ci npm install && npm run devnpm install && npm run dev npm run dev   # start the dashboard (port 3001)
+# open http://localhost:3001
+```
+
+**What you get:**
+- **Project manager home** — create named, isolated workspaces; each project gets its own node, port, and data directory under `~/.valori/projects/<name>/`
+- **Persistent state** — opening a project auto-starts its node and restores all data; closing it writes a final snapshot and locks files at rest
+- **Live activity** — count-up stats (records, nodes, edges), an activity heatmap, and a timeline of every committed event
+- **No URL hardcoding** — the UI proxies to the node through Next.js API routes, so there's nothing to configure
+
+The UI talks to the node server-side (Next.js API routes → node HTTP), so the node port never needs to be exposed to the browser directly. Safe to use behind a firewall.
+
+---
+
+### Option 3 — Docker, raw HTTP / Python SDK (~60 seconds, prebuilt image)
 
 ```bash
 docker compose up -d
@@ -233,7 +257,7 @@ hits = db.search(vec, k=5, metadata_filter={"year": {"gte": 2020}}) # range filt
 
 Edit `docker-compose.yml` to change `VALORI_DIM` (default: 1536), add auth, or mount S3.
 
-### Option 3 — One-call document ingest (chunk + embed on-node)
+### Option 4 — One-call document ingest (chunk + embed on-node)
 
 Add an embedding provider to Docker so clients can POST raw text — no client-side embedding needed:
 
@@ -260,7 +284,7 @@ print(ans["answer"], "—", ans["citations"][0]["breadcrumb"])  # lands on "… 
 assert db.tree_verify(built["tree"], ans["receipt"])          # proves it wasn't altered
 ```
 
-### Option 4 — 3-node cluster
+### Option 5 — 3-node cluster
 
 ```bash
 cargo install --path crates/valori-cli
@@ -269,7 +293,7 @@ valori setup   # interactive wizard
 
 → [Cluster setup guide](docs/CLUSTER.md) · [Docker Compose](docker-compose.cluster.yml) · [Helm chart](deploy/helm/valori/) · [AWS/Azure Terraform](docs/DEPLOY_AWS.md)
 
-### Option 5 — Agent memory via MCP
+### Option 6 — Agent memory via MCP
 
 ```bash
 VALORI_URL=http://localhost:3000 valori-mcp
@@ -284,17 +308,6 @@ VALORI_URL=http://localhost:3000 valori-mcp
 
 → [`crates/valori-mcp/README.md`](crates/valori-mcp/README.md)
 
-### Option 6 — Web dashboard with persistent projects
-
-```bash
-cd ui && npm install && npm run dev   # http://localhost:3001
-```
-
-Each **project** is an isolated, persistent workspace: its own node, port, and
-data dir under `~/.valori/projects/<name>/`. The Home screen lists every project
-(even when its node is stopped); opening one auto-starts its node and restores
-state, and closing it writes a snapshot and locks the files at rest — they can
-only be deleted from the UI. → [`docs/phases/phase-6-persistent-projects.md`](docs/phases/phase-6-persistent-projects.md)
 
 ---
 
@@ -327,11 +340,15 @@ Requires Rust 1.80+. For the Python FFI extension: `pip install maturin && matur
 
 ## Documentation
 
+**[docs/README.md](docs/README.md)** — start here. Routes you by use case (trying it out / building an app / deploying / verifying / contributing) before listing the full reference index.
+
+Key docs directly:
+
 | Doc | What it covers |
 |---|---|
-| [docs/getting-started.md](docs/getting-started.md) | Full quickstart for all deployment modes |
-| [docs/api-reference.md](docs/api-reference.md) | Complete HTTP API reference |
-| [docs/python-reference.md](docs/python-reference.md) | Full Python SDK reference |
+| [docs/getting-started.md](docs/getting-started.md) | First insert, search, collections, auth — all deployment modes |
+| [docs/api-reference.md](docs/api-reference.md) | Complete HTTP API reference (all `/v1/` endpoints) |
+| [docs/python-reference.md](docs/python-reference.md) | Full Python SDK reference — all four clients |
 | [docs/CLUSTER.md](docs/CLUSTER.md) | Cluster setup, operations, failover |
 | [docs/DR.md](docs/DR.md) | Backup, restore, cross-region DR runbook |
 | [docs/CAPACITY.md](docs/CAPACITY.md) | Capacity planning — vectors/GB, WAL growth, S3 cost |

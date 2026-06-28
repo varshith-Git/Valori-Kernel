@@ -145,9 +145,9 @@ echo ""
 # ── UI deps (optional) ────────────────────────────────────────────────────────
 if [ "$NODE_OK" = true ] && [ -d "ui" ]; then
     echo -e "${BLUE}[bonus] UI dependencies${NC}"
-    info "Running: npm install in ui/"
-    (cd ui && npm install --silent)
-    ok "UI dependencies installed"
+    info "Running: npm ci in ui/ (exact lockfile install)"
+    (cd ui && npm ci --silent)
+    ok "UI dependencies installed (lockfile-exact)"
     echo ""
 fi
 

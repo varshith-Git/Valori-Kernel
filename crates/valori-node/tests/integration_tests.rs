@@ -85,3 +85,40 @@ fn test_dim_enforced_from_config() {
         "6-element vector must still be rejected after a valid insert"
     );
 }
+
+#[test]
+fn test_search_dim_validated() {
+    let cfg = make_cfg(4);
+    let mut engine = Engine::new(&cfg);
+
+    // Insert a valid record to lock the dim.
+    engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
+
+    // A wrong-dim query must be rejected.
+    assert!(
+        engine.search_l2(&[1.0, 0.0], 5).is_err(),
+        "2-element query against dim=4 store must return an error, not results"
+    );
+
+    // A query with one extra element must also be rejected.
+    assert!(
+        engine.search_l2(&[1.0, 0.0, 0.0, 0.0, 0.0], 5).is_err(),
+        "5-element query against dim=4 store must return an error"
+    );
+
+    // Correct-dim query must succeed.
+    assert!(
+        engine.search_l2(&[1.0, 0.0, 0.0, 0.0], 5).is_ok(),
+        "4-element query against dim=4 store must succeed"
+    );
+
+    // Same checks via the namespace-scoped path.
+    assert!(
+        engine.search_l2_ns(&[1.0, 0.0], 5, 0).is_err(),
+        "2-element ns-query against dim=4 store must return an error"
+    );
+    assert!(
+        engine.search_l2_ns(&[1.0, 0.0, 0.0, 0.0], 5, 0).is_ok(),
+        "4-element ns-query against dim=4 store must succeed"
+    );
+}

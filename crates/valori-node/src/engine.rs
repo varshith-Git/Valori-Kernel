@@ -558,7 +558,7 @@ impl Engine {
         EngineHealth {
             status,
             version: env!("CARGO_PKG_VERSION"),
-            dim: self.dim,
+            dim: self.state.dim.unwrap_or(self.dim),
             index: format!("{:?}", self.index_kind),
             persistence: persistence.to_string(),
             records: PoolStats {
@@ -830,6 +830,14 @@ impl Engine {
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>, EngineError> {
+        if let Some(dim) = self.state.dim {
+            if query.len() != dim {
+                return Err(EngineError::Kernel(KernelError::DimensionMismatch {
+                    expected: dim,
+                    found: query.len(),
+                }));
+            }
+        }
         for &v in query {
             if v > 32767.99 || v < -32768.0 {
                 return Err(EngineError::InvalidInput("Query vector values must be between -32768.0 and 32767.99".to_string()));
@@ -1162,29 +1170,39 @@ impl Engine {
          }
 
          use valori_kernel::types::id::{NodeId, EdgeId};
-         let edge_id = EdgeId(self.state.edge_count() as u32);
          let kind = EdgeKind::from_u8(kind).unwrap_or_default();
          let from = NodeId(from);
          let to = NodeId(to);
 
-         let event = valori_kernel::event::KernelEvent::CreateEdge {
-             id: edge_id,
-             kind,
-             from,
-             to,
-         };
-
          if let Some(ref mut committer) = self.event_committer {
-             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             self.apply_committed_event(&event)?;
+             // When a committer is active, engine.state is never mutated — only
+             // live_state is.  Use live_state for the edge ID so it stays in
+             // sync after each commit_event call.
+             let edge_id = EdgeId(committer.live_state().edge_count() as u32);
+             let event = valori_kernel::event::KernelEvent::CreateEdge {
+                 id: edge_id,
+                 kind,
+                 from,
+                 to,
+             };
+             // C-1: commit_event applies the event to live_state internally.
+             // Do NOT also call apply_committed_event — engine.state is never
+             // used when a committer is present (only live_state is), so the
+             // double-apply would fail with NotFound for nodes created via
+             // create_node (which also only wrote to live_state).
+             committer.commit_event(event).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             return Ok(edge_id.0);
          } else {
+             let edge_id = EdgeId(self.state.edge_count() as u32);
              let cmd = Command::CreateEdge { edge_id, kind, from, to };
              if let Some(ref mut writer) = self.wal_writer {
                  writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              }
              self.state.apply(&cmd)?;
+             return Ok(edge_id.0);
          }
-         Ok(edge_id.0)
+         #[allow(unreachable_code)]
+         Ok(0)
     }
 
     pub fn get_proof(&self) -> valori_kernel::proof::DeterministicProof {
@@ -1307,6 +1325,14 @@ impl Engine {
         use valori_kernel::types::scalar::FxpScalar;
         use valori_kernel::types::vector::FxpVector;
 
+        if let Some(dim) = self.state.dim {
+            if query.len() != dim {
+                return Err(EngineError::Kernel(KernelError::DimensionMismatch {
+                    expected: dim,
+                    found: query.len(),
+                }));
+            }
+        }
         for &v in query {
             if v > 32767.99 || v < -32768.0 {
                 return Err(EngineError::InvalidInput("Query vector values must be between -32768.0 and 32767.99".to_string()));

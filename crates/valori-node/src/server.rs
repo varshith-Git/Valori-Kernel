@@ -5,6 +5,9 @@ use axum::{
     extract::{State, Path as AxumPath, Extension},
     Json,
     body::Body,
+    middleware::Next,
+    http::{Request, HeaderValue},
+    response::Response,
 };
 use tower_http::cors::{CorsLayer, Any};
 use tokio_util::io::ReaderStream;
@@ -23,8 +26,7 @@ pub type SharedEngine = Arc<RwLock<Engine>>;
 
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use axum::extract::Query;
-use axum::middleware::Next;
-use axum::response::{Response, IntoResponse};
+use axum::response::IntoResponse;
 use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
@@ -179,6 +181,22 @@ fn make_cors_layer(
 
 /// Build a standalone HTTP router.  Existing callers pass `None` for `key_store`;
 /// use [`build_router_with_keys`] from `main.rs` to enable Phase 3.5 key management.
+/// Middleware that marks a response as coming from a deprecated path.
+/// Adds `Deprecation: true` (RFC 8594) and a `Link` header pointing at the
+/// canonical v1 path so HTTP clients and API gateways can log/alert on use.
+async fn deprecation_warning(req: Request<Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    headers.insert("Deprecation", HeaderValue::from_static("true"));
+    headers.insert(
+        "Link",
+        HeaderValue::from_static(
+            "<https://docs.valori.ai/api/v1>; rel=\"successor-version\"",
+        ),
+    );
+    resp
+}
+
 pub fn build_router(
     state: SharedEngine,
     auth_token: Option<String>,
@@ -205,65 +223,86 @@ pub fn build_router_with_keys(
         .route("/v1/keys", post(create_key_handler).get(list_keys_handler))
         .route("/v1/keys/:id", delete(revoke_key_handler));
 
-    // ── Protected routes ──────────────────────────────────────────────────────
-    let protected = Router::new()
-        .route("/version", axum::routing::get(version_handler))
-        .route("/records", post(insert_record))
-        .route("/v1/delete", post(delete_record))
-        .route("/v1/vectors/batch_insert", post(batch_insert))
-        .route("/search", post(search))
-        .route("/graph/node", post(create_node))
-        .route("/graph/node/:id", axum::routing::get(get_node).delete(delete_node))
-        .route("/graph/nodes", axum::routing::get(list_nodes))
-        .route("/graph/edge", post(create_edge))
-        .route("/graph/edges/:id", axum::routing::get(get_edges))
-        .route("/graph/subgraph", axum::routing::get(get_subgraph))
-        .route("/v1/graphrag", post(graphrag))
-        .route("/v1/snapshot/download", axum::routing::get(snapshot))
-        .route("/v1/snapshot/upload", post(restore))
-        .route("/v1/snapshot/save", post(snapshot_save))
-        .route("/v1/snapshot/restore", post(snapshot_restore))
-        .route("/v1/memory/upsert_vector", post(memory_upsert_vector))
-        .route("/v1/memory/search_vector", post(memory_search_vector))
-        .route("/v1/memory/consolidate", post(memory_consolidate))
-        .route("/v1/memory/contradict", post(memory_contradict))
-        .route("/v1/memory/meta/set", post(meta_set))
-        .route("/v1/memory/meta/get", axum::routing::get(meta_get))
-        .route("/v1/proof/state", axum::routing::get(get_proof))
-        .route("/v1/proof/event-log", axum::routing::get(get_event_proof))
-        .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
-        .route("/v1/replication/events", axum::routing::get(get_replication_events))
-        .route("/v1/replication/state", axum::routing::get(get_replication_state))
-        .route("/timeline", axum::routing::get(get_timeline))
-        .route("/v1/timeline", axum::routing::get(get_timeline))
-        .route("/v1/namespaces", post(create_collection_handler).get(list_collections_handler))
-        .route("/v1/namespaces/:name", delete(drop_collection_handler))
-        .route("/v1/storage/snapshots", axum::routing::get(list_remote_snapshots))
-        .route("/v1/storage/snapshots/upload", post(upload_snapshot_to_store))
+    // ── Canonical v1 routes ───────────────────────────────────────────────────
+    // Everything an integrator should use. This is the stable, enterprise-safe
+    // surface. All legacy paths below alias into these same handlers.
+    let v1 = Router::new()
+        .route("/v1/version",                   axum::routing::get(version_handler))
+        .route("/v1/records",                   post(insert_record))
+        .route("/v1/search",                    post(search))
+        .route("/v1/graph/node",                post(create_node))
+        .route("/v1/graph/node/:id",            axum::routing::get(get_node).delete(delete_node))
+        .route("/v1/graph/nodes",               axum::routing::get(list_nodes))
+        .route("/v1/graph/edge",                post(create_edge))
+        .route("/v1/graph/edges/:id",           axum::routing::get(get_edges))
+        .route("/v1/graph/subgraph",            axum::routing::get(get_subgraph))
+        .route("/v1/delete",                    post(delete_record))
+        .route("/v1/vectors/batch-insert",      post(batch_insert))
+        .route("/v1/graphrag",                  post(graphrag))
+        .route("/v1/snapshot/download",         axum::routing::get(snapshot))
+        .route("/v1/snapshot/upload",           post(restore))
+        .route("/v1/snapshot/save",             post(snapshot_save))
+        .route("/v1/snapshot/restore",          post(snapshot_restore))
+        .route("/v1/memory/upsert",             post(memory_upsert_vector))
+        .route("/v1/memory/search",             post(memory_search_vector))
+        .route("/v1/memory/consolidate",        post(memory_consolidate))
+        .route("/v1/memory/contradict",         post(memory_contradict))
+        .route("/v1/memory/meta/set",           post(meta_set))
+        .route("/v1/memory/meta/get",           axum::routing::get(meta_get))
+        .route("/v1/proof/state",               axum::routing::get(get_proof))
+        .route("/v1/proof/event-log",           axum::routing::get(get_event_proof))
+        .route("/v1/replication/wal",           axum::routing::get(get_wal_stream))
+        .route("/v1/replication/events",        axum::routing::get(get_replication_events))
+        .route("/v1/replication/state",         axum::routing::get(get_replication_state))
+        .route("/v1/timeline",                  axum::routing::get(get_timeline))
+        .route("/v1/namespaces",                post(create_collection_handler).get(list_collections_handler))
+        .route("/v1/namespaces/:name",          delete(drop_collection_handler))
+        .route("/v1/storage/snapshots",         axum::routing::get(list_remote_snapshots))
+        .route("/v1/storage/snapshots/upload",  post(upload_snapshot_to_store))
         .route("/v1/storage/snapshots/restore", post(restore_from_store))
-        .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
-        .route("/v1/storage/wal/archive", post(archive_wal_segment))
-        // Crypto-shredding (Phase 3.6)
-        .route("/v1/records/encrypted", post(insert_encrypted_handler))
-        .route("/v1/crypto/shred/:key_id", delete(shred_key_handler))
-        .route("/v1/crypto/status/:key_id", get(crypto_status_handler))
-        // Index config (Phase 3.13)
-        .route("/v1/index/config", axum::routing::get(index_config_handler))
-        // Built-in document ingestion — Phase 1: chunking only
-        .route("/v1/ingest/document", post(crate::ingest::ingest_document))
-        // Tree-RAG — stateful (cache) + stateless verify
-        .route("/v1/tree/build",         post(tree_build))
-        .route("/v1/tree/query",         post(tree_query))
-        .route("/v1/tree/hybrid",        post(tree_hybrid))
-        .route("/v1/tree/verify",        post(crate::tree_rag::tree_verify))
-        .route("/v1/tree/chain-verify",  post(crate::tree_rag::tree_chain_verify))
-        // Phase I6: Community layer — detection, search, entity extraction
+        .route("/v1/storage/wal",               axum::routing::get(list_remote_wal))
+        .route("/v1/storage/wal/archive",       post(archive_wal_segment))
+        .route("/v1/records/encrypted",         post(insert_encrypted_handler))
+        .route("/v1/crypto/shred/:key_id",      delete(shred_key_handler))
+        .route("/v1/crypto/status/:key_id",     get(crypto_status_handler))
+        .route("/v1/index/config",              axum::routing::get(index_config_handler))
+        .route("/v1/ingest/document",           post(crate::ingest::ingest_document))
+        .route("/v1/ingest",                    post(crate::ingest::ingest))
+        .route("/v1/ingest/extract-entities",   post(extract_entities))
+        .route("/v1/tree/build",                post(tree_build))
+        .route("/v1/tree/query",                post(tree_query))
+        .route("/v1/tree/hybrid",               post(tree_hybrid))
+        .route("/v1/tree/verify",               post(crate::tree_rag::tree_verify))
+        .route("/v1/tree/chain-verify",         post(crate::tree_rag::tree_chain_verify))
         .route("/v1/community/detect",          post(community_detect))
         .route("/v1/community/search",          post(community_search))
-        .route("/v1/ingest/extract-entities",   post(extract_entities))
-        // Built-in document ingestion — Phase 2: chunk + embed + insert (requires VALORI_EMBED_PROVIDER)
-        .route("/v1/ingest", post(crate::ingest::ingest))
-        .merge(key_routes)
+        .merge(key_routes);
+
+    // ── Deprecated legacy routes — same handlers, deprecation headers added ───
+    // Kept alive for backward compatibility. Will be removed in v2.
+    // Clients see `Deprecation: true` + `Link` on every response.
+    let legacy = Router::new()
+        .route("/version",          axum::routing::get(version_handler))
+        .route("/records",          post(insert_record))
+        .route("/search",           post(search))
+        .route("/timeline",         axum::routing::get(get_timeline))
+        .route("/graph/node",       post(create_node))
+        .route("/graph/node/:id",   axum::routing::get(get_node).delete(delete_node))
+        .route("/graph/nodes",      axum::routing::get(list_nodes))
+        .route("/graph/edge",       post(create_edge))
+        .route("/graph/edges/:id",  axum::routing::get(get_edges))
+        .route("/graph/subgraph",   axum::routing::get(get_subgraph))
+        // snake_case alias kept for SDK backward compat — canonical is /v1/vectors/batch-insert
+        .route("/v1/vectors/batch_insert",      post(batch_insert))
+        // snake_case memory aliases
+        .route("/v1/memory/upsert_vector",      post(memory_upsert_vector))
+        .route("/v1/memory/search_vector",      post(memory_search_vector))
+        .layer(axum::middleware::from_fn(deprecation_warning));
+
+    // ── Protected routes = canonical v1 + deprecated legacy ──────────────────
+    let protected = Router::new()
+        .merge(v1)
+        .merge(legacy)
         .with_state(state);
 
     let auth = Arc::new(AuthState {
@@ -661,7 +700,7 @@ fn bytes_to_hex(b: &[u8]) -> String {
 
 /// Parse a subset of ISO 8601 UTC: `YYYY-MM-DDTHH:MM:SSZ` or `YYYY-MM-DDTHH:MM:SS+00:00`.
 /// Returns unix seconds since the epoch.
-fn parse_iso8601(s: &str) -> Option<u64> {
+pub fn parse_iso8601(s: &str) -> Option<u64> {
     let s = s.trim();
     // Require at least "YYYY-MM-DDTHH:MM:SS"
     if s.len() < 19 { return None; }

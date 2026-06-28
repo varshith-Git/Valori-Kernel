@@ -1,16 +1,69 @@
 # Valori Documentation
 
-The map of everything under `docs/`. Start with **Getting Started**, then branch
-by what you're doing — running a cluster, integrating the SDK, or auditing a log.
+> **New here?** Pick your path below — then come back to the reference tables when you need them.
+> The [phase docs](phases/) are internal design records; you don't need them to use Valori.
 
-## Start here
+---
 
-| Doc | What it covers |
-|---|---|
-| [getting-started.md](getting-started.md) | First insert and search, the 60-second tour |
-| [core-concepts.md](core-concepts.md) | The model: events, commit barrier, deterministic state |
-| [../README.md](../README.md) | Project overview, quick start, benchmarks |
-| [../CHANGELOG.md](../CHANGELOG.md) | Release history |
+## Choose your path
+
+### "I don't write code — I want a UI"
+1. `docker compose up -d` — starts the node
+2. `cd ui && npm ci && npm run dev` — opens at http://localhost:3001
+3. Create a project → the UI auto-starts a dedicated node, restores state on every open, and writes a snapshot on close
+
+No configuration needed. The UI proxies to the node server-side — nothing to expose or hardcode.
+
+---
+
+### "I want to try it in 60 seconds — no server"
+1. `pip install valoricore`
+2. Run [`examples/hello_world.py`](../examples/hello_world.py) — inserts, searches, prints a BLAKE3 state hash
+3. Run [`examples/tamper_demo.py`](../examples/tamper_demo.py) — flip a byte, watch the hash change
+
+→ Deep dive: [embedded-quickstart.md](embedded-quickstart.md)
+
+---
+
+### "I'm building a Python app against a running node"
+1. `docker compose up -d` (or `pip install valoricore` + `MemoryClient` for no-server)
+2. Read [getting-started.md](getting-started.md) — covers insert, search, collections, auth
+3. Read [python-reference.md](python-reference.md) — full SDK method reference
+
+→ HTTP API surface: [api-reference.md](api-reference.md) · All endpoints are under `/v1/`
+
+---
+
+### "I'm deploying a production node / cluster"
+1. [DEPLOYMENT.md](DEPLOYMENT.md) — Docker, EC2, env vars
+2. [authentication.md](authentication.md) — bearer tokens and API keys
+3. [CLUSTER.md](CLUSTER.md) — 3/5-node Raft setup, wizard, grow/shrink
+4. [DR.md](DR.md) — snapshot-to-S3, restore, cross-region runbook
+5. [THREAT_MODEL.md](THREAT_MODEL.md) — what Valori protects against
+
+---
+
+### "I need to verify an audit log / prove state hasn't changed"
+1. [determinism-guarantees.md](determinism-guarantees.md) — what the guarantee means
+2. [deterministic-proof.md](deterministic-proof.md) — how to produce and verify a proof
+3. [crash-recovery-proof.md](crash-recovery-proof.md) — crash-symmetric recovery
+4. Run `valori-verify events.log` — the standalone Rust verifier replays the chain
+
+→ See also: [`examples/tamper_demo.py`](../examples/tamper_demo.py)
+
+---
+
+### "I'm contributing to the codebase"
+1. [`CONTRIBUTING.md`](../CONTRIBUTING.md) — setup, conventions, PR checklist
+2. `bash dev-setup.sh` — one-script dev environment
+3. [core-concepts.md](core-concepts.md) — invariants and architecture before touching kernel code
+4. [phases/README.md](phases/README.md) — design history (what was built and why)
+
+---
+
+## Full reference index
+
+### Start here (if you skipped the paths above)
 
 ## Running Valori
 
@@ -69,5 +122,10 @@ by what you're doing — running a cluster, integrating the SDK, or auditing a l
 | Doc | What it covers |
 |---|---|
 | [architecture/](architecture/) | Cluster write-flow diagram and architecture notes |
-| [phases/](phases/) | Per-phase design records (Phase 0 → 2.11) |
 | [../architecture.md](../architecture.md) | The long-form architecture document |
+
+## Internal — phase design records
+
+> These are engineering design journals, not user documentation. Each file records what a phase set out to do, what landed, and what was deferred. You don't need to read these to use or deploy Valori.
+
+[phases/README.md](phases/README.md) — status table with links to all 64 phase docs.

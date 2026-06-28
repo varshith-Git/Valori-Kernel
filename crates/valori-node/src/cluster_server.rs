@@ -21,7 +21,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{State, Query};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -52,6 +52,8 @@ use axum::extract::Extension;
 use axum::middleware::Next;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
+use axum::http::HeaderValue;
+use axum::body::Body;
 
 /// Startup readiness gate (fixes the partial-state-on-restart bug, B13).
 ///
@@ -126,6 +128,9 @@ struct DataPlaneState {
     /// Phase I4: on-node embed config (from VALORI_EMBED_* env vars).
     /// None when VALORI_EMBED_PROVIDER is not set.
     embed_config: Option<crate::embedder::EmbedConfig>,
+    /// VALORI_DIM from config — used as the fallback dim in /health before any
+    /// insert has locked the kernel's dimension.
+    config_dim: usize,
     /// Phase I4: node-local metadata sidecar for /v1/ingest chunk metadata.
     /// Mirrors the standalone Engine::metadata field. Not Raft-replicated —
     /// chunk text/source metadata is advisory and node-local.
@@ -257,6 +262,7 @@ pub fn build_cluster_router_with_keys(
             Arc::new(AesGcmVault::in_memory())
         },
         embed_config: crate::embedder::EmbedConfig::from_node_config(node_cfg),
+        config_dim: node_cfg.dim,
         metadata: Arc::new(crate::metadata::MetadataStore::new()),
         tree_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         community_store: Arc::new(tokio::sync::RwLock::new(None)),
@@ -264,51 +270,76 @@ pub fn build_cluster_router_with_keys(
 
     let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
 
-    let mut router = Router::new()
-        .route("/records", post(insert_record))
-        .route("/search", post(search))
-        .route("/health", get(health))
+    // ── Public routes (no auth) ───────────────────────────────────────────────
+    let public = Router::new()
+        .route("/health",  get(health))
         .route("/metrics", get(metrics))
-        .route("/v1/delete", post(delete_record))
-        .route("/v1/soft-delete", post(soft_delete_record))
-        .route("/v1/vectors/batch_insert", post(batch_insert))
-        .route("/v1/namespaces", post(create_collection_handler).get(list_collections_handler))
-        .route("/v1/namespaces/:name", delete(drop_collection_handler))
-        .route("/v1/proof/state", get(state_proof))
-        .route("/v1/proof/event-log", get(event_log_proof))
-        .route("/v1/cluster/proof", get(cluster_proof))
-        .route("/graph/node", post(create_graph_node))
-        .route("/graph/node/:id", get(get_graph_node))
-        .route("/graph/edge", post(create_graph_edge))
-        .route("/graph/edges/:id", get(get_graph_edges))
-        .route("/graph/subgraph", get(get_graph_subgraph))
-        .route("/v1/graphrag", post(cluster_graphrag))
-        .route("/v1/keys", post(cluster_create_key).get(cluster_list_keys))
-        .route("/v1/keys/:id", delete(cluster_revoke_key))
-        // Phase 3.6: Crypto-shredding
-        .route("/v1/records/encrypted", post(cluster_insert_encrypted))
-        .route("/v1/crypto/shred/:key_id", delete(cluster_shred_key))
-        .route("/v1/crypto/status/:key_id", get(cluster_crypto_status))
-        // Index config (Phase 3.13)
-        .route("/v1/index/config", axum::routing::get(cluster_index_config))
-        // Built-in document ingestion — chunking is stateless so standalone handler works in cluster too
-        .route("/v1/ingest/document", post(crate::ingest::ingest_document))
-        // Tree-RAG — stateless handlers, identical in both routers
-        .route("/v1/tree/build",         post(cluster_tree_build))
-        .route("/v1/tree/query",         post(cluster_tree_query))
-        .route("/v1/tree/hybrid",        post(cluster_tree_hybrid))
-        .route("/v1/tree/verify",        post(crate::tree_rag::tree_verify))
-        .route("/v1/tree/chain-verify",  post(crate::tree_rag::tree_chain_verify))
-        // Phase I6: Community layer
-        .route("/v1/community/detect",        post(cluster_community_detect))
-        .route("/v1/community/search",        post(cluster_community_search))
-        .route("/v1/ingest/extract-entities", post(cluster_extract_entities))
-        // Phase I4: full pipeline (chunk + embed + insert) via Raft
-        .route("/v1/ingest", post(cluster_ingest))
-        .route("/v1/memory/consolidate", post(cluster_memory_consolidate))
-        .route("/v1/memory/contradict", post(cluster_memory_contradict))
-        .route("/v1/memory/meta/set", post(cluster_meta_set))
-        .route("/v1/memory/meta/get", axum::routing::get(cluster_meta_get))
+        .with_state(state.clone());
+
+    // ── Canonical v1 routes ───────────────────────────────────────────────────
+    let v1 = Router::new()
+        .route("/v1/records",                   post(insert_record))
+        .route("/v1/search",                    post(search))
+        .route("/v1/delete",                    post(delete_record))
+        .route("/v1/soft-delete",               post(soft_delete_record))
+        .route("/v1/vectors/batch-insert",      post(batch_insert))
+        .route("/v1/namespaces",                post(create_collection_handler).get(list_collections_handler))
+        .route("/v1/namespaces/:name",          delete(drop_collection_handler))
+        .route("/v1/proof/state",               get(state_proof))
+        .route("/v1/proof/event-log",           get(event_log_proof))
+        .route("/v1/cluster/proof",             get(cluster_proof))
+        .route("/v1/graph/node",                post(create_graph_node))
+        .route("/v1/graph/node/:id",            get(get_graph_node))
+        .route("/v1/graph/edge",                post(create_graph_edge))
+        .route("/v1/graph/edges/:id",           get(get_graph_edges))
+        .route("/v1/graph/subgraph",            get(get_graph_subgraph))
+        .route("/v1/graphrag",                  post(cluster_graphrag))
+        .route("/v1/keys",                      post(cluster_create_key).get(cluster_list_keys))
+        .route("/v1/keys/:id",                  delete(cluster_revoke_key))
+        .route("/v1/records/encrypted",         post(cluster_insert_encrypted))
+        .route("/v1/crypto/shred/:key_id",      delete(cluster_shred_key))
+        .route("/v1/crypto/status/:key_id",     get(cluster_crypto_status))
+        .route("/v1/index/config",              axum::routing::get(cluster_index_config))
+        .route("/v1/ingest/document",           post(crate::ingest::ingest_document))
+        .route("/v1/ingest",                    post(cluster_ingest))
+        .route("/v1/ingest/extract-entities",   post(cluster_extract_entities))
+        .route("/v1/tree/build",                post(cluster_tree_build))
+        .route("/v1/tree/query",                post(cluster_tree_query))
+        .route("/v1/tree/hybrid",               post(cluster_tree_hybrid))
+        .route("/v1/tree/verify",               post(crate::tree_rag::tree_verify))
+        .route("/v1/tree/chain-verify",         post(crate::tree_rag::tree_chain_verify))
+        .route("/v1/community/detect",          post(cluster_community_detect))
+        .route("/v1/community/search",          post(cluster_community_search))
+        .route("/v1/memory/consolidate",        post(cluster_memory_consolidate))
+        .route("/v1/memory/contradict",         post(cluster_memory_contradict))
+        .route("/v1/memory/upsert",             post(cluster_memory_upsert))
+        .route("/v1/memory/search",             post(cluster_memory_search))
+        .route("/v1/memory/meta/set",           post(cluster_meta_set))
+        .route("/v1/memory/meta/get",           axum::routing::get(cluster_meta_get))
+        .route("/v1/graph/nodes",               get(cluster_list_nodes))
+        .route("/v1/version",                   get(cluster_version))
+        .route("/v1/timeline",                  get(cluster_timeline))
+        .route("/v1/snapshot/save",             post(cluster_snapshot_save))
+        .route("/v1/snapshot/restore",          post(cluster_snapshot_restore))
+        .route("/v1/snapshot/download",         get(cluster_snapshot_download));
+
+    // ── Deprecated legacy routes ──────────────────────────────────────────────
+    let legacy = Router::new()
+        .route("/records",          post(insert_record))
+        .route("/search",           post(search))
+        .route("/graph/node",       post(create_graph_node))
+        .route("/graph/node/:id",   get(get_graph_node))
+        .route("/graph/edge",       post(create_graph_edge))
+        .route("/graph/edges/:id",  get(get_graph_edges))
+        .route("/graph/subgraph",   get(get_graph_subgraph))
+        // snake_case alias kept for backward compat
+        .route("/v1/vectors/batch_insert",  post(batch_insert))
+        .layer(axum::middleware::from_fn(deprecation_warning));
+
+    let mut router = Router::new()
+        .merge(public)
+        .merge(v1)
+        .merge(legacy)
         .with_state(state)
         .merge(cluster_router(raft, audit))
         .layer(axum::middleware::from_fn(cluster_auth_guard))
@@ -321,6 +352,20 @@ pub fn build_cluster_router_with_keys(
 
 async fn metrics() -> String {
     crate::telemetry::get_metrics()
+}
+
+/// Adds `Deprecation: true` (RFC 8594) to responses from legacy paths.
+async fn deprecation_warning(req: AxumRequest<Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    h.insert("Deprecation", HeaderValue::from_static("true"));
+    h.insert(
+        "Link",
+        HeaderValue::from_static(
+            "<https://docs.valori.ai/api/v1>; rel=\"successor-version\"",
+        ),
+    );
+    resp
 }
 
 // ── Collection (namespace) management ────────────────────────────────────────
@@ -379,12 +424,16 @@ async fn health(State(state): State<DataPlaneState>) -> Response {
     let m = state.raft.metrics().borrow().clone();
     let embed_enabled = state.embed_config.is_some();
     let embed_provider = state.embed_config.as_ref().map(|c| c.provider.clone());
+    // Report the dimension the kernel has actually locked to, not the config value.
+    // Before any insert, falls back to config dim so callers still see what to send.
+    let dim = state.sm.locked_dim().await.unwrap_or(state.config_dim);
     match m.current_leader {
         Some(leader) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "status": "ok",
                 "leader": leader,
+                "dim": dim,
                 "embed_enabled": embed_enabled,
                 "embed_provider": embed_provider,
             })),
@@ -394,6 +443,7 @@ async fn health(State(state): State<DataPlaneState>) -> Response {
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
                 "status": "no-leader",
+                "dim": dim,
                 "embed_enabled": embed_enabled,
                 "embed_provider": embed_provider,
             })),
@@ -615,6 +665,20 @@ async fn search(
     // still replaying its log back up to the committed index known at boot.
     if let Err(resp) = state.readiness.check(&state.raft) {
         return resp;
+    }
+
+    // Dimension check against the locked kernel dim (set on first insert).
+    // An empty store (dim == None) accepts any query length.
+    if let Some(locked) = state.sm.locked_dim().await {
+        if req.query.len() != locked {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": format!(
+                    "Query vector has {} elements but this store is locked to dim={}. \
+                     Check GET /health for the current dim.",
+                    req.query.len(), locked
+                )
+            }))).into_response();
+        }
     }
 
     let query = match to_fxp(&req.query) {
@@ -1205,6 +1269,18 @@ async fn cluster_graphrag(
 ) -> Response {
     if let Err(resp) = state.readiness.check(&state.raft) {
         return resp;
+    }
+
+    if let Some(locked) = state.sm.locked_dim().await {
+        if req.query_vector.len() != locked {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": format!(
+                    "Query vector has {} elements but this store is locked to dim={}. \
+                     Check GET /health for the current dim.",
+                    req.query_vector.len(), locked
+                )
+            }))).into_response();
+        }
     }
 
     let query = match to_fxp(&req.query_vector) {
@@ -2193,6 +2269,358 @@ async fn cluster_extract_entities(
         relationship_count,
         skipped_relationships: skipped,
     }))
+}
+
+// ── Missing routes: version, graph/nodes, memory upsert/search, timeline, snapshots ──
+
+async fn cluster_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[derive(Deserialize, Default)]
+struct ClusterListNodesQuery {
+    collection: Option<String>,
+}
+
+async fn cluster_list_nodes(
+    State(state): State<DataPlaneState>,
+    Query(q): Query<ClusterListNodesQuery>,
+) -> Response {
+    let ns_id = {
+        let reg = state.namespaces.lock().unwrap();
+        match reg.resolve(q.collection.as_deref()) {
+            Some(id) => id,
+            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection '{}'", q.collection.as_deref().unwrap_or("default"))
+            }))).into_response(),
+        }
+    };
+
+    let nodes = state.sm.with_state(move |s| {
+        s.iter_nodes()
+            .filter(|n| q.collection.is_none() || n.namespace_id == ns_id)
+            .enumerate()
+            .map(|(i, n)| crate::api::NodeInfo {
+                node_id: i as u32,
+                kind: n.kind as u8,
+                record_id: n.record.map(|r| r.0),
+                namespace_id: n.namespace_id,
+            })
+            .collect::<Vec<_>>()
+    }).await;
+
+    let count = nodes.len();
+    (StatusCode::OK, Json(crate::api::ListNodesResponse { nodes, count })).into_response()
+}
+
+// ── Cluster memory upsert — writes go through Raft ───────────────────────────
+
+async fn cluster_memory_upsert(
+    State(state): State<DataPlaneState>,
+    Json(payload): Json<crate::api::MemoryUpsertVectorRequest>,
+) -> Response {
+    let vector = match to_fxp(&payload.vector) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let ns_id: u16 = {
+        let reg = state.namespaces.lock().unwrap();
+        match reg.resolve(payload.collection.as_deref()) {
+            Some(id) => id,
+            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection '{}'", payload.collection.as_deref().unwrap_or("default"))
+            }))).into_response(),
+        }
+    };
+
+    // 1. Insert vector record.
+    let record_id = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(r) => r.allocated_record_id.unwrap_or(0),
+        Err(resp) => return resp,
+    };
+
+    // 2. Create or reuse document node.
+    let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
+        existing
+    } else {
+        match raft_write_data(&state.raft, ClientRequest {
+            event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        }).await {
+            Ok(r) => r.allocated_node_id.unwrap_or(0),
+            Err(resp) => return resp,
+        }
+    };
+
+    // 3. Create chunk node linked to the record.
+    let chunk_node_id = match raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(record_id)) },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        Ok(r) => r.allocated_node_id.unwrap_or(0),
+        Err(resp) => return resp,
+    };
+
+    // 4. Connect document → chunk.
+    if let Err(resp) = raft_write_data(&state.raft, ClientRequest {
+        event: KernelEvent::AutoCreateEdge {
+            from: NodeId(doc_node_id),
+            to: NodeId(chunk_node_id),
+            kind: EdgeKind::ParentOf,
+        },
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+    }).await {
+        return resp;
+    }
+
+    let memory_id = format!("rec:{}", record_id);
+    if let Some(meta) = payload.metadata {
+        state.metadata.set(memory_id.clone(), meta);
+    }
+
+    let _ = ns_id;
+
+    (StatusCode::OK, Json(crate::api::MemoryUpsertResponse {
+        memory_id,
+        record_id,
+        document_node_id: doc_node_id,
+        chunk_node_id,
+    })).into_response()
+}
+
+// ── Cluster memory search — read-only ────────────────────────────────────────
+
+async fn cluster_memory_search(
+    State(state): State<DataPlaneState>,
+    Json(payload): Json<crate::api::MemorySearchVectorRequest>,
+) -> Response {
+    // Dimension check.
+    if let Some(locked) = state.sm.locked_dim().await {
+        if payload.query_vector.len() != locked {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": format!(
+                    "Query vector has {} elements but this store is locked to dim={}.",
+                    payload.query_vector.len(), locked
+                )
+            }))).into_response();
+        }
+    }
+
+    let query = match to_fxp(&payload.query_vector) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
+    };
+
+    let ns_id: u16 = {
+        let reg = state.namespaces.lock().unwrap();
+        reg.resolve(payload.collection.as_deref()).unwrap_or(0)
+    };
+
+    let half_life = payload.decay_half_life_secs.unwrap_or(0);
+    let k = payload.k;
+
+    let results = if half_life == 0 {
+        state.sm.with_state(|s| {
+            let mut buf = vec![KernelSearchResult::default(); k];
+            let n = s.search_l2_ns(&query, &mut buf, ns_id);
+            buf[..n].iter().map(|r| {
+                let memory_id = format!("rec:{}", r.id.0);
+                crate::api::MemorySearchHit {
+                    memory_id,
+                    record_id: r.id.0,
+                    score: r.score as f32 / (SCALE as f32 * SCALE as f32),
+                    metadata: None,
+                    decay_factor: None,
+                    age_secs: None,
+                }
+            }).collect::<Vec<_>>()
+        }).await
+    } else {
+        let pool = k.saturating_mul(4).max(50).min(1000);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs()).unwrap_or(0);
+        state.sm.with_state_and_timestamps(|s, created_at| {
+            let mut buf = vec![KernelSearchResult::default(); pool];
+            let n = s.search_l2_ns(&query, &mut buf, ns_id);
+            let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()
+                .map(|r| crate::decay::DecayHit {
+                    id: r.id.0,
+                    distance: r.score as f32,
+                    created_at: created_at.get(&r.id.0).copied(),
+                })
+                .collect();
+            crate::decay::rerank(candidates, now, half_life, k)
+                .into_iter()
+                .map(|h| crate::api::MemorySearchHit {
+                    memory_id: format!("rec:{}", h.id),
+                    record_id: h.id,
+                    score: h.distance,
+                    metadata: None,
+                    decay_factor: Some(h.factor),
+                    age_secs: h.age_secs,
+                })
+                .collect::<Vec<_>>()
+        }).await
+    };
+
+    // Attach metadata from the node-local sidecar.
+    let results: Vec<_> = results.into_iter().map(|mut hit| {
+        hit.metadata = state.metadata.get(&hit.memory_id);
+        hit
+    }).collect();
+
+    (StatusCode::OK, Json(crate::api::MemorySearchResponse { results })).into_response()
+}
+
+// ── Cluster timeline — read from events.log if configured ────────────────────
+
+#[derive(Deserialize, Default)]
+struct ClusterTimelineQuery {
+    from: Option<String>,
+    to: Option<String>,
+}
+
+async fn cluster_timeline(
+    State(state): State<DataPlaneState>,
+    Query(q): Query<ClusterTimelineQuery>,
+) -> Response {
+    use valori_wire::{parse_header, decode_entry, LogEntry as WireLogEntry};
+    use valori_kernel::event::KernelEvent;
+
+    let path = match &state.event_log_path {
+        Some(p) => p.clone(),
+        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "Event log not enabled on this node (set VALORI_EVENT_LOG_PATH)"
+        }))).into_response(),
+    };
+
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Cannot read event log: {e}")
+        }))).into_response(),
+    };
+
+    let header = match parse_header(&bytes) {
+        Ok(h) => h,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Cannot parse event log header: {e:?}")
+        }))).into_response(),
+    };
+
+    let from_unix = q.from.as_deref().and_then(crate::server::parse_iso8601);
+    let to_unix   = q.to.as_deref().and_then(crate::server::parse_iso8601);
+
+    let mut entries: Vec<crate::api::TimelineEntry> = Vec::new();
+    let mut offset = header.header_len;
+    let mut log_index: u64 = 0;
+
+    while offset < bytes.len() {
+        match decode_entry(header.version, &bytes[offset..]) {
+            Ok((decoded, consumed)) => {
+                offset += consumed;
+                let ts = decoded.wall_time_secs;
+
+                if let Some(from) = from_unix { if ts < from { log_index += 1; continue; } }
+                if let Some(to)   = to_unix   { if ts > to   { log_index += 1; continue; } }
+
+                if let WireLogEntry::Event(ref ev) = decoded.entry {
+                    let (event_type, record_id, node_id, edge_id) = match ev {
+                        KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
+                        KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),
+                        KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted", Some(id.0), None,       None),
+                        KernelEvent::DeleteRecord { id }              => ("DeleteRecord",           Some(id.0), None,       None),
+                        KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",       Some(id.0), None,       None),
+                        KernelEvent::ShredKey { .. }                  => ("ShredKey",               None,       None,       None),
+                        KernelEvent::CreateNode { id, .. }            => ("CreateNode",             None,       Some(id.0), None),
+                        KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",         None,       None,       None),
+                        KernelEvent::DeleteNode { id }                => ("DeleteNode",             None,       Some(id.0), None),
+                        KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",             None,       None,       Some(id.0)),
+                        KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
+                        KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
+                        KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
+                        KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
+                    };
+                    entries.push(crate::api::TimelineEntry {
+                        log_index,
+                        timestamp_unix: ts,
+                        timestamp_iso: crate::server::unix_to_iso8601(ts),
+                        event_type,
+                        record_id,
+                        node_id,
+                        edge_id,
+                    });
+                }
+                log_index += 1;
+            }
+            Err(_) => break,
+        }
+    }
+
+    let total = entries.len();
+    (StatusCode::OK, Json(crate::api::TimelineResponse {
+        events: entries,
+        total,
+        from_unix,
+        to_unix,
+    })).into_response()
+}
+
+// ── Cluster snapshot save/restore/download ────────────────────────────────────
+// In cluster mode snapshots are driven by openraft's own mechanism, but we
+// expose save/restore/download for operational tooling (same surface as standalone).
+
+fn encode_cluster_snapshot(state: &valori_kernel::state::kernel::KernelState) -> Result<Vec<u8>, String> {
+    let mut buf = vec![0u8; 1 << 20];
+    match valori_kernel::snapshot::encode::encode_state(state, &mut buf) {
+        Ok(n) => Ok(buf[..n].to_vec()),
+        Err(e) => Err(format!("{e:?}")),
+    }
+}
+
+async fn cluster_snapshot_save(
+    State(state): State<DataPlaneState>,
+) -> Response {
+    match state.sm.with_state(encode_cluster_snapshot).await {
+        Ok(bytes) => (StatusCode::OK, Json(serde_json::json!({
+            "success": true,
+            "bytes": bytes.len(),
+            "note": "In-memory snapshot encoded. Cluster snapshots are persisted automatically by Raft."
+        }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("snapshot encode failed: {e}")
+        }))).into_response(),
+    }
+}
+
+async fn cluster_snapshot_restore() -> Response {
+    (StatusCode::NOT_IMPLEMENTED, Json(serde_json::json!({
+        "error": "Snapshot restore in cluster mode must be done via the Raft snapshot mechanism. \
+                  Shut down all nodes, replace the redb log file on node-1, and restart."
+    }))).into_response()
+}
+
+async fn cluster_snapshot_download(
+    State(state): State<DataPlaneState>,
+) -> Response {
+    match state.sm.with_state(encode_cluster_snapshot).await {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE.as_str(), "application/octet-stream"),
+                (header::CONTENT_DISPOSITION.as_str(), "attachment; filename=\"cluster-snapshot.snap\""),
+            ],
+            bytes,
+        ).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("snapshot encode failed: {e}")
+        }))).into_response(),
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

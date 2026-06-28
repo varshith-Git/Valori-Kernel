@@ -136,9 +136,9 @@ maturin develop        # compiles and installs into your active Python env
 ## 4. Web dashboard (Next.js UI)
 
 ```bash
-# Node.js 18+ required
+# Node.js 20+ required (pinned in ui/package.json engines field)
 cd ui
-npm install
+npm ci           # installs exact versions from package-lock.json — do not use npm install
 npm run dev      # starts at http://localhost:3001
 ```
 

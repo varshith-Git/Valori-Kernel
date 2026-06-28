@@ -1,4 +1,15 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+# Suppress urllib3's LibreSSL warning on stock macOS Python before any import
+# that pulls in requests/urllib3.  The warning is cosmetic — LibreSSL works
+# fine for TLS 1.2/1.3 in practice; the urllib3 team added it as a nudge to
+# upgrade, not a functional error.  New users shouldn't see it as their first
+# output from `import valoricore`.
+import warnings as _warnings
+_warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3 v2 only supports OpenSSL",
+    module=r"urllib3",
+)
 """
 valoricore — Python SDK for Valori
 ====================================
@@ -56,6 +67,7 @@ from .adapter import ValoricoreAdapter
 from .integrations import ValoricoreLangChain, ValoricoreRetriever, ValoricoreLlamaIndex
 from .exceptions import (
     ValoricoreError,
+    AuthenticationError,
     IntegrityError,
     ValidationError,
     ConnectionError,

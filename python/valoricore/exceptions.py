@@ -24,6 +24,15 @@ class NotFoundError(ValoricoreError):
     """Raised when a record, node, or edge does not exist."""
     pass
 
+class AuthenticationError(ValoricoreError):
+    """
+    Raised when the server returns HTTP 401 (missing or invalid token) or
+    HTTP 403 (token present but lacks permission for this operation).
+
+    Set ``token=`` on the client or check ``VALORI_AUTH_TOKEN`` on the node.
+    """
+    pass
+
 class NotLeaderError(ValoricoreError):
     """
     Raised when a write hits a cluster follower that cannot name the leader

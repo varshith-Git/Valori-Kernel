@@ -1,19 +1,24 @@
 # Valori — single-node deployment
 # Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 #
-# This is the default compose file: one container, one volume, one command.
+# This is the default compose file: one valori-node + one web dashboard.
 # For a 3-node Raft cluster use: docker compose -f docker-compose.cluster.yml up -d
 #
-# Quick start:
+# Quick start (no-code, non-technical users):
+#   docker compose up -d
+#   open http://localhost:3001        ← web dashboard
+#
+# Quick start (developers, Python SDK):
 #   docker compose up -d
 #   curl http://localhost:3000/health
-#
-# Python:
 #   pip install valoricore
 #   from valoricore.remote import SyncRemoteClient
 #   db = SyncRemoteClient("http://localhost:3000")
 #   db.insert([0.1, 0.2, 0.3])
 #   print(db.get_proof())
+#
+# Dashboard-only (if you already have a node running on :3000):
+#   docker compose up -d valori-ui
 #
 # Upgrading to a cluster later:
 #   1. docker compose exec valori curl -X POST http://localhost:3000/v1/snapshot
@@ -67,6 +72,25 @@ services:
       timeout: 3s
       start_period: 10s
       retries: 3
+
+  valori-ui:
+    image: ghcr.io/varshith-git/valori-kernel/valori-ui:latest
+    # Build locally from the ui/ directory:
+    # build:
+    #   context: ui
+    #   dockerfile: Dockerfile
+    container_name: valori-ui
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      # Points the Next.js server-side proxy at the valori node.
+      # Uses the Docker network service name — never exposed to the browser.
+      VALORI_NODE_URL: "http://valori:3000"
+      NODE_ENV: "production"
+    depends_on:
+      valori:
+        condition: service_healthy
 
 volumes:
   valori-data:

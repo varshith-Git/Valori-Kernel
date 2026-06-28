@@ -55,8 +55,10 @@ export default function AuditPage() {
         setError("event-log-disabled");
         return;
       }
-      if (!res.ok) throw new Error(`${res.status}`);
-      const lines: string[] = await res.json();
+      if (res.status === 503) throw new Error("Node unreachable — is the valori server running?");
+      if (!res.ok) throw new Error(`Failed to load audit trail (HTTP ${res.status})`);
+      const body = await res.json();
+      const lines: string[] = Array.isArray(body) ? body : [];
       setEvents(lines.map(parseEvent).reverse()); // newest first
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load audit trail");

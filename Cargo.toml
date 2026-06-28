@@ -49,6 +49,7 @@ valori-kernel    = { path = "crates/valori-kernel",    version = "0.2.1", defaul
 valori-wire      = { path = "crates/valori-wire",      version = "0.2.1" }
 valori-consensus = { path = "crates/valori-consensus", version = "0.2.1" }
 valori-node      = { path = "crates/valori-node",      version = "0.2.1" }
+valori-verify    = { path = "crates/valori-verify",    version = "0.2.1" }
 
 # Firmware requires abort on panic (no unwinding support in no_std)
 # This also guarantees fail-closed behavior for the Node.

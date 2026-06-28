@@ -3985,6 +3985,7 @@ dependencies = [
  "serde_json",
  "valori-kernel",
  "valori-node",
+ "valori-verify",
 ]
 
 [[package]]
