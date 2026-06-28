@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Valoricore-v0.2.1-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
+<img src="https://img.shields.io/badge/Valoricore-v0.2.2-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
 
 # Valoricore
 
@@ -37,7 +37,7 @@ Valori fixes this by unifying **Vector Memory** and **Knowledge Graphs** using *
 | **Results across hardware** | Bit-identical (Q16.16) | Float drift | Pass cross-platform audits; replay any AI decision with guaranteed identical output |
 | **Cryptographic state proof** | BLAKE3 Merkle root per insert | None | Prove exactly what data the AI saw at any point in time |
 | **Hybrid Vector + Graph** | Native, same memory space | Separate systems | Build GraphRAG pipelines without managing a second database |
-| **Offline proof verification** | No DB connection required | N/A | Auditors can verify AI decisions without accessing production |
+| **Offline proof verification** | In-process via pip wheel | N/A | Auditors can verify AI decisions without accessing production or installing Rust |
 | **Snapshot / replay** | Byte-exact restore | Partial / format-specific | Disaster recovery that is provably correct, not just "probably fine" |
 | **`no_std` embeddable core** | Runs on ARM Cortex-M4 | Heap-heavy | Deploy AI memory to edge devices, browsers, and air-gapped systems |
 | **Multi-tenant collections** | Up to 1 024 isolated namespaces | Tag filtering only | True tenant isolation with zero cross-contamination risk |
@@ -689,6 +689,58 @@ is_valid = verify_embedding(floats=my_vector, claimed_hash=proof_hex)
 print(f"Proof valid: {is_valid}")   # True
 ```
 
+### Step 11 — Offline Event Log Verification
+
+Replay an `events.log` through the same deterministic kernel and independently
+confirm the final state hash — **no running server, no Rust toolchain**. Works
+entirely in-process via the compiled extension that ships inside the wheel.
+
+```python
+from valoricore.verify import verify_log
+
+# The live node's hash — recorded at close-of-business and stored in your audit DB
+expected = client.get_state_hash()   # 64-char BLAKE3 hex
+
+# Hours/days/months later, on any machine, with only pip install valoricore:
+report = verify_log(
+    "/data/events.log",
+    expected_hash=expected,
+    raise_on_tamper=True,   # raises TamperDetected if anything is wrong
+)
+
+print(report.verdict)           # "verified"
+print(report.events_replayed)   # e.g. 12 847
+print(report.state_hash)        # matches expected — math doesn't lie
+```
+
+If the log was tampered with, the `verdict` is one of:
+- `tampered_chain` — a BLAKE3 chain link breaks at a specific event (reports exact event number, byte offset, and commit timestamp)
+- `tampered_structural` — an entry failed to decode (truncation, bit-flip)
+- `tampered_semantic` — entry decoded but the kernel rejected it
+- `tampered_content` — chain is intact but final state hash differs from expected
+
+```python
+from valoricore.verify import verify_log, TamperDetected
+
+try:
+    report = verify_log("/data/events.log", expected_hash=known_hash, raise_on_tamper=True)
+except TamperDetected as e:
+    print(e)
+    # TamperDetected: chain breach at event 4831 (2025-03-12T14:22:07Z)
+    # likely altered entry: event 4830
+```
+
+The `VerifyReport` object also contains the full JSON finding, which you can
+write to a compliance record or send to an auditor.
+
+```python
+report = verify_log("/data/events.log")
+print(report.verdict)           # "verified" or "tampered_*"
+print(report.chain_head)        # final BLAKE3 chain head (64-char hex)
+print(report.events_replayed)
+print(report.checkpoints_seen)
+```
+
 ---
 
 ## Framework Integrations
@@ -840,12 +892,14 @@ vector_store.restore(snap)             # bit-exact restore
 
 ```python
 from valoricore import (
-    ValoricoreError,   # base — catch all SDK errors
-    ValidationError,   # bad vector dimension / FXP out-of-range
-    ConnectionError,   # remote node unreachable
-    IntegrityError,    # BLAKE3 proof mismatch
-    NotFoundError,     # record / node / edge doesn't exist
-    KernelError,       # unrecoverable Rust kernel error
+    ValoricoreError,       # base — catch all SDK errors
+    AuthenticationError,   # HTTP 401/403 — missing or invalid token
+    ValidationError,       # bad vector dimension / FXP out-of-range
+    ConnectionError,       # remote node unreachable
+    IntegrityError,        # BLAKE3 proof mismatch
+    NotFoundError,         # record / node / edge doesn't exist
+    KernelError,           # unrecoverable Rust kernel error
+    NotLeaderError,        # cluster write hit a follower and no leader is elected
 )
 
 try:
@@ -862,6 +916,14 @@ try:
     MemoryClient(remote="http://offline-node:3000").snapshot()
 except ConnectionError as e:
     print(f"Node unreachable: {e}")
+
+try:
+    SyncRemoteClient("http://localhost:3000").insert([0.1] * 128)
+    # Node has VALORI_AUTH_TOKEN set but no token= was passed
+except AuthenticationError as e:
+    print(f"Auth failed: {e}")
+    # → AuthenticationError: [HTTP 401] Authentication failed for /v1/records —
+    #   set token= to the client or set VALORI_AUTH_TOKEN on the node.
 ```
 
 ---
@@ -907,8 +969,8 @@ except ConnectionError as e:
 
 | Variable | Default | Description |
 |---|---|---|
-| `VALORI_MAX_RECORDS` | `1024` | Soft record limit |
-| `VALORI_DIM` | `16` | Embedding dimension |
+| `VALORI_MAX_RECORDS` | `1000000` | Soft record limit |
+| `VALORI_DIM` | `128` | Embedding dimension |
 | `VALORI_INDEX` | `bruteforce` | `bruteforce`, `hnsw`, or `ivf` |
 | `VALORI_QUANT` | *(none)* | `scalar` or `product` |
 | `VALORI_SNAPSHOT_PATH` | *(none)* | Path to write snapshots |
