@@ -22,7 +22,7 @@ export interface ProjectEntry {
   dir:           string;   // absolute path to project data dir
   port:          number;   // HTTP port this project's node binds
   dim:           number;
-  index:         "brute" | "hnsw";
+  index:         "brute" | "hnsw" | "ivf";
   maxRecords:    number;
   createdAt:     string;   // ISO
   lastOpenedAt?: string;   // ISO
@@ -138,7 +138,7 @@ export function reprotect(name: string): void {
 export interface CreateProjectInput {
   name:        string;
   dim:         number;
-  index:       "brute" | "hnsw";
+  index:       "brute" | "hnsw" | "ivf";
   maxRecords?: number;
 }
 

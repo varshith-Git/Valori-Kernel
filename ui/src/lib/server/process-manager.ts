@@ -35,7 +35,7 @@ export interface NodeCfg {
 
 export interface LaunchConfig {
   dim: number;
-  index: "brute" | "hnsw";
+  index: "brute" | "hnsw" | "ivf";
   maxRecords: number;
   authToken?: string;
   nodes: NodeCfg[];
@@ -184,7 +184,7 @@ class ProcessManager {
   startProject(p: {
     port: number;
     dim: number;
-    index: "brute" | "hnsw";
+    index: "brute" | "hnsw" | "ivf";
     maxRecords: number;
     snapshotPath: string;
     eventLogPath: string;

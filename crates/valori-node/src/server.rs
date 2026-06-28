@@ -276,6 +276,7 @@ pub fn build_router_with_keys(
         .route("/v1/tree/chain-verify",         post(crate::tree_rag::tree_chain_verify))
         .route("/v1/community/detect",          post(community_detect))
         .route("/v1/community/search",          post(community_search))
+        .route("/v1/community/overview",        get(community_overview))
         .merge(key_routes);
 
     // ── Deprecated legacy routes — same handlers, deprecation headers added ───
@@ -1997,6 +1998,49 @@ async fn community_search(
         communities,
         total_communities_searched: total,
     }))
+}
+
+/// `GET /v1/community/overview`
+///
+/// Returns every detected community sorted by member count (largest first),
+/// with its centroid vector, size, and the BLAKE3 receipt that covers the
+/// full assignment map.  No LLM required — all data is derived from the
+/// graph structure alone.  Requires `POST /v1/community/detect` to have been
+/// called at least once.
+async fn community_overview(
+    State(engine): State<SharedEngine>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let eng = engine.read().await;
+    let store = eng.community_store.as_ref().ok_or_else(|| {
+        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+            "error": "community index not built — call POST /v1/community/detect first"
+        })))
+    })?;
+
+    let mut communities: Vec<serde_json::Value> = store.members.iter()
+        .map(|(&cid, members)| {
+            let centroid = store.centroids.get(&cid).cloned().unwrap_or_default();
+            serde_json::json!({
+                "community_id": cid,
+                "member_count": members.len(),
+                "centroid": centroid,
+                "sample_node_ids": members.iter().copied().take(10).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    communities.sort_by(|a, b| {
+        let ac = a["member_count"].as_u64().unwrap_or(0);
+        let bc = b["member_count"].as_u64().unwrap_or(0);
+        bc.cmp(&ac)
+    });
+
+    Ok(Json(serde_json::json!({
+        "community_count": store.community_count,
+        "node_count": store.node_count,
+        "receipt": store.receipt,
+        "communities": communities,
+    })))
 }
 
 /// `POST /v1/ingest/extract-entities`

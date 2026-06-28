@@ -310,6 +310,7 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/tree/chain-verify",         post(crate::tree_rag::tree_chain_verify))
         .route("/v1/community/detect",          post(cluster_community_detect))
         .route("/v1/community/search",          post(cluster_community_search))
+        .route("/v1/community/overview",        get(cluster_community_overview))
         .route("/v1/memory/consolidate",        post(cluster_memory_consolidate))
         .route("/v1/memory/contradict",         post(cluster_memory_contradict))
         .route("/v1/memory/upsert",             post(cluster_memory_upsert))
@@ -2157,6 +2158,42 @@ async fn cluster_community_search(
         communities,
         total_communities_searched: total,
     }))
+}
+
+async fn cluster_community_overview(
+    State(s): State<DataPlaneState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let store_guard = s.community_store.read().await;
+    let store = store_guard.as_ref().ok_or_else(|| {
+        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
+            "error": "community index not built — call POST /v1/community/detect first"
+        })))
+    })?;
+
+    let mut communities: Vec<serde_json::Value> = store.members.iter()
+        .map(|(&cid, members)| {
+            let centroid = store.centroids.get(&cid).cloned().unwrap_or_default();
+            serde_json::json!({
+                "community_id": cid,
+                "member_count": members.len(),
+                "centroid": centroid,
+                "sample_node_ids": members.iter().copied().take(10).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    communities.sort_by(|a, b| {
+        let ac = a["member_count"].as_u64().unwrap_or(0);
+        let bc = b["member_count"].as_u64().unwrap_or(0);
+        bc.cmp(&ac)
+    });
+
+    Ok(Json(serde_json::json!({
+        "community_count": store.community_count,
+        "node_count": store.node_count,
+        "receipt": store.receipt,
+        "communities": communities,
+    })))
 }
 
 async fn cluster_extract_entities(

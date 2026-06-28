@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, dim: number, index: "brute" | "hnsw") => Promise<void>;
+  onCreate: (name: string, dim: number, index: "brute" | "hnsw" | "ivf") => Promise<void>;
 }
 
 const DIMS = [
@@ -26,7 +26,7 @@ const DIMS = [
 export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
   const [name, setName]   = useState("");
   const [dim, setDim]     = useState(768);
-  const [index, setIndex] = useState<"brute" | "hnsw">("brute");
+  const [index, setIndex] = useState<"brute" | "hnsw" | "ivf">("brute");
   const [busy, setBusy]   = useState(false);
   const [error, setError] = useState("");
 
@@ -92,7 +92,7 @@ export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
           <div className="flex flex-col gap-1">
             <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Index</label>
             <div className="flex gap-2">
-              {(["brute", "hnsw"] as const).map((opt) => (
+              {(["brute", "hnsw", "ivf"] as const).map((opt) => (
                 <button
                   key={opt}
                   type="button"
@@ -103,7 +103,7 @@ export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
                       : "border-input bg-background text-muted-foreground hover:text-foreground"
                   }`}
                 >
-                  {opt === "brute" ? "Brute-force (exact)" : "HNSW (approx)"}
+                  {opt === "brute" ? "Brute-force" : opt === "hnsw" ? "HNSW" : "IVF"}
                 </button>
               ))}
             </div>

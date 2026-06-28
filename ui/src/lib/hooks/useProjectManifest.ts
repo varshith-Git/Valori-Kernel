@@ -8,7 +8,7 @@ export interface ManifestProject {
   dir:           string;
   port:          number;
   dim:           number;
-  index:         "brute" | "hnsw";
+  index:         "brute" | "hnsw" | "ivf";
   maxRecords:    number;
   createdAt:     string;
   lastOpenedAt?: string;
@@ -38,7 +38,7 @@ export function useProjectManifest() {
   const create = async (input: {
     name: string;
     dim?: number;
-    index?: "brute" | "hnsw";
+    index?: "brute" | "hnsw" | "ivf";
   }): Promise<ManifestProject | null> => {
     const res = await fetch("/api/projects", {
       method: "POST",

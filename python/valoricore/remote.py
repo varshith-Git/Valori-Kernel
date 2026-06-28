@@ -479,6 +479,27 @@ class SyncRemoteClient:
             body["namespace"] = namespace
         return self._post("/v1/community/search", body)
 
+    def community_overview(self) -> dict:
+        """Return all detected communities sorted by size (largest first).
+
+        Each entry contains ``community_id``, ``member_count``, ``centroid``
+        (f32 vector), and ``sample_node_ids``. Also returns the BLAKE3
+        ``receipt`` that proves the community structure at detection time.
+
+        Requires ``community_detect()`` to have been called first.
+
+        Returns ``{"community_count", "node_count", "receipt",
+        "communities": [{"community_id", "member_count", "centroid",
+        "sample_node_ids"}]}``.
+        """
+        url = self.base_url + "/v1/community/overview"
+        try:
+            resp = self.session.get(url, timeout=30)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get community overview: {e}")
+
     def extract_entities(
         self,
         text: str,
@@ -1600,6 +1621,17 @@ class AsyncRemoteClient:
         if namespace is not None:
             body["namespace"] = namespace
         return await self._post("/v1/community/search", body)
+
+    async def community_overview(self) -> dict:
+        """Async version of SyncRemoteClient.community_overview."""
+        import httpx
+        url = self.base_url + "/v1/community/overview"
+        try:
+            resp = await self.client.get(url)
+            _raise_for_status(resp)
+            return resp.json()
+        except httpx.HTTPError as e:
+            raise ConnectionError(f"Failed to get community overview: {e}")
 
     async def extract_entities(
         self,

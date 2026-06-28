@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       name?: string;
       dim?: number;
-      index?: "brute" | "hnsw";
+      index?: "brute" | "hnsw" | "ivf";
       maxRecords?: number;
     };
     if (!body.name) {
