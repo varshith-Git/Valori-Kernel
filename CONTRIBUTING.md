@@ -33,8 +33,8 @@ cargo --version
 git clone https://github.com/varshith-Git/Valori-Kernel.git
 cd Valori-Kernel
 
-# Build every crate in the workspace
-cargo build --workspace
+# Build all default crates (excludes valori-ffi which needs maturin)
+cargo build
 
 # Run the core test suite
 cargo test -p valori-kernel -p valori-node
@@ -47,12 +47,40 @@ All tests should pass. On Linux, install `build-essential` / `gcc` if you hit a 
 ## 2. Run a standalone node (the simplest start)
 
 ```bash
-# In-memory, no persistence (fastest for dev)
+# In-memory only — no persistence, data lost on restart (fastest for dev/testing)
 VALORI_DIM=128 cargo run -p valori-node
 
-# With WAL + snapshot (survives restarts — recommended)
+# With WAL + snapshot — data survives restarts (recommended for real work)
 VALORI_DIM=128 \
-VALORI_EVENT_LOG_PATH=/tmp/valori.log \
+VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
+cargo run -p valori-node
+
+# With auth token — all endpoints require "Authorization: Bearer <token>"
+VALORI_DIM=128 \
+VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
+VALORI_AUTH_TOKEN=mysecrettoken \
+cargo run -p valori-node
+
+# HNSW index instead of brute-force (faster search, uses more RAM)
+VALORI_DIM=128 \
+VALORI_INDEX=hnsw \
+VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
+cargo run -p valori-node
+
+# Custom port
+VALORI_DIM=128 \
+VALORI_BIND=0.0.0.0:8080 \
+cargo run -p valori-node
+
+# With embedding provider (enables POST /v1/ingest — chunk+embed+insert in one call)
+VALORI_DIM=768 \
+VALORI_EMBED_PROVIDER=ollama \
+VALORI_EMBED_MODEL=nomic-embed-text \
+VALORI_EMBED_URL=http://localhost:11434 \
+VALORI_EVENT_LOG_PATH=/tmp/valori-events.log \
 VALORI_SNAPSHOT_PATH=/tmp/valori.snap \
 cargo run -p valori-node
 ```
@@ -72,6 +100,15 @@ curl -s -X POST http://localhost:3000/records \
 curl -s -X POST http://localhost:3000/search \
   -H "Content-Type: application/json" \
   -d '{"query": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], "k": 5}' | jq .
+
+# Proof — BLAKE3 state hash (same on every machine for the same data)
+curl -s http://localhost:3000/v1/proof/state | jq .
+
+# List collections
+curl -s http://localhost:3000/v1/namespaces | jq .
+
+# Wipe and start fresh (in-memory node: just restart; persisted node: delete files)
+rm -f /tmp/valori-events.log /tmp/valori.snap
 ```
 
 > **`VALORI_DIM` is immutable after the first insert.** Set it once and never change it for the same data directory.
@@ -123,27 +160,88 @@ npm start
 
 ---
 
-## 5. Local 3-node cluster (Docker)
+## 5. Local 3-node cluster
+
+### Option A — Docker (easiest)
 
 ```bash
 # Start 3 nodes + bootstrap automatically
-docker compose up -d
+docker compose -f docker-compose.cluster.yml up -d
 
 # Wait ~3 seconds for the leader election, then check
 curl http://localhost:3001/health
 curl http://localhost:3001/v1/cluster/status | jq .
 ```
 
-| Node | HTTP port | Raft gRPC port |
+Tear down and wipe volumes:
+
+```bash
+docker compose -f docker-compose.cluster.yml down -v
+```
+
+### Option B — Raw `cargo run` (no Docker)
+
+Open **3 separate terminal tabs** in the repo root.
+
+**Tab 1 — node 1 (bootstrap leader)**
+```bash
+VALORI_NODE_ID=1 \
+VALORI_CLUSTER_INIT=1 \
+VALORI_CLUSTER_MEMBERS="1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003" \
+VALORI_BIND=0.0.0.0:3001 \
+VALORI_RAFT_BIND=0.0.0.0:3101 \
+VALORI_RAFT_LOG_PATH=/tmp/valori-n1.redb \
+VALORI_EVENT_LOG_PATH=/tmp/valori-n1-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori-n1.snap \
+VALORI_DIM=128 \
+cargo run -p valori-node
+```
+
+**Tab 2 — node 2**
+```bash
+VALORI_NODE_ID=2 \
+VALORI_CLUSTER_MEMBERS="1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003" \
+VALORI_BIND=0.0.0.0:3002 \
+VALORI_RAFT_BIND=0.0.0.0:3102 \
+VALORI_RAFT_LOG_PATH=/tmp/valori-n2.redb \
+VALORI_EVENT_LOG_PATH=/tmp/valori-n2-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori-n2.snap \
+VALORI_DIM=128 \
+cargo run -p valori-node
+```
+
+**Tab 3 — node 3**
+```bash
+VALORI_NODE_ID=3 \
+VALORI_CLUSTER_MEMBERS="1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003" \
+VALORI_BIND=0.0.0.0:3003 \
+VALORI_RAFT_BIND=0.0.0.0:3103 \
+VALORI_RAFT_LOG_PATH=/tmp/valori-n3.redb \
+VALORI_EVENT_LOG_PATH=/tmp/valori-n3-events.log \
+VALORI_SNAPSHOT_PATH=/tmp/valori-n3.snap \
+VALORI_DIM=128 \
+cargo run -p valori-node
+```
+
+**Start node 1 first**, wait for `"Raft initialized"` in its log, then start nodes 2 and 3.
+
+**Verify from any terminal:**
+```bash
+curl http://localhost:3001/health
+curl http://localhost:3001/v1/cluster/status | jq .
+```
+
+**Port layout:**
+
+| Node | HTTP | Raft gRPC |
 |---|---|---|
 | node-1 | 3001 | 3101 |
 | node-2 | 3002 | 3102 |
 | node-3 | 3003 | 3103 |
 
-Tear down and wipe volumes:
-
+**Wipe and restart cleanly:**
 ```bash
-docker compose down -v
+rm -f /tmp/valori-n{1,2,3}.{redb,snap} /tmp/valori-n{1,2,3}-events.log
 ```
 
 ---
