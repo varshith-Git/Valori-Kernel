@@ -1599,6 +1599,7 @@ struct ClusterMemoryContradictRequest {
     #[serde(default)]
     threshold: Option<f32>,
     #[serde(default)]
+    #[allow(dead_code)]
     collection: Option<String>,
 }
 
@@ -2223,7 +2224,7 @@ async fn cluster_extract_entities(
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
 
     // Insert records + nodes via Raft.
-    let ns_id: u16 = s.namespaces.lock().unwrap()
+    let _ns_id: u16 = s.namespaces.lock().unwrap()
         .resolve(payload.namespace.as_deref())
         .unwrap_or(0);
 
@@ -2236,7 +2237,7 @@ async fn cluster_extract_entities(
 
     use valori_kernel::event::KernelEvent;
     use valori_kernel::types::vector::FxpVector;
-    use valori_kernel::types::id::{RecordId, NodeId, EdgeId};
+    use valori_kernel::types::id::{RecordId, NodeId};
     use valori_consensus::types::ClientRequest;
 
     for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {

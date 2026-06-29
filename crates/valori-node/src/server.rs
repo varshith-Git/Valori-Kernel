@@ -1892,7 +1892,7 @@ async fn tree_hybrid(
     // ── Fuse + rank ───────────────────────────────────────────────────────────
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
     hits.truncate(k);
-    for (i, h) in hits.iter_mut().enumerate() {
+    for (i, _h) in hits.iter_mut().enumerate() {
         let _ = i; // rank is implicit from position
     }
 

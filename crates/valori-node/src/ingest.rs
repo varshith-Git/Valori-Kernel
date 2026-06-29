@@ -33,7 +33,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use crate::server::SharedEngine;
-use crate::embedder::{EmbedConfig, embed_batch};
+use crate::embedder::embed_batch;
 
 /// M-6: Maximum accepted text length for ingest/chunk endpoints.
 /// 10 MB is generous for real documents; beyond this the chunker + embedding
@@ -378,7 +378,7 @@ fn chunk_sentence_window(text: &str) -> Vec<IngestChunk> {
 
     const WINDOW: usize = 2; // sentences of context on each side
 
-    sentences.iter().enumerate().map(|(i, sentence)| {
+    sentences.iter().enumerate().map(|(i, _sentence)| {
         let lo = i.saturating_sub(WINDOW);
         let hi = (i + WINDOW + 1).min(sentences.len());
         let window_text = sentences[lo..hi].join(" ");
