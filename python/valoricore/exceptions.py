@@ -8,8 +8,12 @@ class ConnectionError(ValoricoreError):
     """Raised when the client cannot connect to a remote Valoricore node."""
     pass
 
-class ValidationError(ValoricoreError):
-    """Raised when input data (e.g., vector dimensions) is invalid."""
+class ValidationError(ValoricoreError, ValueError):
+    """Raised when input data (e.g. vector dimensions or FXP bounds) is invalid."""
+    pass
+
+class ProtocolError(ValoricoreError):
+    """Raised for protocol-level problems (unexpected server response shape, etc.)."""
     pass
 
 class IntegrityError(ValoricoreError):

@@ -6,7 +6,16 @@ import requests
 from typing import Callable, List, Dict, Any, Optional, TypedDict
 
 from .memory import MemoryClient
+from .remote import _BearerAuth
 from .kinds import NODE_DOCUMENT, NODE_CHUNK, EDGE_PARENT_OF
+from .exceptions import (
+    ValoricoreError,
+    ValidationError,
+    AuthenticationError,
+    ProtocolError,
+)
+# Backward-compat alias — callers that caught AuthError still work
+AuthError = AuthenticationError
 
 EmbedFn = Callable[[str], List[float]]
 
@@ -53,23 +62,6 @@ def _validate_vector(vector: List[float]) -> None:
                 f"Embedding value at index {i} ({v}) out of allowed range [{MIN_SAFE_FLOAT}, {MAX_SAFE_FLOAT}] for Q16.16 fixed-point storage."
             )
 
-class ValoricoreError(Exception):
-    """Base class for all Valoricore exceptions."""
-    pass
-
-class ProtocolError(ValoricoreError):
-    """Raised for protocol-level problems (invalid server response, etc.)."""
-    pass
-
-class AuthError(ValoricoreError):
-    """Raised when authentication fails (401/403)."""
-    pass
-
-class ValidationError(ValoricoreError, ValueError):
-    """Raised when input validation fails (e.g. FXP bounds)."""
-    pass
-
-
 def _ensure_keys(d: dict, keys):
     missing = [k for k in keys if k not in d]
     if missing:
@@ -79,18 +71,6 @@ import json
 
 # H-2: custom auth class that redacts itself in __repr__/__str__ so bearer tokens
 # do not appear in tracebacks, Sentry reports, or Python logging output.
-class _BearerAuth(requests.auth.AuthBase):
-    def __init__(self, token: str) -> None:
-        self._token = token
-
-    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
-        r.headers["Authorization"] = f"Bearer {self._token}"
-        return r
-
-    def __repr__(self) -> str:
-        return "<BearerAuth [REDACTED]>"
-
-
 class ProtocolRemoteClient:
     def __init__(self, base_url: str, embed_fn, expected_dim: int, api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
@@ -110,7 +90,7 @@ class ProtocolRemoteClient:
         if not resp.ok:
             # Handle Auth Errors specifically
             if resp.status_code in (401, 403):
-                 raise AuthError(f"Authentication failed ({resp.status_code}): {resp.reason}")
+                 raise AuthenticationError(f"Authentication failed ({resp.status_code}): {resp.reason}")
 
             # Try to parse JSON error message, fallback to text
             try:
@@ -185,13 +165,13 @@ class ProtocolRemoteClient:
         """Set metadata for a memory_id, record_id, or node_id."""
         url = f"{self.base_url}/v1/memory/meta/set"
         payload = {"target_id": target_id, "metadata": metadata}
-        resp = self.session.post(url, json=payload, timeout=5)
+        resp = self.session.post(url, json=payload, auth=self._auth, timeout=5)
         resp.raise_for_status()
-        
+
     def get_metadata(self, target_id: str) -> Optional[Dict[str, Any]]:
         """Get metadata for a target_id."""
         url = f"{self.base_url}/v1/memory/meta/get"
-        resp = self.session.get(url, params={"target_id": target_id}, timeout=5)
+        resp = self.session.get(url, params={"target_id": target_id}, auth=self._auth, timeout=5)
         resp.raise_for_status()
         data = resp.json()
         return data.get("metadata")
@@ -248,7 +228,7 @@ class ProtocolRemoteClient:
                 
             record_ids.append(res["record_id"])
             chunk_node_ids.append(res["chunk_node_id"])
-            proof_hashes.append(res["proof_hash"])
+            proof_hashes.append(res.get("proof_hash", ""))
             
         memory_ids = [f"rec:{rid}" for rid in record_ids]
         return {

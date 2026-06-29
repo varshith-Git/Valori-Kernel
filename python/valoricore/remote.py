@@ -37,6 +37,19 @@ def _base_of(final_url: str, path: str) -> Optional[str]:
     return None
 
 
+class _BearerAuth(requests.auth.AuthBase):
+    """Per-request auth injector that redacts itself in repr/tracebacks."""
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def __call__(self, r: requests.PreparedRequest) -> requests.PreparedRequest:
+        r.headers["Authorization"] = f"Bearer {self._token}"
+        return r
+
+    def __repr__(self) -> str:
+        return "<BearerAuth [REDACTED]>"
+
+
 class SyncRemoteClient(ValoriClient):
     """Synchronous REST client for a Valoricore node — standalone or clustered.
 
@@ -64,8 +77,12 @@ class SyncRemoteClient(ValoriClient):
             import re
             self.ui_url = re.sub(r":\d+$", ":3001", self.base_url)
         self.session = requests.Session()
-        if token:
-            self.session.headers["Authorization"] = f"Bearer {token}"
+        # H-2: use session.auth (not session.headers) so the token is injected
+        # per-request via __call__ and never sits in the headers dict where it
+        # would appear in dict(session.headers), logging output, or tracebacks.
+        # _BearerAuth.__repr__ returns "[REDACTED]" so it's safe in logs.
+        self._auth = _BearerAuth(token) if token else None
+        self.session.auth = self._auth
         self._auto_snapshot_interval = None
         self._insert_count = 0
         # M-4: default snapshot dir to ~/.valori/snapshots/ instead of CWD.

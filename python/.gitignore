@@ -1,0 +1,20 @@
+# Test database artifacts — tests must use pytest tmp_path, not hardcoded paths
+test_ffi_db/
+valoricore_test_db/
+valoricore_db/
+valori_db/
+valori_test_db_debug/
+*.db/
+
+# Build / dist
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.pyd
+
+# Snapshots written during tests
+valoricore_snapshots/
