@@ -147,7 +147,12 @@ jobs:
         run: |
           find dist/ -mindepth 2 -type f | while read f; do
             dest="dist/$(basename "$f")"
-            [ "$f" != "$dest" ] && mv "$f" "$dest"
+            # realpath comparison avoids the "same file" error when the artifact
+            # subdirectory name matches the filename (download-artifact@v4 nests
+            # artifacts as dist/<name>/<name> when they share the same name).
+            if [ "$(realpath "$f")" != "$(realpath "$dest" 2>/dev/null || echo "")" ]; then
+              mv "$f" "$dest"
+            fi
           done
           find dist/ -mindepth 1 -maxdepth 1 -type d -empty -delete
 
