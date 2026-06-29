@@ -1,9 +1,11 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+from collections import deque
 from typing import List, Dict, Optional, Any, Tuple
 import os
 import threading
 from .types import Vector, RecordId, NodeId, Proof, StateHash
 from .exceptions import ValidationError, KernelError
+from .base import ValoriClient
 
 # H-1: Process-global lock that serialises the env-var mutation → engine-init →
 # env-restore block.  Without this, two threads racing through LocalClient.__init__
@@ -20,7 +22,7 @@ except ImportError:
     except ImportError:
         _ffi = None
 
-class LocalClient:
+class LocalClient(ValoriClient):
     """Synchronous FFI client for the embedded Valoricore Kernel."""
 
     def __init__(
@@ -101,7 +103,16 @@ class LocalClient:
                 with open(file_path, "wb") as f:
                     f.write(snap_bytes)
 
-    def insert(self, vector: Vector, tag: int = 0) -> RecordId:
+    def insert(
+        self,
+        vector: Vector,
+        tag: int = 0,
+        *,
+        collection: Optional[str] = None,  # ignored — LocalClient is single-tenant
+        text: Optional[str] = None,         # ignored — no built-in text index
+        idempotency_key: Optional[str] = None,  # ignored — no dedup
+        **kwargs: Any,
+    ) -> RecordId:
         """Insert a vector into the kernel."""
         try:
             res = self.kernel.insert(vector, tag)
@@ -119,8 +130,21 @@ class LocalClient:
         except ValueError as e:
             raise ValidationError(str(e))
 
-    def search(self, query: Vector, k: int, filter_tag: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Perform nearest neighbor search."""
+    def search(
+        self,
+        query: Vector,
+        k: int,
+        filter_tag: Optional[int] = None,
+        *,
+        collection: Optional[str] = None,          # ignored
+        consistency: Optional[str] = None,          # ignored — not a cluster node
+        decay_half_life_secs: Optional[float] = None,  # ignored
+        rerank: bool = False,                       # ignored — no text index
+        query_text: Optional[str] = None,           # ignored
+        metadata_filter: Optional[Dict[str, Any]] = None,  # ignored
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        """Perform nearest neighbour search."""
         try:
             hits = self.kernel.search(query, k, filter_tag)
             return [{"id": h[0], "score": h[1]} for h in hits]
@@ -224,11 +248,11 @@ class LocalClient:
         """
         max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = set([start_node])
-        queue = [(start_node, 0)]
+        queue = deque([(start_node, 0)])
         result = []
-        
+
         while queue:
-            current, depth = queue.pop(0)
+            current, depth = queue.popleft()
             result.append(current)
             if depth >= max_depth:
                 continue
@@ -274,7 +298,16 @@ class LocalClient:
         except Exception as e:
             raise KernelError(f"Failed to restore kernel state: {e}")
     
-    def insert_batch(self, vectors: List[Vector]) -> List[RecordId]:
+    def insert_batch(
+        self,
+        vectors: List[Vector],
+        *,
+        collection: Optional[str] = None,                      # ignored — single-tenant
+        metadata: Optional[List[Optional[Dict[str, Any]]]] = None,  # ignored — kernel stores no per-record metadata from batch
+        texts: Optional[List[str]] = None,                     # ignored — no built-in text index
+        tags: Optional[List[int]] = None,                      # ignored
+        **kwargs: Any,
+    ) -> List[RecordId]:
         res = self.kernel.insert_batch(vectors)
         self._check_auto_snapshot(len(vectors))
         return res
@@ -289,12 +322,24 @@ class LocalClient:
         except ValueError as e:
             raise ValidationError(str(e))
     
-    def get_metadata(self, record_id: int) -> Optional[bytes]:
-        return self.kernel.get_metadata(record_id)
-    
-    def set_metadata(self, record_id: int, metadata: bytes) -> None:
+    def get_metadata(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Return metadata dict for a record, or None if not set."""
+        import json as _json
+        raw = self.kernel.get_metadata(record_id)
+        if raw is None:
+            return None
         try:
-            self.kernel.set_metadata(record_id, list(metadata))
+            blob = bytes(raw) if not isinstance(raw, (bytes, bytearray)) else raw
+            return _json.loads(blob.decode())
+        except Exception:
+            return None
+
+    def set_metadata(self, record_id: int, metadata: Dict[str, Any]) -> None:
+        """Attach a metadata dict to a record (stored as UTF-8 JSON bytes)."""
+        import json as _json
+        try:
+            blob = _json.dumps(metadata, separators=(",", ":")).encode()
+            self.kernel.set_metadata(record_id, list(blob))
         except ValueError as e:
             raise ValidationError(str(e))
     
@@ -308,7 +353,13 @@ class LocalClient:
     def soft_delete(self, record_id: int) -> None:
         self.kernel.soft_delete(record_id)
 
-    def delete(self, record_id: int) -> None:
+    def delete(
+        self,
+        record_id: RecordId,
+        *,
+        idempotency_key: Optional[str] = None,  # ignored
+        **kwargs: Any,
+    ) -> None:
         """Permanently remove a record from the pool and the search index."""
         try:
             self.kernel.delete(record_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import requests
 from typing import Callable, List, Dict, Any, Optional, TypedDict
 
-from .memory import MemoryClient, EXPECTED_DIM
+from .memory import MemoryClient
 from .kinds import NODE_DOCUMENT, NODE_CHUNK, EDGE_PARENT_OF
 
 EmbedFn = Callable[[str], List[float]]

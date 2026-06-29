@@ -10,7 +10,7 @@ synchronous Rust FFI to prevent data races in local mode.
 import asyncio
 import threading
 from typing import List, Dict, Optional, Any, Callable, Tuple
-from .memory import MemoryClient, EmbedFn, EXPECTED_DIM
+from .memory import MemoryClient, EmbedFn
 from .types import Vector, RecordId, NodeId, Proof, StateHash
 from .exceptions import ValidationError
 

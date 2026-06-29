@@ -1,61 +1,51 @@
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+"""
+valoricore - Python SDK for Valori
+
+Pick one client
+---------------
+MemoryClient          -- embedded FFI, no server required
+  from valoricore import MemoryClient
+
+SyncRemoteClient      -- HTTP, blocking (requests)
+  from valoricore.remote import SyncRemoteClient
+
+AsyncRemoteClient     -- HTTP, async/await (httpx + asyncio / FastAPI)
+  from valoricore.remote import AsyncRemoteClient
+
+ClusterClient         -- 3/5-node Raft cluster, automatic leader failover
+  from valoricore.remote import ClusterClient
+
+Embedded quick-start (no server):
+
+    from valoricore import MemoryClient
+    from valoricore.embeddings import SentenceTransformerEmbedder
+
+    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")
+    db = MemoryClient(path="./my_db", dim=384)
+    db.add_document(text="Hello world", embed=embedder)
+    hits = db.semantic_search("Hello", embed=embedder, k=5)
+    print(db.get_state_hash())   # 64-char BLAKE3 hex
+
+Remote quick-start (valori-node on :3000):
+
+    from valoricore.remote import SyncRemoteClient
+
+    with SyncRemoteClient("http://localhost:3000") as db:
+        db.insert([0.1, 0.2, 0.3])
+        hits = db.search([0.1, 0.2, 0.3], k=5)
+        print(db.get_state_hash())
+"""
+
 # Suppress urllib3's LibreSSL warning on stock macOS Python before any import
-# that pulls in requests/urllib3.  The warning is cosmetic — LibreSSL works
-# fine for TLS 1.2/1.3 in practice; the urllib3 team added it as a nudge to
-# upgrade, not a functional error.  New users shouldn't see it as their first
-# output from `import valoricore`.
+# that pulls in requests/urllib3.  The warning is cosmetic; LibreSSL works
+# fine for TLS 1.2/1.3 — urllib3 added it as a nudge, not a functional error.
 import warnings as _warnings
 _warnings.filterwarnings(
     "ignore",
     message=r"urllib3 v2 only supports OpenSSL",
     module=r"urllib3",
 )
-"""
-valoricore — Python SDK for Valori
-====================================
-
-**Start here — pick one client:**
-
-+----------------------+----------------------------------------------+------------------------------+
-| Client               | Import                                       | Use when                     |
-+======================+==============================================+==============================+
-| ``MemoryClient``     | ``from valoricore import MemoryClient``      | Local process, no server     |
-|                      |                                              | (PyO3 FFI, offline-capable)  |
-+----------------------+----------------------------------------------+------------------------------+
-| ``SyncRemoteClient`` | ``from valoricore.remote import             | Running valori-node over     |
-|                      | SyncRemoteClient``                           | HTTP (standalone or cluster) |
-+----------------------+----------------------------------------------+------------------------------+
-| ``AsyncRemoteClient``| ``from valoricore.remote import             | Same as above, async/await   |
-|                      | AsyncRemoteClient``                          | (FastAPI, asyncio)           |
-+----------------------+----------------------------------------------+------------------------------+
-| ``ClusterClient``    | ``from valoricore.remote import             | 3/5-node Raft cluster,       |
-|                      | ClusterClient``                              | automatic leader failover    |
-+----------------------+----------------------------------------------+------------------------------+
-
-Everything else (``Valoricore``, ``AsyncValoricore``, ``ValoricoreAdapter``,
-``LocalClient``) is an advanced wrapper or legacy alias — you do not need them
-to get started.
-
-Embedded quick-start (no server)::
-
-    from valoricore import MemoryClient
-    from valoricore.embeddings import SentenceTransformerEmbedder
-
-    embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2")  # pip install "valoricore[local]"
-    db = MemoryClient(path="./my_db", dim=384)
-    db.add_document(text="Hello world", embed=embedder)
-    hits = db.semantic_search("Hello", embed=embedder, k=5)
-    print(db.get_state_hash())   # 64-char BLAKE3 hex — reproducible on any machine
-
-Remote quick-start (valori-node running on :3000)::
-
-    from valoricore.remote import SyncRemoteClient
-
-    db = SyncRemoteClient("http://localhost:3000")
-    db.insert([0.1, 0.2, 0.3])
-    hits = db.search([0.1, 0.2, 0.3], k=5)
-    print(db.get_state_hash())
-"""
 
 from .local import LocalClient
 from .remote import SyncRemoteClient, AsyncRemoteClient, ClusterClient, AsyncClusterClient
@@ -95,6 +85,7 @@ from .kinds import (
     EDGE_PARENT_OF,
 )
 from .types import Vector, FixedVector, Proof, StateHash, NodeId, RecordId, Metadata
+from .base import ValoriClient
 from .ingest import load_text_from_file, chunk_text
 from .chunking import split_by_sentences, naive_paragraph_chunker
 
@@ -109,10 +100,12 @@ except ImportError:
     verify_embedding = None   # type: ignore[assignment]
 
 try:
-    from importlib.metadata import version as _pkg_version
+    from importlib.metadata import version as _pkg_version, PackageNotFoundError as _PkgNFE
     __version__ = _pkg_version("valoricore")
-except Exception:
-    __version__ = "0.0.0"   # fallback: package not installed (editable dev, docs build)
+except _PkgNFE:
+    # Package is not registered (editable install not yet run, docs build, etc.)
+    # "dev" is intentionally distinct from any real version so callers can detect it.
+    __version__ = "dev"
 __author__  = "Varshith Gudur"
 __license__ = "MIT OR Apache-2.0"
 
@@ -193,6 +186,7 @@ __all__ = [
     "NodeId",
     "RecordId",
     "Metadata",
+    "ValoriClient",
 
     # ── Ingest utilities ───────────────────────────────────────────
     "load_text_from_file",

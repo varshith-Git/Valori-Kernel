@@ -11,6 +11,7 @@ def Valoricore(
     dim: int = 0,
     max_nodes: int = 0,
     max_edges: int = 0,
+    token: Optional[str] = None,
 ) -> Union[LocalClient, SyncRemoteClient]:
     """
     Standard Synchronous Factory.
@@ -24,7 +25,7 @@ def Valoricore(
         max_edges:   Knowledge Graph edge capacity.
     """
     if remote:
-        return SyncRemoteClient(base_url=remote)
+        return SyncRemoteClient(base_url=remote, token=token)
     else:
         return LocalClient(
             path=path,
@@ -43,6 +44,8 @@ def AsyncValoricore(
     dim: int = 0,
     max_nodes: int = 0,
     max_edges: int = 0,
+    token: Optional[str] = None,
+    timeout: float = 10.0,
 ) -> Union[LocalClient, AsyncRemoteClient]:
     """
     Standard Asynchronous Factory.
@@ -50,7 +53,7 @@ def AsyncValoricore(
     - Else -> LocalClient
     """
     if remote:
-        return AsyncRemoteClient(base_url=remote)
+        return AsyncRemoteClient(base_url=remote, token=token, timeout=timeout)
     else:
         return LocalClient(
             path=path,

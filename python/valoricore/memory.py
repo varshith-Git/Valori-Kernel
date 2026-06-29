@@ -11,7 +11,6 @@ from .exceptions import ValidationError
 
 EmbedFn = Callable[[str], Vector]
 
-EXPECTED_DIM = 384  # must match kernel D
 
 class MemoryClient:
     """High-level semantic memory API for document ingestion and Knowledge Graph management."""

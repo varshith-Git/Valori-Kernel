@@ -2,7 +2,9 @@
 import time
 import requests
 import warnings
+from collections import deque
 from typing import List, Dict, Optional, Any, Tuple
+from .base import ValoriClient
 from uuid import uuid4
 from .types import Vector, RecordId, NodeId, Proof
 from .exceptions import AuthenticationError, ConnectionError, ValidationError, NotFoundError, NotLeaderError
@@ -35,7 +37,7 @@ def _base_of(final_url: str, path: str) -> Optional[str]:
     return None
 
 
-class SyncRemoteClient:
+class SyncRemoteClient(ValoriClient):
     """Synchronous REST client for a Valoricore node — standalone or clustered.
 
     Against a Raft cluster, point ``base_url`` at *any* node. Reads
@@ -215,15 +217,18 @@ class SyncRemoteClient:
         self,
         batch: List[Vector],
         collection: str = "default",
-        metadata: Optional[List[Optional[str]]] = None,
+        metadata: Optional[List[Optional[Dict[str, Any]]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
         texts: Optional[List[Optional[str]]] = None,
+        **kwargs: Any,
     ) -> List[RecordId]:
-        """Insert a batch of vectors with optional per-item idempotency keys.
+        """Insert a batch of vectors.
 
         Args:
-            metadata: Optional per-vector context strings (UTF-8 JSON).
-                      Committed into the BLAKE3 audit chain. Length must match ``batch``.
+            metadata: Optional per-vector metadata dicts. Each dict is serialised
+                      to a JSON string and committed into the BLAKE3 audit chain.
+                      Length must match ``batch``. Use ``None`` entries to skip
+                      metadata for specific vectors.
             request_ids: Optional per-vector idempotency keys (32-hex strings).
                          Length must match ``batch``.
             texts: Optional per-vector raw text strings for BM25 hybrid reranking.
@@ -235,11 +240,16 @@ class SyncRemoteClient:
         Returns:
             List of record IDs (existing ID for deduped items, new ID otherwise).
         """
+        import json as _json
         data: Dict[str, Any] = {"batch": batch}
         if collection != "default":
             data["collection"] = collection
         if metadata is not None:
-            data["metadata"] = metadata
+            # Server expects List[Optional[str]] — serialize each dict to JSON string.
+            data["metadata"] = [
+                _json.dumps(m, separators=(",", ":")) if m is not None else None
+                for m in metadata
+            ]
         if request_ids is not None:
             data["request_ids"] = request_ids
         if texts is not None:
@@ -1059,15 +1069,15 @@ class SyncRemoteClient:
         """
         max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = set([start_node])
-        queue = [(start_node, 0)]
+        queue = deque([(start_node, 0)])
         result = []
-        
+
         while queue:
-            current, depth = queue.pop(0)
+            current, depth = queue.popleft()
             result.append(current)
             if depth >= max_depth:
                 continue
-                
+
             for edge in self.get_edges(current):
                 nxt = edge["to_node"]
                 if nxt not in visited:
@@ -1198,36 +1208,36 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to revoke key '{key_id}': {e}")
 
-    def get_metadata(self, record_id: int) -> Optional[bytes]:
-        """Retrieve metadata for a remote record."""
+    def get_metadata(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve metadata for a record. Returns a dict or None if not set."""
+        import json as _json
         url = f"{self.base_url}/v1/memory/meta/get?key=rec:{record_id}"
         try:
             resp = self.session.get(url, timeout=5)
             if resp.status_code == 404:
                 return None
             _raise_for_status(resp)
-            data = resp.json()
-            val = data.get("value")
-            return val.encode() if val else None
+            val = resp.json().get("value")
+            if val is None:
+                return None
+            return _json.loads(val) if isinstance(val, str) else val
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve metadata: {e}")
 
-    def set_metadata(self, record_id: int, metadata: bytes) -> None:
-        """Set metadata for a remote record."""
-        data = {
+    def set_metadata(self, record_id: int, metadata: Dict[str, Any]) -> None:
+        """Attach a metadata dict to a record."""
+        import json as _json
+        self._post("/v1/memory/meta/set", {
             "key": f"rec:{record_id}",
-            "value": metadata.decode(errors='replace')
-        }
-        self._post("/v1/memory/meta/set", data)
+            "value": _json.dumps(metadata, separators=(",", ":")),
+        })
 
     def record_count(self) -> int:
-        """Get the total record count from the remote node."""
-        try:
-            resp = self.session.get(f"{self.base_url}/health", timeout=5)
-            _raise_for_status(resp)
-            return resp.json().get("record_count", 0)
-        except requests.exceptions.RequestException:
-            return 0
+        """Get the total live record count from the remote node."""
+        resp = self.session.get(f"{self.base_url}/health", timeout=5)
+        _raise_for_status(resp)
+        data = resp.json()
+        return data.get("records", {}).get("live", 0)
 
     def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
         """Download a binary snapshot of the remote engine state."""
@@ -1359,6 +1369,16 @@ class SyncRemoteClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"resolve_contradiction failed: {e}")
 
+    def close(self) -> None:
+        """Close the underlying requests.Session."""
+        self.session.close()
+
+    def __enter__(self) -> "SyncRemoteClient":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
 class AsyncRemoteClient:
     """Asynchronous REST client for a standalone Valoricore node using httpx.
 
@@ -1368,7 +1388,8 @@ class AsyncRemoteClient:
     """
 
     def __init__(self, base_url: str, max_retries: int = 3, retry_backoff: float = 0.5,
-                 ui_url: Optional[str] = None, token: Optional[str] = None):
+                 ui_url: Optional[str] = None, token: Optional[str] = None,
+                 timeout: float = 10.0):
         import httpx
         self.base_url = base_url.rstrip("/")
         if ui_url:
@@ -1380,7 +1401,7 @@ class AsyncRemoteClient:
         # follow_redirects=True is essential for clusters: writes to a follower
         # answer 307 + Location pointing at the leader. httpx does NOT follow
         # redirects by default, so without this every write to a non-leader fails.
-        self.client = httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers)
+        self.client = httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers)
         self._auto_snapshot_interval = None
         self._insert_count = 0
         self._snapshot_dir = "./valoricore_snapshots"
@@ -1999,15 +2020,15 @@ class AsyncRemoteClient:
 
     async def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
         visited = set([start_node])
-        queue = [(start_node, 0)]
+        queue = deque([(start_node, 0)])
         result = []
-        
+
         while queue:
-            current, depth = queue.pop(0)
+            current, depth = queue.popleft()
             result.append(current)
             if depth >= max_depth:
                 continue
-                
+
             edges = await self.get_edges(current)
             for edge in edges:
                 nxt = edge["to_node"]
@@ -2107,33 +2128,36 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
 
-    async def get_metadata(self, record_id: int) -> Optional[bytes]:
+    async def get_metadata(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Retrieve metadata for a record. Returns a dict or None if not set."""
+        import json as _json
         url = f"{self.base_url}/v1/memory/meta/get?key=rec:{record_id}"
         try:
             resp = await self.client.get(url)
             if resp.status_code == 404:
                 return None
             _raise_for_status(resp)
-            data = resp.json()
-            val = data.get("value")
-            return val.encode() if val else None
+            val = resp.json().get("value")
+            if val is None:
+                return None
+            return _json.loads(val) if isinstance(val, str) else val
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve metadata: {e}")
 
-    async def set_metadata(self, record_id: int, metadata: bytes) -> None:
-        data = {
+    async def set_metadata(self, record_id: int, metadata: Dict[str, Any]) -> None:
+        """Attach a metadata dict to a record."""
+        import json as _json
+        await self._post("/v1/memory/meta/set", {
             "key": f"rec:{record_id}",
-            "value": metadata.decode(errors='replace')
-        }
-        await self._post("/v1/memory/meta/set", data)
+            "value": _json.dumps(metadata, separators=(",", ":")),
+        })
 
     async def record_count(self) -> int:
-        try:
-            resp = await self.client.get(f"{self.base_url}/health")
-            _raise_for_status(resp)
-            return resp.json().get("record_count", 0)
-        except Exception:
-            return 0
+        """Get the total live record count from the remote node."""
+        resp = await self.client.get(f"{self.base_url}/health")
+        _raise_for_status(resp)
+        data = resp.json()
+        return data.get("records", {}).get("live", 0)
 
     async def snapshot(self, auto_interval: Optional[int] = None, save_dir: str = "./valoricore_snapshots") -> bytes:
         """Download a binary snapshot of the remote engine state."""
@@ -2251,6 +2275,12 @@ class AsyncRemoteClient:
     async def close(self):
         """Close the underlying httpx client."""
         await self.client.aclose()
+
+    async def __aenter__(self) -> "AsyncRemoteClient":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.close()
 
 class ClusterClient:
     """Multi-node cluster client — routes writes to the leader, round-robins reads.
@@ -2449,6 +2479,17 @@ class ClusterClient:
     def revoke_key(self, key_id: str) -> None:
         self._write_client().revoke_key(key_id)
 
+    def close(self) -> None:
+        """Close all underlying session pools."""
+        for c in self._clients:
+            c.close()
+
+    def __enter__(self) -> "ClusterClient":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
 
 class AsyncClusterClient:
     """Async multi-node cluster client. Mirrors :class:`ClusterClient`."""
@@ -2605,6 +2646,12 @@ class AsyncClusterClient:
     async def close(self) -> None:
         import asyncio
         await asyncio.gather(*[c.close() for c in self._clients])
+
+    async def __aenter__(self) -> "ClusterClient":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self.close()
 
 
 # Backward Compatibility Alias
