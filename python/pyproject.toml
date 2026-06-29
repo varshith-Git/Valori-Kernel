@@ -111,6 +111,9 @@ all = [
     "llama-index-core>=0.10.0",
 ]
 
+[project.scripts]
+valori = "valoricore.cli:main"
+
 # ── Maturin (Rust FFI build) ──────────────────────────────────────────────────
 [tool.maturin]
 features = ["pyo3/extension-module"]
