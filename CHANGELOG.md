@@ -6,6 +6,77 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-06-29
+
+### Security
+- **SEC-2** `SyncRemoteClient` — bearer token was stored in `session.headers`
+  (visible in `dict(session.headers)`, Python logging, and tracebacks). Ported
+  the `_BearerAuth(requests.auth.AuthBase)` redaction pattern from
+  `protocol.py`; token now injected per-request via `__call__`, never stored
+  in the headers dict. `_BearerAuth.__repr__` returns `[REDACTED]`.
+- **SEC-3** `ProtocolRemoteClient.set_metadata()` / `get_metadata()` — both
+  called `session.post/get` without `auth=self._auth`, bypassing authentication
+  even when an API key was configured. Fixed; all HTTP calls in
+  `ProtocolRemoteClient` are now authenticated.
+- **SEC-4** `set_metadata` — `metadata.decode(errors='replace')` silently
+  corrupted binary metadata on round-trip (`b'\xff\xfe'` → garbage). Resolved
+  by unifying the metadata type to `Dict[str, Any]` with a JSON codec; the
+  corrupt decode path is gone entirely.
+
+### Fixed
+- **BUG-2** `ProtocolRemoteClient.upsert_text()` crashed with `KeyError` on
+  every call — `res["proof_hash"]` hard-access on a field the server does not
+  return. Changed to `res.get("proof_hash", "")`.
+- **BUG-3** `test_batch_verify.py` called `exit(1)` at module scope when
+  `VALORI_URL` was not set, killing the entire pytest process. Replaced with
+  `pytest.skip()` inside the test function.
+- **BUG-4** `record_count()` always returned 0 — `resp.json().get("record_count", 0)`
+  but `/health` returns `{"records": {"live": N}}`. Fixed to
+  `resp.json().get("records", {}).get("live", 0)` on both sync and async clients.
+- **BUG-5** Duplicate, incompatible exception hierarchies — `protocol.py`
+  defined its own `ValoricoreError`, `ValidationError`, `AuthError`,
+  `ProtocolError` as separate classes from `exceptions.py`. `except
+  valoricore.ValidationError` would not catch a `protocol.ValidationError`.
+  Deleted the four duplicates from `protocol.py`; all now imported from
+  `exceptions.py`. `ValidationError` now also inherits `ValueError`.
+  `AuthError` kept as a backward-compat alias for `AuthenticationError`.
+- **#3** `record_count()` — same as BUG-4 above (sync + async).
+- **#4** `factory.py` — `Valoricore(remote=…, token=…)` silently dropped the
+  token; `SyncRemoteClient` was constructed with no auth. Fixed by forwarding
+  `token=token` in both `Valoricore` and `AsyncValoricore`.
+- **#5** `ValoriClient` ABC added — shared interface for `LocalClient` and
+  `SyncRemoteClient`. `LocalClient` methods widened to accept
+  `collection/text/consistency/metadata_filter` kwargs (ignored with annotation)
+  so factory-swapped code never raises `TypeError`.
+- **#6** Metadata types unified — `insert_batch` now accepts
+  `List[Optional[Dict[str, Any]]]` (SDK serialises each dict to a JSON string);
+  `get_metadata`/`set_metadata` use `Dict[str, Any]` on all clients with JSON
+  encode/decode. `LocalClient` stores as UTF-8 JSON bytes internally.
+- **#7** `AsyncRemoteClient` timeout — constructor now accepts
+  `timeout: float = 10.0` forwarded to `httpx.AsyncClient`; `AsyncValoricore`
+  factory passes it through.
+- **#8** BFS O(n²) — all three `walk()` implementations (`LocalClient`,
+  `SyncRemoteClient`, `AsyncRemoteClient`) replaced `list.pop(0)` with
+  `collections.deque` + `popleft()`.
+- **#9** `EXPECTED_DIM = 384` removed from `memory.py`; dead imports cleaned
+  from `protocol.py` and `async_memory.py`. `MemoryClient` already used
+  `self._dim` for validation; the constant had no effect.
+- **#10** Context-manager support — `SyncRemoteClient` gains `close()` /
+  `__enter__` / `__exit__`; `AsyncRemoteClient` and both `ClusterClient`
+  variants gain `__aenter__` / `__aexit__`.
+- **#11** `__init__.py` module docstring — moved to first statement so
+  `__doc__` is populated; RST grid table replaced with plain text readable in
+  `help()` and `pydoc`.
+- **#12** `ClusterClient.close()` — closes all N underlying `requests.Session`
+  pools; adds `__enter__` / `__exit__`.
+- **#13** `__version__` fallback — `except Exception` narrowed to
+  `except PackageNotFoundError`; fallback changed from `"0.0.0"` to `"dev"` to
+  distinguish an unregistered editable install from a real release.
+- Test suite — 42 offline test failures resolved; `conftest.py` added with
+  auto-skip for integration tests, env-var cleanup, and shared fixtures.
+  `addopts = "-m 'not integration'"` means `pytest` on a clean checkout runs
+  73 tests with 0 failures.
+
 ### Added (Phase I7 — Metadata filtering)
 - **`metadata_filter` on `POST /search`** — optional JSON predicate that restricts
   results to records whose stored metadata satisfies all specified key-value conditions.
