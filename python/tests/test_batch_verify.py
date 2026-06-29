@@ -1,9 +1,12 @@
+import pytest
 #!/usr/bin/env python3
 """Quick test to verify batch insert endpoint after Event Log configuration"""
 
 import requests
 import os
 from dotenv import load_dotenv
+
+pytestmark = pytest.mark.integration
 
 # Load environment variables from .env file
 load_dotenv()

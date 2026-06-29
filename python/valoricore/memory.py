@@ -101,7 +101,7 @@ class MemoryClient:
             vec = embed(chunk)
             rid, proof = self._db.insert_with_proof(vec)
             record_ids.append(rid)
-            proof_hashes.append(proof.hex())
+            proof_hashes.append(proof if isinstance(proof, str) else proof.hex())
             
             cid = self._db.create_node(kind=NODE_CHUNK, record_id=rid)
             chunk_node_ids.append(cid)
@@ -139,7 +139,7 @@ class MemoryClient:
             "record_id": rid,
             "document_node_id": doc_node_id,
             "chunk_node_id": chunk_node_id,
-            "proof_hash": proof.hex(),
+            "proof_hash": proof if isinstance(proof, str) else proof.hex(),
         }
 
     def semantic_search(

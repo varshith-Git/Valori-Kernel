@@ -1,7 +1,10 @@
+import pytest
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 import unittest
 from unittest.mock import MagicMock, patch
 from valoricore.protocol import ProtocolClient, ProtocolError
+
+pytestmark = pytest.mark.integration
 
 class TestProtocolRemote(unittest.TestCase):
     def setUp(self):

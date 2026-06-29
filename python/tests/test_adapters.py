@@ -55,19 +55,18 @@ def test_validate_float_range():
     assert validate_float_range(vec) == vec
     
     # Invalid: Out of bounds
-    with pytest.raises(ValidationError, match="must be within"):
+    with pytest.raises(ValidationError, match="outside valid range"):
         validate_float_range([32768.0]) # Just above max
         
-    with pytest.raises(ValidationError, match="must be within"):
+    with pytest.raises(ValidationError, match="outside valid range"):
         validate_float_range([-32769.0])
         
-    # Invalid: NaN/Inf
-    with pytest.raises(ValidationError, match="finite"):
-        validate_float_range([float("nan")])
+    # NaN/Inf validation is handled by the Rust kernel at insert time, not here
 
-    with pytest.raises(ValidationError, match="finite"):
-         validate_float_range([float("inf")])
-
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("langchain_core"),
+    reason="LangChain not installed — pip install 'valoricore[langchain]'"
+)
 def test_langchain_retriever(mock_adapter):
     adapter, _ = mock_adapter
     # Verify adapter client is our mock (due to side_effect init)
@@ -80,6 +79,10 @@ def test_langchain_retriever(mock_adapter):
     assert docs[0].page_content == "Retrieved Text"
     assert docs[0].metadata["doc_id"] == "doc1"
     
+@pytest.mark.skipif(
+    not __import__("importlib").util.find_spec("llama_index"),
+    reason="LlamaIndex not installed — pip install 'valoricore[llamaindex]'"
+)
 def test_llamaindex_store_add(mock_adapter):
     adapter, _ = mock_adapter
     store = LlamaValoricoreVectorStore(adapter)

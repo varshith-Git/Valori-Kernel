@@ -12,6 +12,13 @@ import json
 import tempfile
 import pytest
 
+langchain_available = pytest.importorskip(
+    "langchain_core", reason="LangChain not installed — pip install 'valoricore[langchain]'"
+)
+llamaindex_available = pytest.importorskip(
+    "llama_index", reason="LlamaIndex not installed — pip install 'valoricore[llamaindex]'"
+)
+
 from valoricore.integrations import ValoricoreLangChain, ValoricoreRetriever, ValoricoreLlamaIndex
 from valoricore.embeddings import DummyEmbedder, HashEmbedder
 

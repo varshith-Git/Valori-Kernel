@@ -1,3 +1,4 @@
+import pytest
 import requests
 import subprocess
 import time
@@ -5,6 +6,8 @@ import json
 import os
 import signal
 import sys
+
+pytestmark = pytest.mark.integration
 
 # Configuration
 NODE_BIN = "./target/debug/valoricore-node"

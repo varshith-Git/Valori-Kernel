@@ -25,6 +25,10 @@ class MockLocalClient:
         self.records[rid] = vector
         return rid
 
+    def insert_with_proof(self, vector, tag=0):
+        rid = self.insert(vector)
+        return rid, "mock_proof_hex"
+
     def create_node(self, kind, record_id=None):
         self.node_counter += 1
         nid = self.node_counter
@@ -79,7 +83,7 @@ def memory_client(monkeypatch):
     if use_mock:
         print("\n[NOTE] Rust FFI not found or forced off. Running tests with MockLocalClient.")
         mock_client = MockLocalClient()
-        def mock_factory(remote=None):
+        def mock_factory(remote=None, **kwargs):
             if remote is None:
                 return mock_client
             raise ValueError("Remote not mocked")

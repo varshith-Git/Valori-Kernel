@@ -5,6 +5,8 @@ import json
 from unittest.mock import MagicMock, patch
 from valoricore.protocol import ProtocolRemoteClient, ProtocolError, AuthError, ValidationError
 
+pytestmark = pytest.mark.integration
+
 BASE_URL = "http://test-server"
 
 @pytest.fixture

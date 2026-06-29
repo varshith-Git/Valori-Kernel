@@ -58,7 +58,7 @@ async def test_exception_handling():
     with pytest.raises(ValidationError) as excinfo:
         await client.upsert_vector(vector=invalid_vec)
     
-    assert "dimensional" in str(excinfo.value)
+    assert "dimension" in str(excinfo.value)
     print(f"✅ ValidationError caught correctly: {excinfo.value}")
 
 if __name__ == "__main__":

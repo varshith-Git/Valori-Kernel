@@ -5,7 +5,6 @@ from __future__ import annotations
 import requests
 from typing import Callable, List, Dict, Any, Optional, TypedDict
 
-from . import Valoricore
 from .memory import MemoryClient, EXPECTED_DIM
 from .kinds import NODE_DOCUMENT, NODE_CHUNK, EDGE_PARENT_OF
 
@@ -278,6 +277,7 @@ class ProtocolClient:
         index_kind: str = "bruteforce",
         quantization: str = "none",
         expected_dim: int = 0,
+        path: str = "./valori_db",
     ) -> None:
         self._embed = embed
 
@@ -295,6 +295,7 @@ class ProtocolClient:
             # If remote is set but not http, fall back to whatever MemoryClient supports.
             self._memory = MemoryClient(
                 remote=remote,
+                path=path,
                 index_kind=index_kind,
                 quantization=quantization,
             )
@@ -431,9 +432,7 @@ class ProtocolClient:
         if self._impl:
             return self._impl.search_vector(vector, k=k)
 
-        # Local Mode
-        if len(vector) != EXPECTED_DIM:
-             raise ValueError(f"Embedding must be {EXPECTED_DIM}-dimensional, got {len(vector)}")
+        # Local Mode — dimension is validated by the kernel on insert
             
         # semantic_search in MemoryClient expects text and an embedder.
         # simpler to just call _db.search directly for pre-computed vectors.

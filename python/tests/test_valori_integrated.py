@@ -20,8 +20,8 @@ except ImportError:
 
 import shutil
 
-def test_integration():
-    db_path = "/tmp/valoricore_test_db"
+def test_integration(tmp_path):
+    db_path = str(tmp_path / "valoricore_test_db")
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
     
@@ -30,7 +30,7 @@ def test_integration():
     
     print("Inserting vector...")
     # Dim 384
-    vec = [0.1] * 384
+    vec = [0.1] * 16
     # Insert returns auto-assigned ID. Tag 100 for this vector.
     assigned_id = engine.insert(vec, 100)
     print(f"Assigned ID: {assigned_id}")
@@ -46,7 +46,7 @@ def test_integration():
     print("SUCCESS: Insert and Search Verified.")
 
     print("Inserting vector with Tag 200...")
-    vec2 = [0.2] * 384
+    vec2 = [0.2] * 16
     id2 = engine.insert(vec2, 200)
     assert id2 == 1
     

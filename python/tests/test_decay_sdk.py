@@ -1,3 +1,4 @@
+import pytest
 #!/usr/bin/env python3
 """End-to-end test for the Python SDK decay parameter (Phase C4.1).
 
@@ -26,6 +27,8 @@ sys.path.insert(0, str(REPO / "python"))
 NODE_BIN = REPO / "target" / "debug" / "valori-node"
 
 from valoricore.remote import SyncRemoteClient, AsyncRemoteClient  # noqa: E402
+
+pytestmark = pytest.mark.integration
 
 DIM = 4
 

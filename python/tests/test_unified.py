@@ -1,3 +1,4 @@
+import pytest
 import sys
 import os
 # Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
@@ -11,6 +12,8 @@ sys.path.append(os.path.join(os.getcwd(), "python"))
 sys.path.append(os.getcwd()) 
 
 from valoricore import Valoricore
+
+pytestmark = pytest.mark.integration
 
 def test_unified():
     print("=== Testing Local (FFI) Mode ===")

@@ -1,7 +1,10 @@
+import pytest
 from valoricore import Valoricore, MemoryClient
 import requests
 import time
 import random
+
+pytestmark = pytest.mark.integration
 
 def test_scale_10k():
     base_url = "http://127.0.0.1:3033"

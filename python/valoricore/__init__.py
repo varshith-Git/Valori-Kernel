@@ -60,6 +60,7 @@ Remote quick-start (valori-node running on :3000)::
 from .local import LocalClient
 from .remote import SyncRemoteClient, AsyncRemoteClient, ClusterClient, AsyncClusterClient
 from .memory import MemoryClient
+from .protocol import ProtocolClient, ProtocolRemoteClient
 from .graph import Node, DocumentGraph
 from .async_memory import AsyncMemoryClient
 from .factory import Valoricore, AsyncValoricore
@@ -127,6 +128,10 @@ __all__ = [
     # ── High-level graph objects ───────────────────────────────────
     "Node",
     "DocumentGraph",
+
+    # ── Protocol clients ───────────────────────────────────────────
+    "ProtocolClient",
+    "ProtocolRemoteClient",
 
     # ── Base clients ───────────────────────────────────────────────
     "LocalClient",

@@ -1,3 +1,4 @@
+import pytest
 #!/usr/bin/env python3
 """
 Rigorous Production Testing Suite for Valoricore Koyeb Deployment
@@ -12,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any
 import os
 from dotenv import load_dotenv
+
+pytestmark = pytest.mark.integration
 
 # Load environment variables from .env file
 load_dotenv()

@@ -19,7 +19,7 @@ def dummy_embed(text: str) -> list[float]:
     # Use hash bytes to seed generation or just cycle
     vals = [int(hash_val[i*2:(i+1)*2], 16) for i in range(32)]
     
-    for i in range(384):
+    for i in range(16):
         byte_val = vals[i % 32]
         # Mix with index to avoid strict repetition pattern being too obvious
         v = (byte_val ^ (i & 0xFF)) / 255.0
@@ -27,11 +27,8 @@ def dummy_embed(text: str) -> list[float]:
     return res
 
 @pytest.fixture
-def protocol_client():
-    # Uses local FFI by default (remote=None)
-    # If FFI missing, we might need mocking similar to test_memory.py?
-    # But now we know FFI is installed.
-    return ProtocolClient(embed=dummy_embed, remote=None)
+def protocol_client(tmp_path):
+    return ProtocolClient(embed=dummy_embed, remote=None, path=str(tmp_path / "db"))
 
 def test_protocol_export():
     assert PublicProtocolClient is not None
@@ -50,7 +47,7 @@ def test_upsert_text_basic(protocol_client):
     assert hits["results"][0]["memory_id"] in res["memory_ids"]
 
 def test_upsert_vector_explicit(protocol_client):
-    vec = [0.5] * 384 # D=384
+    vec = [0.5] * 16 # D=384
     
     res = protocol_client.upsert_vector(vec)
     
@@ -74,9 +71,10 @@ def test_upsert_vector_explicit(protocol_client):
     assert found
 
 def test_dim_mismatch(protocol_client):
+    from valoricore.exceptions import ValidationError as VErr
     bad_vec = [0.0] * 3
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, VErr)):
         protocol_client.upsert_vector(bad_vec)
-        
-    with pytest.raises(ValueError):
+
+    with pytest.raises((ValueError, VErr)):
         protocol_client.search_vector(bad_vec)

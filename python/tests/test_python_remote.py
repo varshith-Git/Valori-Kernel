@@ -1,6 +1,9 @@
+import pytest
 import sys
 import time
 import requests
+
+pytestmark = pytest.mark.integration
 
 def test_remote():
     base_url = "http://127.0.0.1:3032"
