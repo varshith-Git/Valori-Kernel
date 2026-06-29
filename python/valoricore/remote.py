@@ -244,7 +244,7 @@ class SyncRemoteClient:
             data["request_ids"] = request_ids
         if texts is not None:
             data["texts"] = texts
-        resp = self._post("/v1/vectors/batch-insert", data)
+        resp = self._post("/v1/vectors/batch_insert", data)
         self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
@@ -541,7 +541,7 @@ class SyncRemoteClient:
     def soft_delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
         """Mark a record as inactive without physically removing it."""
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
-        self._post("/v1/soft-delete", {"id": record_id}, idempotency_key=key)
+        self._post("/v1/delete", {"id": record_id}, idempotency_key=key)
 
     def search(
         self,
@@ -735,7 +735,7 @@ class SyncRemoteClient:
             data["metadata"] = metadata
         if tags is not None:
             data["tags"] = tags
-        return self._post("/v1/memory/upsert", data)
+        return self._post("/v1/memory/upsert_vector", data)
 
     def memory_search(
         self,
@@ -759,7 +759,7 @@ class SyncRemoteClient:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
-        return self._post("/v1/memory/search", data)["results"]
+        return self._post("/v1/memory/search_vector", data)["results"]
 
     # ── Proof / provenance ──────────────────────────────────────────────────────
 
@@ -1485,7 +1485,7 @@ class AsyncRemoteClient:
             data["request_ids"] = request_ids
         if texts is not None:
             data["texts"] = texts
-        resp = await self._post("/v1/vectors/batch-insert", data)
+        resp = await self._post("/v1/vectors/batch_insert", data)
         await self._check_auto_snapshot(len(batch))
         return resp["ids"]
 
@@ -1665,7 +1665,7 @@ class AsyncRemoteClient:
 
     async def soft_delete(self, record_id: int) -> None:
         """Mark a record as inactive without physically removing it."""
-        await self._post("/v1/soft-delete", {"id": record_id})
+        await self._post("/v1/delete", {"id": record_id})
 
     async def search(
         self,
@@ -1782,7 +1782,7 @@ class AsyncRemoteClient:
             data["metadata"] = metadata
         if tags is not None:
             data["tags"] = tags
-        return await self._post("/v1/memory/upsert", data)
+        return await self._post("/v1/memory/upsert_vector", data)
 
     async def memory_search(
         self,
@@ -1799,7 +1799,7 @@ class AsyncRemoteClient:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
-        resp = await self._post("/v1/memory/search", data)
+        resp = await self._post("/v1/memory/search_vector", data)
         return resp["results"]
 
     # ── Proof / provenance ──────────────────────────────────────────────────────
