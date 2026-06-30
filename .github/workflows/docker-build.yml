@@ -133,10 +133,13 @@ jobs:
               image: valori-node:ci
           EOF
 
+          # Only start the "valori" service — valori-ui's image isn't
+          # published to GHCR for this CI run, and `up -d` with no service
+          # argument would try (and fail) to pull it too.
           docker compose \
             -f docker-compose.yml \
             -f /tmp/ci-image-override.yml \
-            up -d
+            up -d valori
 
           # Wait up to 60 s for the single node to become healthy.
           for i in $(seq 1 12); do
