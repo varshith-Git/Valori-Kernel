@@ -32,11 +32,12 @@ COPY crates/valori-consensus/Cargo.toml crates/valori-consensus/
 # valori-ffi and embedded are non-default workspace members but must be present
 # for workspace resolution even though valori-node never depends on them.
 COPY crates/valori-ffi/Cargo.toml       crates/valori-ffi/
+COPY crates/valori-mcp/Cargo.toml       crates/valori-mcp/
 COPY embedded/Cargo.toml                embedded/
 
 # Stub src files to allow `cargo build` to populate the dep cache.
-# valori-ffi / embedded stubs are inert (not in valori-node's dep graph).
-RUN for crate in valori-kernel valori-node valori-wire valori-cli valori-verify valori-consensus valori-ffi; do \
+# valori-ffi / valori-mcp / embedded stubs are inert (not in valori-node's dep graph).
+RUN for crate in valori-kernel valori-node valori-wire valori-cli valori-verify valori-consensus valori-ffi valori-mcp; do \
         mkdir -p crates/$crate/src && \
         printf 'pub fn stub() {}\n' > crates/$crate/src/lib.rs && \
         printf 'fn main() {}\n' > crates/$crate/src/main.rs; \

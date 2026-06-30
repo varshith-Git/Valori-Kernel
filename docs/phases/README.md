@@ -72,6 +72,8 @@ people and sessions that built it.
 | I5 — Tree-RAG: hierarchical retrieval + citations + replayable receipts | [phase-I5-tree-rag.md](phase-I5-tree-rag.md) | `main` | ✅ done |
 | I6 — Community layer: Label Propagation + centroid search + entity extraction | [phase-I6-community-layer.md](phase-I6-community-layer.md) | `main` | ✅ done |
 | I7 — Metadata filtering: JSON predicate post-filter on `/search` (both paths) | [phase-I7-metadata-filter.md](phase-I7-metadata-filter.md) | `main` | ✅ done |
+| P1 — Million-scale performance: growable-Vec snapshots (fixes `CapacityExceeded` at 1M), WAL flush-on-drop, SIMD L2, benchmark suite | [phase-P1-million-scale-performance.md](phase-P1-million-scale-performance.md) | `main` | ✅ done |
+| P2 — IVF centroid auto-scaling (k = sqrt(N)); `needs_rebuild()` hook; `VALORI_IVF_N_LIST`/`VALORI_IVF_N_PROBE` overrides | [phase-P2-ivf-centroid-scaling.md](phase-P2-ivf-centroid-scaling.md) | `main` | ✅ done |
 
 ## Report template
 

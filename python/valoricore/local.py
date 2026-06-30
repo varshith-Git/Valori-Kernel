@@ -37,7 +37,19 @@ class LocalClient(ValoriClient):
         """
         Args:
             path:        Database directory.
-            index_kind:  ``"bruteforce"`` | ``"hnsw"``
+            index_kind:  ``"bruteforce"`` | ``"hnsw"`` | ``"ivf"``
+
+                         **Index selection:**
+                         - ``"bruteforce"`` — O(N) scan. Fine up to ~50K records
+                           (p50 ~10 ms). Becomes unviable above that: 1M records =
+                           248 ms / 3 QPS. Zero build time.
+                         - ``"hnsw"`` — Sub-millisecond search at any scale.
+                           **Required for production workloads above 50K records.**
+                           Build time is paid once and survives snapshot/restore
+                           (0.107 ms / 9 199 QPS at 1M records).
+                         - ``"ivf"`` — Approximate; good at 10K–100K. Degrades at 1M+
+                           without centroid tuning. Use HNSW instead for large datasets.
+
             max_records: Vector pool capacity. Overrides ``VALORI_MAX_RECORDS``.
                          Defaults to the env var value (1024 if unset — too small
                          for production; always pass an explicit value).
@@ -292,6 +304,33 @@ class LocalClient(ValoriClient):
             
         return bytes(self.kernel.snapshot())
 
+    def flush(self) -> None:
+        """
+        Flush buffered WAL entries to disk immediately (fsync).
+
+        Inserts are buffered in memory for throughput; call ``flush()`` when you
+        need durability without taking a full snapshot — e.g. between large
+        import chunks, or before exiting without calling ``save_snapshot()``.
+        """
+        try:
+            self.kernel.flush()
+        except Exception as e:
+            raise KernelError(f"Failed to flush WAL: {e}")
+
+    def save_snapshot(self) -> str:
+        """
+        Flush buffered WAL entries and write a full snapshot to
+        ``<path>/current.snap``, then return the path.
+
+        On the next ``LocalClient(path=...)`` init, the engine loads this
+        snapshot first and only replays WAL events that arrived after it,
+        making startup instant.
+        """
+        try:
+            return self.kernel.save_snapshot()
+        except Exception as e:
+            raise KernelError(f"Failed to save snapshot: {e}")
+
     def restore(self, data: bytes) -> None:
         try:
             self.kernel.restore(data)
@@ -305,10 +344,17 @@ class LocalClient(ValoriClient):
         collection: Optional[str] = None,                      # ignored — single-tenant
         metadata: Optional[List[Optional[Dict[str, Any]]]] = None,  # ignored — kernel stores no per-record metadata from batch
         texts: Optional[List[str]] = None,                     # ignored — no built-in text index
-        tags: Optional[List[int]] = None,                      # ignored
+        tags: Optional[List[int]] = None,
         **kwargs: Any,
     ) -> List[RecordId]:
-        res = self.kernel.insert_batch(vectors)
+        """Insert multiple vectors in a single batched WAL write.
+
+        **Batch size guidance:**
+        - < 100 vectors: slower than a plain ``insert`` loop — per-call overhead dominates.
+        - 100–1 000 vectors: good throughput (~20K–98K rec/s).
+        - 1 000–10 000 vectors: optimal range (~98K–177K rec/s). Prefer this for bulk loads.
+        """
+        res = self.kernel.insert_batch(vectors, tags)
         self._check_auto_snapshot(len(vectors))
         return res
     

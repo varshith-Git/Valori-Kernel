@@ -412,7 +412,14 @@ across restarts today (see Phase C6 follow-ups).
 | `/v1/snapshot/upload` | `POST` | Upload a snapshot binary to restore state. |
 
 Snapshots include the full namespace registry — collection names, IDs, and all
-records survive a round-trip.
+records survive a round-trip. The snapshot encoder writes into a growable buffer
+(Phase P1), so there is no record-count or dimension ceiling — verified at 1M
+records (515 MB snapshot in ~1.2 s).
+
+**WAL durability on teardown (Phase P1).** Inserts are buffered and fsynced in
+batches for throughput. `Engine` and `EventCommitter` now flush the tail buffer
+on `Drop`, so a clean teardown never loses buffered events. For explicit
+durability mid-run without a full snapshot, call `flush()`.
 
 ```bash
 curl -X POST http://localhost:3000/v1/snapshot/save \
@@ -643,6 +650,15 @@ curl http://localhost:3000/v1/index/config
 | `VALORI_HNSW_EF_SEARCH` | `50` | Beam width floor during queries. Higher = better recall, slower search. |
 
 Only takes effect when `VALORI_INDEX=hnsw`. Has no effect in cluster mode (cluster uses kernel brute-force for linearizable consistency).
+
+### IVF environment variables (Phase P2)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VALORI_IVF_N_LIST` | auto | Fix centroid count. When absent, `n_list = max(16, sqrt(N))` is computed at build time. |
+| `VALORI_IVF_N_PROBE` | auto | Fix probe count. When absent, `n_probe = max(1, sqrt(n_list))` is computed at build time. |
+
+Only takes effect when `VALORI_INDEX=ivf`. Setting either variable disables auto-scaling and pins the values. The auto-scaling rule (`k = sqrt(N)`) keeps average bucket size near `sqrt(N)` and scan cost at O(sqrt(N)) regardless of dataset size — this is the FAISS-recommended operating point.
 
 ### Decay (Phase C4.1)
 

@@ -70,6 +70,13 @@ ignore = [
     # out of scope for the CI-config fix. Until then these ship in the wheel.
     "RUSTSEC-2025-0020",  # pyo3 < 0.24.1: buffer overflow in PyString::from_object
     "RUSTSEC-2026-0177",  # pyo3 < 0.29.0: missing Sync bound on PyCFunction::new_closure
+
+    # ── anyhow unsound advisory ────────────────────────────────────────────────
+    # RUSTSEC-2026-0190: UB in Error::context + Error::downcast_mut borrow chain.
+    # anyhow 1.x is a transitive dep; no 1.x patch is released yet.
+    # We never call downcast_mut on contexted errors — not in our hot path.
+    # TODO: remove once anyhow ships a patched 1.x release.
+    "RUSTSEC-2026-0190",  # anyhow: unsound borrow in Error::context + downcast_mut
 ]
 
 [bans]

@@ -124,6 +124,14 @@ pub struct NodeConfig {
     // Env: VALORI_HNSW_EF_SEARCH (default 50) — beam width during query
     pub hnsw_ef_search: Option<usize>,
 
+    // ── IVF parameter overrides ───────────────────────────────────────────────
+    // Only take effect when VALORI_INDEX=ivf. When absent, auto-scaling applies:
+    // n_list = max(16, sqrt(N)), n_probe = max(1, sqrt(n_list)).
+    // Env: VALORI_IVF_N_LIST  — fix centroid count (disables auto-scale)
+    pub ivf_n_list: Option<usize>,
+    // Env: VALORI_IVF_N_PROBE — fix probe count (disables auto-scale)
+    pub ivf_n_probe: Option<usize>,
+
     // ── Phase C4.1: time-decay re-ranking ────────────────────────────────────
     // Default half-life (seconds) applied to search ranking when a request does
     // not specify its own. Absent or 0 = decay off (pure distance ranking).
@@ -246,6 +254,9 @@ impl Default for NodeConfig {
         let hnsw_ef_construction = std::env::var("VALORI_HNSW_EF_CONSTRUCTION").ok().and_then(|v| v.parse().ok());
         let hnsw_ef_search = std::env::var("VALORI_HNSW_EF_SEARCH").ok().and_then(|v| v.parse().ok());
 
+        let ivf_n_list: Option<usize> = std::env::var("VALORI_IVF_N_LIST").ok().and_then(|v| v.parse().ok());
+        let ivf_n_probe: Option<usize> = std::env::var("VALORI_IVF_N_PROBE").ok().and_then(|v| v.parse().ok());
+
         let decay_half_life_secs = std::env::var("VALORI_DECAY_HALF_LIFE_SECS")
             .ok().and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
 
@@ -297,6 +308,8 @@ impl Default for NodeConfig {
             hnsw_m,
             hnsw_ef_construction,
             hnsw_ef_search,
+            ivf_n_list,
+            ivf_n_probe,
             decay_half_life_secs,
             embed_provider,
             embed_model,

@@ -172,7 +172,6 @@ pub struct Engine {
 
     // WAL Persistence (Phase 20)
     pub wal_writer: Option<WalWriter>,
-    pub wal_accumulator: blake3::Hasher,
 
     // Event-sourced persistence (Phase 23 - NEW)
     pub event_committer: Option<EventCommitter>,
@@ -227,6 +226,11 @@ pub struct Engine {
     /// same config without re-reading env vars.
     pub hnsw_config: crate::structure::hnsw::HnswConfig,
 
+    /// IVF parameters captured at Engine construction. When auto_scale=true,
+    /// the effective n_list/n_probe are computed at build() time from sqrt(N);
+    /// this config carries the user's overrides (or defaults).
+    pub ivf_config: crate::structure::ivf::IvfConfig,
+
     /// Phase C4.1: default decay half-life (seconds) applied to search ranking
     /// when a request does not specify its own. `None`/0 = decay off.
     pub decay_half_life_secs: Option<u64>,
@@ -269,8 +273,13 @@ impl Engine {
                   Box::new(HnswIndex::new_with_config(hnsw_cfg))
               },
               IndexKind::Ivf => {
-                  use crate::structure::ivf::{IvfIndex, IvfConfig};
-                  Box::new(IvfIndex::new(IvfConfig::default(), cfg.dim))
+                  use crate::structure::ivf::IvfIndex;
+                  let ivf_cfg = {
+                      use crate::structure::ivf::IvfConfig;
+                      let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
+                      IvfConfig { n_list: cfg.ivf_n_list.unwrap_or(100), n_probe: cfg.ivf_n_probe.unwrap_or(10), auto_scale }
+                  };
+                  Box::new(IvfIndex::new(ivf_cfg, cfg.dim))
               }
          };
 
@@ -305,8 +314,6 @@ impl Engine {
         } else {
             None
         };
-        
-        let wal_accumulator = blake3::Hasher::new();
         
         let event_committer = if let Some(ref path) = cfg.event_log_path {
              match EventLogWriter::open(path, Some(cfg.dim as u32)) {
@@ -354,7 +361,6 @@ impl Engine {
             max_edges: cfg.max_edges,
             dim: cfg.dim,
             wal_writer,
-            wal_accumulator,
             event_committer,
             record_to_node: HashMap::new(),
             created_at: HashMap::new(),
@@ -389,6 +395,15 @@ impl Engine {
                 if let Some(ef) = cfg.hnsw_ef_construction { c.ef_construction = ef; }
                 if let Some(ef) = cfg.hnsw_ef_search       { c.ef_search = ef; }
                 c
+            },
+            ivf_config: {
+                use crate::structure::ivf::IvfConfig;
+                let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
+                IvfConfig {
+                    n_list:     cfg.ivf_n_list.unwrap_or(100),
+                    n_probe:    cfg.ivf_n_probe.unwrap_or(10),
+                    auto_scale,
+                }
             },
             decay_half_life_secs: cfg.decay_half_life_secs,
             reranker: crate::valori_reranker::ValoriReranker::new(),
@@ -704,17 +719,31 @@ impl Engine {
             .map_err(|e| EngineError::InvalidInput(format!("Vault encrypt: {e:?}")))?;
 
         let rid = self.state.next_record_id();
-        let cmd = Command::InsertRecordEncrypted {
-            namespace_id,
-            id: rid,
-            key_id,
-            ciphertext,
-            tag,
-        };
-        if let Some(ref mut writer) = self.wal_writer {
-            writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+
+        if let Some(ref mut committer) = self.event_committer {
+            let event = valori_kernel::event::KernelEvent::InsertRecordEncrypted {
+                id: rid,
+                key_id,
+                ciphertext,
+                metadata_ciphertext: None,
+                tag,
+            };
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event_ns(&event, namespace_id)?;
+        } else {
+            let cmd = Command::InsertRecordEncrypted {
+                namespace_id,
+                id: rid,
+                key_id,
+                ciphertext,
+                tag,
+            };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
         }
-        self.state.apply(&cmd)?;
+
         Ok(rid.0)
     }
 
@@ -726,11 +755,19 @@ impl Engine {
         self.vault.shred(key_id)
             .map_err(|e| EngineError::InvalidInput(format!("Vault shred: {e:?}")))?;
 
-        let cmd = Command::ShredKey { key_id };
-        if let Some(ref mut writer) = self.wal_writer {
-            writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let event = valori_kernel::event::KernelEvent::ShredKey { key_id };
+
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
+        } else {
+            let cmd = Command::ShredKey { key_id };
+            if let Some(ref mut writer) = self.wal_writer {
+                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            }
+            self.state.apply(&cmd)?;
         }
-        self.state.apply(&cmd)?;
+
         Ok(())
     }
 
@@ -815,6 +852,12 @@ impl Engine {
         // Record new request_ids for future dedup.
         for &i in &insert_indices {
             if let Some(Some(rid)) = request_ids.and_then(|r| r.get(i)) {
+                // Cap batch_seen at 65536 entries: once the window fills, clear
+                // the whole map. Best-effort dedup; a cleared map just means a
+                // very old duplicate request_id could slip through once.
+                if self.batch_seen.len() >= 65536 {
+                    self.batch_seen.clear();
+                }
                 self.batch_seen.insert(*rid, id_map[i]);
             }
         }
@@ -901,25 +944,12 @@ impl Engine {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(b"VAL1");
 
-        // Compute a tight upper bound for the kernel state encoding.
-        // Per record slot: 1 (presence flag) + 4 (id) + 1 (flags) + 8 (tag)
-        //                  + dim×4 (Q16.16 vector) + 4 (metadata len) = 18 + dim×4
-        // Per node: up to 15 bytes; per edge: up to 18 bytes.
-        // Header: 64 bytes.  2 MB safety margin covers node/edge metadata variance.
-        let dim = self.state.dim.unwrap_or(384);
-        let total_slots = self.state.total_record_slots();
-        let node_count  = self.state.node_count();
-        let edge_count  = self.state.edge_count();
-        // V4 layout: nodes gain `first_in_edge` (5 bytes), edges gain `next_in` (5 bytes)
-        let k_buf_size  = 64
-            + total_slots * (18 + dim * 4)
-            + node_count  * 25   // 20 + 5 for first_in_edge
-            + edge_count  * 29   // 24 + 5 for next_in
-            + 2 * 1024 * 1024;   // 2 MB safety margin
-        let mut k_buf = vec![0u8; k_buf_size];
-        let k_len = encode_state(&self.state, &mut k_buf)?;
-        k_buf.truncate(k_len);
-        buffer.extend_from_slice(&(k_len as u32).to_le_bytes());
+        // Encode the kernel state into a growable Vec — no pre-sized buffer,
+        // no CapacityExceeded possible regardless of record count or dimension.
+        let hint = valori_kernel::snapshot::encode::encode_capacity_hint(&self.state);
+        let mut k_buf = Vec::with_capacity(hint);
+        encode_state(&self.state, &mut k_buf)?;
+        buffer.extend_from_slice(&(k_buf.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&k_buf);
 
         let m_buf = self.metadata.snapshot();
@@ -936,6 +966,21 @@ impl Engine {
         buffer.extend_from_slice(b"NSRG");
         buffer.extend_from_slice(&(ns_json.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&ns_json);
+
+        // created_at section (magic "CRTS") — decay timestamps, u32→u64 map.
+        let crts_buf = bincode::serde::encode_to_vec(&self.created_at, bincode::config::standard())
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        buffer.extend_from_slice(b"CRTS");
+        buffer.extend_from_slice(&(crts_buf.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&crts_buf);
+
+        // BM25 reranker corpus section (magic "BCRP") — tokenised text per record.
+        let (corpus, total_tokens) = self.reranker.snapshot_corpus();
+        let bcrp_buf = bincode::serde::encode_to_vec(&(corpus, total_tokens), bincode::config::standard())
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        buffer.extend_from_slice(b"BCRP");
+        buffer.extend_from_slice(&(bcrp_buf.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(&bcrp_buf);
 
         Ok(buffer)
     }
@@ -1016,13 +1061,17 @@ impl Engine {
                 return Err(EngineError::InvalidInput("Truncated snapshot: ns_data out of bounds".into()));
             }
             let ns_json = &data[offset..offset + ns_len];
+            offset += ns_len;
             Some(serde_json::from_slice(ns_json)
                 .map_err(|e| EngineError::InvalidInput(format!("ns registry decode: {e}")))?)
         } else {
             None
         };
 
-        self.restore_from_components(k_data, m_data, i_data, ns_registry)
+        self.restore_from_components(k_data, m_data, i_data, ns_registry)?;
+        // Parse optional trailing sections (CRTS, BCRP) — silently skipped on old snapshots.
+        self.restore_trailing_sections(data, offset);
+        Ok(())
     }
 
     /// Soft-delete a record: mark it as a tombstone and remove it from the search index.
@@ -1048,6 +1097,7 @@ impl Engine {
             self.index.delete(id);
         }
         self.reranker.remove(id as u64);
+        self.created_at.remove(&id);
         Ok(())
     }
 
@@ -1072,6 +1122,7 @@ impl Engine {
             self.state.apply(&cmd)?;
             self.index.delete(id);
         }
+        self.created_at.remove(&id);
         Ok(())
     }
 
@@ -1415,9 +1466,9 @@ impl Engine {
                   Box::new(HnswIndex::new_with_config(self.hnsw_config.clone()))
               },
               IndexKind::Ivf => {
-                  use crate::structure::ivf::{IvfIndex, IvfConfig};
+                  use crate::structure::ivf::IvfIndex;
                   let dim = self.state.dim.unwrap_or(0);
-                  Box::new(IvfIndex::new(IvfConfig::default(), dim))
+                  Box::new(IvfIndex::new(self.ivf_config.clone(), dim))
               }
          };
          self.index = blank;
@@ -1547,6 +1598,47 @@ impl Engine {
             self.namespaces = reg;
         }
         Ok(())
+    }
+
+    /// Parse optional trailing sections (CRTS, BCRP) from snapshot bytes.
+    /// `offset` is the position immediately after the NSRG section.
+    fn restore_trailing_sections(&mut self, data: &[u8], mut offset: usize) {
+        while offset + 8 <= data.len() {
+            let tag = &data[offset..offset + 4];
+            let section_len = u32::from_le_bytes(
+                data[offset + 4..offset + 8].try_into().unwrap_or([0; 4])
+            ) as usize;
+            offset += 8;
+            if offset + section_len > data.len() { break; }
+            let section = &data[offset..offset + section_len];
+            offset += section_len;
+
+            if tag == b"CRTS" {
+                if let Ok((map, _)) = bincode::serde::decode_from_slice::<HashMap<u32, u64>, _>(
+                    section, bincode::config::standard()
+                ) {
+                    self.created_at = map;
+                }
+            } else if tag == b"BCRP" {
+                use std::collections::HashMap as StdMap;
+                if let Ok(((corpus, total_tokens), _)) = bincode::serde::decode_from_slice::<(StdMap<u64, Vec<String>>, usize), _>(
+                    section, bincode::config::standard()
+                ) {
+                    self.reranker.restore_corpus(corpus, total_tokens);
+                }
+            }
+            // Unknown tags are silently skipped — forward-compatible.
+        }
+    }
+}
+
+// ── Drop: flush WAL buffer on engine teardown ─────────────────────────────────
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        if let Some(ref mut committer) = self.event_committer {
+            let _ = committer.flush_pending();
+        }
     }
 }
 

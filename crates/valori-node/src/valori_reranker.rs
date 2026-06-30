@@ -175,6 +175,17 @@ impl ValoriReranker {
     pub fn is_empty(&self) -> bool {
         self.corpus.is_empty()
     }
+
+    /// Serialize the corpus to bytes (for snapshot persistence).
+    pub fn snapshot_corpus(&self) -> (&HashMap<u64, Vec<String>>, usize) {
+        (&self.corpus, self.total_tokens)
+    }
+
+    /// Replace the corpus from a deserialized snapshot.
+    pub fn restore_corpus(&mut self, corpus: HashMap<u64, Vec<String>>, total_tokens: usize) {
+        self.corpus = corpus;
+        self.total_tokens = total_tokens;
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

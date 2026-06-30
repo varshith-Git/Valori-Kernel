@@ -12,9 +12,35 @@ Built in direct response to the 2026-06-12 review (Mayur, Rahul). Three asks, th
 
 | Script | What it measures | Run it |
 |---|---|---|
+| [`local_perf.py`](local_perf.py) | Insert throughput, search latency, index comparison, snapshot — up to 1M records, no server required | `python3 benchmarks/local_perf.py --million` |
 | [`run_benchmark.py`](run_benchmark.py) | Three-arm RAG quality (float32 vs Q16.16 vs Q16.16+graph) | `python3 benchmarks/run_benchmark.py` |
 | [`multi_arch_hash.py`](multi_arch_hash.py) | Identical BLAKE3 state hash across CPU architectures | `python3 benchmarks/multi_arch_hash.py --url http://localhost:3000` |
 | [`q16_precision.py`](q16_precision.py) | Recall@10 of Q16.16 vs float32 ground truth at 384/768/1536/3072 dims | `python3 benchmarks/q16_precision.py --dim 384 [--st] [--openai]` |
+
+### local_perf.py — usage
+
+```bash
+# Standard run (up to 50K records, ~2 min):
+python3 benchmarks/local_perf.py
+
+# Quick run (10K max, ~30 sec):
+python3 benchmarks/local_perf.py --quick
+
+# Full 1 million record run (~10–15 min):
+python3 benchmarks/local_perf.py --million
+
+# Save results as markdown:
+python3 benchmarks/local_perf.py --million --out benchmarks/RESULTS_1M.md
+```
+
+**Prerequisites** — install the release wheel first (unoptimized dev build gives 10–30× slower numbers):
+
+```bash
+cd crates/valori-ffi
+maturin build --release
+pip install ../../target/wheels/valoricore_ffi-*.whl --force-reinstall
+pip install -e python/   # SDK wrapper
+```
 
 ```bash
 # Quick start — run all three against a local node (dim=384)

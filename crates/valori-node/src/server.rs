@@ -297,9 +297,6 @@ pub fn build_router_with_keys(
         .route("/graph/subgraph",   axum::routing::get(get_subgraph))
         // snake_case alias kept for SDK backward compat — canonical is /v1/vectors/batch-insert
         .route("/v1/vectors/batch_insert",      post(batch_insert))
-        // snake_case memory aliases
-        .route("/v1/memory/upsert_vector",      post(memory_upsert_vector))
-        .route("/v1/memory/search_vector",      post(memory_search_vector))
         .layer(axum::middleware::from_fn(deprecation_warning));
 
     // ── Protected routes = canonical v1 + deprecated legacy ──────────────────

@@ -134,6 +134,20 @@ support simply ignore the trailing bytes.
 [VAL1 header][records+flags][nodes][edges][index][namespace heads: 8 KB][NSRG: 4-byte len + JSON]
 ```
 
+**Encoder (Phase P1):** `snapshot::encode::encode_state(state, &mut Vec<u8>)`
+writes into a **growable `Vec`**, not a pre-sized slice — `CapacityExceeded` is
+structurally impossible at any record count or dimension. Pre-size the `Vec`
+with `encode_capacity_hint(state)` to avoid reallocation on the hot path. Stays
+`no_std` via `alloc::vec::Vec`. (The prior fixed-buffer design silently
+underestimated by 10 bytes/record after V6 and failed above ~250K records.)
+
+### L2 distance — SIMD (Phase P1)
+
+`math::l2::l2_sq_i32` dispatches to NEON (aarch64) / AVX2 (x86_64) with a scalar
+fallback. **Every path returns the identical integer** (accumulated in i64 to
+avoid overflow at `dim > 512`) — SIMD is a speedup only and does not affect the
+deterministic state hash.
+
 ---
 
 ## Invariants

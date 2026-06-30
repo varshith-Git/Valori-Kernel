@@ -225,25 +225,10 @@ impl StateMachineInner {
     }
 
     fn encode_kernel(&self) -> Result<Vec<u8>, StorageError<NodeId>> {
-        // Same sizing formula valori-node uses for its own snapshots.
-        let total_slots = self.state.total_record_slots();
-        let dim = self.state.dim.unwrap_or(0);
-        // M-4: guard against corrupted state causing OOM via overflow.
-        const MAX_SNAPSHOT_BYTES: usize = 1 << 30; // 1 GB sanity cap
-        let size = 64usize
-            .saturating_add(total_slots.saturating_mul(18usize.saturating_add(dim.saturating_mul(4))))
-            .saturating_add(self.state.node_count().saturating_mul(25))
-            .saturating_add(self.state.edge_count().saturating_mul(29))
-            .saturating_add(2 * 1024 * 1024);
-        if size > MAX_SNAPSHOT_BYTES {
-            return Err(io_err(format!(
-                "snapshot buffer estimate {size} bytes exceeds 1 GB cap — kernel state may be corrupt"
-            )));
-        }
-        let mut buf = vec![0u8; size];
-        let len = encode_state(&self.state, &mut buf)
+        let hint = valori_kernel::snapshot::encode::encode_capacity_hint(&self.state);
+        let mut buf = Vec::with_capacity(hint);
+        encode_state(&self.state, &mut buf)
             .map_err(|e| io_err(format!("kernel snapshot encode failed: {e:?}")))?;
-        buf.truncate(len);
         Ok(buf)
     }
 }

@@ -188,6 +188,10 @@ Phase C4.1c.
 Snapshots are self-verifying: the payload carries the BLAKE3 state hash;
 `install_snapshot` recomputes it and refuses a mismatch.
 
+`encode_kernel()` encodes into a growable `Vec` pre-sized with
+`encode_capacity_hint()` (Phase P1) — no fixed buffer, no `CapacityExceeded`
+ceiling on the Raft snapshot payload. The old 1 GB cap guard is gone.
+
 ```rust
 // AuditSink trait — plug in a real writer or the test double.
 impl AuditSink for EventLogAuditSink {

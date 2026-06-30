@@ -8,7 +8,7 @@ use valori_kernel::fxp::format::{
 };
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_kernel::snapshot::encode::encode_state;
+use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -71,9 +71,8 @@ fn snapshot_v5_roundtrip_preserves_hash() {
     }
     let before = hash_state_blake3(&state);
 
-    let mut buf = vec![0u8; 1 << 16];
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len);
+    let mut buf = Vec::with_capacity(encode_capacity_hint(&state));
+    encode_state(&state, &mut buf).unwrap();
 
     let restored = decode_state(&buf).unwrap();
     assert_eq!(hash_state_blake3(&restored), before);
@@ -82,9 +81,8 @@ fn snapshot_v5_roundtrip_preserves_hash() {
 #[test]
 fn snapshot_with_foreign_format_is_refused() {
     let state = KernelState::new();
-    let mut buf = vec![0u8; 1 << 14]; // 16 KB — accommodates V6 namespace heads arrays (8 KB)
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len);
+    let mut buf = Vec::with_capacity(encode_capacity_hint(&state));
+    encode_state(&state, &mut buf).unwrap();
 
     // Format byte position: MAGIC(4) + schema_ver(4) + state_version(8)
     // + 4 capacity u32s(16) = offset 32.

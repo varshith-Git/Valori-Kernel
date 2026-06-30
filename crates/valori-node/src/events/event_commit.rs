@@ -68,6 +68,11 @@ impl ShadowExecutor {
 /// Default rotation threshold: 256 MiB.
 pub const DEFAULT_LOG_ROTATION_BYTES: u64 = 256 * 1024 * 1024;
 
+/// How many events to buffer before a forced fsync. Callers that need
+/// immediate durability (snapshot save, clean shutdown) must call
+/// `flush_pending()` explicitly. Default: 64 (one fsync per 64 inserts).
+pub const DEFAULT_WRITE_BUFFER_SIZE: usize = 64;
+
 pub struct EventCommitter {
     /// Event log writer (durable storage)
     event_log: EventLogWriter,
@@ -80,6 +85,12 @@ pub struct EventCommitter {
 
     /// Rotate the log when it exceeds this many bytes. None disables auto-rotation.
     log_rotation_bytes: Option<u64>,
+
+    /// Pending log entries not yet fsynced to disk.
+    write_buf: Vec<crate::events::event_log::LogEntry>,
+
+    /// Flush write_buf when it reaches this many entries (0 = flush every event).
+    flush_every: usize,
 }
 
 impl EventCommitter {
@@ -94,12 +105,32 @@ impl EventCommitter {
             journal,
             live_state,
             log_rotation_bytes: Some(DEFAULT_LOG_ROTATION_BYTES),
+            write_buf: Vec::with_capacity(DEFAULT_WRITE_BUFFER_SIZE),
+            flush_every: DEFAULT_WRITE_BUFFER_SIZE,
         }
     }
 
     pub fn with_rotation_bytes(mut self, limit: Option<u64>) -> Self {
         self.log_rotation_bytes = limit;
         self
+    }
+
+    /// Set how many events to buffer before a forced fsync (0 = sync every event).
+    pub fn with_flush_every(mut self, n: usize) -> Self {
+        self.flush_every = if n == 0 { 1 } else { n };
+        self.write_buf = Vec::with_capacity(self.flush_every);
+        self
+    }
+
+    /// Flush buffered log entries to disk now (single fsync).
+    /// Must be called before save_snapshot() and on clean shutdown.
+    pub fn flush_pending(&mut self) -> Result<()> {
+        if self.write_buf.is_empty() {
+            return Ok(());
+        }
+        self.event_log.append_batch(&self.write_buf)?;
+        self.write_buf.clear();
+        Ok(())
     }
 
     /// Commit an event (the ONLY way to mutate state).
@@ -115,15 +146,22 @@ impl EventCommitter {
         let mut shadow = self.live_state.clone();
         shadow.apply_event(&event).map_err(CommitError::ShadowApply)?;
 
-        // Step 2: Persist to disk (event is now known-good).
-        let entry = crate::events::event_log::LogEntry::Event(event.clone());
-        self.event_log.append(&entry)?;
-
-        // Step 3: Live apply — must succeed because shadow passed on an
+        // Step 2: Live apply — must succeed because shadow passed on an
         // identical state snapshot. Panic here is a programming error.
         self.live_state
             .apply_event(&event)
             .expect("live apply after shadow-pass must succeed");
+
+        // Step 3: Buffer the log entry; flush when the buffer is full.
+        // State is already live in memory (auditable); disk write is deferred
+        // for throughput. Callers that need immediate durability (snapshot save,
+        // clean shutdown) must call flush_pending() explicitly.
+        let entry = crate::events::event_log::LogEntry::Event(event.clone());
+        self.write_buf.push(entry);
+        if self.write_buf.len() >= self.flush_every {
+            self.event_log.append_batch(&self.write_buf)?;
+            self.write_buf.clear();
+        }
 
         // Step 4: Commit journal.
         self.journal.append_buffered(event.clone());
@@ -133,8 +171,9 @@ impl EventCommitter {
         Ok(CommitResult::Committed)
     }
 
-    /// Explicitly flush the event log buffer to disk
+    /// Explicitly flush all buffered events to disk (fsync).
     pub fn flush_log(&mut self) -> Result<()> {
+        self.flush_pending()?;
         self.event_log.flush()?;
         Ok(())
     }
@@ -244,9 +283,21 @@ impl EventCommitter {
         &self.event_log
     }
 
-    /// Decompose into components (for reconstruction)
-    pub fn into_parts(self) -> (EventLogWriter, EventJournal, KernelState) {
-        (self.event_log, self.journal, self.live_state)
+    /// Decompose into components (for reconstruction).
+    /// Flushes any buffered WAL entries before consuming self.
+    pub fn into_parts(mut self) -> (EventLogWriter, EventJournal, KernelState) {
+        let _ = self.flush_pending();
+        // SAFETY: we are consuming self; Drop will run but flush_pending is
+        // idempotent (write_buf will be empty) so no double-flush occurs.
+        let mut this = std::mem::ManuallyDrop::new(self);
+        unsafe {
+            let log   = std::ptr::read(&this.event_log);
+            let jour  = std::ptr::read(&this.journal);
+            let state = std::ptr::read(&this.live_state);
+            // Drop remaining fields that aren't returned.
+            std::ptr::drop_in_place(&mut this.write_buf);
+            (log, jour, state)
+        }
     }
 
     /// Rotate the event log (Compaction/Checkpointing)
@@ -255,6 +306,7 @@ impl EventCommitter {
         archive_path: impl AsRef<std::path::Path>,
         checkpoint_entry: Option<crate::events::event_log::LogEntry>
     ) -> crate::events::event_commit::Result<()> {
+        self.flush_pending()?;
         self.event_log.rotate(archive_path, checkpoint_entry)
             .map_err(crate::events::event_commit::CommitError::EventLog)
     }
@@ -276,6 +328,12 @@ impl EventCommitter {
         }
         
         Ok(CommitResult::Committed)
+    }
+}
+
+impl Drop for EventCommitter {
+    fn drop(&mut self) {
+        let _ = self.flush_pending();
     }
 }
 

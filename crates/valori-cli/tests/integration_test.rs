@@ -20,7 +20,7 @@ struct TestPaths {
 /// Create a minimal database: 3 records + snapshot, then 3 more events in log.
 fn build_test_db(dir: &Path) -> anyhow::Result<TestPaths> {
     use valori_kernel::event::KernelEvent;
-    use valori_kernel::snapshot::encode::encode_state;
+    use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
     use valori_kernel::state::kernel::KernelState;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
@@ -42,9 +42,9 @@ fn build_test_db(dir: &Path) -> anyhow::Result<TestPaths> {
     }
 
     // ── 2. Write snapshot (VAL1 format) ──────────────────────────────────────
-    let mut k_buf = vec![0u8; 65_536];
-    let k_len     = encode_state(&state, &mut k_buf).expect("encode state");
-    k_buf.truncate(k_len);
+    let mut k_buf = Vec::with_capacity(encode_capacity_hint(&state));
+    encode_state(&state, &mut k_buf).expect("encode state");
+    let k_len = k_buf.len();
 
     let mut snap = Vec::new();
     snap.extend_from_slice(b"VAL1");

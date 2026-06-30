@@ -145,16 +145,18 @@ jobs:
 
       - name: Flatten dist directory
         run: |
+          # download-artifact@v4 nests each artifact as dist/<artifact-name>/<file>.
+          # When the artifact name matches the file name the src and dst are the
+          # same inode — skip the copy in that case to avoid the "same file" error.
           find dist/ -mindepth 2 -type f | while read f; do
             dest="dist/$(basename "$f")"
-            # realpath comparison avoids the "same file" error when the artifact
-            # subdirectory name matches the filename (download-artifact@v4 nests
-            # artifacts as dist/<name>/<name> when they share the same name).
-            if [ "$(realpath "$f")" != "$(realpath "$dest" 2>/dev/null || echo "")" ]; then
-              mv "$f" "$dest"
+            src_inode=$(stat -c '%i' "$f" 2>/dev/null || stat -f '%i' "$f")
+            dst_inode=$(stat -c '%i' "$dest" 2>/dev/null || stat -f '%i' "$dest" 2>/dev/null || echo "none")
+            if [ "$src_inode" != "$dst_inode" ]; then
+              cp "$f" "$dest"
             fi
           done
-          find dist/ -mindepth 1 -maxdepth 1 -type d -empty -delete
+          find dist/ -mindepth 1 -maxdepth 1 -type d -delete
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3

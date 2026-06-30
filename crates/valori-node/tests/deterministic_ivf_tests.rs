@@ -15,12 +15,12 @@ fn test_ivf_determinism() {
     }
     
     // Run 1
-    let mut ivf1 = IvfIndex::new(IvfConfig { n_list: 10, n_probe: 3 }, 3);
+    let mut ivf1 = IvfIndex::new(IvfConfig { n_list: 10, n_probe: 3, auto_scale: false }, 3);
     ivf1.build(&records);
     let snap1 = ivf1.snapshot().unwrap();
     
     // Run 2
-    let mut ivf2 = IvfIndex::new(IvfConfig { n_list: 10, n_probe: 3 }, 3);
+    let mut ivf2 = IvfIndex::new(IvfConfig { n_list: 10, n_probe: 3, auto_scale: false }, 3);
     ivf2.build(&records);
     let snap2 = ivf2.snapshot().unwrap();
     

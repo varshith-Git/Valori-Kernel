@@ -228,7 +228,9 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 | `VALORI_EVENT_LOG_PATH` | — | Audit log path (omit = in-memory only) |
 | `VALORI_SNAPSHOT_PATH` | — | Snapshot file path |
 | `VALORI_AUTH_TOKEN` | — | Bearer token (omit = no auth) |
-| `VALORI_INDEX` | brute | `brute` or `hnsw` |
+| `VALORI_INDEX` | brute | `brute`, `hnsw`, or `ivf` |
+| `VALORI_IVF_N_LIST` | auto | IVF centroid count. Absent = auto-scale: `max(16, sqrt(N))` computed at each `build()`. Setting this disables auto-scale. |
+| `VALORI_IVF_N_PROBE` | auto | IVF probe count. Absent = auto-scale: `max(1, sqrt(n_list))`. Setting this disables auto-scale. |
 | `VALORI_DECAY_HALF_LIFE_SECS` | — | Phase C4.1 default decay half-life for search ranking; per-request `decay_half_life_secs` overrides. Omit/0 = no decay |
 | `VALORI_EMBED_PROVIDER` | — | Phase I2: `ollama` / `openai` / `custom`; absent = embedding disabled; enables `POST /v1/ingest` |
 | `VALORI_EMBED_MODEL` | provider default | Embed model name (e.g. `nomic-embed-text`, `text-embedding-3-small`) |

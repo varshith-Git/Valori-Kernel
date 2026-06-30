@@ -107,12 +107,9 @@ pub fn deterministic_kmeans(
 }
 
 /// Squared L2 distance over Q16.16 fixed-point vectors.
-/// Returns an i64; exact, no floating-point involved.
+/// Dispatches to NEON/AVX2/SSE4.1/scalar depending on CPU.
 pub fn l2_sq_q16(a: &[i32], b: &[i32]) -> i64 {
-    a.iter().zip(b).map(|(x, y)| {
-        let d = (*x as i64) - (*y as i64);
-        d * d
-    }).sum()
+    valori_kernel::math::l2::l2_sq_i32(a, b)
 }
 
 /// Convert an f32 to Q16.16 fixed-point (deterministic: round-to-nearest, then clamp).

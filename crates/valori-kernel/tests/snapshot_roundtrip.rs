@@ -5,7 +5,7 @@
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_kernel::snapshot::encode::encode_state;
+use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::enums::{EdgeKind, NodeKind};
 use valori_kernel::types::id::{EdgeId, NodeId, RecordId};
@@ -49,15 +49,18 @@ fn populated_state() -> KernelState {
     state
 }
 
+fn encode(state: &KernelState) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(encode_capacity_hint(state));
+    encode_state(state, &mut buf).expect("encode");
+    buf
+}
+
 #[test]
 fn roundtrip_preserves_state_hash() {
     let state = populated_state();
     let hash_before = hash_state_blake3(&state);
 
-    let mut buf = vec![0u8; 1 << 20];
-    let len = encode_state(&state, &mut buf).expect("encode");
-    buf.truncate(len);
-
+    let buf = encode(&state);
     let restored = decode_state(&buf).expect("decode");
     assert_eq!(hash_state_blake3(&restored), hash_before);
     assert_eq!(restored.record_count(), state.record_count());
@@ -67,12 +70,8 @@ fn roundtrip_preserves_state_hash() {
 
 #[test]
 fn restored_state_continues_sequencing() {
-    // A restored snapshot must accept the NEXT sequential id — this is what
-    // crash recovery and follower bootstrap rely on.
     let state = populated_state();
-    let mut buf = vec![0u8; 1 << 20];
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len);
+    let buf = encode(&state);
 
     let mut restored = decode_state(&buf).unwrap();
     restored
@@ -88,10 +87,7 @@ fn restored_state_continues_sequencing() {
 #[test]
 fn corrupt_magic_is_rejected() {
     let state = populated_state();
-    let mut buf = vec![0u8; 1 << 20];
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len);
-
+    let mut buf = encode(&state);
     buf[0] ^= 0xFF;
     assert!(decode_state(&buf).is_err());
 }
@@ -99,18 +95,14 @@ fn corrupt_magic_is_rejected() {
 #[test]
 fn truncated_snapshot_is_rejected() {
     let state = populated_state();
-    let mut buf = vec![0u8; 1 << 20];
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len / 2);
-    assert!(decode_state(&buf).is_err());
+    let buf = encode(&state);
+    assert!(decode_state(&buf[..buf.len() / 2]).is_err());
 }
 
 #[test]
 fn empty_state_roundtrips() {
     let state = KernelState::new();
-    let mut buf = vec![0u8; 1 << 14]; // 16 KB — accommodates V6 namespace heads (8 KB)
-    let len = encode_state(&state, &mut buf).unwrap();
-    buf.truncate(len);
+    let buf = encode(&state);
     let restored = decode_state(&buf).unwrap();
     assert_eq!(hash_state_blake3(&restored), hash_state_blake3(&state));
 }

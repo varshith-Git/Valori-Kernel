@@ -6,13 +6,22 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct IvfConfig {
+    /// Number of centroids. Ignored when `auto_scale = true` (the default).
     pub n_list: usize,
+    /// Number of centroid buckets probed during search. Ignored when `auto_scale = true`.
     pub n_probe: usize,
+    /// When true (default), `build()` overrides n_list = max(16, sqrt(N)) and
+    /// n_probe = max(1, sqrt(n_list)). Set to false only when fixed values are
+    /// required (VALORI_IVF_N_LIST / VALORI_IVF_N_PROBE are set).
+    #[serde(default = "default_auto_scale")]
+    pub auto_scale: bool,
 }
+
+fn default_auto_scale() -> bool { true }
 
 impl Default for IvfConfig {
     fn default() -> Self {
-        Self { n_list: 100, n_probe: 5 }
+        Self { n_list: 100, n_probe: 10, auto_scale: true }
     }
 }
 
@@ -21,6 +30,10 @@ impl Default for IvfConfig {
 /// All internal distance computation uses i64 integer arithmetic — no f32 in
 /// the hot path.  f32 values are converted to Q16.16 once at the public
 /// boundary (build / insert / search) and never touched again.
+///
+/// With auto_scale=true (default), centroid count = max(16, sqrt(N)) and
+/// n_probe = max(1, sqrt(n_list)). This keeps average bucket size near
+/// sqrt(N) and scan cost at O(sqrt(N)) rather than O(N).
 pub struct IvfIndex {
     pub config: IvfConfig,
     pub dim: usize,
@@ -28,11 +41,32 @@ pub struct IvfIndex {
     pub centroids: Vec<Vec<i32>>,
     /// Inverted lists: per-centroid list of (record_id, Q16.16 vector).
     pub inverted_lists: Vec<Vec<(u32, Vec<i32>)>>,
+    /// Record count at the most recent `build()` call. Used to detect when
+    /// the index has drifted far enough from its build state to need a rebuild.
+    pub n_at_last_build: usize,
 }
 
 impl IvfIndex {
     pub fn new(config: IvfConfig, dim: usize) -> Self {
-        Self { config, dim, centroids: Vec::new(), inverted_lists: Vec::new() }
+        Self { config, dim, centroids: Vec::new(), inverted_lists: Vec::new(), n_at_last_build: 0 }
+    }
+
+    /// True when online inserts since the last `build()` have grown the dataset
+    /// past 2× the build size — centroid quality has degraded enough to warrant
+    /// a rebuild.
+    pub fn needs_rebuild(&self, current_count: usize) -> bool {
+        self.n_at_last_build > 0 && current_count > self.n_at_last_build * 2
+    }
+
+    /// Compute effective n_list and n_probe for a given dataset size.
+    /// Classic FAISS rule: n_list ≈ sqrt(N), n_probe ≈ sqrt(n_list).
+    fn effective_params(config: &IvfConfig, n: usize) -> (usize, usize) {
+        if !config.auto_scale {
+            return (config.n_list, config.n_probe);
+        }
+        let n_list  = ((n as f64).sqrt() as usize).max(16);
+        let n_probe = ((n_list as f64).sqrt() as usize).max(1);
+        (n_list, n_probe)
     }
 
     /// Returns (centroid_index, squared_distance_i64).
@@ -55,14 +89,22 @@ impl IvfIndex {
 impl VectorIndex for IvfIndex {
     fn build(&mut self, records: &[(u32, Vec<f32>)]) {
         if records.is_empty() { return; }
+
+        let (eff_n_list, eff_n_probe) = Self::effective_params(&self.config, records.len());
+        // Persist the effective values so snapshot/restore reproduces them.
+        self.config.n_list  = eff_n_list;
+        self.config.n_probe = eff_n_probe;
+
         // Convert to Q16.16 for kmeans — centroids come back as Vec<Vec<i32>>.
-        self.centroids = deterministic_kmeans(records, self.config.n_list, 20);
+        self.centroids = deterministic_kmeans(records, eff_n_list, 20);
         self.inverted_lists = vec![Vec::new(); self.centroids.len()];
         for (id, vec) in records {
             let q_vec: Vec<i32> = vec.iter().map(|&v| f32_to_q16(v)).collect();
             let (c_idx, _) = self.find_nearest_centroid(&q_vec);
             self.inverted_lists[c_idx].push((*id, q_vec));
         }
+
+        self.n_at_last_build = records.len();
     }
 
     fn insert(&mut self, id: u32, vec: &[f32]) {
@@ -159,10 +201,13 @@ impl VectorIndex for IvfIndex {
             inverted_lists: Vec<Vec<(u32, Vec<i32>)>>,
         }
         let dump: IvfLoad = bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
+        // n_at_last_build is derived from the total record count in the lists.
+        let total: usize = dump.inverted_lists.iter().map(|l| l.len()).sum();
         self.config = dump.config;
         self.centroids = dump.centroids;
         self.inverted_lists = dump.inverted_lists;
         self.dim = if self.centroids.is_empty() { 0 } else { self.centroids[0].len() };
+        self.n_at_last_build = total;
         Ok(())
     }
 }

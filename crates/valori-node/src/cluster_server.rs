@@ -2616,11 +2616,11 @@ async fn cluster_timeline(
 // expose save/restore/download for operational tooling (same surface as standalone).
 
 fn encode_cluster_snapshot(state: &valori_kernel::state::kernel::KernelState) -> Result<Vec<u8>, String> {
-    let mut buf = vec![0u8; 1 << 20];
-    match valori_kernel::snapshot::encode::encode_state(state, &mut buf) {
-        Ok(n) => Ok(buf[..n].to_vec()),
-        Err(e) => Err(format!("{e:?}")),
-    }
+    let hint = valori_kernel::snapshot::encode::encode_capacity_hint(state);
+    let mut buf = Vec::with_capacity(hint);
+    valori_kernel::snapshot::encode::encode_state(state, &mut buf)
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(buf)
 }
 
 async fn cluster_snapshot_save(

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://img.shields.io/badge/Valoricore-v0.2.2-6c47ff?style=for-the-badge&logo=rust" alt="version"/>
+<img src="https://img.shields.io/pypi/v/valoricore?style=for-the-badge&color=6c47ff&logo=rust&label=Valoricore" alt="version"/>
 
 # Valoricore
 

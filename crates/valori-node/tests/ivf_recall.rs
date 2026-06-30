@@ -9,6 +9,7 @@
 
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
 use valori_node::engine::Engine;
+use valori_node::structure::index::VectorIndex;
 
 const DIM: usize = 8;
 const N_VECTORS: usize = 200;
@@ -130,6 +131,77 @@ fn test_ivf_excludes_soft_deleted_records() {
         "soft-deleted record {} must not appear in IVF results; got {:?}",
         r0, results
     );
+}
+
+// ── Test 5: auto-scaling — n_list grows with sqrt(N) ─────────────────────────
+//
+// With auto_scale=true (default), build() sets n_list = max(16, sqrt(N)).
+// At N=200 that should be 14 → clamped to 16.
+// At N=10000 that should be 100.
+// We verify that after build(), the centroid count matches the formula.
+
+#[test]
+fn test_ivf_autoscale_centroid_count() {
+    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+
+    let cfg = IvfConfig::default(); // auto_scale = true
+
+    // N = 400 → sqrt(400) = 20, which is > 16, so n_list should be 20.
+    let n: usize = 400;
+    let dim = 4;
+    let records: Vec<(u32, Vec<f32>)> = (0..n)
+        .map(|i| {
+            let v = vec![(i as f32 / n as f32); dim];
+            (i as u32, v)
+        })
+        .collect();
+
+    let mut idx = IvfIndex::new(cfg, dim);
+    idx.build(&records);
+
+    let expected_n_list = ((n as f64).sqrt() as usize).max(16);
+    assert_eq!(
+        idx.config.n_list, expected_n_list,
+        "n_list should be {} for N={} with auto_scale=true, got {}",
+        expected_n_list, n, idx.config.n_list
+    );
+    assert_eq!(idx.n_at_last_build, n, "n_at_last_build should match record count");
+}
+
+#[test]
+fn test_ivf_autoscale_disabled_by_manual_override() {
+    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+
+    let cfg = IvfConfig { n_list: 5, n_probe: 2, auto_scale: false };
+    let n: usize = 400;
+    let dim = 4;
+    let records: Vec<(u32, Vec<f32>)> = (0..n)
+        .map(|i| (i as u32, vec![(i as f32 / n as f32); dim]))
+        .collect();
+
+    let mut idx = IvfIndex::new(cfg, dim);
+    idx.build(&records);
+
+    assert_eq!(idx.config.n_list, 5, "manual override should pin n_list to 5");
+}
+
+#[test]
+fn test_ivf_needs_rebuild_after_2x_growth() {
+    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+
+    let cfg = IvfConfig::default();
+    let dim = 4;
+    let n_build: usize = 200;
+    let records: Vec<(u32, Vec<f32>)> = (0..n_build)
+        .map(|i| (i as u32, vec![(i as f32 / n_build as f32); dim]))
+        .collect();
+
+    let mut idx = IvfIndex::new(cfg, dim);
+    idx.build(&records);
+
+    assert!(!idx.needs_rebuild(n_build),       "no rebuild needed at build size");
+    assert!(!idx.needs_rebuild(n_build * 2),   "no rebuild needed at exact 2×");
+    assert!( idx.needs_rebuild(n_build * 2 + 1), "rebuild needed past 2×");
 }
 
 // ── Test 4: rebuild_index reproduces the same nearest neighbour ───────────────

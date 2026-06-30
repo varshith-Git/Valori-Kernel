@@ -45,8 +45,10 @@ impl ValoricoreEngine {
 
         let wal_path = std::path::PathBuf::from(format!("{}/wal.log", path));
         let event_log_path = std::path::PathBuf::from(format!("{}/events.log", path));
+        let snapshot_path = std::path::PathBuf::from(format!("{}/current.snap", path));
         config.wal_path = Some(wal_path);
         config.event_log_path = Some(event_log_path);
+        config.snapshot_path = Some(snapshot_path);
 
         use valori_node::config::IndexKind;
         config.index_kind = match index_kind {
@@ -73,7 +75,14 @@ impl ValoricoreEngine {
         let mut engine = lock_engine!(self);
 
         // H-3: Reject mismatched dimensions before writing any event to the log.
-        if let Some(dim) = engine.state.dim {
+        // Must read dim from live_state when committer is active — engine.state.dim
+        // is always None in the committer path because engine.state is never mutated.
+        let current_dim = if let Some(ref c) = engine.event_committer {
+            c.live_state().dim
+        } else {
+            engine.state.dim
+        };
+        if let Some(dim) = current_dim {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
                     "dimension mismatch: engine expects {dim}, got {}", vector.len()
@@ -93,18 +102,22 @@ impl ValoricoreEngine {
         }
         let fxp_vec = FxpVector { data: fxp_data };
 
-        if let Some(ref mut committer) = engine.event_committer {
+        // I-1: scope the committer borrow so engine.index can be borrowed after.
+        // commit_event only updates live_state; engine.index is a separate structure
+        // that must be populated explicitly for HNSW/IVF to work.
+        let rid = {
+            let committer = engine.event_committer.as_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
             let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec, metadata: None, tag };
-            // C-1: commit_event() already applies the event to live_state internally
-            // (shadow-apply → persist → live-apply).  Do NOT call apply_committed_event again.
+            // C-1: commit_event() already applies the event to live_state internally.
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("commit failed: {:?}", e))
             })?;
-            Ok(rid.0)
-        } else {
-            Err(PyRuntimeError::new_err("event log not initialized"))
-        }
+            rid
+        };
+        engine.index.insert(rid.0, &vector);
+        Ok(rid.0)
     }
 
     #[pyo3(signature = (vector, k, filter_tag=None))]
@@ -129,20 +142,22 @@ impl ValoricoreEngine {
             }
         }
 
-        let mut fxp_data = Vec::with_capacity(vector.len());
-        for &v in &vector {
-            fxp_data.push(valori_kernel::types::scalar::FxpScalar(from_f32(v).0));
-        }
-        let fxp_vec = FxpVector { data: fxp_data };
-
-        let mut results = vec![valori_kernel::index::SearchResult::default(); k];
-        let count = state_ref.search_l2(&fxp_vec, &mut results, filter_tag);
-
-        let mut py_results = Vec::with_capacity(count);
-        for i in 0..count {
-            let r = results[i];
-            py_results.push((r.id.0 as u32, r.score));
-        }
+        // I-1: use engine.index (HNSW/IVF/brute) when no tag filter — gives the
+        // correct index for the configured kind.  Fall back to kernel search_l2
+        // only when tag filtering is required (the engine index has no tag awareness).
+        let py_results: Vec<(u32, i64)> = if filter_tag.is_none() {
+            let hits = engine.index.search(&vector, k);
+            hits.into_iter().map(|(id, dist)| (id, (dist * 65536.0) as i64)).collect()
+        } else {
+            let mut fxp_data = Vec::with_capacity(vector.len());
+            for &v in &vector {
+                fxp_data.push(valori_kernel::types::scalar::FxpScalar(from_f32(v).0));
+            }
+            let fxp_vec = FxpVector { data: fxp_data };
+            let mut results = vec![valori_kernel::index::SearchResult::default(); k];
+            let count = state_ref.search_l2(&fxp_vec, &mut results, filter_tag);
+            results[..count].iter().map(|r| (r.id.0 as u32, r.score)).collect()
+        };
 
         Ok(py_results)
     }
@@ -197,16 +212,63 @@ impl ValoricoreEngine {
 
     fn delete_node(&self, node_id: u32) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        engine.delete_node(node_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("DeleteNode failed: {:?}", e))
-        })
+        use valori_kernel::types::id::NodeId;
+        let nid = NodeId(node_id);
+
+        // Verify node exists in live_state (engine.state is stale in committer path).
+        let exists = if let Some(ref c) = engine.event_committer {
+            c.live_state().get_node(nid).is_some()
+        } else {
+            engine.state.get_node(nid).is_some()
+        };
+        if !exists {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("node {} not found", node_id)
+            ));
+        }
+
+        let event = KernelEvent::DeleteNode { id: nid };
+        if let Some(ref mut committer) = engine.event_committer {
+            committer.commit_event(event).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to delete node {}: {:?}", node_id, e))
+            })?;
+        } else {
+            engine.delete_node(node_id).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to delete node {}: {:?}", node_id, e))
+            })?;
+        }
+        Ok(())
     }
 
     fn delete_edge(&self, edge_id: u32) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        engine.delete_edge(edge_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("DeleteEdge failed: {:?}", e))
-        })
+        use valori_kernel::types::id::EdgeId;
+        let eid = EdgeId(edge_id);
+
+        // Verify edge exists in live_state (engine.state is stale in committer path).
+        // Edges are checked via their presence in the state's edge pool.
+        let exists = if let Some(ref c) = engine.event_committer {
+            c.live_state().get_edge(eid).is_some()
+        } else {
+            engine.state.get_edge(eid).is_some()
+        };
+        if !exists {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                format!("edge {} not found", edge_id)
+            ));
+        }
+
+        let event = KernelEvent::DeleteEdge { id: eid };
+        if let Some(ref mut committer) = engine.event_committer {
+            committer.commit_event(event).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to delete edge {}: {:?}", edge_id, e))
+            })?;
+        } else {
+            engine.delete_edge(edge_id).map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to delete edge {}: {:?}", edge_id, e))
+            })?;
+        }
+        Ok(())
     }
 
     #[pyo3(signature = (node_id))]
@@ -214,7 +276,13 @@ impl ValoricoreEngine {
         let engine = lock_engine!(self);
         use valori_kernel::types::id::NodeId;
 
-        match engine.state.get_node(NodeId(node_id)) {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+
+        match state_ref.get_node(NodeId(node_id)) {
             Some(n) => {
                 let rec = n.record.map(|r| r.0);
                 Ok(Some((n.kind as u8, rec)))
@@ -228,9 +296,14 @@ impl ValoricoreEngine {
         let engine = lock_engine!(self);
         use valori_kernel::types::id::NodeId;
 
-        let mut py_edges = Vec::new();
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
 
-        if let Some(iter) = engine.state.outgoing_edges(NodeId(node_id)) {
+        let mut py_edges = Vec::new();
+        if let Some(iter) = state_ref.outgoing_edges(NodeId(node_id)) {
             for edge in iter {
                 py_edges.push((edge.id.0, edge.to.0, edge.kind as u8));
             }
@@ -239,13 +312,65 @@ impl ValoricoreEngine {
         Ok(py_edges)
     }
 
-    fn insert_batch(&self, vectors: Vec<Vec<f32>>) -> PyResult<Vec<u32>> {
+    #[pyo3(signature = (vectors, tags=None))]
+    fn insert_batch(&self, vectors: Vec<Vec<f32>>, tags: Option<Vec<u64>>) -> PyResult<Vec<u32>> {
+        // Validate tags length upfront.
+        if let Some(ref t) = tags {
+            if t.len() != vectors.len() {
+                return Err(PyValueError::new_err(format!(
+                    "tags length {} does not match vectors length {}", t.len(), vectors.len()
+                )));
+            }
+        }
+
         let mut engine = lock_engine!(self);
-        match engine.insert_batch(&vectors) {
-            Ok(ids) => Ok(ids),
-            Err(e) => Err(PyRuntimeError::new_err(
-                format!("batch insert failed: {:?}", e)
-            ))
+
+        // Build all events first (validate everything before touching the log).
+        // Then commit as a single batch: one shadow-apply pass + one fsync.
+        if engine.event_committer.is_some() {
+            let first_id = engine.event_committer.as_ref().unwrap().live_state().next_record_id().0;
+            let mut events = Vec::with_capacity(vectors.len());
+
+            for (i, vector) in vectors.iter().enumerate() {
+                if let Some(dim) = engine.event_committer.as_ref().unwrap().live_state().dim {
+                    if vector.len() != dim {
+                        return Err(PyValueError::new_err(format!(
+                            "vector[{i}] dimension mismatch: engine expects {dim}, got {}", vector.len()
+                        )));
+                    }
+                }
+                let mut fxp_data = Vec::with_capacity(vector.len());
+                for (j, &f) in vector.iter().enumerate() {
+                    if f < -32767.0 || f > 32767.0 {
+                        return Err(PyValueError::new_err(format!(
+                            "vectors[{i}][{j}] ({f}) outside valid Q16.16 range [-32767, 32767]"
+                        )));
+                    }
+                    fxp_data.push(valori_kernel::types::scalar::FxpScalar(from_f32(f).0));
+                }
+                let tag = tags.as_ref().map_or(0, |t| t[i]);
+                events.push(KernelEvent::InsertRecord {
+                    id: valori_kernel::types::id::RecordId(first_id + i as u32),
+                    vector: FxpVector { data: fxp_data },
+                    metadata: None,
+                    tag,
+                });
+            }
+
+            // Single shadow-apply + single fsync for the whole batch.
+            engine.event_committer.as_mut().unwrap().commit_batch(events).map_err(|e| {
+                PyRuntimeError::new_err(format!("batch insert failed: {:?}", e))
+            })?;
+
+            let ids: Vec<u32> = (first_id..first_id + vectors.len() as u32).collect();
+            for (i, vector) in vectors.iter().enumerate() {
+                engine.index.insert(ids[i], vector);
+            }
+            Ok(ids)
+        } else {
+            engine.insert_batch(&vectors).map_err(|e| {
+                PyRuntimeError::new_err(format!("batch insert failed: {:?}", e))
+            })
         }
     }
 
@@ -259,8 +384,14 @@ impl ValoricoreEngine {
         let mut engine = lock_engine!(self);
 
         for (i, vector) in vectors.iter().enumerate() {
-            // H-3: dimension check before touching the log.
-            if let Some(dim) = engine.state.dim {
+            // H-3: dimension check before touching the log. Read dim from
+            // live_state when committer active — engine.state.dim is always None there.
+            let current_dim = if let Some(ref c) = engine.event_committer {
+                c.live_state().dim
+            } else {
+                engine.state.dim
+            };
+            if let Some(dim) = current_dim {
                 if vector.len() != dim {
                     return Err(PyValueError::new_err(format!(
                         "vector[{i}] dimension mismatch: engine expects {dim}, got {}", vector.len()
@@ -287,25 +418,23 @@ impl ValoricoreEngine {
 
             let tag = tags[i];
 
-            if let Some(ref mut committer) = engine.event_committer {
+            let rid = {
+                let committer = engine.event_committer.as_mut()
+                    .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
                 let rid = committer.live_state().next_record_id();
                 let event = KernelEvent::InsertRecord {
                     id: rid,
                     vector: fxp_vec,
-                    // M-2 note: proof is stored in record metadata intentionally for
-                    // cryptographic provenance.  Users needing application metadata
-                    // should use set_metadata() on the returned record id.
                     metadata: Some(proof_bytes),
                     tag,
                 };
-                // C-1: commit_event applies internally; do NOT call apply_committed_event.
                 committer.commit_event(event).map_err(|e| {
                     PyRuntimeError::new_err(format!("commit failed: {:?}", e))
                 })?;
-                results.push((rid.0, proof_hex));
-            } else {
-                return Err(PyRuntimeError::new_err("event log not initialized"));
-            }
+                rid
+            };
+            engine.index.insert(rid.0, vector);
+            results.push((rid.0, proof_hex));
         }
 
         Ok(results)
@@ -324,11 +453,15 @@ impl ValoricoreEngine {
         }
 
         // 2. Fallback to Record-level metadata (proof bytes from insert_with_proof).
-        match engine.state.get_record(rid) {
+        // Must read from live_state when committer is active.
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+        match state_ref.get_record(rid) {
             Some(record) => Ok(record.metadata.clone()),
-            None => Err(PyValueError::new_err(
-                format!("record {} not found", record_id)
-            ))
+            None => Ok(None),
         }
     }
 
@@ -340,12 +473,17 @@ impl ValoricoreEngine {
         let mut engine = lock_engine!(self);
         let rid = RecordId(record_id);
 
-        if engine.state.get_record(rid).is_none() {
+        // Must check live_state when committer is active.
+        let record_exists = if let Some(ref c) = engine.event_committer {
+            c.live_state().get_record(rid).is_some()
+        } else {
+            engine.state.get_record(rid).is_some()
+        };
+        if !record_exists {
             return Err(PyValueError::new_err(format!("record {} not found", record_id)));
         }
 
-        // H-2: Commit a SetMeta event so the metadata is in the BLAKE3 audit chain,
-        // crash-safe, and replayable.  The sidecar write below is a redundant cache.
+        // H-2: Commit a SetMeta event so the metadata is in the BLAKE3 audit chain.
         let key = format!("record_{}", record_id);
         let value = hex::encode(&metadata);
         if let Some(ref mut committer) = engine.event_committer {
@@ -355,94 +493,189 @@ impl ValoricoreEngine {
             })?;
         }
 
-        // Redundant sidecar for fast get_metadata lookups (non-authoritative).
+        // metadata.json sidecar is the live retrieval path for get_metadata().
+        // get_metadata() has no WAL-replay fallback, so a sidecar write failure
+        // is a real durability loss — propagate it rather than swallowing it.
         let json_value = serde_json::to_value(&metadata)
             .map_err(|e| PyValueError::new_err(format!("serialize failed: {}", e)))?;
         engine.metadata.set(key, json_value);
-        if let Err(e) = engine.flush_metadata() {
-            eprintln!("[valoricore-ffi] set_metadata: failed to persist metadata sidecar: {:?}", e);
-        }
+        engine.flush_metadata()
+            .map_err(|e| PyRuntimeError::new_err(format!("set_metadata: sidecar flush failed: {:?}", e)))?;
         Ok(())
     }
 
     fn get_state_hash(&self) -> PyResult<String> {
         let engine = lock_engine!(self);
-        let proof = engine.get_proof();
-        Ok(hex::encode(proof.final_state_hash))
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        Ok(hex::encode(hash_state_blake3(state_ref)))
     }
 
     fn record_count(&self) -> PyResult<usize> {
         let engine = lock_engine!(self);
-        Ok(engine.state.record_count())
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+        Ok(state_ref.record_count())
     }
 
     fn snapshot(&self) -> PyResult<Vec<u8>> {
-        let engine = lock_engine!(self);
+        let mut engine = lock_engine!(self);
+        // In the committer path, engine.state is never mutated — all mutations
+        // land in committer.live_state. Sync live_state → engine.state before
+        // snapshotting so the snapshot captures the actual current records.
+        if let Some(ref c) = engine.event_committer {
+            engine.state = c.live_state().clone();
+        }
         match engine.snapshot() {
             Ok(data) => Ok(data),
-            Err(e) => Err(PyRuntimeError::new_err(
-                format!("snapshot failed: {:?}", e)
-            ))
+            Err(e) => Err(PyRuntimeError::new_err(format!("snapshot failed: {:?}", e)))
         }
+    }
+
+    /// Write the current snapshot to `<db_path>/current.snap` and return the path.
+    fn save_snapshot(&self) -> PyResult<String> {
+        let mut engine = lock_engine!(self);
+        // Flush any buffered WAL entries before snapshotting so the snapshot
+        // and WAL are in sync — crash recovery will replay from the right offset.
+        if let Some(ref mut c) = engine.event_committer {
+            c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
+            engine.state = c.live_state().clone();
+        }
+        match engine.save_snapshot(None) {
+            Ok(path) => Ok(path.to_string_lossy().into_owned()),
+            Err(e) => Err(PyRuntimeError::new_err(format!("save_snapshot failed: {:?}", e)))
+        }
+    }
+
+    /// Flush buffered WAL entries to disk immediately.
+    /// Call this when you need durability before an explicit snapshot.
+    fn flush(&self) -> PyResult<()> {
+        let mut engine = lock_engine!(self);
+        if let Some(ref mut c) = engine.event_committer {
+            c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
+        }
+        Ok(())
     }
 
     fn restore(&self, data: Vec<u8>) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        match engine.restore(&data) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(PyRuntimeError::new_err(
-                format!("restore failed: {:?}", e)
-            ))
+        engine.restore(&data).map_err(|e| {
+            PyRuntimeError::new_err(format!("restore failed: {:?}", e))
+        })?;
+        // After restore, engine.state holds the correct records. Copy it into
+        // the committer's live_state so that reads via live_state() (search,
+        // record_count, get_node, etc.) reflect the restored snapshot.
+        let restored_state = engine.state.clone();
+        if let Some(ref mut committer) = engine.event_committer {
+            *committer.live_state_mut() = restored_state;
         }
+        Ok(())
     }
 
     fn soft_delete(&self, record_id: u32) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        engine.soft_delete_record(record_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
-        })?;
+        let rid = RecordId(record_id);
+
+        // Verify record exists in live_state (engine.state is stale in committer path).
+        let exists = if let Some(ref c) = engine.event_committer {
+            c.live_state().get_record(rid).is_some()
+        } else {
+            engine.state.get_record(rid).is_some()
+        };
+        if !exists {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!("record {} not found", record_id)));
+        }
+
+        let event = KernelEvent::SoftDeleteRecord { id: rid };
+        if let Some(ref mut committer) = engine.event_committer {
+            committer.commit_event(event).map_err(|e| {
+                PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
+            })?;
+        } else {
+            engine.soft_delete_record(record_id).map_err(|e| {
+                PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
+            })?;
+        }
+        engine.index.delete(record_id);
         Ok(())
     }
 
     fn delete(&self, record_id: u32) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        engine.delete_record(record_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
-        })?;
+        let rid = RecordId(record_id);
+
+        // Verify record exists in live_state (engine.state is stale in committer path).
+        let exists = if let Some(ref c) = engine.event_committer {
+            c.live_state().get_record(rid).is_some()
+        } else {
+            engine.state.get_record(rid).is_some()
+        };
+        if !exists {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!("record {} not found", record_id)));
+        }
+
+        let event = KernelEvent::DeleteRecord { id: rid };
+        if let Some(ref mut committer) = engine.event_committer {
+            committer.commit_event(event).map_err(|e| {
+                PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
+            })?;
+        } else {
+            engine.delete_record(record_id).map_err(|e| {
+                PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
+            })?;
+        }
+        engine.index.delete(record_id);
         Ok(())
     }
 
     #[pyo3(signature = (vector, tag))]
     fn insert_with_proof(&self, vector: Vec<f32>, tag: u64) -> PyResult<(u32, String)> {
-        let mut fxp_data = Vec::with_capacity(vector.len());
-        let mut fixed_values = Vec::with_capacity(vector.len());
-        for (i, &f) in vector.iter().enumerate() {
-            if f < -32767.0 || f > 32767.0 {
-                return Err(PyValueError::new_err(format!(
-                    "float at index {i} ({f}) outside valid Q16.16 range [-32767, 32767]"
-                )));
-            }
-            let scalar = valori_kernel::types::scalar::FxpScalar(from_f32(f).0);
-            fxp_data.push(scalar);
-            fixed_values.push(scalar.0);
-        }
-        let fxp_vec = FxpVector { data: fxp_data };
-
-        let proof_bytes = generate_proof_bytes(&fixed_values);
-        let proof_hex = hex::encode(&proof_bytes);
-
         let mut engine = lock_engine!(self);
 
-        // H-3: dimension check after lock (dim is set by first insert).
-        if let Some(dim) = engine.state.dim {
+        // H-3: dim + range checks before any allocation so a bad vector is
+        // rejected without computing proof bytes or allocating FXP vecs.
+        let current_dim = if let Some(ref c) = engine.event_committer {
+            c.live_state().dim
+        } else {
+            engine.state.dim
+        };
+        if let Some(dim) = current_dim {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
                     "dimension mismatch: engine expects {dim}, got {}", vector.len()
                 )));
             }
         }
+        for (i, &f) in vector.iter().enumerate() {
+            if f < -32767.0 || f > 32767.0 {
+                return Err(PyValueError::new_err(format!(
+                    "float at index {i} ({f}) outside valid Q16.16 range [-32767, 32767]"
+                )));
+            }
+        }
 
-        if let Some(ref mut committer) = engine.event_committer {
+        // Validation passed — now convert and compute proof.
+        let mut fxp_data = Vec::with_capacity(vector.len());
+        let mut fixed_values = Vec::with_capacity(vector.len());
+        for &f in &vector {
+            let scalar = valori_kernel::types::scalar::FxpScalar(from_f32(f).0);
+            fxp_data.push(scalar);
+            fixed_values.push(scalar.0);
+        }
+        let fxp_vec = FxpVector { data: fxp_data };
+        let proof_bytes = generate_proof_bytes(&fixed_values);
+        let proof_hex = hex::encode(&proof_bytes);
+
+        let rid = {
+            let committer = engine.event_committer.as_mut()
+                .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
             let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord {
                 id: rid,
@@ -450,14 +683,13 @@ impl ValoricoreEngine {
                 metadata: Some(proof_bytes),
                 tag,
             };
-            // C-1: commit_event applies internally; do NOT call apply_committed_event.
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("commit failed: {:?}", e))
             })?;
-            Ok((rid.0, proof_hex))
-        } else {
-            Err(PyRuntimeError::new_err("event log not initialized"))
-        }
+            rid
+        };
+        engine.index.insert(rid.0, &vector);
+        Ok((rid.0, proof_hex))
     }
 
     fn get_timeline(&self) -> PyResult<Vec<String>> {

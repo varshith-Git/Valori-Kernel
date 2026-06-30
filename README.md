@@ -50,27 +50,62 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 
 ## Where Valori Sits in Your Stack
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                      Your AI Application                            │
-│   LangChain · LlamaIndex · OpenAI Agents · Custom Orchestrators    │
-└────────────────────────┬────────────────────────────────────────────┘
-                         │  Python SDK  /  HTTP  /  PyO3 FFI
-┌────────────────────────▼────────────────────────────────────────────┐
-│                         VALORI                                      │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐   │
-│  │  Vector      │   │  Knowledge   │   │  Cryptographic       │   │
-│  │  Memory      │   │  Graph       │   │  Audit Trail         │   │
-│  │  (HNSW/Brute)│   │  (same store)│   │  (BLAKE3 + replay)   │   │
-│  └──────────────┘   └──────────────┘   └──────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │           Q16.16 Fixed-Point Kernel  (no_std / no_alloc)    │  │
-│  │   bit-identical results on x86 · ARM · RISC-V · Cortex-M4  │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-│  ┌───────────────────────┐   ┌──────────────────────────────────┐  │
-│  │   Standalone Node     │   │   3- or 5-Node Raft Cluster      │  │
-│  └───────────────────────┘   └──────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph APP["Your AI Application"]
+        direction LR
+        A1["LangChain · LlamaIndex"]
+        A2["OpenAI Agents · Orchestrators"]
+        A3["MCP Clients · Claude · Cursor"]
+    end
+
+    subgraph ACCESS["Access Layer"]
+        direction LR
+        S1["Python SDK"]
+        S2["HTTP REST"]
+        S3["PyO3 FFI\nin-process"]
+        S4["MCP stdio\nvalori-mcp"]
+    end
+
+    subgraph VALORI["  VALORI  "]
+        direction TB
+
+        subgraph CAPS["Capabilities"]
+            direction LR
+            C1["Vector Memory\nHNSW · IVF · Brute-force"]
+            C2["Knowledge Graph\nGraphRAG · Tree-RAG · Community"]
+            C3["Cryptographic Audit\nBLAKE3 chain · receipts"]
+            C4["Self-Maintaining Memory\ndecay · consolidate · contradict"]
+        end
+
+        subgraph KERN["Q16.16 Fixed-Point Kernel  ·  no_std  ·  WASM-safe"]
+            direction LR
+            K1["x86"] ~~~ K2["ARM"] ~~~ K3["RISC-V"] ~~~ K4["Cortex-M4"]
+        end
+
+        subgraph DEPLOY["Deployment"]
+            direction LR
+            D1["Standalone Node"]
+            D2["3 / 5-Node Raft Cluster"]
+        end
+    end
+
+    subgraph STORAGE["Durable Storage"]
+        direction LR
+        ST1["events.log\nBLAKE3 WAL"]
+        ST2["Snapshot\nVAL1 V6"]
+        ST3["S3 · MinIO · R2"]
+    end
+
+    APP --> ACCESS --> VALORI --> STORAGE
+
+    style APP      fill:#0f172a,color:#e2e8f0,stroke:#475569
+    style ACCESS   fill:#0f172a,color:#e2e8f0,stroke:#475569
+    style VALORI   fill:#1e1b4b,color:#e2e8f0,stroke:#6366f1,stroke-width:2px
+    style CAPS     fill:#1e1b4b,color:#e2e8f0,stroke:#4338ca
+    style KERN     fill:#312e81,color:#c7d2fe,stroke:#818cf8
+    style DEPLOY   fill:#1e1b4b,color:#e2e8f0,stroke:#4338ca
+    style STORAGE  fill:#0f172a,color:#e2e8f0,stroke:#475569
 ```
 
 ---
@@ -97,6 +132,83 @@ Every byte of state is recovered from the append-only, BLAKE3-chained event log 
 | **S3 offload** | Snapshot archival + WAL rotation to S3/MinIO/R2 |
 
 → [Full feature list and phase history](docs/phases/README.md)
+
+---
+
+## Performance
+
+Measured on Apple Silicon M-series · release build · k=10.
+Reproduce: `python3 benchmarks/local_perf.py --million`
+
+### Batch insert throughput by embedding model
+
+| Model | Dim | Batch 100 | Batch 1,000 | Batch 10,000 |
+|---|---|---|---|---|
+| baseline / custom | 128 | 20,800 rec/s | 98,150 rec/s | **177,705 rec/s** |
+| nomic-embed-text · all-MiniLM-L6-v2 | 384 | 18,431 rec/s | 62,719 rec/s | **81,971 rec/s** |
+| BGE-base · E5-base · bert-base | 768 | 14,284 rec/s | 36,815 rec/s | **47,143 rec/s** |
+| OpenAI ada-002 · text-embedding-3-small | 1,536 | 9,734 rec/s | 19,929 rec/s | **25,196 rec/s** |
+
+> **Batch size warning:** `insert_batch` with fewer than 100 records is **slower than a plain `insert` loop** — per-call overhead dominates at small sizes. Always use batches of ≥ 100; the sweet spot is 1,000–10,000.
+
+### HNSW search latency by embedding model (10K records, k=10)
+
+| Model | Dim | HNSW p50 | HNSW QPS | Brute p50 | Brute QPS |
+|---|---|---|---|---|---|
+| baseline / custom | 128 | 0.050 ms | 19,759 q/s | 1.224 ms | 810 q/s |
+| nomic-embed-text · all-MiniLM-L6-v2 | 384 | 0.146 ms | 4,486 q/s | 3.329 ms | 273 q/s |
+| BGE-base · E5-base · bert-base | 768 | 0.269 ms | 3,674 q/s | 7.338 ms | 135 q/s |
+| OpenAI ada-002 · text-embedding-3-small | 1,536 | 0.523 ms | 1,897 q/s | 14.923 ms | 66 q/s |
+
+> **Index selection warning:** Brute force is O(N) — latency grows linearly with dataset size. It becomes unviable above ~50K records at any dimension. **HNSW is mandatory for production read-heavy workloads above 50K records.** Build cost is paid once and survives snapshot/restore; search stays sub-millisecond regardless of dataset size.
+
+### Search latency vs dataset size (HNSW, dim=128, k=10)
+
+| Records | p50 | p99 | QPS |
+|---|---|---|---|
+| 1,000 | 0.05 ms | — | ~20,000 q/s |
+| 10,000 | 0.05 ms | 0.069 ms | 19,759 q/s |
+| 1,000,000 | **0.107 ms** | 0.138 ms | **9,199 q/s** |
+
+→ **Sub-millisecond search at 1 million records.**
+
+### Search latency vs dataset size (bruteforce, dim=128, k=10)
+
+| Records | p50 | p95 | p99 | QPS |
+|---|---|---|---|---|
+| 1,000 | 0.129 ms | 0.131 ms | 0.135 ms | 7,820 q/s |
+| 10,000 | 1.224 ms | 1.285 ms | 1.354 ms | 810 q/s |
+| 50,000 | 10.129 ms | 10.735 ms | 11.336 ms | 98 q/s |
+| 1,000,000 | 247.815 ms | 288.795 ms | 308.291 ms | 3 q/s |
+
+### Index comparison @ 1 million records (dim=128, k=10)
+
+| Index | Build time | p50 | p99 | QPS |
+|---|---|---|---|---|
+| **HNSW** | 4.4 min (one-time) | **0.107 ms** | **0.138 ms** | **9,199 q/s** |
+| IVF | 28 s | 58.35 ms | 66.05 ms | 16 q/s |
+| Brute force | 27 s | 247.41 ms | 297.01 ms | 4 q/s |
+
+### Snapshot timing
+
+| Records | Dim | Size | `snapshot()` | `restore()` | `save_snapshot()` |
+|---|---|---|---|---|---|
+| 10,000 | 128 | 5.2 MB | 2.2 ms | 4.3 ms | 4.7 ms |
+| 10,000 | 384 | 14.9 MB | 5.9 ms | 6.0 ms | 12.4 ms |
+| 10,000 | 768 | 29.6 MB | 10.0 ms | 16.3 ms | 20.6 ms |
+| 10,000 | 1,536 | 58.9 MB | 18.8 ms | 29.5 ms | 44.7 ms |
+| 50,000 | 128 | 25.8 MB | 10.1 ms | 21.6 ms | 26.7 ms |
+
+### Batch size sweet spot (dim=128, bruteforce, 10K total records)
+
+| Batch size | Throughput |
+|---|---|
+| 1 (single inserts) | 2,512 rec/s |
+| 10 | 1,936 rec/s ⚠️ slower than single |
+| 100 | 14,561 rec/s |
+| 500 | 60,805 rec/s |
+| 1,000 | 95,147 rec/s |
+| **10,000** | **174,963 rec/s** |
 
 ---
 

@@ -6,6 +6,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Snapshot `CapacityExceeded` at scale** — `encode_state` rewritten from a
+  fixed `&mut [u8]` buffer to a growable `&mut Vec<u8>`. Snapshots above ~250K
+  records (any dimension) previously failed with `Kernel(CapacityExceeded)`
+  because the V6 schema added 10 bytes/record that the buffer-size formula did
+  not account for. Verified end-to-end at 1M records (515 MB snapshot in 1.2 s).
+  The encoder is now structurally incapable of this error. Stays `no_std`.
+- **WAL loss on clean teardown** — added `impl Drop for Engine` and
+  `impl Drop for EventCommitter` to flush the batched write buffer on scope
+  exit. A clean shutdown could previously lose up to `flush_every` buffered
+  events; recovery tests found 0 events after a simulated crash.
+
+### Added
+- **IVF centroid auto-scaling** (`n_list = max(16, sqrt(N))`, `n_probe = max(1, sqrt(n_list))`) — fixes a 153× QPS regression from 10K to 1M records. Centroids now scale with dataset size so average bucket size stays O(sqrt(N)) and scan cost is O(sqrt(N)) not O(N). Manual override via `VALORI_IVF_N_LIST` / `VALORI_IVF_N_PROBE` disables auto-scaling. Added `IvfIndex::needs_rebuild(count)` hook (returns true when online inserts exceed 2× the build size).
+- **`encode_capacity_hint(state)`** — V6-correct pre-allocation estimate so the
+  snapshot `Vec` avoids repeated reallocation on the hot path.
+- **SIMD L2 distance** (`l2_sq_i32`) — NEON (aarch64) + AVX2 (x86_64) paths with
+  scalar fallback; identical integer result on every path (determinism
+  preserved), purely a speedup.
+- **Benchmark suite** — `benchmarks/local_perf.py` (B1–B7) + `RESULTS_1M.md`,
+  with a full performance section and HNSW-above-50K / small-batch warnings in
+  the root `README.md`.
+
 ## [0.2.3] — 2026-06-29
 
 ### Security
