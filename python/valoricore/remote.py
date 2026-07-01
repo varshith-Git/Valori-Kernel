@@ -928,23 +928,32 @@ class SyncRemoteClient(ValoriClient):
         _raise_for_status(resp)
         return resp.json()
 
-    def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
-        """Create a graph node. Returns Node ID."""
-        data = {"kind": kind, "record_id": record_id}
+    def create_node(self, kind: int, record_id: Optional[int] = None, collection: str = "default") -> NodeId:
+        """Create a graph node in ``collection``. Returns Node ID."""
+        data: Dict[str, Any] = {"kind": kind, "record_id": record_id}
+        if collection != "default":
+            data["collection"] = collection
         resp = self._post("/v1/graph/node", data)
         return resp["node_id"]
 
-    def create_edge(self, from_id: int, to_id: int, kind: int) -> int:
-        """Create a graph edge. Returns Edge ID."""
-        data = {"from": from_id, "to": to_id, "kind": kind}
+    def create_edge(self, from_id: int, to_id: int, kind: int, collection: str = "default") -> int:
+        """Create a graph edge in ``collection``. Returns Edge ID."""
+        data: Dict[str, Any] = {"from": from_id, "to": to_id, "kind": kind}
+        if collection != "default":
+            data["collection"] = collection
         resp = self._post("/v1/graph/edge", data)
         return resp["edge_id"]
 
-    def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
-        """Fetch node data (kind, record_id)."""
+    def get_node(self, node_id: int, collection: str = "default") -> Optional[Dict[str, Any]]:
+        """Fetch node data (kind, record_id) from ``collection``.
+
+        Node ids are only unique within their own collection's shard in
+        cluster mode — pass the same ``collection`` the node was created in.
+        """
         url = self.base_url + f"/v1/graph/node/{node_id}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = self.session.get(url, timeout=5)
+            resp = self.session.get(url, params=params, timeout=5)
             if resp.status_code == 404:
                 return None
             _raise_for_status(resp)
@@ -952,11 +961,12 @@ class SyncRemoteClient(ValoriClient):
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
-    def get_edges(self, node_id: int) -> List[Dict[str, Any]]:
-        """Fetch all outgoing edges for a given node."""
+    def get_edges(self, node_id: int, collection: str = "default") -> List[Dict[str, Any]]:
+        """Fetch all outgoing edges for a given node in ``collection``."""
         url = self.base_url + f"/v1/graph/edges/{node_id}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = self.session.get(url, timeout=5)
+            resp = self.session.get(url, params=params, timeout=5)
             if resp.status_code == 404:
                 return []
             _raise_for_status(resp)
@@ -964,9 +974,9 @@ class SyncRemoteClient(ValoriClient):
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
 
-    def neighbors(self, node_id: int) -> List[int]:
+    def neighbors(self, node_id: int, collection: str = "default") -> List[int]:
         """Return immediate neighbor node IDs for a given node."""
-        return [e["to_node"] for e in self.get_edges(node_id)]
+        return [e["to_node"] for e in self.get_edges(node_id, collection=collection)]
 
     # ── Collection (namespace) management ─────────────────────────────────────
 
@@ -1327,7 +1337,7 @@ class SyncRemoteClient(ValoriClient):
 
     # ── Cortex: Knowledge graph ────────────────────────────────────────────────
 
-    def subgraph(self, root_node: int, depth: int = 2) -> Dict[str, Any]:
+    def subgraph(self, root_node: int, depth: int = 2, collection: str = "default") -> Dict[str, Any]:
         """Bounded BFS from ``root_node`` (depth capped at 4 server-side).
 
         Returns ``{"nodes": [...], "edges": [...]}`` where each node has
@@ -1338,8 +1348,9 @@ class SyncRemoteClient(ValoriClient):
         EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
         """
         url = self.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = self.session.get(url, timeout=5)
+            resp = self.session.get(url, params=params, timeout=5)
             _raise_for_status(resp)
             return resp.json()
         except requests.exceptions.RequestException as e:
@@ -1950,13 +1961,17 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to fetch timeline: {e}")
 
-    async def create_node(self, kind: int, record_id: Optional[int] = None) -> NodeId:
-        data = {"kind": kind, "record_id": record_id}
+    async def create_node(self, kind: int, record_id: Optional[int] = None, collection: str = "default") -> NodeId:
+        data: Dict[str, Any] = {"kind": kind, "record_id": record_id}
+        if collection != "default":
+            data["collection"] = collection
         resp = await self._post("/v1/graph/node", data)
         return resp["node_id"]
 
-    async def create_edge(self, from_id: int, to_id: int, kind: int) -> int:
-        data = {"from": from_id, "to": to_id, "kind": kind}
+    async def create_edge(self, from_id: int, to_id: int, kind: int, collection: str = "default") -> int:
+        data: Dict[str, Any] = {"from": from_id, "to": to_id, "kind": kind}
+        if collection != "default":
+            data["collection"] = collection
         resp = await self._post("/v1/graph/edge", data)
         return resp["edge_id"]
 
@@ -1985,10 +2000,11 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to drop collection '{name}': {e}")
 
-    async def get_node(self, node_id: int) -> Optional[Dict[str, Any]]:
+    async def get_node(self, node_id: int, collection: str = "default") -> Optional[Dict[str, Any]]:
         url = self.base_url + f"/v1/graph/node/{node_id}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = await self.client.get(url)
+            resp = await self.client.get(url, params=params)
             if resp.status_code == 404:
                 return None
             _raise_for_status(resp)
@@ -1996,10 +2012,11 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
-    async def get_edges(self, node_id: int) -> List[Dict[str, Any]]:
+    async def get_edges(self, node_id: int, collection: str = "default") -> List[Dict[str, Any]]:
         url = self.base_url + f"/v1/graph/edges/{node_id}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = await self.client.get(url)
+            resp = await self.client.get(url, params=params)
             if resp.status_code == 404:
                 return []
             _raise_for_status(resp)
@@ -2007,8 +2024,8 @@ class AsyncRemoteClient:
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
 
-    async def neighbors(self, node_id: int) -> List[int]:
-        edges = await self.get_edges(node_id)
+    async def neighbors(self, node_id: int, collection: str = "default") -> List[int]:
+        edges = await self.get_edges(node_id, collection=collection)
         return [e["to_node"] for e in edges]
 
     # ── Phase 3.6: Crypto-shredding ──────────────────────────────────────────
@@ -2253,15 +2270,16 @@ class AsyncRemoteClient:
 
     # ── Cortex: Knowledge graph ────────────────────────────────────────────────
 
-    async def subgraph(self, root_node: int, depth: int = 2) -> Dict[str, Any]:
+    async def subgraph(self, root_node: int, depth: int = 2, collection: str = "default") -> Dict[str, Any]:
         """Bounded BFS from ``root_node``. Returns ``{"nodes": [...], "edges": [...]}``.
 
         NodeKind: 0=Record, 1=Concept, 5=Document, 6=Chunk
         EdgeKind: 4=Mentions, 5=RefersTo, 6=ParentOf
         """
         url = self.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
+        params = {} if collection == "default" else {"collection": collection}
         try:
-            resp = await self.client.get(url)
+            resp = await self.client.get(url, params=params)
             _raise_for_status(resp)
             return resp.json()
         except Exception as e:

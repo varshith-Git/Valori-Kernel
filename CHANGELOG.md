@@ -50,6 +50,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **Python SDK graph methods had no `collection` support (Phase S11)** —
+  `create_node()`, `get_node()`, `create_edge()`, `get_edges()`,
+  `subgraph()`, and `neighbors()` on both `SyncRemoteClient` and
+  `AsyncRemoteClient` always targeted the default collection — the server
+  side has always supported `collection` on these endpoints (and the
+  cluster path routes it correctly as of S8), but the SDK never exposed
+  it. All six gained a `collection: str = "default"` parameter,
+  backward-compatible with every existing call site.
 - **`valoricore-ffi` did not compile (Phase S10)** — `get_timeline()`'s
   exhaustive `KernelEvent` match was missing arms for
   `AutoCreateNamespace`/`DropNamespace` (added in S2). Predates the S1-S9

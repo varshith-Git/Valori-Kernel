@@ -84,6 +84,7 @@ people and sessions that built it.
 | S8 — Graph node/edge CRUD, `/v1/graphrag`, and `/v1/community/detect` (namespace-scoped) now route to their collection's shard instead of always shard 0; cross-shard community detection (no namespace filter) explicitly kept out of scope | [phase-S8-graph-community-routing.md](phase-S8-graph-community-routing.md) | `Node-scaleup` | ✅ done |
 | S9 — Automated `cluster_ingest` coverage via an in-process mock embed server; fixed `cluster_tree_hybrid`'s vector-search section (resolved namespace but scanned shard 0 regardless) — the bug S1 originally flagged and never revisited | [phase-S9-ingest-coverage-tree-hybrid.md](phase-S9-ingest-coverage-tree-hybrid.md) | `Node-scaleup` | ✅ done |
 | S10 — Fixed `valoricore-ffi`'s compile break: `get_timeline()`'s exhaustive `KernelEvent` match was missing `AutoCreateNamespace`/`DropNamespace` arms since S2; confirmed pre-existing on `main`, verified via a real `maturin build --release` | [phase-S10-ffi-namespace-events.md](phase-S10-ffi-namespace-events.md) | `Node-scaleup` | ✅ done |
+| S11 — Python SDK: added `collection` param to `create_node`/`get_node`/`create_edge`/`get_edges`/`subgraph`/`neighbors` on both `SyncRemoteClient` and `AsyncRemoteClient` — these six methods had no collection support at all despite the server (standalone always, cluster since S8) fully supporting it | [phase-S11-sdk-graph-collection-param.md](phase-S11-sdk-graph-collection-param.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 
