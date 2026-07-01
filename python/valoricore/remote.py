@@ -1097,7 +1097,7 @@ class SyncRemoteClient(ValoriClient):
     # L-5: cap BFS depth to prevent unbounded memory/time on dense graphs.
     _MAX_WALK_DEPTH = 10
 
-    def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
+    def walk(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
         """
         Breadth-first search traversal of the knowledge graph.
         Returns a list of visited node IDs up to max_depth (capped at 10).
@@ -1113,27 +1113,27 @@ class SyncRemoteClient(ValoriClient):
             if depth >= max_depth:
                 continue
 
-            for edge in self.get_edges(current):
+            for edge in self.get_edges(current, collection=collection):
                 nxt = edge["to_node"]
                 if nxt not in visited:
                     visited.add(nxt)
                     queue.append((nxt, depth + 1))
-                    
+
         return result
 
-    def expand(self, start_node: int, max_depth: int = 2) -> List[int]:
+    def expand(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
         """
         Uses walk() to traverse the graph and returns all unique Record IDs
         found attached to any node in the traversal path.
         """
-        visited_nodes = self.walk(start_node, max_depth)
+        visited_nodes = self.walk(start_node, max_depth, collection=collection)
         record_ids = set()
-        
+
         for node_id in visited_nodes:
-            n = self.get_node(node_id)
+            n = self.get_node(node_id, collection=collection)
             if n and n["record_id"] is not None:
                 record_ids.add(n["record_id"])
-                
+
         return list(record_ids)
 
     def delete(
@@ -2071,7 +2071,7 @@ class AsyncRemoteClient:
 
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def walk(self, start_node: int, max_depth: int = 2) -> List[int]:
+    async def walk(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
         visited = set([start_node])
         queue = deque([(start_node, 0)])
         result = []
@@ -2082,24 +2082,24 @@ class AsyncRemoteClient:
             if depth >= max_depth:
                 continue
 
-            edges = await self.get_edges(current)
+            edges = await self.get_edges(current, collection=collection)
             for edge in edges:
                 nxt = edge["to_node"]
                 if nxt not in visited:
                     visited.add(nxt)
                     queue.append((nxt, depth + 1))
-                    
+
         return result
 
-    async def expand(self, start_node: int, max_depth: int = 2) -> List[int]:
-        visited_nodes = await self.walk(start_node, max_depth)
+    async def expand(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
+        visited_nodes = await self.walk(start_node, max_depth, collection=collection)
         record_ids = set()
-        
+
         for node_id in visited_nodes:
-            n = await self.get_node(node_id)
+            n = await self.get_node(node_id, collection=collection)
             if n and n["record_id"] is not None:
                 record_ids.add(n["record_id"])
-                
+
         return list(record_ids)
 
     async def delete(self, record_id: int, collection: str = "default") -> None:

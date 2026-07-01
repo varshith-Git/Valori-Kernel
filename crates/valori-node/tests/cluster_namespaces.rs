@@ -634,19 +634,28 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     assert_eq!(count_shard0_nodes, 0, "none of tenant-a's graph traffic should touch shard 0");
 
     // GET reads, scoped by ?collection=, must find them on the right shard.
+    // Response shape is wire-compatible with the standalone server's
+    // GetNodeResponse ({"kind","record_id","namespace_id"}, no "id" — the
+    // caller already knows the id from the path) — see the fix in
+    // get_graph_node's doc comment for why this matters (Python SDK
+    // walk()/expand() read record_id specifically).
     let (status, body) = get_json(
         router.clone(),
         &format!("/v1/graph/node/{node_1}?collection=tenant-a"),
     ).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["id"], node_1);
+    assert_eq!(body["kind"], 0);
+    assert_eq!(body["namespace_id"], ns_a);
 
     let (status, body) = get_json(
         router.clone(),
         &format!("/v1/graph/edges/{node_1}?collection=tenant-a"),
     ).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["edges"].as_array().unwrap().len(), 1, "{body}");
+    let edges = body["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 1, "{body}");
+    // edge_id/to_node — matching standalone's EdgeData shape, not id/from/to.
+    assert_eq!(edges[0]["to_node"], node_2);
 
     let (status, body) = get_json(
         router,

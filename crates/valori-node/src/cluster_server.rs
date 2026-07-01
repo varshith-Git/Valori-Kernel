@@ -1338,13 +1338,19 @@ async fn get_graph_node(
         }
     };
     let shard_sm = &state.shard_for(ns_id).state_machine;
+    // Wire-compatible with the standalone server's GetNodeResponse (api.rs) —
+    // {"kind", "record_id", "namespace_id"}, matching the SearchHit
+    // convention used elsewhere in this file. Was previously
+    // {"id","kind","record"}, silently incompatible with standalone:
+    // the Python SDK's walk()/expand() read n["record_id"] specifically
+    // and would KeyError against the old cluster shape.
     let result = shard_sm
         .with_state(|s| {
             s.get_node(NodeId(id)).map(|n| {
                 serde_json::json!({
-                    "id": n.id.0,
                     "kind": n.kind as u8,
-                    "record": n.record.map(|r| r.0),
+                    "record_id": n.record.map(|r| r.0),
+                    "namespace_id": n.namespace_id,
                 })
             })
         })
@@ -1440,14 +1446,18 @@ async fn get_graph_edges(
         }
     };
     let shard_sm = &state.shard_for(ns_id).state_machine;
+    // Wire-compatible with the standalone server's GetEdgesResponse/EdgeData
+    // (api.rs) — {"edge_id", "to_node", "kind"}, no "from" (implied by the
+    // path's :id) and no separate "id"/"to" pair. Was previously
+    // {"id","from","to","kind"}: the Python SDK's walk()/neighbors() read
+    // edge["to_node"] specifically and would KeyError against the old shape.
     let edges: Option<Vec<serde_json::Value>> = shard_sm
         .with_state(|s| {
             s.outgoing_edges(NodeId(id)).map(|iter| {
                 iter.map(|e| {
                     serde_json::json!({
-                        "id": e.id.0,
-                        "from": e.from.0,
-                        "to": e.to.0,
+                        "edge_id": e.id.0,
+                        "to_node": e.to.0,
                         "kind": e.kind as u8,
                     })
                 })

@@ -85,6 +85,7 @@ people and sessions that built it.
 | S9 — Automated `cluster_ingest` coverage via an in-process mock embed server; fixed `cluster_tree_hybrid`'s vector-search section (resolved namespace but scanned shard 0 regardless) — the bug S1 originally flagged and never revisited | [phase-S9-ingest-coverage-tree-hybrid.md](phase-S9-ingest-coverage-tree-hybrid.md) | `Node-scaleup` | ✅ done |
 | S10 — Fixed `valoricore-ffi`'s compile break: `get_timeline()`'s exhaustive `KernelEvent` match was missing `AutoCreateNamespace`/`DropNamespace` arms since S2; confirmed pre-existing on `main`, verified via a real `maturin build --release` | [phase-S10-ffi-namespace-events.md](phase-S10-ffi-namespace-events.md) | `Node-scaleup` | ✅ done |
 | S11 — Python SDK: added `collection` param to `create_node`/`get_node`/`create_edge`/`get_edges`/`subgraph`/`neighbors` on both `SyncRemoteClient` and `AsyncRemoteClient` — these six methods had no collection support at all despite the server (standalone always, cluster since S8) fully supporting it | [phase-S11-sdk-graph-collection-param.md](phase-S11-sdk-graph-collection-param.md) | `Node-scaleup` | ✅ done |
+| S12 — Fixed a standalone/cluster wire-format mismatch on `GET /v1/graph/node/:id` and `GET /v1/graph/edges/:id` (different field names per mode, e.g. `record` vs `record_id`) that made the Python SDK's `walk()`/`expand()`/`neighbors()` throw `KeyError` against cluster nodes; found while writing S11's docs | [phase-S12-graph-wire-compat.md](phase-S12-graph-wire-compat.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 

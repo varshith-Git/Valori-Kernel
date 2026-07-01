@@ -50,6 +50,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **Cluster mode's `GET /v1/graph/node/:id` and `GET /v1/graph/edges/:id`
+  returned different field names than the standalone server (Phase S12)**
+  — e.g. `{"id","kind","record"}` vs standalone's
+  `{"kind","record_id","namespace_id"}`. Harmless for callers reading raw
+  JSON, but the Python SDK's `walk()`/`expand()`/`neighbors()` read
+  specific keys (`record_id`, `to_node`) and threw `KeyError` against
+  cluster nodes. Predates S1-S11 entirely; found while documenting S11.
+  Cluster now emits the same shape as standalone. `GET /v1/graph/subgraph`
+  and `/v1/graphrag` were unaffected — they already shared one function
+  between both modes.
 - **Python SDK graph methods had no `collection` support (Phase S11)** —
   `create_node()`, `get_node()`, `create_edge()`, `get_edges()`,
   `subgraph()`, and `neighbors()` on both `SyncRemoteClient` and
