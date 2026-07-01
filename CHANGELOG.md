@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Cluster-mode collection creation was not Raft-replicated (Phase S2)** —
+  `POST /v1/namespaces` mutated a private, per-node, in-memory registry
+  directly. Two nodes could silently assign different `NamespaceId`s to the
+  same collection name (or the same id to different names), and a follower
+  would happily "succeed" against its own out-of-sync copy instead of
+  redirecting to the leader. Now goes through Raft like every other write
+  (`KernelEvent::AutoCreateNamespace`/`DropNamespace`); every node ends up
+  with the identical, durable mapping, and a follower correctly
+  307-redirects. See `docs/phases/phase-S2-namespace-replication.md`.
 - **Snapshot `CapacityExceeded` at scale** — `encode_state` rewritten from a
   fixed `&mut [u8]` buffer to a growable `&mut Vec<u8>`. Snapshots above ~250K
   records (any dimension) previously failed with `Kernel(CapacityExceeded)`

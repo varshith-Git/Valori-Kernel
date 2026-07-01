@@ -167,6 +167,27 @@ The dedup table is part of replicated state (it travels in snapshots). Every
 node makes the same dedup decision. Only successful applies enter the table, so
 a rejected event's `request_id` can be retried.
 
+### Namespace registry (Phase S2)
+
+`StateMachineInner.namespace_registry: ClusterNamespaceRegistry` maps
+collection name → `NamespaceId`, replicated exactly like `dedup_set` — every
+node makes the identical create/resolve decision because both are mutated
+inside the same single Raft-ordered `apply()` critical section, and it
+travels in snapshots so a late-joining or restarted node agrees immediately.
+Fixes a real gap: before this phase, `valori-node`'s `DataPlaneState`
+carried its own private, per-node, unreplicated registry — two nodes could
+silently assign different ids to the same collection name. Unlike the dedup
+table, this one is genuinely *not* the same category as `created_at` below —
+it is deterministic and identical across nodes, just not part of the BLAKE3
+hash domain (see the type's own doc comment in `state_machine.rs` for the
+hashing rationale: `KernelState` has no concept of names, only integer ids).
+
+`KernelEvent::AutoCreateNamespace { name }` / `DropNamespace { name }` are
+the wire events — the state machine resolves/allocates the id from its own
+registry (never from `KernelState`) and calls `KernelState::apply_event_ns`
+with the id already decided, mirroring how `AutoInsertRecord` pre-allocates
+a record id before the kernel ever sees the event.
+
 ### Creation timestamps for decay (Phase C4.1b)
 
 `StateMachineInner.created_at: HashMap<u32, u64>` records the unix-second
@@ -253,11 +274,11 @@ cargo test -p valori-consensus
 |---|---|
 | `tests/type_config.rs` | Wire-type round-trips, serde evolution defaults. |
 | `tests/log_store.rs` | Append/read, truncate-then-rewrite, purge floor monotonicity. |
-| `tests/state_machine.rs` | Apply pipeline, dedup, audit ordering, snapshot round-trip, corruption refusal. |
+| `tests/state_machine.rs` | Apply pipeline, dedup, audit ordering, snapshot round-trip, corruption refusal, namespace registry (id sequencing, idempotency, drop, snapshot survival, cross-instance convergence — Phase S2). |
 | `tests/openraft_compliance.rs` | Official openraft storage compliance suite. |
 | `tests/grpc_cluster.rs` | Real 3-node cluster: election, 10 replicated writes, cross-cluster dedup, ForwardToLeader. |
 | `tests/snapshot_transfer.rs` | Late-joiner catch-up: snapshot-only, snapshot + live-tail, hash convergence. |
-| `tests/fault_tolerance.rs` | Leader crash → re-election, minority loss, majority loss stalls writes. |
+| `tests/fault_tolerance.rs` | Leader crash → re-election, minority loss, majority loss stalls writes, namespace registry converges across real Raft nodes (Phase S2). |
 | `tests/partition_scenarios.rs` | Asymmetric partition, BLAKE3 hash frozen during isolation + converges on heal, isolated-node cannot fork chain. |
 | `tests/multi_shard.rs` | Phase S1: 2 shards × 3 nodes over one shared gRPC listener — independent leader election per shard, write isolation, independent BLAKE3 convergence, one shard's leader failing doesn't affect the other's liveness. |
 | `src/partition_harness.rs` (internal) | `PartitionTable`, `make_cluster`, helpers; 4 in-module tests: 3-node consensus, leader isolation, partition-heal convergence, minority-cannot-commit. |

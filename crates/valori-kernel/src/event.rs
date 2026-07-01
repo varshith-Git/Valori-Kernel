@@ -138,6 +138,28 @@ pub enum KernelEvent {
         key: alloc::string::String,
         value: alloc::string::String,
     },
+
+    /// Register a namespace name -> id mapping, id assigned at apply time
+    /// (cluster-mode; Phase S2). Analogous to `AutoInsertRecord` — the
+    /// consensus layer allocates the id deterministically (every replica
+    /// applies entries in the same Raft-ordered sequence) and calls
+    /// `KernelState::apply_event_ns` with the id already decided. The name
+    /// itself is not stored in `KernelState` (namespaces are pure integers
+    /// here); it rides in the event for audit-log readability and so the
+    /// consensus-layer registry can replay it.
+    AutoCreateNamespace {
+        name: alloc::string::String,
+    },
+
+    /// Drop a namespace by name (cluster-mode; Phase S2), cascading exactly
+    /// like `Command::DropNamespace`. Takes a name rather than a pre-resolved
+    /// id: the consensus layer resolves name -> id from its own registry
+    /// immediately before calling `apply_event_ns`, inside the same
+    /// Raft-apply critical section, so there is no time-of-check/time-of-use
+    /// race between resolving and dropping.
+    DropNamespace {
+        name: alloc::string::String,
+    },
 }
 
 impl KernelEvent {
@@ -158,6 +180,8 @@ impl KernelEvent {
             KernelEvent::AutoCreateEdge { .. } => "AutoCreateEdge",
             KernelEvent::AutoInsertRecordEncrypted { .. } => "AutoInsertRecordEncrypted",
             KernelEvent::SetMeta { .. } => "SetMeta",
+            KernelEvent::AutoCreateNamespace { .. } => "AutoCreateNamespace",
+            KernelEvent::DropNamespace { .. } => "DropNamespace",
         }
     }
 }
@@ -265,6 +289,16 @@ impl Serialize for KernelEvent {
                 state.serialize_field("value", value)?;
                 state.end()
             }
+            KernelEvent::AutoCreateNamespace { name } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 14, "AutoCreateNamespace", 1)?;
+                state.serialize_field("name", name)?;
+                state.end()
+            }
+            KernelEvent::DropNamespace { name } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 15, "DropNamespace", 1)?;
+                state.serialize_field("name", name)?;
+                state.end()
+            }
         }
     }
 }
@@ -366,6 +400,12 @@ impl<'de> Deserialize<'de> for KernelEvent {
                  key: alloc::string::String,
                  value: alloc::string::String,
              },
+             AutoCreateNamespace {
+                 name: alloc::string::String,
+             },
+             DropNamespace {
+                 name: alloc::string::String,
+             },
         }
 
         // Delegate to the Helper
@@ -391,6 +431,8 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag } =>
                 KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, ciphertext, tag },
             KernelEventHelper::SetMeta { key, value } => KernelEvent::SetMeta { key, value },
+            KernelEventHelper::AutoCreateNamespace { name } => KernelEvent::AutoCreateNamespace { name },
+            KernelEventHelper::DropNamespace { name } => KernelEvent::DropNamespace { name },
         })
     }
 }
@@ -472,5 +514,36 @@ mod tests {
         let (decoded, _): (KernelEvent, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
 
         assert_eq!(original, decoded, "Event must survive serialization roundtrip");
+    }
+
+    #[test]
+    fn test_auto_create_namespace_roundtrip() {
+        let original = KernelEvent::AutoCreateNamespace { name: "tenant-acme".into() };
+        let bytes = bincode::serde::encode_to_vec(&original, bincode::config::standard()).unwrap();
+        let (decoded, _): (KernelEvent, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+        assert_eq!(original, decoded);
+        assert_eq!(original.event_type(), "AutoCreateNamespace");
+    }
+
+    #[test]
+    fn test_drop_namespace_by_name_roundtrip() {
+        let original = KernelEvent::DropNamespace { name: "tenant-acme".into() };
+        let bytes = bincode::serde::encode_to_vec(&original, bincode::config::standard()).unwrap();
+        let (decoded, _): (KernelEvent, _) = bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
+        assert_eq!(original, decoded);
+        assert_eq!(original.event_type(), "DropNamespace");
+    }
+
+    #[test]
+    fn test_namespace_events_serialization_determinism() {
+        let create = KernelEvent::AutoCreateNamespace { name: "docs".into() };
+        let b1 = bincode::serde::encode_to_vec(&create, bincode::config::standard()).unwrap();
+        let b2 = bincode::serde::encode_to_vec(&create, bincode::config::standard()).unwrap();
+        assert_eq!(b1, b2);
+
+        let drop = KernelEvent::DropNamespace { name: "docs".into() };
+        let b3 = bincode::serde::encode_to_vec(&drop, bincode::config::standard()).unwrap();
+        let b4 = bincode::serde::encode_to_vec(&drop, bincode::config::standard()).unwrap();
+        assert_eq!(b3, b4);
     }
 }

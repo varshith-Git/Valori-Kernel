@@ -236,3 +236,45 @@ async fn majority_loss_stalls_writes_instead_of_forking() {
         "no quorum → no apply"
     );
 }
+
+// ── Phase S2: namespace registry converges over real Raft ────────────────────
+//
+// The consensus-level tests in tests/state_machine.rs prove the apply()
+// dispatch logic in isolation (in-memory, no network). This test proves the
+// fix at the layer that actually matters: a name -> id mapping submitted on
+// the leader must be visible, identically, on FOLLOWERS THAT NEVER RECEIVED
+// A DIRECT WRITE — over a real gRPC transport, real leader election, real
+// log replication. This is the lowest layer that doesn't require booting the
+// HTTP data plane at all.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn namespace_registry_converges_across_real_raft_nodes() {
+    let nodes = three_node_cluster().await;
+    let leader = leader_index(&nodes);
+
+    let create = ClientRequest {
+        event: KernelEvent::AutoCreateNamespace { name: "tenant-acme".to_string() },
+        request_id: None,
+        schema_version: 0,
+    };
+    let resp = nodes[leader].raft.client_write(create).await.unwrap();
+    let allocated_id = resp.data.allocated_namespace_id.expect("namespace id must be allocated");
+
+    for node in &nodes {
+        node.raft
+            .wait(Some(Duration::from_secs(10)))
+            .applied_index_at_least(Some(resp.data.log_index), "namespace create applied")
+            .await
+            .unwrap();
+    }
+
+    // Every node — including the two that never received the HTTP/client_write
+    // call directly — must resolve the SAME id for the SAME name.
+    for node in &nodes {
+        assert_eq!(
+            node.sm.resolve_namespace(Some("tenant-acme")).await,
+            Some(allocated_id),
+            "every replica must agree on the namespace id, not just the one that received the write"
+        );
+    }
+}

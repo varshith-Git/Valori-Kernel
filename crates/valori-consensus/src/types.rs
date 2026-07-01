@@ -109,6 +109,12 @@ pub struct ClientResponse {
     /// Populated when the request used `KernelEvent::AutoCreateEdge`.
     #[serde(default)]
     pub allocated_edge_id: Option<u32>,
+    /// Populated when the request used `KernelEvent::AutoCreateNamespace`.
+    /// The NamespaceId assigned by the state machine at apply time (or the
+    /// pre-existing id, if the name was already registered — idempotent).
+    /// Phase S2.
+    #[serde(default)]
+    pub allocated_namespace_id: Option<u16>,
 }
 
 openraft::declare_raft_types!(

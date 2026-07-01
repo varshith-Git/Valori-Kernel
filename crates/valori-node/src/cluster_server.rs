@@ -19,7 +19,7 @@
 //! this router makes a cluster node *usable* end to end, not feature-equal
 //! with standalone.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::extract::{State, Query};
 use axum::http::{header, StatusCode};
@@ -45,8 +45,6 @@ use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
 use valori_kernel::crypto::KeyVault;
 use crate::cluster::ClusterHandle;
 use crate::cluster_api::cluster_router;
-use crate::engine::NamespaceRegistry;
-use crate::errors::EngineError;
 use crate::events::event_log::EventLogWriter;
 use axum::extract::Extension;
 use axum::middleware::Next;
@@ -117,11 +115,6 @@ struct DataPlaneState {
     event_log_path: Option<std::path::PathBuf>,
     /// Startup readiness gate (B13). Shared; cheap to clone.
     readiness: Arc<ReadinessGate>,
-    /// Local namespace registry — maps collection names to NamespaceIds.
-    /// Not Raft-replicated; reconstructed from inserts on restart if needed.
-    /// For multi-node clusters this means namespace names are node-local
-    /// (a follow-up will replicate them via KernelEvent::CreateNamespace).
-    namespaces: Arc<Mutex<NamespaceRegistry>>,
     /// Phase 3.6: per-node AES-256-GCM vault. DEKs are not Raft-replicated;
     /// each node holds only the keys for records it encrypted.
     vault: Arc<dyn KeyVault + Send + Sync>,
@@ -256,7 +249,6 @@ pub fn build_cluster_router_with_keys(
         http: reqwest::Client::new(),
         event_log_path,
         readiness: Arc::new(ReadinessGate::new(handle.startup_committed_index)),
-        namespaces: Arc::new(Mutex::new(NamespaceRegistry::new())),
         vault: {
             use crate::crypto_vault::AesGcmVault;
             Arc::new(AesGcmVault::in_memory())
@@ -385,25 +377,68 @@ struct CollectionInfo { name: String, id: u16 }
 #[derive(Serialize)]
 struct ListCollectionsResponse { collections: Vec<CollectionInfo> }
 
+// Phase S2: collection creation/drop now goes through Raft
+// (KernelEvent::AutoCreateNamespace / DropNamespace) instead of mutating a
+// per-node, unreplicated registry directly — see
+// docs/phases/phase-S2-*.md. A follower correctly 307-redirects these now,
+// rather than silently succeeding against its own out-of-sync local copy.
+
 async fn create_collection_handler(
     State(s): State<DataPlaneState>,
     Json(payload): Json<CreateCollectionRequest>,
-) -> Result<Json<CreateCollectionResponse>, EngineError> {
+) -> Response {
     let name = payload.name.trim().to_string();
     if name.is_empty() {
-        return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "collection name cannot be empty" })),
+        )
+            .into_response();
     }
-    let mut reg = s.namespaces.lock().unwrap();
-    let already_exists = reg.map.contains_key(&name) || name == "default";
-    let id = reg.create(&name)?;
-    Ok(Json(CreateCollectionResponse { name, id, created: !already_exists }))
+    if name == "default" {
+        // Idempotent no-op — "default" always exists as id 0.
+        return (
+            StatusCode::OK,
+            Json(CreateCollectionResponse { name, id: 0, created: false }),
+        )
+            .into_response();
+    }
+
+    // Best-effort pre-check for the response's `created` flag: a concurrent
+    // create can still race this read, in which case `created` may read
+    // `true` even though another request won the race. Cosmetic only — `id`
+    // always comes from the committed response below, never from this check.
+    let already_exists = s.sm.resolve_namespace(Some(&name)).await.is_some();
+
+    raft_write(
+        &s.raft,
+        ClientRequest {
+            event: KernelEvent::AutoCreateNamespace { name: name.clone() },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        },
+        move |resp| {
+            (
+                StatusCode::OK,
+                Json(CreateCollectionResponse {
+                    name,
+                    id: resp.allocated_namespace_id.unwrap_or(0),
+                    created: !already_exists,
+                }),
+            )
+                .into_response()
+        },
+    )
+    .await
 }
 
 async fn list_collections_handler(
     State(s): State<DataPlaneState>,
 ) -> Json<ListCollectionsResponse> {
-    let reg = s.namespaces.lock().unwrap();
-    let collections = reg.list().into_iter()
+    // Local read, no Raft round trip — matches the eventual-consistency
+    // convention every other list-style read in this file already uses
+    // (e.g. cluster_list_nodes).
+    let collections = s.sm.list_namespaces().await.into_iter()
         .map(|(name, id)| CollectionInfo { name, id })
         .collect();
     Json(ListCollectionsResponse { collections })
@@ -412,15 +447,31 @@ async fn list_collections_handler(
 async fn drop_collection_handler(
     State(s): State<DataPlaneState>,
     Path(name): Path<String>,
-) -> Result<StatusCode, EngineError> {
+) -> Response {
     if name == "default" {
-        return Err(EngineError::InvalidInput("the 'default' collection cannot be dropped".into()));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "the 'default' collection cannot be dropped" })),
+        )
+            .into_response();
     }
-    let mut reg = s.namespaces.lock().unwrap();
-    reg.drop_collection(&name).ok_or_else(|| {
-        EngineError::InvalidInput(format!("collection '{name}' not found"))
-    })?;
-    Ok(StatusCode::NO_CONTENT)
+    if s.sm.resolve_namespace(Some(&name)).await.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("collection '{name}' not found") })),
+        )
+            .into_response();
+    }
+    raft_write(
+        &s.raft,
+        ClientRequest {
+            event: KernelEvent::DropNamespace { name },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        },
+        |_resp| StatusCode::NO_CONTENT.into_response(),
+    )
+    .await
 }
 
 async fn health(State(state): State<DataPlaneState>) -> Response {
@@ -1423,8 +1474,7 @@ async fn cluster_insert_encrypted(
     };
 
     let ns = if let Some(ref coll) = req.collection {
-        let reg = state.namespaces.lock().unwrap();
-        match reg.resolve(Some(coll.as_str())) {
+        match state.sm.resolve_namespace(Some(coll.as_str())).await {
             Some(id) => id,
             None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Collection not found"}))).into_response(),
         }
@@ -1527,10 +1577,9 @@ async fn cluster_memory_consolidate(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
     };
 
-    // Resolve namespace using the cluster's NamespaceRegistry.
+    // Resolve namespace using the cluster's Raft-replicated registry.
     let ns_id: u16 = if let Some(name) = req.collection.as_deref() {
-        let reg = state.namespaces.lock().unwrap();
-        match reg.resolve(Some(name)) {
+        match state.sm.resolve_namespace(Some(name)).await {
             Some(id) => id,
             None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "collection not found" }))).into_response(),
         }
@@ -1789,17 +1838,24 @@ async fn cluster_ingest(
                 Json(serde_json::json!({ "error": "embed provider returned empty vectors" }))).into_response();
     }
 
-    // 4. Resolve namespace (std Mutex — no .await)
-    let ns: u16 = {
-        let mut reg = state.namespaces.lock().expect("namespaces lock");
-        if collection == "default" {
-            0
-        } else {
-            match reg.create(&collection) {
-                Ok(id) => id,
-                Err(e) => return (StatusCode::BAD_REQUEST,
-                                  Json(serde_json::json!({ "error": format!("{e:?}") }))).into_response(),
-            }
+    // 4. Resolve or auto-create the namespace via Raft (S2: replicated, not
+    // local). Fast path: try a local read first — no Raft round trip for a
+    // collection that already exists, which is the common case. Only a
+    // brand-new name pays one extra round trip. The narrow TOCTOU (two
+    // concurrent ingests both missing the fast path for the same new name)
+    // is harmless because AutoCreateNamespace is idempotent by name.
+    let ns: u16 = if collection == "default" {
+        0
+    } else if let Some(id) = state.sm.resolve_namespace(Some(&collection)).await {
+        id
+    } else {
+        match raft_write_data(&state.raft, ClientRequest {
+            event: KernelEvent::AutoCreateNamespace { name: collection.clone() },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+        }).await {
+            Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
+            Err(resp) => return resp,
         }
     };
 
@@ -2033,9 +2089,7 @@ async fn cluster_tree_hybrid(
                 Ok(vecs) if !vecs.is_empty() => {
                     let q_vec = vecs[0].clone();
                     let ns_name = payload.namespace.as_deref();
-                    let ns_id = s.namespaces.lock().unwrap()
-                        .resolve(ns_name)
-                        .unwrap_or(0);
+                    let ns_id = s.sm.resolve_namespace(ns_name).await.unwrap_or(0);
                     let fetch = k * 2;
                     let raw_hits: Vec<(u32, f32)> = s.sm.with_state(move |kernel| {
                         use valori_kernel::fxp::qformat::SCALE;
@@ -2224,9 +2278,7 @@ async fn cluster_extract_entities(
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
 
     // Insert records + nodes via Raft.
-    let _ns_id: u16 = s.namespaces.lock().unwrap()
-        .resolve(payload.namespace.as_deref())
-        .unwrap_or(0);
+    let _ns_id: u16 = s.sm.resolve_namespace(payload.namespace.as_deref()).await.unwrap_or(0);
 
     use valori_kernel::fxp::qformat::SCALE;
     use valori_kernel::types::scalar::FxpScalar;
@@ -2326,14 +2378,11 @@ async fn cluster_list_nodes(
     State(state): State<DataPlaneState>,
     Query(q): Query<ClusterListNodesQuery>,
 ) -> Response {
-    let ns_id = {
-        let reg = state.namespaces.lock().unwrap();
-        match reg.resolve(q.collection.as_deref()) {
-            Some(id) => id,
-            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection '{}'", q.collection.as_deref().unwrap_or("default"))
-            }))).into_response(),
-        }
+    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(id) => id,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": format!("unknown collection '{}'", q.collection.as_deref().unwrap_or("default"))
+        }))).into_response(),
     };
 
     let nodes = state.sm.with_state(move |s| {
@@ -2364,14 +2413,11 @@ async fn cluster_memory_upsert(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
     };
 
-    let ns_id: u16 = {
-        let reg = state.namespaces.lock().unwrap();
-        match reg.resolve(payload.collection.as_deref()) {
-            Some(id) => id,
-            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection '{}'", payload.collection.as_deref().unwrap_or("default"))
-            }))).into_response(),
-        }
+    let ns_id: u16 = match state.sm.resolve_namespace(payload.collection.as_deref()).await {
+        Some(id) => id,
+        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": format!("unknown collection '{}'", payload.collection.as_deref().unwrap_or("default"))
+        }))).into_response(),
     };
 
     // 1. Insert vector record.
@@ -2455,10 +2501,7 @@ async fn cluster_memory_search(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
     };
 
-    let ns_id: u16 = {
-        let reg = state.namespaces.lock().unwrap();
-        reg.resolve(payload.collection.as_deref()).unwrap_or(0)
-    };
+    let ns_id: u16 = state.sm.resolve_namespace(payload.collection.as_deref()).await.unwrap_or(0);
 
     let half_life = payload.decay_half_life_secs.unwrap_or(0);
     let k = payload.k;
@@ -2585,6 +2628,8 @@ async fn cluster_timeline(
                         KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
                         KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
                         KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
+                        KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
+                        KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
                     };
                     entries.push(crate::api::TimelineEntry {
                         log_index,

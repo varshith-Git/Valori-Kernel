@@ -187,5 +187,15 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("SetMeta").fg(Color::White),
             format!("key={key:?}  value={value:?}"),
         ),
+
+        KernelEvent::AutoCreateNamespace { name } => (
+            Cell::new("AutoCreateNamespace").fg(Color::Cyan),
+            format!("name={name:?}  (id assigned at apply)"),
+        ),
+
+        KernelEvent::DropNamespace { name } => (
+            Cell::new("DropNamespace").fg(Color::Red),
+            format!("name={name:?} (cascade-deleted records/nodes)"),
+        ),
     }
 }

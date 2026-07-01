@@ -65,6 +65,7 @@ fn client_response_roundtrips_and_dedup_flag_defaults_false() {
         allocated_record_id: None,
         allocated_node_id: None,
         allocated_edge_id: None,
+        allocated_namespace_id: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     // Strip the flag — old responses without it must still decode.

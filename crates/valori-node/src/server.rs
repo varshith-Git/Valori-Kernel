@@ -1262,6 +1262,8 @@ async fn get_timeline(
             KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
             KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
             KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
+            KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
+            KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
         };
 
         entries.push(TimelineEntry {

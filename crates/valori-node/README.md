@@ -65,6 +65,16 @@ curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
 # Dropping "default" → 400 Bad Request
 ```
 
+### Cluster mode (Phase S2)
+
+Collection create/drop go through Raft, exactly like every other write — the
+name → id mapping is replicated and identical on every node, durable across
+snapshots and leader failover. A follower correctly answers `307 Temporary
+Redirect` to these two endpoints (same as `/records`), pointing at the
+leader. `GET /v1/namespaces` is a local, eventually-consistent read (matches
+every other list-style cluster endpoint) — a node still catching up on
+replication may briefly lag behind the leader's list.
+
 ---
 
 ## Built-in Ingest Pipeline (Phase I1/I2/I3)

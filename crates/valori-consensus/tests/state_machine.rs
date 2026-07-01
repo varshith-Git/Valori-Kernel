@@ -154,7 +154,7 @@ async fn rejected_event_leaves_state_untouched_but_consumes_the_entry() {
 #[tokio::test]
 async fn audit_sink_sees_successful_applies_in_order_and_nothing_else() {
     let sink = MemoryAuditSink::new();
-    let mut sm = ValoriStateMachine::new(Box::new(sink.clone()));
+    let mut sm = ValoriStateMachine::new(Box::new(sink.clone()), 4);
 
     sm.apply(vec![
         normal(1, 1, 1, insert_event(0), Some(rid(1))),       // applies
@@ -303,11 +303,15 @@ async fn apply_accepts_current_schema_version() {
 async fn apply_rejects_unknown_schema_version() {
     let mut sm = ValoriStateMachine::default();
     let future_version = CURRENT_SCHEMA_VERSION.saturating_add(1);
-    let result = sm
+    // H-4: a too-new schema version is rejected at the APPLICATION layer
+    // (ClientResponse.rejected), not as a StorageError — a StorageError here
+    // would permanently halt the node. apply() itself still returns Ok.
+    let replies = sm
         .apply(vec![versioned(1, 1, 1, insert_event(0), future_version)])
-        .await;
+        .await
+        .unwrap();
     assert!(
-        result.is_err(),
+        replies[0].rejected.is_some(),
         "a schema version newer than CURRENT_SCHEMA_VERSION must be refused"
     );
     // State must be untouched — the node did not apply a partially understood entry.
@@ -315,5 +319,119 @@ async fn apply_rejects_unknown_schema_version() {
         sm.with_state(|s| s.record_count()).await,
         0,
         "kernel state must be unchanged after a schema-version rejection"
+    );
+}
+
+// ── Phase S2: Raft-replicated namespace registry ─────────────────────────────
+
+fn create_ns_event(name: &str) -> KernelEvent {
+    KernelEvent::AutoCreateNamespace { name: name.to_string() }
+}
+
+fn drop_ns_event(name: &str) -> KernelEvent {
+    KernelEvent::DropNamespace { name: name.to_string() }
+}
+
+#[tokio::test]
+async fn auto_create_namespace_assigns_sequential_ids() {
+    let mut sm = ValoriStateMachine::default();
+
+    let r1 = sm.apply(vec![normal(1, 1, 1, create_ns_event("docs"), None)]).await.unwrap();
+    let r2 = sm.apply(vec![normal(1, 1, 2, create_ns_event("images"), None)]).await.unwrap();
+
+    assert_eq!(r1[0].allocated_namespace_id, Some(1));
+    assert_eq!(r2[0].allocated_namespace_id, Some(2));
+    assert_eq!(sm.resolve_namespace(Some("docs")).await, Some(1));
+    assert_eq!(sm.resolve_namespace(Some("images")).await, Some(2));
+}
+
+#[tokio::test]
+async fn auto_create_namespace_is_idempotent_by_name() {
+    let mut sm = ValoriStateMachine::default();
+
+    // Two different request_ids (or none) — idempotency here comes from the
+    // NAME, not the dedup table, unlike record inserts.
+    let first = sm.apply(vec![normal(1, 1, 1, create_ns_event("docs"), None)]).await.unwrap();
+    let second = sm.apply(vec![normal(1, 1, 2, create_ns_event("docs"), None)]).await.unwrap();
+
+    assert_eq!(first[0].allocated_namespace_id, second[0].allocated_namespace_id);
+    assert_eq!(first[0].allocated_namespace_id, Some(1));
+}
+
+#[tokio::test]
+async fn default_namespace_resolves_without_being_created() {
+    let sm = ValoriStateMachine::default();
+    assert_eq!(sm.resolve_namespace(None).await, Some(0));
+    assert_eq!(sm.resolve_namespace(Some("default")).await, Some(0));
+    assert_eq!(sm.resolve_namespace(Some("unregistered")).await, None);
+}
+
+#[tokio::test]
+async fn drop_namespace_removes_from_registry() {
+    // The kernel-side cascade-delete (records/nodes/edges) is proven
+    // independently in crates/valori-kernel/tests/state_machine.rs's
+    // drop_namespace_cascades_records_in_that_namespace — this test is
+    // scoped to the consensus-layer registry mutation itself.
+    let mut sm = ValoriStateMachine::default();
+
+    sm.apply(vec![normal(1, 1, 1, create_ns_event("docs"), None)]).await.unwrap();
+    assert_eq!(sm.resolve_namespace(Some("docs")).await, Some(1));
+
+    sm.apply(vec![normal(1, 1, 2, drop_ns_event("docs"), None)]).await.unwrap();
+    assert_eq!(sm.resolve_namespace(Some("docs")).await, None, "dropped namespace must no longer resolve");
+}
+
+#[tokio::test]
+async fn drop_unknown_namespace_is_rejected_registry_unchanged() {
+    let mut sm = ValoriStateMachine::default();
+
+    let replies = sm.apply(vec![normal(1, 1, 1, drop_ns_event("never-created"), None)]).await.unwrap();
+    assert!(replies[0].rejected.is_some(), "dropping an unknown namespace must be rejected");
+    assert_eq!(sm.resolve_namespace(Some("never-created")).await, None);
+}
+
+#[tokio::test]
+async fn snapshot_roundtrip_preserves_namespace_registry() {
+    let mut leader = ValoriStateMachine::default();
+    leader.apply(vec![
+        normal(1, 1, 1, create_ns_event("docs"), None),
+        normal(1, 1, 2, create_ns_event("images"), None),
+    ]).await.unwrap();
+
+    let snapshot = leader.get_snapshot_builder().await.build_snapshot().await.unwrap();
+
+    let mut follower = ValoriStateMachine::default();
+    follower.install_snapshot(&snapshot.meta, snapshot.snapshot).await.unwrap();
+
+    assert_eq!(follower.resolve_namespace(Some("docs")).await, Some(1));
+    assert_eq!(follower.resolve_namespace(Some("images")).await, Some(2));
+
+    // A namespace created AFTER the snapshot must continue the SAME sequence
+    // — proves next_id survived the round-trip too, not just the map.
+    follower.apply(vec![normal(2, 2, 3, create_ns_event("videos"), None)]).await.unwrap();
+    assert_eq!(follower.resolve_namespace(Some("videos")).await, Some(3));
+}
+
+#[tokio::test]
+async fn two_nodes_applying_the_same_entries_converge_on_namespace_ids() {
+    let entries = || {
+        vec![
+            normal(1, 1, 1, create_ns_event("docs"), None),
+            normal(1, 1, 2, create_ns_event("images"), None),
+            normal(1, 1, 3, create_ns_event("docs"), None), // idempotent repeat
+        ]
+    };
+
+    let mut a = ValoriStateMachine::default();
+    let mut b = ValoriStateMachine::default();
+    a.apply(entries()).await.unwrap();
+    b.apply(entries()).await.unwrap();
+
+    assert_eq!(a.resolve_namespace(Some("docs")).await, b.resolve_namespace(Some("docs")).await);
+    assert_eq!(a.resolve_namespace(Some("images")).await, b.resolve_namespace(Some("images")).await);
+    assert_eq!(
+        a.state_hash().await,
+        b.state_hash().await,
+        "namespace events must not desync the BLAKE3 state hash between replicas"
     );
 }

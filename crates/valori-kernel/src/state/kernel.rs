@@ -344,6 +344,26 @@ impl KernelState {
                 self.meta.insert(key.clone(), value.clone());
             }
 
+            KernelEvent::AutoCreateNamespace { name: _ } => {
+                // The name is not stored in KernelState — namespaces are pure
+                // integer ids here (Phase S2 design: the name -> id registry
+                // lives one layer up, in the consensus-layer state machine).
+                // `namespace_id` is the id already allocated by the caller
+                // (ValoriStateMachine::apply, via apply_event_ns) before this
+                // event reached the kernel.
+                let cmd = Command::CreateNamespace { namespace_id };
+                self.apply(&cmd)?;
+            }
+
+            KernelEvent::DropNamespace { name: _ } => {
+                // Same convention as AutoCreateNamespace: the consensus layer
+                // resolved name -> id from its own registry immediately
+                // before calling apply_event_ns, inside the same Raft-apply
+                // critical section, so there is no TOCTOU here.
+                let cmd = Command::DropNamespace { namespace_id };
+                self.apply(&cmd)?;
+            }
+
             KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {
                 let ns = namespace_id as usize;
                 if ns >= MAX_NAMESPACES {
