@@ -30,8 +30,9 @@ use tower_http::cors::{CorsLayer, Any};
 use serde::{Deserialize, Serialize};
 
 use axum::extract::Path;
-use valori_consensus::types::{Raft, CURRENT_SCHEMA_VERSION};
+use valori_consensus::types::{Raft, ShardId, CURRENT_SCHEMA_VERSION};
 use valori_consensus::{ClientRequest, ValoriStateMachine};
+use crate::cluster::ShardHandle;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::fxp::qformat::SCALE;
 use valori_kernel::index::SearchResult as KernelSearchResult;
@@ -136,6 +137,52 @@ struct DataPlaneState {
     /// Node-local (not Raft-replicated) — communities are derived from the
     /// graph which IS replicated, so any peer can re-derive an identical store.
     community_store: Arc<tokio::sync::RwLock<Option<crate::community::CommunityStore>>>,
+    /// Phase S3: every shard this node runs (Phase S1's `ClusterHandle.shards`,
+    /// always contains at least `ShardId(0)`). `raft`/`sm` above are shard 0's
+    /// handles, kept as flat fields so every handler that doesn't resolve a
+    /// namespace keeps working unchanged. Handlers that DO resolve a
+    /// `NamespaceId` should route through `shard_for()` instead of `raft`/`sm`
+    /// directly — see the doc comment there.
+    shards: Arc<std::collections::BTreeMap<ShardId, ShardHandle>>,
+    /// Phase S1's `VALORI_SHARD_COUNT` (default 1). Used by `shard_for_namespace()`.
+    shard_count: u32,
+}
+
+/// Deterministic namespace → shard mapping (Phase S3). No placement table is
+/// needed because Phase S1 keeps every shard symmetric — every configured
+/// cluster member is a voter in every shard — so a pure function of the
+/// namespace id is sufficient and requires no coordination. `shard_count=1`
+/// (S1's default) always resolves to `ShardId(0)`, i.e. today's behavior.
+fn shard_for_namespace(namespace_id: u16, shard_count: u32) -> ShardId {
+    ShardId((namespace_id as u32) % shard_count.max(1))
+}
+
+impl DataPlaneState {
+    /// Resolve which shard owns a namespace's DATA (records/nodes/edges).
+    /// The namespace REGISTRY itself (name → id) always lives on shard 0 —
+    /// see `ValoriStateMachine::resolve_namespace`/`list_namespaces`, unchanged
+    /// by this — only where the namespace's actual records/nodes live is
+    /// routed here.
+    ///
+    /// NOTE (Phase S3, deliberately not yet wired into most handlers): the
+    /// `Auto*` `KernelEvent` variants (`AutoInsertRecord`, `AutoCreateNode`,
+    /// `AutoCreateEdge`) do not carry a namespace id, and
+    /// `ValoriStateMachine::apply()`'s generic dispatch branch always applies
+    /// them to namespace 0 regardless of what a handler resolves — a
+    /// pre-existing bug independent of sharding (see
+    /// docs/phases/phase-S3-shard-routing-infrastructure.md). Routing THOSE
+    /// writes to a non-zero shard today would silently scatter data across
+    /// shards under a namespace id nothing actually wrote to. This accessor
+    /// is therefore currently used only for namespace-registry-adjacent
+    /// reads and for event types that DO carry a real namespace id
+    /// internally (`InsertRecordEncrypted`/`AutoInsertRecordEncrypted`).
+    #[allow(dead_code)]
+    fn shard_for(&self, namespace_id: u16) -> &ShardHandle {
+        let shard_id = shard_for_namespace(namespace_id, self.shard_count);
+        self.shards
+            .get(&shard_id)
+            .expect("shard_for_namespace always returns a shard id in 0..shard_count")
+    }
 }
 
 /// Bind a TCP port and serve the cluster data + management router on it.
@@ -258,6 +305,23 @@ pub fn build_cluster_router_with_keys(
         metadata: Arc::new(crate::metadata::MetadataStore::new()),
         tree_cache: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         community_store: Arc::new(tokio::sync::RwLock::new(None)),
+        shard_count: handle.shards.len() as u32,
+        shards: Arc::new(
+            handle
+                .shards
+                .iter()
+                .map(|(id, h)| {
+                    (
+                        *id,
+                        ShardHandle {
+                            raft: h.raft.clone(),
+                            state_machine: h.state_machine.clone(),
+                            startup_committed_index: h.startup_committed_index,
+                        },
+                    )
+                })
+                .collect(),
+        ),
     };
 
     let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
@@ -2757,5 +2821,47 @@ mod tests {
         gate.check_applied(3).ok(); // open latch
         // Second call must hit the fast-path (ready == true) and return Ok.
         assert!(gate.check_applied(0).is_ok(), "fast-path must bypass target check");
+    }
+
+    // ── Phase S3: shard_for_namespace ────────────────────────────────────────
+
+    use super::shard_for_namespace;
+    use valori_consensus::types::ShardId;
+
+    #[test]
+    fn shard_count_one_always_resolves_to_shard_zero() {
+        // S1's default — must be byte-identical to today's single-shard behavior.
+        for ns in [0u16, 1, 2, 1023] {
+            assert_eq!(shard_for_namespace(ns, 1), ShardId(0));
+        }
+    }
+
+    #[test]
+    fn default_namespace_always_resolves_to_shard_zero() {
+        // Namespace 0 ("default") lands on shard 0 regardless of shard_count —
+        // consequence of the modulo, not a special case, but worth pinning:
+        // the namespace registry itself lives only on shard 0 (Phase S2),
+        // so this must hold for the registry's own bookkeeping to be sound.
+        for shard_count in [1u32, 2, 3, 8] {
+            assert_eq!(shard_for_namespace(0, shard_count), ShardId(0));
+        }
+    }
+
+    #[test]
+    fn distributes_across_shards_deterministically_and_repeatably() {
+        assert_eq!(shard_for_namespace(1, 3), ShardId(1));
+        assert_eq!(shard_for_namespace(2, 3), ShardId(2));
+        assert_eq!(shard_for_namespace(3, 3), ShardId(0));
+        assert_eq!(shard_for_namespace(4, 3), ShardId(1));
+        // Same inputs, same output — pure function, no hidden state.
+        assert_eq!(shard_for_namespace(4, 3), shard_for_namespace(4, 3));
+    }
+
+    #[test]
+    fn shard_count_zero_does_not_panic() {
+        // Defensive: shard_count should never actually be 0 in practice
+        // (ClusterConfig::from_env rejects it), but the routing function
+        // itself must not divide by zero if ever called with a bad value.
+        assert_eq!(shard_for_namespace(5, 0), ShardId(0));
     }
 }
