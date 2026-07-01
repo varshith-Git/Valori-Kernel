@@ -14,8 +14,8 @@ use std::time::Duration;
 
 use openraft::{Config, Raft};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
-use valori_consensus::{serve_raft, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
+use valori_consensus::{serve_raft_single, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -42,10 +42,10 @@ async fn spawn_node(id: NodeId) -> TestNode {
     );
 
     let sm = ValoriStateMachine::default();
-    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), ValoriLogStore::new(), sm.clone())
+    let raft = Raft::new(id, config, ValoriNetworkFactory::new(ShardId(0)), ValoriLogStore::new(), sm.clone())
         .await
         .unwrap();
-    let (addr, _task) = serve_raft(raft.clone(), "127.0.0.1:0").await.unwrap();
+    let (addr, _task) = serve_raft_single(raft.clone(), "127.0.0.1:0").await.unwrap();
 
     TestNode {
         raft,

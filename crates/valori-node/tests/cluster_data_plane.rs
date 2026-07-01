@@ -24,6 +24,7 @@ async fn boot_leader() -> ClusterHandle {
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
     handle
@@ -145,6 +146,7 @@ async fn write_to_a_follower_redirects_with_location() {
         init: false,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
     let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink), 0).await.unwrap();
 

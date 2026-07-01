@@ -26,6 +26,7 @@ async fn serve_node() -> (String, tokio::task::JoinHandle<()>) {
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
     let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
     handle

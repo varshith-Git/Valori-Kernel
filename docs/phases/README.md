@@ -74,6 +74,7 @@ people and sessions that built it.
 | I7 — Metadata filtering: JSON predicate post-filter on `/search` (both paths) | [phase-I7-metadata-filter.md](phase-I7-metadata-filter.md) | `main` | ✅ done |
 | P1 — Million-scale performance: growable-Vec snapshots (fixes `CapacityExceeded` at 1M), WAL flush-on-drop, SIMD L2, benchmark suite | [phase-P1-million-scale-performance.md](phase-P1-million-scale-performance.md) | `main` | ✅ done |
 | P2 — IVF centroid auto-scaling (k = sqrt(N)); `needs_rebuild()` hook; `VALORI_IVF_N_LIST`/`VALORI_IVF_N_PROBE` overrides | [phase-P2-ivf-centroid-scaling.md](phase-P2-ivf-centroid-scaling.md) | `main` | ✅ done |
+| S1 — Multi-Raft consensus skeleton: `ShardId` + shard-routed gRPC transport + per-shard redb/state-machine bootstrap loop; `VALORI_SHARD_COUNT` (default 1, symmetric placement, no namespace routing yet) | [phase-S1-multi-raft-skeleton.md](phase-S1-multi-raft-skeleton.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 

@@ -33,10 +33,10 @@ pub mod partition_harness;
 pub use log_store::ValoriLogStore;
 pub use log_store_redb::RedbLogStore;
 pub use network::{
-    serve_raft, serve_raft_tls, RaftRpcService, RaftTlsConfig, ValoriNetwork,
-    ValoriNetworkFactory,
+    serve_raft, serve_raft_single, serve_raft_tls, serve_raft_tls_single, RaftRpcService,
+    RaftTlsConfig, ValoriNetwork, ValoriNetworkFactory,
 };
 pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
 pub use types::{
-    ClientRequest, ClientResponse, NodeId, TypeConfig, ValoriNode,
+    ClientRequest, ClientResponse, NodeId, ShardId, TypeConfig, ValoriNode,
 };

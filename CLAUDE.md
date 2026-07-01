@@ -248,6 +248,7 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 | `VALORI_RAFT_LOG_PATH` | Persistent redb file for Raft log + vote + SM |
 | `VALORI_STATE_HASH_CHECK_SECS` | Hash-convergence poll interval (default 30, 0 = off) |
 | `VALORI_TLS_CA` / `VALORI_TLS_CERT` / `VALORI_TLS_KEY` | mTLS on Raft channel |
+| `VALORI_SHARD_COUNT` | Phase S1 (skeleton): independent Raft groups per process, one shared gRPC listener, symmetric placement. Default 1 = today's single-Raft-group behavior, byte-identical. No namespace routing yet — shards ≥ 1 have no HTTP surface. See `docs/phases/phase-S1-multi-raft-skeleton.md` |
 
 **Object store (Phase 3.1)**
 

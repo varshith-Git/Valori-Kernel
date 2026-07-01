@@ -30,6 +30,7 @@ async fn boot(node_id: u64, init: bool) -> ClusterHandle {
         init,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
     bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap()
 }

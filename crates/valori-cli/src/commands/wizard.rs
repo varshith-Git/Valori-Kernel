@@ -251,6 +251,7 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
             init: false,
             raft_log_path: None,
             tls: None,
+            shard_count: 1,
         };
 
         let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)
@@ -479,6 +480,7 @@ async fn add_local_node(
         init: false,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
 
     let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)

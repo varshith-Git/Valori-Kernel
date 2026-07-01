@@ -12,6 +12,14 @@
 // Replies carry `Result<Resp, RaftError>` (bincode) — Raft-level errors are
 // data, not transport failures; gRPC status codes are reserved for actual
 // transport problems.
+//
+// shard_id (Phase S1 — multi-Raft skeleton): identifies which independent
+// Raft group this message belongs to. A binary built before this field
+// existed decodes it as 0, which is harmless while every deployment runs
+// a single shard (VALORI_SHARD_COUNT=1) but means shard-aware and
+// pre-S1 binaries must NOT be mixed in a cluster running more than one
+// shard — there is no rolling-upgrade path across this change once
+// shard_count > 1 is in use.
 
 syntax = "proto3";
 package valori.raft;
@@ -19,11 +27,16 @@ package valori.raft;
 message RaftRequest {
   // bincode of the openraft request type for this RPC.
   bytes payload = 1;
+  // Which Raft group (shard) this request targets. 0 = the sole shard
+  // in a single-shard deployment.
+  uint32 shard_id = 2;
 }
 
 message RaftReply {
   // bincode of Result<openraft response, openraft RaftError>.
   bytes payload = 1;
+  // Echoes the request's shard_id.
+  uint32 shard_id = 2;
 }
 
 service RaftService {

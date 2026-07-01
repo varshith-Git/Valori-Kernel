@@ -221,6 +221,26 @@ data; gRPC status codes mean real transport failures.
 itself — no separate address book to drift. `protoc` is vendored
 (`protoc-bin-vendored`) — no system install needed.
 
+### Multi-Raft shard routing (Phase S1)
+
+`RaftRequest`/`RaftReply` carry a `shard_id: u32` field. `RaftRpcService`
+holds a `HashMap<ShardId, Raft>` — one shared gRPC listener demultiplexes
+every shard a node runs by the incoming `shard_id`, returning
+`tonic::Status::not_found` for an unknown one (a real misconfiguration
+signal, since every configured node runs every shard under today's
+symmetric placement). `ValoriNetworkFactory`/`ValoriNetwork` are constructed
+per shard (`ValoriNetworkFactory::new(shard)`) and stamp `shard_id` on every
+outgoing request — openraft consumes one factory per `Raft::new()` call, so
+one shard per factory follows naturally.
+
+`serve_raft`/`serve_raft_tls` take a `HashMap<ShardId, Raft>` now;
+`serve_raft_single`/`serve_raft_tls_single` are convenience wrappers for the
+common one-shard case (`ShardId(0)`).
+
+Namespace→shard routing and asymmetric placement (different node subsets
+per shard) do not exist yet — see
+[`docs/phases/phase-S1-multi-raft-skeleton.md`](../../docs/phases/phase-S1-multi-raft-skeleton.md).
+
 ---
 
 ## Testing
@@ -239,4 +259,5 @@ cargo test -p valori-consensus
 | `tests/snapshot_transfer.rs` | Late-joiner catch-up: snapshot-only, snapshot + live-tail, hash convergence. |
 | `tests/fault_tolerance.rs` | Leader crash → re-election, minority loss, majority loss stalls writes. |
 | `tests/partition_scenarios.rs` | Asymmetric partition, BLAKE3 hash frozen during isolation + converges on heal, isolated-node cannot fork chain. |
+| `tests/multi_shard.rs` | Phase S1: 2 shards × 3 nodes over one shared gRPC listener — independent leader election per shard, write isolation, independent BLAKE3 convergence, one shard's leader failing doesn't affect the other's liveness. |
 | `src/partition_harness.rs` (internal) | `PartitionTable`, `make_cluster`, helpers; 4 in-module tests: 3-node consensus, leader isolation, partition-heal convergence, minority-cannot-commit. |

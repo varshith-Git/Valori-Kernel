@@ -21,6 +21,15 @@ use valori_kernel::event::KernelEvent;
 /// Stable numeric node identity. Comes from `VALORI_NODE_ID` (Phase 1.8).
 pub type NodeId = u64;
 
+/// Identifies one independent Raft group ("shard") within a process
+/// (Phase S1 — multi-Raft skeleton). `ShardId(0)` is the sole shard when
+/// `VALORI_SHARD_COUNT=1` (today's single-Raft-group behavior — see
+/// `valori_node::cluster::bootstrap_cluster`). Namespace-to-shard routing
+/// does not exist yet; this type only identifies which Raft group a wire
+/// message or log/state-machine instance belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+pub struct ShardId(pub u32);
+
 /// A cluster member as known to Raft membership config.
 ///
 /// `api_addr` is the public HTTP data-plane address (axum, port 3000-ish);

@@ -16,9 +16,9 @@ use std::time::Duration;
 use openraft::{Config, Raft};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
 use valori_consensus::{
-    serve_raft_tls, RaftTlsConfig, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+    serve_raft_tls_single, RaftTlsConfig, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
 };
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -80,13 +80,13 @@ async fn spawn_tls_node(id: NodeId, tls: RaftTlsConfig) -> TestNode {
     let raft = Raft::new(
         id,
         config,
-        ValoriNetworkFactory::with_tls(tls.clone()),
+        ValoriNetworkFactory::with_tls(ShardId(0), tls.clone()),
         ValoriLogStore::new(),
         sm.clone(),
     )
     .await
     .unwrap();
-    let (addr, _task) = serve_raft_tls(raft.clone(), "127.0.0.1:0", tls).await.unwrap();
+    let (addr, _task) = serve_raft_tls_single(raft.clone(), "127.0.0.1:0", tls).await.unwrap();
     TestNode {
         raft,
         sm,
@@ -214,7 +214,7 @@ async fn plaintext_client_cannot_reach_a_tls_server() {
         let mut client =
             valori_consensus::network::proto::raft_service_client::RaftServiceClient::new(channel);
         client
-            .vote(valori_consensus::network::proto::RaftRequest { payload: vec![] })
+            .vote(valori_consensus::network::proto::RaftRequest { payload: vec![], shard_id: 0 })
             .await
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
         Ok::<(), Box<dyn std::error::Error>>(())

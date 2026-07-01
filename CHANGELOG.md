@@ -19,6 +19,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   events; recovery tests found 0 events after a simulated crash.
 
 ### Added
+- **Multi-Raft consensus skeleton (Phase S1)** — a cluster process can now run
+  multiple independent Raft groups ("shards") sharing one gRPC listener, each
+  with its own persistent redb log, state machine, and leader election.
+  New `VALORI_SHARD_COUNT` env var (default `1`, byte-identical to prior
+  single-Raft-group behavior). Foundation for future namespace-sharded
+  horizontal scaling — namespace→shard routing and HTTP-layer wiring are not
+  part of this phase. See `docs/phases/phase-S1-multi-raft-skeleton.md`.
 - **IVF centroid auto-scaling** (`n_list = max(16, sqrt(N))`, `n_probe = max(1, sqrt(n_list))`) — fixes a 153× QPS regression from 10K to 1M records. Centroids now scale with dataset size so average bucket size stays O(sqrt(N)) and scan cost is O(sqrt(N)) not O(N). Manual override via `VALORI_IVF_N_LIST` / `VALORI_IVF_N_PROBE` disables auto-scaling. Added `IvfIndex::needs_rebuild(count)` hook (returns true when online inserts exceed 2× the build size).
 - **`encode_capacity_hint(state)`** — V6-correct pre-allocation estimate so the
   snapshot `Vec` avoids repeated reallocation on the hot path.

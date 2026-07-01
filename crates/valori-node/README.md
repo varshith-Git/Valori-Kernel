@@ -547,6 +547,7 @@ curl -X POST http://localhost:3000/v1/cluster/remove-node \
 | `VALORI_SNAPSHOT_EVERY_EVENTS` | Trigger a Raft snapshot every N applied entries (default `5000`). Lower values bound the log-replay window on restart at the cost of more snapshot I/O. |
 | `VALORI_RAFT_SNAPSHOT_KEEP` | Log entries to retain after each snapshot for followers that are only slightly behind (default `1000`). |
 | `VALORI_STATE_HASH_CHECK_SECS` | Hash-convergence poll interval in seconds (default `30`, `0` = off). |
+| `VALORI_SHARD_COUNT` | **Phase S1 — multi-Raft skeleton.** Number of independent Raft groups this process runs, sharing one gRPC listener (default `1`, byte-identical to pre-S1 behavior). Every configured member is a voter in every shard (symmetric placement) — namespace→shard routing and asymmetric placement do not exist yet, so shards beyond 0 currently have no HTTP surface. See [`docs/phases/phase-S1-multi-raft-skeleton.md`](../../docs/phases/phase-S1-multi-raft-skeleton.md). |
 
 ---
 
