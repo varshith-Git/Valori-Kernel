@@ -394,12 +394,20 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/vectors/batch_insert",  post(batch_insert))
         .layer(axum::middleware::from_fn(deprecation_warning));
 
+    // Phase S6: shard-aware read-index needs every shard's raft handle,
+    // independent of DataPlaneState (already moved into with_state above).
+    let api_shards: std::collections::BTreeMap<ShardId, Raft> = handle
+        .shards
+        .iter()
+        .map(|(id, h)| (*id, h.raft.clone()))
+        .collect();
+
     let mut router = Router::new()
         .merge(public)
         .merge(v1)
         .merge(legacy)
         .with_state(state)
-        .merge(cluster_router(raft, audit))
+        .merge(cluster_router(raft, Arc::new(api_shards), audit))
         .layer(axum::middleware::from_fn(cluster_auth_guard))
         .layer(Extension(auth.clone()));
     if let Some(cors) = make_cors_layer() {
@@ -643,6 +651,10 @@ struct InsertRequest {
     /// Client idempotency token (hex-free 16 bytes as array) — optional.
     #[serde(default)]
     request_id: Option<[u8; 16]>,
+    /// Phase S7. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S7 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -693,10 +705,22 @@ async fn insert_record(
         }
     };
 
+    // Phase S7: resolve collection -> namespace (registry always lives on
+    // shard 0), then route the write to that namespace's data shard.
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
+
     // ID is assigned by the state machine at apply time (AutoInsertRecord).
     // No per-node mutex or retry loop needed — the Raft log is the serialiser.
     raft_write(
-        &state.raft,
+        shard_raft,
         ClientRequest {
             event: KernelEvent::AutoInsertRecord {
                 vector,
@@ -704,7 +728,7 @@ async fn insert_record(
                 tag: req.tag,
             },
             request_id: req.request_id,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
         },
         |resp| {
             (
@@ -758,6 +782,10 @@ struct SearchRequest {
     /// Supports range operators: `{"year": {"gte": 2020, "lte": 2024}}`.
     #[serde(default)]
     metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Phase S7. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S7 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 fn default_rerank() -> bool { true }
@@ -784,9 +812,22 @@ async fn search(
         return resp;
     }
 
+    // Phase S7: resolve collection -> namespace (registry always lives on
+    // shard 0), then route the read to that namespace's data shard.
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard = state.shard_for(ns_id);
+    let shard_sm = &shard.state_machine;
+
     // Dimension check against the locked kernel dim (set on first insert).
     // An empty store (dim == None) accepts any query length.
-    if let Some(locked) = state.sm.locked_dim().await {
+    if let Some(locked) = shard_sm.locked_dim().await {
         if req.query.len() != locked {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
                 "error": format!(
@@ -808,7 +849,7 @@ async fn search(
     // Linearizable reads (the default) establish a read index first, so the
     // local scan below reflects every write committed before this read began.
     if req.consistency == Consistency::Linearizable {
-        if let Err(resp) = ensure_read_consistency(&state.raft, &state.http).await {
+        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
             return resp;
         }
     }
@@ -835,8 +876,7 @@ async fn search(
     let query_text_owned = req.query_text.clone().unwrap_or_default();
 
     let results: Vec<SearchHit> = if half_life == 0 {
-        let raw: Vec<SearchHit> = state
-            .sm
+        let raw: Vec<SearchHit> = shard_sm
             .with_state(|s| {
                 let mut buf = vec![KernelSearchResult::default(); fetch_k];
                 let n = s.search_l2(&query, &mut buf, None);
@@ -865,7 +905,7 @@ async fn search(
                 .map(|h| (h.id as u64, h.score as f32))
                 .collect();
             let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
-            state.sm.with_text_corpus(|corpus| {
+            shard_sm.with_text_corpus(|corpus| {
                 // build a reranker seeded with only the candidate texts
                 let mut reranker = crate::valori_reranker::ValoriReranker::new();
                 for id in &candidate_ids {
@@ -886,8 +926,7 @@ async fn search(
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs()).unwrap_or(0);
-        let decayed: Vec<crate::decay::DecayedHit> = state
-            .sm
+        let decayed: Vec<crate::decay::DecayedHit> = shard_sm
             .with_state_and_timestamps(|s, created_at| {
                 let mut buf = vec![KernelSearchResult::default(); pool];
                 let n = s.search_l2(&query, &mut buf, None);
@@ -936,7 +975,7 @@ fn read_unavailable(msg: String) -> Response {
 ///   then wait until this node's applied index catches up before returning.
 ///
 /// On success the caller may scan local state and the result is linearizable.
-async fn ensure_read_consistency(raft: &Raft, http: &reqwest::Client) -> Result<(), Response> {
+async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest::Client) -> Result<(), Response> {
     // Snapshot the metrics into owned values so no watch borrow is held across
     // an await point.
     let m = raft.metrics().borrow().clone();
@@ -975,7 +1014,7 @@ async fn ensure_read_consistency(raft: &Raft, http: &reqwest::Client) -> Result<
         }
     };
 
-    let url = format!("http://{leader_api}/v1/cluster/read-index");
+    let url = format!("http://{leader_api}/v1/cluster/read-index?shard={}", shard_id.0);
     let read_index = match http
         .get(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -1008,18 +1047,34 @@ async fn ensure_read_consistency(raft: &Raft, http: &reqwest::Client) -> Result<
 #[derive(Deserialize)]
 struct DeleteRequest {
     id: u32,
+    /// Phase S7. Record ids are only unique within their own shard's kernel
+    /// state (each shard runs an independent id counter), so the caller must
+    /// name the collection the record was inserted into — there is no way to
+    /// find a record from its bare id alone. Absent/"default" resolves to the
+    /// default namespace, shard 0 — byte-identical to pre-S7 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 async fn delete_record(
     State(state): State<DataPlaneState>,
     Json(req): Json<DeleteRequest>,
 ) -> Response {
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
     raft_write(
-        &state.raft,
+        shard_raft,
         ClientRequest {
             event: KernelEvent::DeleteRecord { id: RecordId(req.id) },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
         },
         |resp| {
             (StatusCode::OK, Json(serde_json::json!({
@@ -1036,12 +1091,21 @@ async fn soft_delete_record(
     State(state): State<DataPlaneState>,
     Json(req): Json<DeleteRequest>,
 ) -> Response {
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
     raft_write(
-        &state.raft,
+        shard_raft,
         ClientRequest {
             event: KernelEvent::SoftDeleteRecord { id: RecordId(req.id) },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
         },
         |resp| {
             (StatusCode::OK, Json(serde_json::json!({
@@ -1066,12 +1130,26 @@ struct BatchInsertRequest {
     /// `AutoInsertRecord` event and therefore included in the BLAKE3 audit chain.
     #[serde(default)]
     metadata: Option<Vec<Option<String>>>,
+    /// Phase S7. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S7 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 async fn batch_insert(
     State(state): State<DataPlaneState>,
     Json(req): Json<BatchInsertRequest>,
 ) -> Response {
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
+
     let mut ids = Vec::with_capacity(req.batch.len());
 
     for values in req.batch {
@@ -1088,12 +1166,11 @@ async fn batch_insert(
             .and_then(|s| s.as_ref())
             .map(|s| s.as_bytes().to_vec());
 
-        match state
-            .raft
+        match shard_raft
             .client_write(ClientRequest {
                 event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: 0 },
                 request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
             })
             .await
         {
@@ -1186,6 +1263,10 @@ async fn event_log_proof(State(state): State<DataPlaneState>) -> Response {
 struct CreateNodeRequest {
     kind: u8,
     record_id: Option<u32>,
+    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S8 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 async fn create_graph_node(
@@ -1202,10 +1283,19 @@ async fn create_graph_node(
                 .into_response();
         }
     };
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
     let record = req.record_id.map(RecordId);
     raft_write(
-        &state.raft,
-        ClientRequest { event: KernelEvent::AutoCreateNode { kind, record }, request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0 },
+        shard_raft,
+        ClientRequest { event: KernelEvent::AutoCreateNode { kind, record }, request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id },
         |resp| {
             (
                 StatusCode::OK,
@@ -1222,15 +1312,33 @@ async fn create_graph_node(
 
 // ── Graph — get node ──────────────────────────────────────────────────────────
 
+/// Phase S8: node/edge ids are only unique within their own shard's kernel
+/// state, so lookups must be told which collection to look in — the same
+/// reasoning as `DeleteRequest::collection` (S7).
+#[derive(Deserialize)]
+struct CollectionQuery {
+    #[serde(default)]
+    collection: Option<String>,
+}
+
 async fn get_graph_node(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
+    axum::extract::Query(q): axum::extract::Query<CollectionQuery>,
 ) -> Response {
     if let Err(resp) = state.readiness.check(&state.raft) {
         return resp;
     }
-    let result = state
-        .sm
+    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", q.collection)
+            }))).into_response();
+        }
+    };
+    let shard_sm = &state.shard_for(ns_id).state_machine;
+    let result = shard_sm
         .with_state(|s| {
             s.get_node(NodeId(id)).map(|n| {
                 serde_json::json!({
@@ -1259,6 +1367,10 @@ struct CreateEdgeRequest {
     from: u32,
     to: u32,
     kind: u8,
+    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S8 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 async fn create_graph_edge(
@@ -1275,8 +1387,17 @@ async fn create_graph_edge(
                 .into_response();
         }
     };
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard_raft = &state.shard_for(ns_id).raft;
     raft_write(
-        &state.raft,
+        shard_raft,
         ClientRequest {
             event: KernelEvent::AutoCreateEdge {
                 from: NodeId(req.from),
@@ -1284,7 +1405,7 @@ async fn create_graph_edge(
                 kind,
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
         },
         |resp| {
             (
@@ -1305,12 +1426,21 @@ async fn create_graph_edge(
 async fn get_graph_edges(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
+    axum::extract::Query(q): axum::extract::Query<CollectionQuery>,
 ) -> Response {
     if let Err(resp) = state.readiness.check(&state.raft) {
         return resp;
     }
-    let edges: Option<Vec<serde_json::Value>> = state
-        .sm
+    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", q.collection)
+            }))).into_response();
+        }
+    };
+    let shard_sm = &state.shard_for(ns_id).state_machine;
+    let edges: Option<Vec<serde_json::Value>> = shard_sm
         .with_state(|s| {
             s.outgoing_edges(NodeId(id)).map(|iter| {
                 iter.map(|e| {
@@ -1343,6 +1473,10 @@ struct SubgraphQuery {
     root: u32,
     #[serde(default = "default_subgraph_depth")]
     depth: u32,
+    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S8 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 fn default_subgraph_depth() -> u32 { 2 }
 
@@ -1354,11 +1488,20 @@ async fn get_graph_subgraph(
         return resp;
     }
 
+    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", q.collection)
+            }))).into_response();
+        }
+    };
+    let shard_sm = &state.shard_for(ns_id).state_machine;
+
     let root = q.root;
     let depth = q.depth;
 
-    let result = state
-        .sm
+    let result = shard_sm
         .with_state(move |s| {
             let (nodes_out, edges_out) = crate::graph_rag::expand_subgraph(s, &[root], depth);
             serde_json::json!({ "nodes": nodes_out, "edges": edges_out })
@@ -1378,6 +1521,10 @@ struct ClusterGraphRagRequest {
     depth: u32,
     #[serde(default)]
     consistency: Consistency,
+    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
+    /// byte-identical to pre-S8 behavior.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 async fn cluster_graphrag(
@@ -1388,7 +1535,18 @@ async fn cluster_graphrag(
         return resp;
     }
 
-    if let Some(locked) = state.sm.locked_dim().await {
+    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
+        Some(id) => id,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("unknown collection: {:?}", req.collection)
+            }))).into_response();
+        }
+    };
+    let shard = state.shard_for(ns_id);
+    let shard_sm = &shard.state_machine;
+
+    if let Some(locked) = shard_sm.locked_dim().await {
         if req.query_vector.len() != locked {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
                 "error": format!(
@@ -1410,7 +1568,7 @@ async fn cluster_graphrag(
     // Linearizable by default: establish a read index so the local snapshot
     // reflects every write committed before this GraphRAG read began.
     if req.consistency == Consistency::Linearizable {
-        if let Err(resp) = ensure_read_consistency(&state.raft, &state.http).await {
+        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
             return resp;
         }
     }
@@ -1418,8 +1576,7 @@ async fn cluster_graphrag(
     let k = req.k.max(1);
     let depth = req.depth;
 
-    let payload = state
-        .sm
+    let payload = shard_sm
         .with_state(move |s| {
             let mut buf = vec![KernelSearchResult::default(); k];
             let n = s.search_l2(&query, &mut buf, None);
@@ -1544,9 +1701,15 @@ async fn cluster_insert_encrypted(
     } else {
         valori_kernel::types::id::DEFAULT_NS.0
     };
+    // Phase S5: route to the shard that owns this namespace's data. Safe
+    // now that cluster_shred_key (below) broadcasts to every shard instead
+    // of assuming shard 0 — a key_id's ciphertext can land on any shard
+    // depending on which collection it was inserted into, and shredding
+    // must find it wherever it is.
+    let shard_raft = &state.shard_for(ns).raft;
 
     raft_write(
-        &state.raft,
+        shard_raft,
         ClientRequest {
             event: KernelEvent::AutoInsertRecordEncrypted {
                 key_id,
@@ -1555,7 +1718,7 @@ async fn cluster_insert_encrypted(
                 tag: req.tag.unwrap_or(0),
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
         },
         move |resp| {
             (StatusCode::CREATED, Json(ClusterInsertEncryptedResponse {
@@ -1577,24 +1740,67 @@ async fn cluster_shred_key(
         None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
     };
 
-    // Shred the vault key locally FIRST (ensures ciphertext is unrecoverable).
+    // Shred the vault key locally FIRST — the compliance-critical,
+    // irreversible step: this node's ciphertext-decryption capability for
+    // key_id is destroyed unconditionally, regardless of what follows.
     if let Err(e) = state.vault.shred(key_id) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:?}")}))).into_response();
     }
 
-    // Propagate FLAG_SHREDDED to all replicas via Raft.
-    raft_write(
-        &state.raft,
-        ClientRequest {
+    // Phase S5: propagate FLAG_SHREDDED to EVERY shard, not just shard 0 —
+    // a key_id's ciphertext can land on any shard depending on which
+    // collection it was inserted into (cluster_insert_encrypted routes by
+    // namespace since this phase). KernelState::apply_shred_key is a safe,
+    // idempotent no-op on a shard holding no matching records, so
+    // attempting every shard is always correct.
+    //
+    // A single write can't be routed with one 307 the way other endpoints
+    // are: different shards may be led by different nodes, so there is no
+    // single "the leader" to redirect to. Each shard is attempted directly;
+    // shards this node doesn't lead are reported, not silently dropped —
+    // retry (idempotent, safe) against this same endpoint to complete
+    // propagation, since a later call re-attempts every shard including
+    // ones already done (a no-op there).
+    let mut shard_status = serde_json::Map::new();
+    let mut all_shredded = true;
+    for (shard_id, handle) in state.shards.iter() {
+        let key = format!("shard_{}", shard_id.0);
+        match handle.raft.client_write(ClientRequest {
             event: KernelEvent::ShredKey { key_id },
             request_id: None,
             schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+        }).await {
+            Ok(_) => { shard_status.insert(key, serde_json::json!({ "status": "shredded" })); }
+            Err(openraft::error::RaftError::APIError(
+                openraft::error::ClientWriteError::ForwardToLeader(fwd),
+            )) => {
+                all_shredded = false;
+                shard_status.insert(key, serde_json::json!({
+                    "status": "not-leader",
+                    "leader_api_addr": fwd.leader_node.map(|n| n.api_addr.clone()),
+                }));
+            }
+            Err(e) => {
+                all_shredded = false;
+                shard_status.insert(key, serde_json::json!({ "status": "error", "detail": e.to_string() }));
+            }
+        }
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({
+        "key_id": key_id_hex,
+        "shredded": all_shredded,
+        "shards": shard_status,
+        "note": if all_shredded {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(
+                "vault key destroyed on this node; FLAG_SHREDDED did not reach every shard \
+                 because this node doesn't lead them all — retry this call (idempotent) to \
+                 complete propagation".into()
+            )
         },
-        move |_resp| {
-            (StatusCode::OK, Json(serde_json::json!({"key_id": key_id_hex, "shredded": true}))).into_response()
-        },
-    )
-    .await
+    }))).into_response()
 }
 
 async fn cluster_crypto_status(
@@ -2161,9 +2367,15 @@ async fn cluster_tree_hybrid(
                 Ok(vecs) if !vecs.is_empty() => {
                     let q_vec = vecs[0].clone();
                     let ns_name = payload.namespace.as_deref();
+                    // Phase S9: the namespace registry always resolves via
+                    // shard 0 (s.sm), but the vector scan itself must run
+                    // against the DATA shard that namespace actually lives
+                    // on — the same fix already applied to
+                    // cluster_memory_search in S3b.
                     let ns_id = s.sm.resolve_namespace(ns_name).await.unwrap_or(0);
+                    let shard_sm = &s.shard_for(ns_id).state_machine;
                     let fetch = k * 2;
-                    let raw_hits: Vec<(u32, f32)> = s.sm.with_state(move |kernel| {
+                    let raw_hits: Vec<(u32, f32)> = shard_sm.with_state(move |kernel| {
                         use valori_kernel::fxp::qformat::SCALE;
                         use valori_kernel::types::scalar::FxpScalar;
                         use valori_kernel::types::vector::FxpVector;
@@ -2227,12 +2439,30 @@ async fn cluster_community_detect(
 ) -> Json<crate::community::DetectResponse> {
     let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
 
-    // Run detection on the current kernel snapshot and cache the result.
+    // Phase S8: when a namespace is named, route detection to that
+    // namespace's own data shard and filter to it — same treatment as every
+    // other collection-aware handler. When namespace is omitted, this scans
+    // shard 0 only (unchanged pre-S8 behavior) — see the phase doc for why
+    // true "detect across every shard" is deliberately out of scope: node
+    // ids are only unique within a shard's own kernel state, so merging
+    // label-propagation results from multiple shards needs a shard-local ->
+    // global id remapping scheme, the same class of problem as composite
+    // external ids (S3/S4's deferred follow-up), not a routing fix.
+    // An unknown namespace name resolves to None (no filter) — matching the
+    // standalone handler's existing behavior at server.rs's community_detect.
+    let ns_id = match payload.namespace.as_deref() {
+        Some(name) => s.sm.resolve_namespace(Some(name)).await,
+        None => None,
+    };
+    let shard_sm = match ns_id {
+        Some(id) => &s.shard_for(id).state_machine,
+        None => &s.sm,
+    };
+
+    // Run detection on the target shard's kernel snapshot and cache the result.
     let (community_count, node_count, receipt, communities) = {
-        let store = s.sm.with_state(move |kernel| {
-            // Cluster path: no namespace filter yet (namespace registry is node-local,
-            // not replicated; a follow-up will add cluster-wide namespace metadata).
-            let raw = crate::community::label_propagation(kernel, None, max_iter);
+        let store = shard_sm.with_state(move |kernel| {
+            let raw = crate::community::label_propagation(kernel, ns_id, max_iter);
             crate::community::build_community_store(kernel, raw)
         }).await;
 
@@ -2585,7 +2815,18 @@ async fn cluster_memory_search(
 
     let ns_id: u16 = state.sm.resolve_namespace(payload.collection.as_deref()).await.unwrap_or(0);
     // Phase S3b: read from the shard that owns this namespace's data.
-    let shard_sm = &state.shard_for(ns_id).state_machine;
+    let shard = state.shard_for(ns_id);
+    let shard_sm = &shard.state_machine;
+
+    // Phase S6: linearizable by default (matches /v1/search), now that the
+    // read-index protocol is shard-aware — this is the first read handler
+    // to actually exercise it, since /v1/search and GraphRAG are still
+    // shard-0-only pending S7/S8.
+    if payload.consistency.as_deref() != Some("local") {
+        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
+            return resp;
+        }
+    }
 
     let half_life = payload.decay_half_life_secs.unwrap_or(0);
     let k = payload.k;

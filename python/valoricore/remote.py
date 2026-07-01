@@ -565,10 +565,18 @@ class SyncRemoteClient(ValoriClient):
         self._check_auto_snapshot(len(vectors))
         return results
 
-    def soft_delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
+    def soft_delete(
+        self,
+        record_id: int,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> None:
         """Mark a record as inactive without physically removing it."""
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
-        self._post("/v1/delete", {"id": record_id}, idempotency_key=key)
+        data: Dict[str, Any] = {"id": record_id}
+        if collection != "default":
+            data["collection"] = collection
+        self._post("/v1/soft-delete", data, idempotency_key=key)
 
     def search(
         self,
@@ -1118,10 +1126,18 @@ class SyncRemoteClient(ValoriClient):
                 
         return list(record_ids)
 
-    def delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
+    def delete(
+        self,
+        record_id: int,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> None:
         """Permanently remove a record from the remote pool."""
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
-        self._post("/v1/delete", {"id": record_id}, idempotency_key=key)
+        data: Dict[str, Any] = {"id": record_id}
+        if collection != "default":
+            data["collection"] = collection
+        self._post("/v1/delete", data, idempotency_key=key)
 
     # ── Cluster operations ──────────────────────────────────────────────────
 
@@ -1701,9 +1717,12 @@ class AsyncRemoteClient:
         await self._check_auto_snapshot(len(vectors))
         return results
 
-    async def soft_delete(self, record_id: int) -> None:
+    async def soft_delete(self, record_id: int, collection: str = "default") -> None:
         """Mark a record as inactive without physically removing it."""
-        await self._post("/v1/delete", {"id": record_id})
+        data: Dict[str, Any] = {"id": record_id}
+        if collection != "default":
+            data["collection"] = collection
+        await self._post("/v1/soft-delete", data)
 
     async def search(
         self,
@@ -2066,8 +2085,11 @@ class AsyncRemoteClient:
                 
         return list(record_ids)
 
-    async def delete(self, record_id: int) -> None:
-        await self._post("/v1/delete", {"id": record_id})
+    async def delete(self, record_id: int, collection: str = "default") -> None:
+        data: Dict[str, Any] = {"id": record_id}
+        if collection != "default":
+            data["collection"] = collection
+        await self._post("/v1/delete", data)
 
     # ── Cluster operations ──────────────────────────────────────────────────
 
@@ -2382,11 +2404,21 @@ class ClusterClient:
             batch, collection=collection, metadata=metadata, request_ids=request_ids
         )
 
-    def delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
-        self._write_client().delete(record_id, idempotency_key=idempotency_key)
+    def delete(
+        self,
+        record_id: int,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> None:
+        self._write_client().delete(record_id, collection=collection, idempotency_key=idempotency_key)
 
-    def soft_delete(self, record_id: int, idempotency_key: Optional[bytes] = None) -> None:
-        self._write_client().soft_delete(record_id, idempotency_key=idempotency_key)
+    def soft_delete(
+        self,
+        record_id: int,
+        collection: str = "default",
+        idempotency_key: Optional[bytes] = None,
+    ) -> None:
+        self._write_client().soft_delete(record_id, collection=collection, idempotency_key=idempotency_key)
 
     def create_collection(self, name: str) -> Dict[str, Any]:
         return self._write_client().create_collection(name)
@@ -2569,8 +2601,11 @@ class AsyncClusterClient:
             request_ids=request_ids, texts=texts,
         )
 
-    async def delete(self, record_id: int) -> None:
-        await self._write_client().delete(record_id)
+    async def delete(self, record_id: int, collection: str = "default") -> None:
+        await self._write_client().delete(record_id, collection=collection)
+
+    async def soft_delete(self, record_id: int, collection: str = "default") -> None:
+        await self._write_client().soft_delete(record_id, collection=collection)
 
     async def create_collection(self, name: str) -> Dict[str, Any]:
         return await self._write_client().create_collection(name)

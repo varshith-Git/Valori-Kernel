@@ -7,6 +7,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Shard routing completed across the entire cluster HTTP surface (Phases
+  S5-S9)** — every collection-aware endpoint now routes to the shard that
+  actually owns its namespace's data, closing out the routing work started
+  in S3/S4:
+  - **S5** — `cluster_insert_encrypted` routes by namespace;
+    `DELETE /v1/crypto/shred/:key_id` fans out to every shard this node
+    runs (ciphertext for one key can land on multiple shards) and
+    aggregates per-shard status into `{"shredded": bool, "shards": {...}}`.
+  - **S6** — linearizable reads are shard-aware:
+    `ensure_read_consistency(shard_id, ...)` and
+    `GET /v1/cluster/read-index?shard=N`; `cluster_memory_search` gained a
+    read-index check it never had before (previously always
+    eventually-consistent regardless of the requested `consistency`).
+  - **S7** — core CRUD (`/v1/records`, `/v1/search`, `/v1/delete`,
+    `/v1/soft-delete`, `/v1/vectors/batch-insert`) gained a `collection`
+    field and shard routing, matching the standalone server's existing
+    contract.
+  - **S8** — graph node/edge CRUD (`/v1/graph/*`), `/v1/graphrag`, and
+    namespace-scoped `/v1/community/detect` now route to their collection's
+    shard.
+  - **S9** — `cluster_ingest` gained automated test coverage via an
+    in-process mock embed server; `cluster_tree_hybrid`'s vector-search
+    section now routes to the resolved namespace's shard (previously
+    resolved the namespace correctly but scanned shard 0 regardless — a bug
+    flagged back in S1 and never revisited until now).
+
+  See `docs/phases/phase-S5-crypto-shredding-cross-shard.md` through
+  `docs/phases/phase-S9-ingest-coverage-tree-hybrid.md`.
+
 - **Namespace→shard routing (Phases S3+S4)** — deterministic
   `shard_for_namespace(namespace_id, shard_count)` (`namespace_id % shard_count`,
   no placement table needed) and a multi-shard-aware `DataPlaneState`.
@@ -21,6 +50,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **Python SDK `soft_delete()` permanently deleted records instead of
+  soft-deleting them (Phase S7)** — `SyncRemoteClient.soft_delete()` and
+  `AsyncRemoteClient.soft_delete()` posted to `/v1/delete` (hard delete)
+  instead of `/v1/soft-delete`, on both standalone and cluster targets.
+  Fixed both methods to hit the correct endpoint; `crates/valori-node/README.md`'s
+  API table had the same mislabeling, corrected, and `/v1/soft-delete`
+  (previously undocumented) added as its own row. `delete()`/`soft_delete()`
+  also gained an optional `collection` parameter on both clients (and their
+  `ClusterClient`/`AsyncClusterClient` wrappers) — previously always scoped
+  to the default collection regardless of where the record actually lived.
 - **Collections/namespaces for graph data (nodes/edges) and vector-record
   writes were non-functional in cluster mode (Phase S3a)** —
   `ValoriStateMachine::apply()`'s generic dispatch always applied

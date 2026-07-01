@@ -20,16 +20,16 @@
 //! Admin-action audit events (`NodeJoined`/`NodeLeft` in the chained log)
 //! land in Phase 2.9; these endpoints are the place they'll be emitted.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use valori_consensus::types::{NodeId, Raft, ValoriNode};
+use valori_consensus::types::{NodeId, Raft, ShardId, ValoriNode};
 use valori_wire::{AdminEvent, LogEntry};
 
 use crate::events::event_log::EventLogWriter;
@@ -37,7 +37,15 @@ use crate::events::event_log::EventLogWriter;
 /// Shared state for the cluster endpoints.
 #[derive(Clone)]
 pub struct ClusterApiState {
+    /// Shard 0's raft — every endpoint except `read_index` (Phase S6) only
+    /// ever needs this one, since membership/status/health are shard-
+    /// agnostic under S1's symmetric placement (every node is a voter in
+    /// every shard, so shard 0's membership view is identical to every
+    /// other shard's).
     pub raft: Arc<Raft>,
+    /// Every shard this node runs, for the shard-aware read-index endpoint.
+    /// Always contains at least `ShardId(0)` (== `raft` above).
+    pub shards: Arc<BTreeMap<ShardId, Raft>>,
     /// Where successful membership changes are recorded as `AdminEvent`s
     /// in the BLAKE3 chain (Phase 2.9). `None` = no audit log configured.
     pub audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
@@ -45,6 +53,7 @@ pub struct ClusterApiState {
 
 pub fn cluster_router(
     raft: Arc<Raft>,
+    shards: Arc<BTreeMap<ShardId, Raft>>,
     audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
 ) -> Router {
     Router::new()
@@ -55,7 +64,7 @@ pub fn cluster_router(
         .route("/v1/cluster/add-node", post(add_node))
         .route("/v1/cluster/remove-node", post(remove_node))
         .route("/v1/cluster/snapshot", post(trigger_snapshot))
-        .with_state(ClusterApiState { raft, audit })
+        .with_state(ClusterApiState { raft, shards, audit })
 }
 
 /// Record an admin action in the chained audit log. Failures are logged,
@@ -127,24 +136,50 @@ async fn status(State(state): State<ClusterApiState>) -> Json<StatusView> {
 // waits until its own applied index reaches `read_index` before serving —
 // see `ensure_read_consistency` in cluster_server.rs.
 
-async fn read_index(State(state): State<ClusterApiState>) -> Response {
-    match state.raft.get_read_log_id().await {
+#[derive(Deserialize, Default)]
+struct ReadIndexQuery {
+    /// Phase S6: which shard's read index to establish. Absent = shard 0,
+    /// byte-identical to pre-S6 behavior for every caller that doesn't know
+    /// about sharding yet.
+    #[serde(default)]
+    shard: u32,
+}
+
+async fn read_index(
+    State(state): State<ClusterApiState>,
+    Query(q): Query<ReadIndexQuery>,
+) -> Response {
+    let shard_id = ShardId(q.shard);
+    let raft = match state.shards.get(&shard_id) {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("unknown shard {}", q.shard) })),
+            )
+                .into_response();
+        }
+    };
+
+    match raft.get_read_log_id().await {
         Ok((read_log_id, _applied)) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "read_index": read_log_id.map(|l| l.index).unwrap_or(0),
+                "shard": shard_id.0,
             })),
         )
             .into_response(),
         Err(e) => {
             // Not the leader anymore, or no quorum — name the leader we know so
             // the caller can re-resolve and retry.
-            let leader = state.raft.metrics().borrow().current_leader;
+            let leader = raft.metrics().borrow().current_leader;
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({
                     "error": "cannot establish read index (not leader or no quorum)",
                     "leader": leader,
+                    "shard": shard_id.0,
                     "detail": format!("{e}"),
                 })),
             )

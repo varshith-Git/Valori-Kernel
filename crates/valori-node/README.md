@@ -193,7 +193,8 @@ does not exist the request is rejected with `400 Bad Request`.
 | `/records` | `POST` | Insert a single vector. Optional `text` field indexes the record for hybrid retrieval (Phase C5). |
 | `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors. Optional `texts` array indexes each record for hybrid retrieval (Phase C5). |
 | `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Supports `as_of` / `as_of_log_index` for point-in-time reads, `decay_half_life_secs` for recency-aware ranking (Phase C4.1), and `metadata_filter` for JSON predicate post-filtering (Phase I7). |
-| `/v1/delete` | `POST` | Soft-delete a record by ID. |
+| `/v1/delete` | `POST` | Permanently remove a record by ID (accepts an optional `"collection"` field, S7). |
+| `/v1/soft-delete` | `POST` | Mark a record inactive without removing it — searchable-off but still present for audit (accepts an optional `"collection"` field, S7). |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 
 ### Insert into a collection
@@ -516,6 +517,17 @@ unrecoverable — GDPR Article 17 compliance without truncating the audit log.
 **Durability:** Set `VALORI_SHRED_LOG_PATH=./shred.log` to persist shredded key_ids across restarts.
 
 **Grouping:** Multiple records can share one `key_id` and be shredded atomically with a single `DELETE`.
+
+**Multi-shard clusters (Phase S5):** `DELETE /v1/crypto/shred/:key_id` fans out to
+every shard this node runs, since ciphertext for one `key_id` can legitimately
+land on different shards (one per collection it was used to encrypt into).
+The response is `{"key_id", "shredded": bool, "shards": {"shard_0": {"status": "shredded"|"not-leader"|"error", ...}, ...}}`
+— `shredded` is `true` only when every shard reports `"shredded"`. A shard
+reporting `"not-leader"` means retry the call (it's a leader-redirect
+condition, not a failure); the per-node DEK is destroyed unconditionally on
+the very first call regardless of per-shard status, so retrying is always
+safe — it can only re-confirm already-shredded records, never re-encrypt
+them.
 
 ---
 

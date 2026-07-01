@@ -320,6 +320,11 @@ pub struct MemorySearchVectorRequest {
     /// recall path re-ranks older memories down. See `SearchRequest`.
     #[serde(default)]
     pub decay_half_life_secs: Option<u64>,
+    /// Phase S6 (cluster mode only; ignored standalone): `"local"` skips
+    /// the read-index round trip (eventually consistent, faster). Absent
+    /// or any other value defaults to linearizable, matching `/v1/search`.
+    #[serde(default)]
+    pub consistency: Option<String>,
 }
 
 #[derive(Serialize)]
