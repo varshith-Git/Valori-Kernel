@@ -11,8 +11,7 @@ use std::time::Duration;
 
 use valori_consensus::types::ValoriNode;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterConfigError};
-use valori_node::commit::{CommitError, Committer, EventLogAuditSink};
-use valori_node::events::event_log::EventLogWriter;
+use valori_node::commit::{CommitError, Committer};
 use valori_node::events::event_replay::read_event_log;
 
 use valori_kernel::event::KernelEvent;
@@ -81,11 +80,10 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
     let dir = tempfile::tempdir().unwrap();
     let log_path = dir.path().join("events.log");
 
-    // The audit sink is the node's real chained event-log writer.
-    let writer = EventLogWriter::open(&log_path, Some(4)).unwrap();
-    let audit = EventLogAuditSink::new(writer);
-
     // Boot a single-node cluster; raft_bind :0 picks a free port.
+    // bootstrap_cluster now builds the real chained event-log writer itself
+    // (Phase S13) from the path — no more hand-constructing EventLogWriter/
+    // EventLogAuditSink here.
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
@@ -97,7 +95,7 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(audit), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
 
     handle
         .raft
@@ -138,6 +136,68 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
     );
 }
 
+// Phase S13 regression: shard_count == 1 must stay byte-for-byte the pre-S13
+// single-shard layout — unsuffixed filename, no "-shard0" sibling file — and
+// the new top-level ClusterHandle.event_log_writer alias must point at the
+// exact same file the caller configured.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_shard_event_log_path_is_unsuffixed_and_matches_pre_s13_naming() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("events.log");
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+        shard_count: 1,
+    };
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+
+    assert!(log_path.exists(), "the configured path itself must exist");
+    assert!(
+        !dir.path().join("events-shard0.log").exists(),
+        "shard_count == 1 must never produce a suffixed sibling file"
+    );
+
+    let mut committer = handle.committer();
+    let r1 = committer.commit(insert(0)).unwrap();
+    let r2 = committer.commit(insert(1)).unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .applied_index_at_least(Some(r2.log_index), "metrics caught up")
+        .await
+        .unwrap();
+    let _ = r1;
+
+    let events = read_event_log(&log_path, Some(4)).unwrap();
+    assert_eq!(events.len(), 2);
+
+    // The new flat-field alias must report the exact same path as the
+    // configured base path — proving it correctly threads shard 0's real
+    // writer handle back out to the caller.
+    let via_handle_path = handle
+        .event_log_writer
+        .as_ref()
+        .expect("shard 0 must have a real writer when a path was configured")
+        .lock()
+        .unwrap()
+        .path()
+        .to_path_buf();
+    assert_eq!(via_handle_path, log_path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deterministic_rejection_surfaces_as_rejected_not_io() {
     let cfg = ClusterConfig {
@@ -151,7 +211,7 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
+    let handle = bootstrap_cluster(&cfg, None, None, 0)
         .await
         .unwrap();
     handle
@@ -192,7 +252,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
 
     // ── Life 1: write 5 records, record the hash, then crash ─────────────────
     let hash_before = {
-        let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
+        let handle = bootstrap_cluster(&cfg, None, None, 0)
             .await
             .unwrap();
         handle
@@ -225,7 +285,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     // ── Life 2: same redb file, fresh everything else ────────────────────────
     // init: true is safe — openraft refuses a second initialize and the
     // bootstrap treats that as "fine" (membership is in the log).
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
+    let handle = bootstrap_cluster(&cfg, None, None, 0)
         .await
         .unwrap();
     handle
@@ -277,7 +337,7 @@ async fn raft_metrics_appear_in_prometheus_output() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
+    let handle = bootstrap_cluster(&cfg, None, None, 0)
         .await
         .unwrap();
     handle

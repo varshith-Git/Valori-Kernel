@@ -13,7 +13,6 @@ use axum::http::{Method, Request, StatusCode};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterHandle};
 use valori_node::cluster_api::cluster_router;
 use valori_node::commit::Committer;
@@ -32,7 +31,7 @@ async fn boot(node_id: u64, init: bool) -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap()
+    bootstrap_cluster(&cfg, None, None, 0).await.unwrap()
 }
 
 async fn wait_for_leader(h: &ClusterHandle, id: u64) {

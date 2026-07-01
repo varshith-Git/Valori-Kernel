@@ -16,7 +16,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterHandle};
 use valori_node::cluster_server::serve_cluster_api;
 
@@ -254,7 +253,7 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
             shard_count: 1,
         };
 
-        let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)
+        let handle = bootstrap_cluster(&cfg, None, None, 0)
             .await
             .with_context(|| format!("node {node_id} failed — is port {raft_port} free?"))?;
 
@@ -483,7 +482,7 @@ async fn add_local_node(
         shard_count: 1,
     };
 
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0)
+    let handle = bootstrap_cluster(&cfg, None, None, 0)
         .await
         .with_context(|| format!("node {next_id} failed — is port {raft_port} free?"))?;
 

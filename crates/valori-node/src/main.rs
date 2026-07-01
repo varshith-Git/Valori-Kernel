@@ -153,8 +153,6 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
 async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
     use valori_node::cluster::bootstrap_cluster;
     use valori_node::cluster_server::build_cluster_router;
-    use valori_node::commit::EventLogAuditSink;
-    use valori_node::events::event_log::EventLogWriter;
 
     let node_cfg = NodeConfig::default();
 
@@ -166,44 +164,37 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         "Booting in CLUSTER mode"
     );
 
-    // The audit sink: quorum-committed events land in the chained
-    // events.log, same format the standalone path and valori-verify use.
-    let (audit_sink, audit_writer): (
-        Box<dyn valori_consensus::AuditSink>,
-        Option<Arc<std::sync::Mutex<EventLogWriter>>>,
-    ) = match &node_cfg.event_log_path {
-        Some(path) => {
-            let writer = EventLogWriter::open(path, Some(node_cfg.dim as u32))
-                .unwrap_or_else(|e| {
-                    eprintln!("FATAL: cannot open audit log {path:?}: {e}");
-                    std::process::exit(1);
-                });
-            let mut sink = EventLogAuditSink::new(writer);
-            if let Some(limit) = node_cfg.event_log_rotation_bytes {
-                sink = sink.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
-            }
-            let handle = sink.writer();
-            (Box::new(sink), Some(handle))
-        }
-        None => {
-            tracing::warn!(
-                "VALORI_EVENT_LOG_PATH is not set — cluster running WITHOUT an \
-                 audit log. Committed events are replicated but not chained to \
-                 disk on this node."
-            );
-            (Box::new(valori_consensus::NullAuditSink), None)
-        }
-    };
+    if node_cfg.event_log_path.is_none() {
+        tracing::warn!(
+            "VALORI_EVENT_LOG_PATH is not set — cluster running WITHOUT an \
+             audit log. Committed events are replicated but not chained to \
+             disk on this node."
+        );
+    }
 
-    let handle = bootstrap_cluster(&cluster_cfg, audit_sink, node_cfg.dim)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("FATAL: cluster bootstrap failed: {e}");
-            std::process::exit(1);
-        });
+    // Phase S13: bootstrap_cluster builds a real per-shard audit sink for
+    // every shard itself (quorum-committed events land in each shard's own
+    // chained events.log, same format the standalone path and valori-verify
+    // use) — this just passes the raw path + rotation config through instead
+    // of pre-constructing a single EventLogWriter/EventLogAuditSink here.
+    let rotation_bytes = match node_cfg.event_log_rotation_bytes {
+        Some(0) => None,
+        other => other,
+    };
+    let handle = bootstrap_cluster(
+        &cluster_cfg,
+        node_cfg.event_log_path.as_deref(),
+        rotation_bytes,
+        node_cfg.dim,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("FATAL: cluster bootstrap failed: {e}");
+        std::process::exit(1);
+    });
     tracing::info!("Raft listening on {}", handle.raft_addr);
 
-    let app = build_cluster_router(&handle, audit_writer);
+    let app = build_cluster_router(&handle, handle.event_log_writer.clone());
     let addr = node_cfg.bind_addr;
     tracing::info!("HTTP API listening on {addr}");
 

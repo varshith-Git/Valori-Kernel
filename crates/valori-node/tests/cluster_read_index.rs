@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use valori_consensus::types::{NodeId, ValoriNode};
-use valori_consensus::{ClientRequest, NullAuditSink};
+use valori_consensus::ClientRequest;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
@@ -35,7 +35,7 @@ async fn boot(id: NodeId) -> Node {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     let (api, task) = serve_cluster_api(&handle, "127.0.0.1:0", None).await.unwrap();
     Node { handle, api_addr: api.to_string(), _http_task: task }
 }

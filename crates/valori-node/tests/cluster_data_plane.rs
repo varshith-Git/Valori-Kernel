@@ -10,7 +10,6 @@ use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterHandle};
 use valori_node::cluster_server::build_cluster_router;
 
@@ -26,7 +25,7 @@ async fn boot_leader() -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -148,7 +147,7 @@ async fn write_to_a_follower_redirects_with_location() {
         tls: None,
         shard_count: 1,
     };
-    let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink), 0).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
 
     h1.raft
         .add_learner(

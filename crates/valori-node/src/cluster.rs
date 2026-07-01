@@ -18,7 +18,7 @@
 //! returning a [`RaftCommitter`] that plugs into the `Committer` seam.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use openraft::storage::RaftLogStorage;
 use openraft::{Config, SnapshotPolicy};
@@ -29,7 +29,8 @@ use valori_consensus::{
     ValoriStateMachine,
 };
 
-use crate::commit::RaftCommitter;
+use crate::commit::{EventLogAuditSink, RaftCommitter};
+use crate::events::event_log::EventLogWriter;
 use valori_consensus::types::{NodeId, ShardId, ValoriNode};
 
 /// Parsed cluster topology.
@@ -54,9 +55,13 @@ pub struct ClusterConfig {
     /// Env: VALORI_SHARD_COUNT (default 1). Number of independent Raft
     /// groups this process runs, all sharing the one gRPC listener at
     /// `raft_bind`. Every configured member is a voter in every shard
-    /// (symmetric placement — Phase S1 does not implement namespace→shard
-    /// routing; that is a later phase). `shard_count == 1` is byte-for-byte
-    /// the pre-S1 single-Raft-group behavior (see `bootstrap_cluster`).
+    /// (symmetric placement — every node runs every shard; there is no
+    /// per-shard node subset yet). Namespace→shard HTTP routing (which
+    /// shard a given collection's data lands on) is implemented in
+    /// `cluster_server.rs`'s `shard_for_namespace()`, wired into every
+    /// collection-aware handler as of Phases S3-S9. `shard_count == 1` is
+    /// byte-for-byte the pre-S1 single-Raft-group behavior (see
+    /// `bootstrap_cluster`).
     pub shard_count: u32,
 }
 
@@ -197,6 +202,14 @@ pub struct ShardHandle {
     /// The committed log index this shard knew at boot — see
     /// [`ClusterHandle::startup_committed_index`].
     pub startup_committed_index: u64,
+    /// This shard's audit-log writer handle (Phase S13), when a real
+    /// [`EventLogAuditSink`] backs it — i.e. `event_log_path` was `Some` at
+    /// bootstrap and `EventLogWriter::open` succeeded for this shard's
+    /// derived path. `None` when no path was configured at all, or when
+    /// this specific shard's log failed to open and fell back to
+    /// [`NullAuditSink`] (shards >= 1 only — shard 0's open failure is
+    /// fatal, see `bootstrap_cluster`).
+    pub event_log_writer: Option<Arc<Mutex<EventLogWriter>>>,
 }
 
 /// Everything a cluster node runs on.
@@ -225,6 +238,12 @@ pub struct ClusterHandle {
     /// Every shard this node runs, keyed by `ShardId`. Always contains at
     /// least `ShardId(0)`.
     pub shards: BTreeMap<ShardId, ShardHandle>,
+    /// Shard 0's audit-log writer handle (Phase S13) — see
+    /// [`ShardHandle::event_log_writer`]. Flat field aliasing shard 0, same
+    /// convention as `raft`/`state_machine` above, so callers that only
+    /// ever cared about shard 0's audit surface (`main.rs`) don't need to
+    /// reach into `shards[&ShardId(0)]`.
+    pub event_log_writer: Option<Arc<Mutex<EventLogWriter>>>,
 }
 
 impl ClusterHandle {
@@ -256,19 +275,32 @@ fn shard_path(base: &std::path::Path, shard: ShardId, shard_count: u32) -> std::
     base.with_file_name(format!("{stem}-shard{}{ext}", shard.0))
 }
 
-/// Assemble and start the Phase 2 stack for one node — as of Phase S1, one
-/// or more independent Raft groups ("shards"), all sharing the one gRPC
-/// listener at `cfg.raft_bind`.
+/// Assemble and start the Phase 2 stack for one node — one or more
+/// independent Raft groups ("shards"), all sharing the one gRPC listener at
+/// `cfg.raft_bind`.
 ///
-/// `audit` is where shard 0's quorum-committed events are recorded — in
-/// production, [`crate::commit::EventLogAuditSink`] over the chained
-/// `events.log`. Shards beyond 0 have no HTTP surface in this slice (no
-/// namespace routing exists yet), so nothing ever writes a `KernelEvent`
-/// into them; they get an internal [`NullAuditSink`] rather than forcing
-/// every caller to supply N audit sinks for shards nothing writes to.
+/// `event_log_path` is the base path each shard's quorum-committed events
+/// are chained into — in production, [`crate::commit::EventLogAuditSink`]
+/// over the chained `events.log`. Every shard gets its own real audit sink
+/// (Phase S13): `shard_path(event_log_path, shard_id, cfg.shard_count)`
+/// derives each shard's own file (unchanged filename at `shard_count == 1`,
+/// `{stem}-shard{N}{ext}` otherwise), since every shard can genuinely
+/// receive writes as of Phases S3-S9's namespace→shard HTTP routing.
+/// `event_log_path: None` means no audit log configured at all — every
+/// shard gets [`NullAuditSink`], matching pre-S13 behavior for that case.
+///
+/// A failure to open shard 0's audit log is fatal (returns `Err`, matching
+/// the pre-S13 guarantee that a node refuses to boot rather than silently
+/// run its primary shard unaudited). A failure to open a non-zero shard's
+/// audit log is not fatal — that shard falls back to [`NullAuditSink`] and
+/// boots anyway, logged loudly via `tracing::error!`; those shards are new
+/// capability this phase adds, so there is no pre-existing "fatal" guarantee
+/// to preserve for them, and aborting the whole node over one non-primary
+/// shard's disk issue would be a new availability regression.
 pub async fn bootstrap_cluster(
     cfg: &ClusterConfig,
-    audit: Box<dyn AuditSink>,
+    event_log_path: Option<&std::path::Path>,
+    event_log_rotation_bytes: Option<u64>,
     dim: usize,
 ) -> Result<ClusterHandle, std::io::Error> {
     // Snapshot cadence is an explicit, operator-tunable policy — not openraft's
@@ -303,7 +335,6 @@ pub async fn bootstrap_cluster(
         .map_err(|e| std::io::Error::other(format!("raft config invalid: {e}")))?,
     );
 
-    let mut audit = Some(audit);
     let mut shards: BTreeMap<ShardId, ShardHandle> = BTreeMap::new();
     let mut raft_instances: HashMap<ShardId, Raft> = HashMap::new();
 
@@ -323,14 +354,43 @@ pub async fn bootstrap_cluster(
             None => ValoriNetworkFactory::new(shard_id),
         };
 
-        // Only shard 0 gets the caller's audit sink — see the doc comment
-        // above. Shards >= 1 have no HTTP surface in S1, so nothing ever
-        // writes a KernelEvent into them.
-        let audit_i: Box<dyn AuditSink> = if i == 0 {
-            audit.take().expect("shard 0 runs exactly once")
-        } else {
-            Box::new(NullAuditSink)
-        };
+        // Every shard gets a real audit sink of its own (Phase S13) — see
+        // the doc comment above bootstrap_cluster for the shard-0-fatal vs
+        // shards-1+-graceful-fallback rationale.
+        let (audit_i, event_log_writer_i): (Box<dyn AuditSink>, Option<Arc<Mutex<EventLogWriter>>>) =
+            match event_log_path {
+                Some(base) => {
+                    let path = shard_path(base, shard_id, cfg.shard_count);
+                    match EventLogWriter::open(&path, Some(dim as u32)) {
+                        Ok(writer) => {
+                            let mut sink = EventLogAuditSink::new(writer);
+                            if let Some(limit) = event_log_rotation_bytes {
+                                sink = sink.with_rotation_bytes(Some(limit));
+                            }
+                            let writer_handle = sink.writer();
+                            (Box::new(sink), Some(writer_handle))
+                        }
+                        Err(e) if i == 0 => {
+                            return Err(std::io::Error::other(format!(
+                                "shard 0 audit log open failed at {}: {e}",
+                                path.display()
+                            )));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                shard = i,
+                                path = %path.display(),
+                                error = %e,
+                                "failed to open shard's audit log — this shard's writes will NOT \
+                                 be chained to disk (falling back to NullAuditSink for this shard \
+                                 only; Raft replication and kernel state are unaffected)"
+                            );
+                            (Box::new(NullAuditSink), None)
+                        }
+                    }
+                }
+                None => (Box::new(NullAuditSink), None),
+            };
 
         let (state_machine, raft, startup_committed_index) = match &cfg.raft_log_path {
             Some(base_path) => {
@@ -385,7 +445,7 @@ pub async fn bootstrap_cluster(
         raft_instances.insert(shard_id, raft.clone());
         shards.insert(
             shard_id,
-            ShardHandle { raft, state_machine, startup_committed_index },
+            ShardHandle { raft, state_machine, startup_committed_index, event_log_writer: event_log_writer_i },
         );
     }
 
@@ -429,6 +489,7 @@ pub async fn bootstrap_cluster(
         .clone();
     let shard0_sm = shards.get(&ShardId(0)).unwrap().state_machine.clone();
     let shard0_index = shards.get(&ShardId(0)).unwrap().startup_committed_index;
+    let shard0_event_log_writer = shards.get(&ShardId(0)).unwrap().event_log_writer.clone();
 
     Ok(ClusterHandle {
         raft: shard0,
@@ -438,6 +499,7 @@ pub async fn bootstrap_cluster(
         watcher_tasks,
         startup_committed_index: shard0_index,
         shards,
+        event_log_writer: shard0_event_log_writer,
     })
 }
 

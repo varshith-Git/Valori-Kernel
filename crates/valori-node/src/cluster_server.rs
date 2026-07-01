@@ -316,6 +316,7 @@ pub fn build_cluster_router_with_keys(
                             raft: h.raft.clone(),
                             state_machine: h.state_machine.clone(),
                             startup_committed_index: h.startup_committed_index,
+                            event_log_writer: h.event_log_writer.clone(),
                         },
                     )
                 })

@@ -16,7 +16,6 @@ use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterHandle};
 use valori_node::cluster_server::{build_cluster_router, build_cluster_router_with_keys};
 
@@ -32,7 +31,7 @@ async fn boot_leader() -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -56,7 +55,7 @@ async fn two_node_cluster() -> (ClusterHandle, ClusterHandle) {
         tls: None,
         shard_count: 1,
     };
-    let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink), 0).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
 
     h1.raft
         .add_learner(2, ValoriNode { api_addr: "10.0.0.2:3000".into(), raft_addr: h2.raft_addr.to_string() }, true)
@@ -263,7 +262,7 @@ async fn boot_leader_with_shards(shard_count: u32) -> ClusterHandle {
         tls: None,
         shard_count,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -328,6 +327,101 @@ async fn writes_to_different_collections_route_to_different_shards() {
         .with_state(|s| s.record_count())
         .await;
     assert_eq!(count_shard0, 0, "shard 0 holds the namespace registry, not tenant-a/b's records");
+}
+
+/// Phase S13: a write routed to a non-zero shard must be durably,
+/// chain-verifiably audited on THAT shard's own events.log — not silently
+/// discarded by a NullAuditSink (the pre-S13 bug: only shard 0 ever got a
+/// real audit sink). Proves the fix at the layer that matters: read the
+/// actual bytes on disk back with the standalone recovery path, the same
+/// way an external auditor would.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("events.log");
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+        shard_count: 3,
+    };
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+
+    let router = build_cluster_router(&handle, handle.event_log_writer.clone());
+
+    // Same routing proof as writes_to_different_collections_route_to_different_shards:
+    // sequential namespace ids land on distinct shards deterministically.
+    let (_, _, body_a) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let ns_a = body_a["id"].as_u64().unwrap() as u16;
+    let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
+    assert_ne!(shard_a, valori_consensus::types::ShardId(0), "test must exercise a non-zero shard");
+
+    let (status, _, body) = post_json(
+        router,
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The shard-specific writer must exist and its file must be non-empty.
+    // Use the writer's own reported path rather than hand-deriving the
+    // filename — shard_path()'s early-return is keyed on shard_count == 1,
+    // not shard == 0, so at shard_count=3 shard 0's own file is ALSO
+    // suffixed ("events-shard0.log"), not the bare configured path.
+    let shard_a_writer = handle.shards[&shard_a]
+        .event_log_writer
+        .as_ref()
+        .expect("a non-zero shard that received a write must have a real audit sink");
+    let shard_a_path = shard_a_writer.lock().unwrap().path().to_path_buf();
+    assert!(shard_a_path.exists(), "shard {shard_a:?}'s own event log must exist on disk");
+    assert!(
+        std::fs::metadata(&shard_a_path).unwrap().len() > 0,
+        "shard {shard_a:?}'s event log must be non-empty"
+    );
+
+    // The chain must be well-formed: read_event_log decodes v3 entries AND
+    // verifies the BLAKE3 chain-advance as it goes — a broken/tampered
+    // chain surfaces as an Err here, not just a byte-count check.
+    // cluster_memory_upsert is a compound write (record + document node +
+    // chunk node + ParentOf edge, all routed to the same shard) — assert
+    // the record insert is among them rather than assuming exactly one event.
+    let events = valori_node::events::event_replay::read_event_log(&shard_a_path, Some(4)).unwrap();
+    assert!(!events.is_empty(), "the upsert must have committed at least one event to this shard");
+    assert!(
+        events.iter().any(|e| e.event_type() == "AutoInsertRecord"),
+        "the record insert must be chained onto tenant-a's own shard: {:?}",
+        events.iter().map(|e| e.event_type()).collect::<Vec<_>>()
+    );
+
+    // Isolation: shard 0's own log holds the namespace-registry event
+    // (AutoCreateNamespace always routes to shard 0, the metadata shard),
+    // but must NOT contain tenant-a's AutoInsertRecord — proving the record
+    // data itself didn't leak onto shard 0's audit trail.
+    let shard0_writer = handle.shards[&valori_consensus::types::ShardId(0)]
+        .event_log_writer
+        .as_ref()
+        .expect("shard 0 always has a real audit sink when a path is configured");
+    let shard0_path = shard0_writer.lock().unwrap().path().to_path_buf();
+    assert_ne!(shard0_path, shard_a_path, "shard 0 and tenant-a's shard must have distinct files");
+    let shard0_events = valori_node::events::event_replay::read_event_log(&shard0_path, Some(4)).unwrap();
+    assert!(
+        shard0_events.iter().all(|e| e.event_type() != "AutoInsertRecord"),
+        "tenant-a's AutoInsertRecord must not appear in shard 0's audit log: {:?}",
+        shard0_events.iter().map(|e| e.event_type()).collect::<Vec<_>>()
+    );
 }
 
 /// Phase S4: cluster_memory_consolidate (soft-delete old + insert new +

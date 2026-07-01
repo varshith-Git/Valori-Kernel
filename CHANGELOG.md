@@ -50,6 +50,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **Shards ≥ 1 silently discarded their audit trail (Phase S13)** —
+  `bootstrap_cluster()` only ever gave shard 0 a real audit sink; every
+  other shard got a hardcoded `NullAuditSink` that discards events without
+  writing them to disk. This was an intentional S1-era decision made when
+  no HTTP traffic could reach shard ≥ 1 — invalidated once S3-S9 wired real
+  namespace→shard HTTP routing to every shard, but never revisited. Writes
+  to a non-zero shard were still correctly Raft-committed and applied to
+  that shard's `KernelState`, but had no BLAKE3 chain on disk. Every shard
+  now gets its own genuine `events-shardN.log` (unchanged filename at
+  `shard_count == 1`). A failure to open shard 0's audit log remains fatal
+  (unchanged); a failure on shards ≥ 1 falls back to `NullAuditSink` for
+  that shard only, logged loudly, rather than aborting the whole node —
+  new capability this phase adds, no prior "fatal" guarantee to preserve
+  there. See `docs/phases/phase-S13-per-shard-audit-sinks.md`.
 - **Cluster mode's `GET /v1/graph/node/:id` and `GET /v1/graph/edges/:id`
   returned different field names than the standalone server (Phase S12)**
   — e.g. `{"id","kind","record"}` vs standalone's
