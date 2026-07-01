@@ -173,10 +173,9 @@ impl DataPlaneState {
     /// docs/phases/phase-S3-shard-routing-infrastructure.md). Routing THOSE
     /// writes to a non-zero shard today would silently scatter data across
     /// shards under a namespace id nothing actually wrote to. This accessor
-    /// is therefore currently used only for namespace-registry-adjacent
-    /// reads and for event types that DO carry a real namespace id
-    /// internally (`InsertRecordEncrypted`/`AutoInsertRecordEncrypted`).
-    #[allow(dead_code)]
+    /// is used by `cluster_memory_upsert` (write) and `cluster_list_nodes`/
+    /// `cluster_memory_search` (reads) as of Phase S3b — see those handlers
+    /// for the current, deliberately narrow set of routed endpoints.
     fn shard_for(&self, namespace_id: u16) -> &ShardHandle {
         let shard_id = shard_for_namespace(namespace_id, self.shard_count);
         self.shards
@@ -479,7 +478,7 @@ async fn create_collection_handler(
         ClientRequest {
             event: KernelEvent::AutoCreateNamespace { name: name.clone() },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         move |resp| {
             (
@@ -531,7 +530,7 @@ async fn drop_collection_handler(
         ClientRequest {
             event: KernelEvent::DropNamespace { name },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         |_resp| StatusCode::NO_CONTENT.into_response(),
     )
@@ -705,7 +704,7 @@ async fn insert_record(
                 tag: req.tag,
             },
             request_id: req.request_id,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         |resp| {
             (
@@ -1020,7 +1019,7 @@ async fn delete_record(
         ClientRequest {
             event: KernelEvent::DeleteRecord { id: RecordId(req.id) },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         |resp| {
             (StatusCode::OK, Json(serde_json::json!({
@@ -1042,7 +1041,7 @@ async fn soft_delete_record(
         ClientRequest {
             event: KernelEvent::SoftDeleteRecord { id: RecordId(req.id) },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         |resp| {
             (StatusCode::OK, Json(serde_json::json!({
@@ -1094,7 +1093,7 @@ async fn batch_insert(
             .client_write(ClientRequest {
                 event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: 0 },
                 request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION,
+                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
             })
             .await
         {
@@ -1206,7 +1205,7 @@ async fn create_graph_node(
     let record = req.record_id.map(RecordId);
     raft_write(
         &state.raft,
-        ClientRequest { event: KernelEvent::AutoCreateNode { kind, record }, request_id: None, schema_version: CURRENT_SCHEMA_VERSION },
+        ClientRequest { event: KernelEvent::AutoCreateNode { kind, record }, request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0 },
         |resp| {
             (
                 StatusCode::OK,
@@ -1285,7 +1284,7 @@ async fn create_graph_edge(
                 kind,
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         |resp| {
             (
@@ -1556,7 +1555,7 @@ async fn cluster_insert_encrypted(
                 tag: req.tag.unwrap_or(0),
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         move |resp| {
             (StatusCode::CREATED, Json(ClusterInsertEncryptedResponse {
@@ -1589,7 +1588,7 @@ async fn cluster_shred_key(
         ClientRequest {
             event: KernelEvent::ShredKey { key_id },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         },
         move |_resp| {
             (StatusCode::OK, Json(serde_json::json!({"key_id": key_id_hex, "shredded": true}))).into_response()
@@ -1659,13 +1658,13 @@ async fn cluster_memory_consolidate(
     // 1. Soft-delete the old record.
     if let Err(resp) = raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::SoftDeleteRecord { id: RecordId(req.old_record_id) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await { return resp; }
 
     // 2. Insert replacement vector — id comes from the apply response.
     let new_record_id = match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoInsertRecord { vector: new_vector, metadata: None, tag: 0 },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => resp.allocated_record_id.unwrap_or(0),
         Err(resp) => return resp,
@@ -1674,7 +1673,7 @@ async fn cluster_memory_consolidate(
     // 3. Create graph nodes (no namespace_id field on AutoCreateNode).
     let new_node = match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(new_record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
         Err(resp) => return resp,
@@ -1682,7 +1681,7 @@ async fn cluster_memory_consolidate(
 
     let old_node = match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.old_record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
         Err(resp) => return resp,
@@ -1691,7 +1690,7 @@ async fn cluster_memory_consolidate(
     // 4. Supersedes edge: new → old.
     match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateEdge { from: new_node, to: old_node, kind: EdgeKind::Supersedes },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
             "old_record_id": req.old_record_id,
@@ -1770,7 +1769,7 @@ async fn cluster_memory_contradict(
     // Commit graph nodes + Contradicts edge — IDs come from the apply responses.
     let node_a = match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_a)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
         Err(resp) => return resp,
@@ -1778,7 +1777,7 @@ async fn cluster_memory_contradict(
 
     let node_b = match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_b)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
         Err(resp) => return resp,
@@ -1786,7 +1785,7 @@ async fn cluster_memory_contradict(
 
     match raft_write_data(&state.raft, ClientRequest {
         event: KernelEvent::AutoCreateEdge { from: node_a, to: node_b, kind: EdgeKind::Contradicts },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
             "record_a": req.record_a,
@@ -1829,7 +1828,7 @@ async fn cluster_meta_set(
             value: payload.metadata.to_string(),
         },
         request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION,
+        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(_) => (axum::http::StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
         Err(openraft::error::RaftError::APIError(
@@ -1916,7 +1915,7 @@ async fn cluster_ingest(
         match raft_write_data(&state.raft, ClientRequest {
             event: KernelEvent::AutoCreateNamespace { name: collection.clone() },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         }).await {
             Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
             Err(resp) => return resp,
@@ -1939,7 +1938,7 @@ async fn cluster_ingest(
         match state.raft.client_write(ClientRequest {
             event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         }).await {
             Ok(resp) => {
                 if let Some(reason) = &resp.data.rejected {
@@ -1960,7 +1959,7 @@ async fn cluster_ingest(
     let doc_node_id: u32 = match state.raft.client_write(ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
         request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION,
+        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await {
         Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
         Err(_) => 0,
@@ -1979,7 +1978,7 @@ async fn cluster_ingest(
                 record: Some(RecordId(rid)),
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         }).await {
             Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
             Err(_) => 0,
@@ -1993,7 +1992,7 @@ async fn cluster_ingest(
                     kind: EdgeKind::ParentOf,
                 },
                 request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION,
+                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
             }).await;
         }
 
@@ -2017,7 +2016,7 @@ async fn cluster_ingest(
                 value: chunk_meta.to_string(),
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
         }).await;
     }
 
@@ -2035,7 +2034,7 @@ async fn cluster_ingest(
             value: doc_meta.to_string(),
         },
         request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION,
+        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
     }).await;
 
     Json(crate::ingest::IngestResponse {
@@ -2377,8 +2376,8 @@ async fn cluster_extract_entities(
             record: Some(RecordId(record_id)),
         };
 
-        let _ = s.raft.client_write(ClientRequest { event: rec_event,  request_id: None, schema_version: 0 }).await;
-        let _ = s.raft.client_write(ClientRequest { event: node_event, request_id: None, schema_version: 0 }).await;
+        let _ = s.raft.client_write(ClientRequest { event: rec_event,  request_id: None, schema_version: 0, namespace_id: 0 }).await;
+        let _ = s.raft.client_write(ClientRequest { event: node_event, request_id: None, schema_version: 0, namespace_id: 0 }).await;
 
         entity_name_to_node_id.insert(entity.name.clone(), node_id);
         inserted_entities.push(crate::community::InsertedEntity {
@@ -2403,7 +2402,7 @@ async fn cluster_extract_entities(
                     to: NodeId(to_id),
                     kind: EdgeKind::Relation,
                 };
-                let _ = s.raft.client_write(ClientRequest { event: ev, request_id: None, schema_version: 0 }).await;
+                let _ = s.raft.client_write(ClientRequest { event: ev, request_id: None, schema_version: 0, namespace_id: 0 }).await;
                 inserted_rels.push(crate::community::InsertedRelationship {
                     source_name: rel.source.clone(),
                     target_name: rel.target.clone(),
@@ -2448,8 +2447,10 @@ async fn cluster_list_nodes(
             "error": format!("unknown collection '{}'", q.collection.as_deref().unwrap_or("default"))
         }))).into_response(),
     };
+    // Phase S3b: read from the shard that owns this namespace's data.
+    let shard_sm = &state.shard_for(ns_id).state_machine;
 
-    let nodes = state.sm.with_state(move |s| {
+    let nodes = shard_sm.with_state(move |s| {
         s.iter_nodes()
             .filter(|n| q.collection.is_none() || n.namespace_id == ns_id)
             .enumerate()
@@ -2483,11 +2484,15 @@ async fn cluster_memory_upsert(
             "error": format!("unknown collection '{}'", payload.collection.as_deref().unwrap_or("default"))
         }))).into_response(),
     };
+    // Phase S3b: route to the shard that owns this namespace's data. At
+    // shard_count=1 this is always shard 0's raft — byte-identical to
+    // pre-S3 behavior.
+    let shard_raft = &state.shard_for(ns_id).raft;
 
     // 1. Insert vector record.
-    let record_id = match raft_write_data(&state.raft, ClientRequest {
+    let record_id = match raft_write_data(shard_raft, ClientRequest {
         event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
     }).await {
         Ok(r) => r.allocated_record_id.unwrap_or(0),
         Err(resp) => return resp,
@@ -2497,9 +2502,9 @@ async fn cluster_memory_upsert(
     let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
         existing
     } else {
-        match raft_write_data(&state.raft, ClientRequest {
+        match raft_write_data(shard_raft, ClientRequest {
             event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
         }).await {
             Ok(r) => r.allocated_node_id.unwrap_or(0),
             Err(resp) => return resp,
@@ -2507,22 +2512,22 @@ async fn cluster_memory_upsert(
     };
 
     // 3. Create chunk node linked to the record.
-    let chunk_node_id = match raft_write_data(&state.raft, ClientRequest {
+    let chunk_node_id = match raft_write_data(shard_raft, ClientRequest {
         event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
     }).await {
         Ok(r) => r.allocated_node_id.unwrap_or(0),
         Err(resp) => return resp,
     };
 
     // 4. Connect document → chunk.
-    if let Err(resp) = raft_write_data(&state.raft, ClientRequest {
+    if let Err(resp) = raft_write_data(shard_raft, ClientRequest {
         event: KernelEvent::AutoCreateEdge {
             from: NodeId(doc_node_id),
             to: NodeId(chunk_node_id),
             kind: EdgeKind::ParentOf,
         },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION,
+        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
     }).await {
         return resp;
     }
@@ -2531,8 +2536,6 @@ async fn cluster_memory_upsert(
     if let Some(meta) = payload.metadata {
         state.metadata.set(memory_id.clone(), meta);
     }
-
-    let _ = ns_id;
 
     (StatusCode::OK, Json(crate::api::MemoryUpsertResponse {
         memory_id,
@@ -2566,12 +2569,14 @@ async fn cluster_memory_search(
     };
 
     let ns_id: u16 = state.sm.resolve_namespace(payload.collection.as_deref()).await.unwrap_or(0);
+    // Phase S3b: read from the shard that owns this namespace's data.
+    let shard_sm = &state.shard_for(ns_id).state_machine;
 
     let half_life = payload.decay_half_life_secs.unwrap_or(0);
     let k = payload.k;
 
     let results = if half_life == 0 {
-        state.sm.with_state(|s| {
+        shard_sm.with_state(|s| {
             let mut buf = vec![KernelSearchResult::default(); k];
             let n = s.search_l2_ns(&query, &mut buf, ns_id);
             buf[..n].iter().map(|r| {
@@ -2591,7 +2596,7 @@ async fn cluster_memory_search(
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs()).unwrap_or(0);
-        state.sm.with_state_and_timestamps(|s, created_at| {
+        shard_sm.with_state_and_timestamps(|s, created_at| {
             let mut buf = vec![KernelSearchResult::default(); pool];
             let n = s.search_l2_ns(&query, &mut buf, ns_id);
             let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()

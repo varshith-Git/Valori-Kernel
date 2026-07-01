@@ -98,6 +98,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     }
 }
 

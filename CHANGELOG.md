@@ -7,29 +7,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Shard-routing infrastructure (Phase S3)** — deterministic
-  `shard_for_namespace(namespace_id, shard_count)` and a multi-shard-aware
-  `DataPlaneState`, laying the groundwork for namespace→shard HTTP routing.
-  Not yet wired into any handler — investigating the wiring surfaced a
-  separate, pre-existing bug (see Known Issues) that blocks it. See
+- **Namespace→shard routing (Phase S3)** — deterministic
+  `shard_for_namespace(namespace_id, shard_count)` (`namespace_id % shard_count`,
+  no placement table needed) and a multi-shard-aware `DataPlaneState`.
+  `cluster_memory_upsert` (write), `cluster_list_nodes`, and
+  `cluster_memory_search` (reads) now route to the shard that actually
+  owns a namespace's data, instead of always shard 0. See
   `docs/phases/phase-S3-shard-routing-infrastructure.md`.
 
-### Known Issues
-- **Collections/namespaces for graph data (nodes/edges) and most
-  vector-record writes are non-functional in cluster mode.**
-  `ValoriStateMachine::apply()`'s generic dispatch always applies
-  `AutoInsertRecord`/`AutoCreateNode`/`AutoCreateEdge` to namespace 0
-  regardless of which collection a handler resolved — confirmed by reading
-  the code: `cluster_memory_upsert`/`cluster_memory_consolidate` resolve a
-  namespace id and then discard it. Only the crypto-shredding path
-  (`InsertRecordEncrypted`/`AutoInsertRecordEncrypted`) is genuinely
-  namespace-scoped today. Fix is understood (add `namespace_id` to
-  `ClientRequest`, thread it through `apply()`) but touches ~60 call sites
-  across the workspace — scoped as a dedicated follow-up phase (S3a) rather
-  than a rushed partial fix. Does not affect the `default` namespace (id 0),
-  which is unaffected and works as documented.
-
 ### Fixed
+- **Collections/namespaces for graph data (nodes/edges) and vector-record
+  writes were non-functional in cluster mode (Phase S3a)** —
+  `ValoriStateMachine::apply()`'s generic dispatch always applied
+  `AutoInsertRecord`/`AutoCreateNode`/`AutoCreateEdge` to namespace 0
+  regardless of which collection a handler resolved (`cluster_memory_upsert`/
+  `cluster_memory_consolidate` resolved a namespace id and then discarded
+  it). Only the crypto-shredding path
+  (`InsertRecordEncrypted`/`AutoInsertRecordEncrypted`) was genuinely
+  namespace-scoped. Fixed by adding `namespace_id` to `ClientRequest`
+  (`#[serde(default)]`, backward compatible) and threading it through
+  `apply()`'s generic dispatch. Verified live: writes to two different
+  collections now correctly land in their own namespaces (and, combined
+  with the routing above, their own shards).
 - **Cluster-mode collection creation was not Raft-replicated (Phase S2)** —
   `POST /v1/namespaces` mutated a private, per-node, in-memory registry
   directly. Two nodes could silently assign different `NamespaceId`s to the

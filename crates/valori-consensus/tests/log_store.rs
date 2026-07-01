@@ -21,6 +21,7 @@ fn entry(term: u64, node: NodeId, index: u64) -> Entry {
             event: KernelEvent::DeleteRecord { id: RecordId(index as u32) },
             request_id: None,
             schema_version: 0,
+        namespace_id: 0,
         }),
     }
 }

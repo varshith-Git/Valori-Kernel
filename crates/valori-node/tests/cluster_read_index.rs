@@ -105,6 +105,7 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
             },
             schema_version: 0,
             request_id: None,
+            namespace_id: 0,
         })
         .await
         .unwrap();

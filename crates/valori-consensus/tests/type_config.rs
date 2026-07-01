@@ -33,6 +33,7 @@ fn client_request_roundtrips_through_serde_json() {
         event: sample_event(),
         request_id: Some(REQ_ID),
         schema_version: 0,
+    namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: ClientRequest = serde_json::from_str(&json).unwrap();
@@ -48,6 +49,7 @@ fn client_request_without_request_id_decodes_with_default() {
         event: KernelEvent::DeleteRecord { id: RecordId(3) },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     })
     .unwrap();
     let stripped = json.replace(",\"request_id\":null", "");
@@ -103,6 +105,7 @@ fn raft_log_entry_for_a_kernel_event_roundtrips() {
             event: sample_event(),
             request_id: Some(REQ_ID),
             schema_version: 0,
+        namespace_id: 0,
         }),
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -134,6 +137,7 @@ fn schema_version_field_roundtrips() {
         event: sample_event(),
         request_id: None,
         schema_version: CURRENT_SCHEMA_VERSION,
+    namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: ClientRequest = serde_json::from_str(&json).unwrap();
@@ -148,6 +152,7 @@ fn schema_version_defaults_to_zero_when_field_absent() {
         event: KernelEvent::DeleteRecord { id: RecordId(99) },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     // Strip the schema_version field entirely to simulate an old peer.

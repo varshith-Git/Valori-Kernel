@@ -690,7 +690,15 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                                 Some(id) => inner.state.apply_event_ns(&req.event, id).err().map(|e| format!("{e:?}")),
                                 None => Some(format!("namespace '{name}' not found")),
                             },
-                            _ => inner.state.apply_event(&req.event).err().map(|e| format!("{e:?}")),
+                            // S3a: dispatch through apply_event_ns with the
+                            // request's namespace_id instead of the
+                            // DEFAULT_NS-hardcoded apply_event(). Backward
+                            // compatible: req.namespace_id defaults to 0 for
+                            // old callers, byte-identical to prior behavior.
+                            // Variants that carry their own internal
+                            // namespace_id (InsertRecordEncrypted family)
+                            // ignore this parameter and use their own field.
+                            _ => inner.state.apply_event_ns(&req.event, req.namespace_id).err().map(|e| format!("{e:?}")),
                         }
                     };
 

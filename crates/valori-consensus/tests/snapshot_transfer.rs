@@ -67,6 +67,7 @@ fn insert(id: u32, rid: Option<[u8; 16]>) -> ClientRequest {
         },
         request_id: rid,
         schema_version: 0,
+    namespace_id: 0,
     }
 }
 

@@ -25,7 +25,7 @@ fn insert_event(id: u32) -> KernelEvent {
 fn normal(term: u64, node: NodeId, index: u64, event: KernelEvent, rid: Option<[u8; 16]>) -> Entry {
     Entry {
         log_id: log_id(term, node, index),
-        payload: EntryPayload::Normal(ClientRequest { event, request_id: rid, schema_version: 0 }),
+        payload: EntryPayload::Normal(ClientRequest { event, request_id: rid, schema_version: 0, namespace_id: 0 }),
     }
 }
 
@@ -285,6 +285,7 @@ fn versioned(term: u64, node: NodeId, index: u64, event: KernelEvent, version: u
             event,
             request_id: None,
             schema_version: version,
+        namespace_id: 0,
         }),
     }
 }

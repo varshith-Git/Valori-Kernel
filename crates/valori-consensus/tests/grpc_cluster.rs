@@ -65,6 +65,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     }
 }
 
@@ -210,7 +211,7 @@ async fn graph_events_replicate_and_cascade_across_the_cluster() {
     let leader_id = nodes[0].raft.metrics().borrow().current_leader.unwrap();
     let leader = &nodes[(leader_id - 1) as usize];
 
-    let req = |event: KernelEvent| ClientRequest { event, request_id: None, schema_version: 0 };
+    let req = |event: KernelEvent| ClientRequest { event, request_id: None, schema_version: 0, namespace_id: 0 };
 
     // Two vectors, then a small knowledge graph over them:
     //   doc node 0 (→ record 0), chunk node 1 (→ record 1), concept node 2

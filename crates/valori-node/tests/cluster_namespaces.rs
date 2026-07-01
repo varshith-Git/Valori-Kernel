@@ -248,3 +248,84 @@ async fn shard_count_one_is_unaffected_by_namespace_replication() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(handle.state_machine.resolve_namespace(Some("docs")).await, None);
 }
+
+// ── Phase S3b: real shard-routed writes ──────────────────────────────────────
+
+async fn boot_leader_with_shards(shard_count: u32) -> ClusterHandle {
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+        shard_count,
+    };
+    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+    handle
+}
+
+/// The flagship end-to-end proof for S3a+S3b together: two different
+/// collections, upserted via real HTTP, land in two DIFFERENT shards' Raft
+/// groups — not just "correctly namespace-scoped" (S3a) but genuinely
+/// routed to isolated Raft state machines (S3b). Before S3a's fix, every
+/// one of these writes would have silently landed in namespace 0 on shard
+/// 0, regardless of the collection requested.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn writes_to_different_collections_route_to_different_shards() {
+    let handle = boot_leader_with_shards(3).await;
+    let router = build_cluster_router(&handle, None);
+
+    // Namespace ids are assigned sequentially starting at 1, so the first
+    // two collections created land on shard_for(1)=1 and shard_for(2)=2
+    // with shard_count=3 — two distinct shards, deterministically.
+    let (_, _, body_a) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body_b) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-b" })).await;
+    let ns_a = body_a["id"].as_u64().unwrap() as u16;
+    let ns_b = body_b["id"].as_u64().unwrap() as u16;
+    assert_ne!(ns_a, ns_b);
+
+    let (status, _, body) = post_json(
+        router.clone(),
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _, body) = post_json(
+        router,
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [5.0, 6.0, 7.0, 8.0], "collection": "tenant-b" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
+    let shard_b = valori_consensus::types::ShardId((ns_b as u32) % 3);
+    assert_ne!(shard_a, shard_b, "test setup must exercise two distinct shards");
+
+    let count_a = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
+    let count_b = handle.shards[&shard_b].state_machine.with_state(|s| s.record_count()).await;
+    assert_eq!(count_a, 1, "tenant-a's record must land on its own shard ({shard_a:?})");
+    assert_eq!(count_b, 1, "tenant-b's record must land on its own shard ({shard_b:?})");
+
+    // And NOT cross-contaminate: tenant-a's shard holds exactly tenant-a's
+    // data, nothing from tenant-b, and vice versa (already implied by
+    // count == 1 on each independent shard, but assert explicitly for
+    // shard 0 — the namespace-registry shard — holding zero DATA records,
+    // since neither upsert targeted the default namespace).
+    let count_shard0 = handle.shards[&valori_consensus::types::ShardId(0)]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(count_shard0, 0, "shard 0 holds the namespace registry, not tenant-a/b's records");
+}

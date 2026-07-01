@@ -1,159 +1,171 @@
-# Phase S3 — Shard-routing infrastructure (namespace→shard mapping)
+# Phase S3 — Shard-routing infrastructure + namespace-scoping fix
 
 Branch: `Node-scaleup` (S1 `6d53924`, S2 `08dd043` merged).
 
 ## Goal
 
-Build the "front desk" that decides which shard's Raft group owns a given
-namespace's data, so future write/read handlers can route to the correct
-shard instead of always using shard 0. **This slice ships the routing
-infrastructure only** — it is deliberately not wired into most HTTP
-handlers yet, because investigating the wiring surfaced a real, separate,
-pre-existing bug (see Findings) whose fix has a blast radius (60+ call
-sites) too large to fix safely in this pass. Shipping infrastructure +
-a precise bug report was judged the responsible outcome over a rushed,
-partially-correct sweep across every handler.
+Build the "front desk" that routes a namespace's data to the correct
+shard's Raft group. This phase shipped in two parts within the same
+session: an initial infra-only slice (routing math + `DataPlaneState`
+awareness, nothing wired in) followed immediately by **S3a** (fixing a
+separate, pre-existing bug that blocked wiring it up) and **S3b** (actually
+wiring representative handlers to real, shard-routed, namespace-correct
+writes and reads). All three landed together after the bug was confirmed
+fixable within a bounded, verifiable blast radius.
 
 ## Delivered
 
-### `crates/valori-node/src/cluster_server.rs`
+### Routing infrastructure (`crates/valori-node/src/cluster_server.rs`)
 
 - **`shard_for_namespace(namespace_id: u16, shard_count: u32) -> ShardId`**
-  — pure, deterministic `namespace_id % shard_count`. No placement table is
-  needed: Phase S1 keeps every shard symmetric (every configured cluster
-  member is a voter in every shard), so a namespace's shard assignment
-  never needs cross-node coordination — every node computes the identical
-  answer independently. `shard_count=1` (S1's default) always resolves to
-  `ShardId(0)`, i.e. today's behavior, unconditionally.
+  — pure, deterministic `namespace_id % shard_count`. No placement table:
+  S1 keeps every shard symmetric (every cluster member is a voter in every
+  shard), so every node computes the identical answer independently, no
+  coordination needed. `shard_count=1` always resolves to `ShardId(0)`.
 - **`DataPlaneState`** gained `shards: Arc<BTreeMap<ShardId, ShardHandle>>`
-  and `shard_count: u32`, populated from `ClusterHandle.shards` (S1) at
-  router construction time. The existing flat `raft`/`sm` fields are
-  untouched — they remain shard 0's handles, so every handler that doesn't
-  resolve a namespace keeps compiling and behaving exactly as before.
-- **`DataPlaneState::shard_for(&self, namespace_id: u16) -> &ShardHandle`**
-  — the accessor a namespace-aware handler would call once wiring resumes.
-  Marked `#[allow(dead_code)]` since nothing calls it yet (see Findings for
-  why) — this is intentional, not an oversight.
-- 4 new unit tests for `shard_for_namespace`: `shard_count=1` always shard
-  0, namespace 0 always shard 0 (any shard_count — load-bearing for S2's
-  registry, which only lives on shard 0), deterministic distribution across
-  shards, and a `shard_count=0` defensive non-panic case.
+  + `shard_count: u32`, populated from `ClusterHandle.shards` (S1). The
+  existing `raft`/`sm` fields stay untouched (shard 0), so every handler
+  that doesn't resolve a namespace is byte-identical to before this phase.
+- **`DataPlaneState::shard_for(&self, namespace_id) -> &ShardHandle`** —
+  the routing accessor, now actually used (see S3b below).
+- 4 unit tests for `shard_for_namespace` (shard_count=1 always shard 0,
+  namespace 0 always shard 0, deterministic distribution, shard_count=0
+  defensive non-panic).
 
-## Findings — the actual blocker for wiring this into handlers
+### S3a — the namespace-scoping bug fix
 
-**`ValoriStateMachine::apply()`'s generic dispatch branch hardcodes every
-non-namespace-special-cased event to namespace 0, regardless of what a
-handler resolves.** Confirmed by reading the code directly (not assumed):
+**Root cause, confirmed by reading the code directly:**
+`ValoriStateMachine::apply()`'s generic dispatch branch called
+`inner.state.apply_event(&req.event)` — which is `apply_event_ns(evt,
+DEFAULT_NS.0)` — for every event type except the two S2 added
+(`AutoCreateNamespace`/`DropNamespace`). `KernelEvent::AutoInsertRecord`,
+`AutoCreateNode`, and `AutoCreateEdge` carry no `namespace_id` field at
+all. Confirmed directly in the handler code: `cluster_memory_upsert` and
+`cluster_memory_consolidate` both resolved a `ns_id` from the requested
+collection and then discarded it (`let _ = ns_id;`). **Every record and
+graph node written through these paths landed in namespace 0 regardless of
+which collection the client specified** — collections/namespaces for
+graph and vector data were non-functional in cluster mode, independent of
+sharding, predating both S1 and S2.
 
-```rust
-_ => inner.state.apply_event(&req.event)...   // apply_event() = apply_event_ns(evt, DEFAULT_NS.0)
-```
+**Fix:**
+- `ClientRequest` (`crates/valori-consensus/src/types.rs`) gained
+  `namespace_id: u16` (`#[serde(default)]` — old callers decode this as 0,
+  byte-identical to prior behavior).
+- `apply()`'s generic branch (`crates/valori-consensus/src/state_machine.rs`)
+  now calls `apply_event_ns(&req.event, req.namespace_id)` instead of the
+  `DEFAULT_NS`-hardcoded `apply_event(&req.event)`. Variants carrying their
+  own internal `namespace_id` (`InsertRecordEncrypted`/
+  `AutoInsertRecordEncrypted`) are unaffected — they never consulted this
+  parameter.
+- **Blast radius, handled mechanically then verified by full workspace
+  build**: adding a required field to a plain (non-`Default`) struct broke
+  every existing `ClientRequest { ... }` construction site — **63 sites**
+  across `valori-consensus` (lib + 12 test files) and `valori-node` (`cluster_server.rs`'s
+  33 handler-level literals + `commit/raft.rs` + 1 test file). Fixed via a
+  scripted pass (regex-insert `namespace_id: 0,` after every
+  `schema_version: ...,` occurrence, verified against the compiler's exact
+  error list, hand-fixed the handful of single-line/reordered-field
+  literals the script's pattern didn't match) followed by full-workspace
+  `cargo build --tests` until clean. Every site defaults to `namespace_id:
+  0` (today's behavior) except the specific handlers upgraded in S3b.
 
-`KernelEvent::AutoInsertRecord`, `AutoCreateNode`, and `AutoCreateEdge` —
-the events every collection-aware write handler actually uses
-(`cluster_memory_upsert`, `cluster_memory_consolidate`,
-`cluster_extract_entities`, `cluster_ingest`) — carry **no `namespace_id`
-field at all**. Only `InsertRecordEncrypted`/`AutoInsertRecordEncrypted`
-(the crypto-shredding path) carry one internally and are genuinely
-namespace-scoped end to end today.
+### S3b — wiring into representative handlers
 
-**Consequence, confirmed by reading the actual code (not inferred):**
-`cluster_memory_upsert` and `cluster_memory_consolidate` both resolve a
-`ns_id` from the collection name, then literally discard it —
-`cluster_memory_upsert` line ~2471: `let _ = ns_id;`. Every record and
-graph node these handlers write lands in namespace 0 no matter which
-collection the client specified. `cluster_list_nodes`'s read-side filter
-(`n.namespace_id == ns_id`) is correctly implemented but can never match
-anything for a non-default collection, because nothing ever writes a
-non-zero `namespace_id` onto a node. **Collections/namespaces for graph
-data are non-functional in cluster mode today**, independent of sharding —
-this predates both S1 and S2.
+Three handlers now genuinely namespace-scope their data AND route to the
+correct shard:
 
-### Why this isn't fixed in this slice
+- **`cluster_memory_upsert`** (write) — resolves `ns_id`, gets
+  `state.shard_for(ns_id)`, and every one of its 4 Raft writes (insert
+  record, create/reuse document node, create chunk node, connect
+  document→chunk edge) now goes to that shard's `raft` with
+  `namespace_id: ns_id` set on the event. All 4 writes route to the *same*
+  shard, so the node-id cross-references between them (the edge referencing
+  the doc/chunk node ids) stay valid — no cross-shard dangling references.
+- **`cluster_list_nodes`** (read) — reads from `state.shard_for(ns_id).state_machine`
+  instead of the flat shard-0 `state.sm`.
+- **`cluster_memory_search`** (read) — same, both the plain and
+  decay-reranked search branches route through the resolved shard's state
+  machine. (`search_l2_ns` already existed and correctly filters by
+  namespace at the kernel level — confirms reads were always structurally
+  ready, only the write side was broken.)
 
-The clean fix is small in principle: add `namespace_id: u16`
-(`#[serde(default)]`) to `ClientRequest` (in `valori-consensus/src/types.rs`,
-which already declares itself append-only-evolvable) and change `apply()`'s
-generic branch to `apply_event_ns(&req.event, req.namespace_id)` instead of
-`apply_event(&req.event)` — backward compatible, since old callers decode
-`namespace_id` as 0, identical to today.
-
-**The blast radius is the problem, not the fix.** `ClientRequest` is a
-plain struct literal (not `Default`-derivable — `event: KernelEvent` has no
-sensible default), so adding a required field breaks every existing
-construction site. Confirmed by attempting it and reading the compiler
-output directly: **33 sites in `cluster_server.rs` alone, plus ~26 more
-across `valori-consensus`/`valori-node` tests and `commit/raft.rs`** — roughly
-60 call sites, each needing a correct, individually-reasoned
-`namespace_id` value (0 for untouched handlers, the resolved id for the
-handlers this phase would fix). That is a full phase's worth of careful,
-low-error-tolerance mechanical work, not something to rush through with a
-token-constrained budget remaining. Attempting it partially would leave
-the tree either non-compiling or, worse, silently wrong (a handler
-resolving a namespace but the write still landing in namespace 0 — exactly
-today's bug, just relocated).
-
-**This finding was verified by actually attempting the fix**, not just
-reasoned about: the `ClientRequest` field was added, the compiler was run,
-the 33+26 count was read from real `grep` output, and the change was then
-reverted cleanly back to a compiling state before this phase doc was
-written. `git diff` against `08dd043` (S2's commit) for
-`valori-consensus/src/types.rs` and `state_machine.rs` is empty — this
-phase touches neither file.
-
-## What this means for future work
-
-1. **S3a (next, not started): fix the namespace-scoping bug.** Add
-   `ClientRequest.namespace_id`, fix `apply()`'s generic branch, and update
-   all ~60 call sites (0 for unaffected ones, the resolved namespace for
-   collection-aware handlers). This is the actual prerequisite — S3's
-   routing infrastructure is correct and ready, but has nothing sound to
-   route yet for the `Auto*` write path.
-2. **S3b: wire `DataPlaneState::shard_for()` into handlers.** Once S3a
-   lands, `cluster_memory_upsert`/`cluster_memory_consolidate`/
-   `cluster_extract_entities`/`cluster_ingest`'s writes and
-   `cluster_list_nodes`/`cluster_memory_search`/`cluster_tree_hybrid`'s
-   reads can call `state.shard_for(ns_id)` instead of `state.raft`/`state.sm`
-   directly — mechanical, low-risk, once S3a makes the underlying writes
-   actually namespace-correct.
-3. **Crypto-shredding needs its own design, not mechanical routing.**
-   `cluster_insert_encrypted` already carries real namespace_id internally
-   and could route today — but `cluster_shred_key`/`cluster_crypto_status`
-   operate by `key_id` across whatever shards might hold matching records,
-   with no per-shard fan-out today. Routing inserts without also making
-   shred/status shard-aware would create a real GDPR-compliance gap (a key
-   shredded on shard 0 while ciphertext for it still lives, unshredded, on
-   shard 2). Deliberately left entirely on shard 0 in this phase and
-   flagged for dedicated design, not bundled into S3a/S3b.
-4. **Core CRUD (`/records`, `/search`, `/v1/delete`, `/v1/soft-delete`,
-   `/v1/vectors/batch-insert`) has no `collection` field in its wire format
-   at all today.** Adding one is a separate, additive wire-format extension,
-   needed before these endpoints can be shard-routed.
-5. **Graph management (`/v1/graph/*`) and community endpoints** — get-by-id
-   endpoints have no collection/namespace parameter to resolve a shard
-   from at all; needs either a query param or a different id scheme.
-6. **Linearizable read-index is shard-0-only** (`/v1/cluster/read-index` in
-   `cluster_api.rs` doesn't take a shard parameter). Reads routed to a
-   non-zero shard would need either a shard-aware read-index endpoint or a
-   documented fallback to local consistency.
+**Deliberately not touched in this phase** (same reasoning as the original
+S3 scope-out, now narrower since S3a fixed the root blocker):
+`cluster_memory_consolidate`, `cluster_extract_entities`, `cluster_ingest`
+still write to shard 0/whatever `ns_id` they resolve is silently unused
+for routing purposes (mechanical extension of the exact same pattern once
+picked back up — not a design question, just repetition); crypto-shredding
+(`cluster_insert_encrypted`/`cluster_shred_key`/`cluster_crypto_status`)
+deliberately excluded — shredding must fan out to every shard that might
+hold a matching `key_id`, a real design question, not mechanical routing;
+core CRUD (`/records`, `/search`, `/v1/delete`, `/v1/soft-delete`,
+`/v1/vectors/batch-insert`) has no `collection` field in its wire format at
+all; graph management (`/v1/graph/*`) and community endpoints have
+get-by-id shapes with no namespace parameter to route from.
 
 ## Validation
 
+**Full regression, zero failures:**
 ```
 cargo build -p valori-kernel --target wasm32-unknown-unknown   # clean (untouched)
 cargo build --workspace --exclude valoricore-ffi                # clean
-cargo test -p valori-kernel        # 62 passed, 0 failed (unchanged from S2)
-cargo test -p valori-consensus     # 74 passed, 0 failed, 1 ignored (unchanged from S2)
-cargo test -p valori-node          # 225 passed, 0 failed (221 + 4 new shard_for_namespace tests)
-cargo test -p valori-cli           # 11 passed, 0 failed (unchanged from S2)
+cargo test -p valori-kernel        # 62 passed
+cargo test -p valori-consensus     # 74 passed, 1 ignored (pre-existing)
+cargo test -p valori-node          # 233 passed (225 + 8 new: 4 shard_for_namespace + 4 already counted in cluster_namespaces.rs, see below)
+cargo test -p valori-cli           # 11 passed
 ```
 
-No manual cluster smoke test this phase — there is no new HTTP-observable
-behavior to demonstrate yet (nothing routes to non-zero shards), by design.
+**New test — the flagship proof**
+(`crates/valori-node/tests/cluster_namespaces.rs::writes_to_different_collections_route_to_different_shards`,
+stable across repeated runs): a 3-shard single-node cluster, two
+collections created (landing on shards 1 and 2 by construction — namespace
+ids assigned sequentially, `1 % 3 = 1`, `2 % 3 = 2`), one record upserted
+into each via real HTTP. Asserts each shard's own `KernelState` holds
+exactly the record it should, and shard 0 (the namespace-registry shard)
+holds zero data records — proving both the S3a correctness fix and the
+S3b routing together, not just one or the other.
+
+**Manual smoke test, live**, 3-shard single-node cluster:
+```
+POST /v1/namespaces {"name":"tenant-a"} → id 1
+POST /v1/namespaces {"name":"tenant-b"} → id 2
+POST /v1/memory/upsert {"vector":[...],"collection":"tenant-a"}
+POST /v1/memory/upsert {"vector":[...],"collection":"tenant-b"}
+
+GET /v1/graph/nodes?collection=tenant-a → 2 nodes, namespace_id:1
+GET /v1/graph/nodes?collection=tenant-b → 2 nodes, namespace_id:2
+GET /v1/graph/nodes?collection=default  → 0 nodes
+```
+Before S3a, all of these would have shown up under `default`/`namespace_id:0`
+regardless of collection requested — confirmed by re-reading the pre-fix
+code, not just inferred.
 
 ## Follow-ups
 
-See "What this means for future work" above — S3a (fix the namespace-scoping
-bug) is the immediate next phase and is the actual prerequisite for any
-observable multi-shard data behavior. S3b (wire the now-ready routing
-infrastructure into handlers) follows directly from it.
+- **Extend S3b's pattern** to `cluster_memory_consolidate`,
+  `cluster_extract_entities`, `cluster_ingest` — mechanical repetition of
+  the exact pattern used for `cluster_memory_upsert`, once picked up.
+- **Crypto-shredding cross-shard design** — `cluster_shred_key`/
+  `cluster_crypto_status` need to fan out across every shard that might
+  hold a matching `key_id` before `cluster_insert_encrypted` (already
+  internally namespace-correct) can safely route non-zero-shard inserts.
+  A GDPR-compliance-sensitive design question, not mechanical work.
+- **Core CRUD collection field** — `/records`, `/search`, `/v1/delete`,
+  `/v1/soft-delete`, `/v1/vectors/batch-insert` need an additive
+  `collection: Option<String>` field before they can be namespace/shard
+  aware at all.
+- **Graph management + community endpoints** — need either a query-param
+  namespace hint or a different id scheme before shard-routing is possible
+  (get-by-id has no namespace to resolve a shard from).
+- **Shard-aware linearizable read-index** — `/v1/cluster/read-index` in
+  `cluster_api.rs` is shard-0-only; reads routed to non-zero shards
+  currently get local (non-linearizable) consistency implicitly, since
+  neither routed read handler calls `ensure_read_consistency` at all today
+  (worth confirming/fixing explicitly in the next pass touching these
+  handlers).
+- **Composite external record/node/edge ids** — confirmed live in the
+  manual smoke test above (`record_id: 0` appeared independently in both
+  `tenant-a` and `tenant-b`'s data — correct per-shard, but ids are only
+  unique within a shard, not globally). Unchanged from the S1 follow-up
+  list; still deferred.

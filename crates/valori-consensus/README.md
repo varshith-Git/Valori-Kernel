@@ -72,10 +72,15 @@ Violations that would break this invariant (and are explicitly prevented):
 - **`NodeId = u64`** — from `VALORI_NODE_ID`.
 - **`ValoriNode { api_addr, raft_addr }`** — both addresses ride in membership
   entries so any node can redirect a client to the leader's HTTP API.
-- **`ClientRequest { event, request_id, schema_version }`** — the Phase 1.2
-  idempotency token travels with the event so every replica makes the same dedup
-  decision. `schema_version` (Phase 3.2) is stamped by the leader at proposal
-  time; followers reject entries they don't understand (see below).
+- **`ClientRequest { event, request_id, schema_version, namespace_id }`** —
+  the Phase 1.2 idempotency token travels with the event so every replica
+  makes the same dedup decision. `schema_version` (Phase 3.2) is stamped by
+  the leader at proposal time; followers reject entries they don't
+  understand (see below). `namespace_id` (Phase S3a, `#[serde(default)]`)
+  is passed to `KernelState::apply_event_ns` for every event whose own
+  `KernelEvent` variant doesn't carry an internal namespace id — fixes a
+  real bug where `AutoInsertRecord`/`AutoCreateNode`/`AutoCreateEdge`
+  always applied to namespace 0 regardless of what a caller intended.
 - **`CURRENT_SCHEMA_VERSION: u8`** — the wire version this binary speaks. Bump
   when a new `KernelEvent` variant would be uninterpretable to an older node.
   See [`docs/COMPATIBILITY.md`](../../docs/COMPATIBILITY.md).

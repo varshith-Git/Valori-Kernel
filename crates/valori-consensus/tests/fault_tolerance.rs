@@ -105,6 +105,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     }
 }
 
@@ -256,6 +257,7 @@ async fn namespace_registry_converges_across_real_raft_nodes() {
         event: KernelEvent::AutoCreateNamespace { name: "tenant-acme".to_string() },
         request_id: None,
         schema_version: 0,
+    namespace_id: 0,
     };
     let resp = nodes[leader].raft.client_write(create).await.unwrap();
     let allocated_id = resp.data.allocated_namespace_id.expect("namespace id must be allocated");
