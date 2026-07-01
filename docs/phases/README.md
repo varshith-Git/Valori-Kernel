@@ -77,6 +77,7 @@ people and sessions that built it.
 | S1 — Multi-Raft consensus skeleton: `ShardId` + shard-routed gRPC transport + per-shard redb/state-machine bootstrap loop; `VALORI_SHARD_COUNT` (default 1, symmetric placement, no namespace routing yet) | [phase-S1-multi-raft-skeleton.md](phase-S1-multi-raft-skeleton.md) | `Node-scaleup` | ✅ done |
 | S2 — Raft-replicated namespace/collection creation: fixes a pre-existing cluster-mode bug (collection create was per-node, unreplicated); `KernelEvent::AutoCreateNamespace`/`DropNamespace`, `ClusterNamespaceRegistry` in the consensus state machine | [phase-S2-namespace-replication.md](phase-S2-namespace-replication.md) | `Node-scaleup` | ✅ done |
 | S3 — Shard-routing: `shard_for_namespace()` + `DataPlaneState` multi-shard aware; S3a fixed a pre-existing bug (`Auto*` writes always landed in namespace 0, `ClientRequest.namespace_id` added, ~63 call sites fixed); S3b wired `cluster_memory_upsert`/`cluster_list_nodes`/`cluster_memory_search` to real namespace-correct, shard-routed data | [phase-S3-shard-routing-infrastructure.md](phase-S3-shard-routing-infrastructure.md) | `Node-scaleup` | ✅ done |
+| S4 — Extends S3b's routing to `cluster_memory_consolidate`, `cluster_extract_entities` (also fixed a pre-existing id-allocation race), and `cluster_ingest` — every collection-aware write handler now routes to its namespace's shard | [phase-S4-remaining-write-handlers.md](phase-S4-remaining-write-handlers.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 

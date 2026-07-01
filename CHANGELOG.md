@@ -7,13 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
-- **Namespace→shard routing (Phase S3)** — deterministic
+- **Namespace→shard routing (Phases S3+S4)** — deterministic
   `shard_for_namespace(namespace_id, shard_count)` (`namespace_id % shard_count`,
   no placement table needed) and a multi-shard-aware `DataPlaneState`.
-  `cluster_memory_upsert` (write), `cluster_list_nodes`, and
-  `cluster_memory_search` (reads) now route to the shard that actually
-  owns a namespace's data, instead of always shard 0. See
-  `docs/phases/phase-S3-shard-routing-infrastructure.md`.
+  `cluster_memory_upsert`, `cluster_memory_consolidate`,
+  `cluster_extract_entities`, and `cluster_ingest` (writes) plus
+  `cluster_list_nodes` and `cluster_memory_search` (reads) now route to the
+  shard that actually owns a namespace's data, instead of always shard 0 —
+  every collection-aware write handler is now shard-routed. `cluster_extract_entities`
+  also had a latent id-allocation race fixed as part of making its routing
+  safe (was pre-reading "next id" from the wrong shard's counter). See
+  `docs/phases/phase-S3-shard-routing-infrastructure.md` and
+  `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
 - **Collections/namespaces for graph data (nodes/edges) and vector-record

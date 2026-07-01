@@ -329,3 +329,51 @@ async fn writes_to_different_collections_route_to_different_shards() {
         .await;
     assert_eq!(count_shard0, 0, "shard 0 holds the namespace registry, not tenant-a/b's records");
 }
+
+/// Phase S4: cluster_memory_consolidate (soft-delete old + insert new +
+/// graph nodes + Supersedes edge) must route its entire write sequence to
+/// the shard that owns the target collection — not just the insert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn consolidate_routes_to_the_collections_shard() {
+    let handle = boot_leader_with_shards(3).await;
+    let router = build_cluster_router(&handle, None);
+
+    // First collection created gets namespace id 1 -> shard 1 (1 % 3 = 1).
+    let (_, _, body) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let ns_a = body["id"].as_u64().unwrap() as u16;
+    let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
+    assert_ne!(shard_a, valori_consensus::types::ShardId(0));
+
+    let (status, _, body) = post_json(
+        router.clone(),
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let old_record_id = body["record_id"].as_u64().unwrap() as u32;
+
+    let (status, _, body) = post_json(
+        router,
+        "/v1/memory/consolidate",
+        serde_json::json!({
+            "old_record_id": old_record_id,
+            "new_vector": [5.0, 6.0, 7.0, 8.0],
+            "collection": "tenant-a",
+        }),
+    ).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // record_count() excludes soft-deleted slots, so after consolidate
+    // (old soft-deleted, new inserted) exactly 1 LIVE record remains — and
+    // it must be on tenant-a's OWN shard, proving the fix routes the whole
+    // sequence there, not just to shard 0.
+    let count = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
+    assert_eq!(count, 1, "the new (live) record must be on tenant-a's shard");
+
+    let count_shard0 = handle.shards[&valori_consensus::types::ShardId(0)]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(count_shard0, 0, "none of tenant-a's consolidate traffic should touch shard 0's data");
+}
