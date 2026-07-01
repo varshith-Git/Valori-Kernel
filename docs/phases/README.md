@@ -83,6 +83,7 @@ people and sessions that built it.
 | S7 — Core CRUD (`/v1/records`, `/v1/search`, `/v1/delete`, `/v1/soft-delete`, `/v1/vectors/batch-insert`) gains `collection` + shard routing; fixed a pre-existing SDK bug where `soft_delete()` hard-deleted (wrong endpoint) | [phase-S7-core-crud-routing.md](phase-S7-core-crud-routing.md) | `Node-scaleup` | ✅ done |
 | S8 — Graph node/edge CRUD, `/v1/graphrag`, and `/v1/community/detect` (namespace-scoped) now route to their collection's shard instead of always shard 0; cross-shard community detection (no namespace filter) explicitly kept out of scope | [phase-S8-graph-community-routing.md](phase-S8-graph-community-routing.md) | `Node-scaleup` | ✅ done |
 | S9 — Automated `cluster_ingest` coverage via an in-process mock embed server; fixed `cluster_tree_hybrid`'s vector-search section (resolved namespace but scanned shard 0 regardless) — the bug S1 originally flagged and never revisited | [phase-S9-ingest-coverage-tree-hybrid.md](phase-S9-ingest-coverage-tree-hybrid.md) | `Node-scaleup` | ✅ done |
+| S10 — Fixed `valoricore-ffi`'s compile break: `get_timeline()`'s exhaustive `KernelEvent` match was missing `AutoCreateNamespace`/`DropNamespace` arms since S2; confirmed pre-existing on `main`, verified via a real `maturin build --release` | [phase-S10-ffi-namespace-events.md](phase-S10-ffi-namespace-events.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 

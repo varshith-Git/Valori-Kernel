@@ -50,6 +50,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **`valoricore-ffi` did not compile (Phase S10)** — `get_timeline()`'s
+  exhaustive `KernelEvent` match was missing arms for
+  `AutoCreateNamespace`/`DropNamespace` (added in S2). Predates the S1-S9
+  sharding work — confirmed present on `main` before any of it. Fixed and
+  verified with a real `maturin build --release` (the crate's actual build
+  path; a bare `cargo build -p valoricore-ffi` never links successfully by
+  design — PyO3's `extension-module` feature omits `libpython`).
 - **Python SDK `soft_delete()` permanently deleted records instead of
   soft-deleting them (Phase S7)** — `SyncRemoteClient.soft_delete()` and
   `AsyncRemoteClient.soft_delete()` posted to `/v1/delete` (hard delete)

@@ -734,6 +734,10 @@ impl ValoricoreEngine {
                         key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
                 KernelEvent::SetMeta { key, value } =>
                     format!("Event ID {event_id}: SetMeta ({key:?} = {value:?})"),
+                KernelEvent::AutoCreateNamespace { name } =>
+                    format!("Event ID {event_id}: AutoCreateNamespace (Name: {name:?})"),
+                KernelEvent::DropNamespace { name } =>
+                    format!("Event ID {event_id}: DropNamespace (Name: {name:?})"),
             };
             events.push(event_str);
         }
