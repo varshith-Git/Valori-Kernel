@@ -305,7 +305,11 @@ export function Sidebar() {
                           "ml-1 h-1.5 w-1.5 rounded-full shrink-0",
                           running ? "bg-emerald-400" : "bg-muted-foreground/40"
                         )}
-                        title={running ? "running" : "at rest"}
+                        title={
+                          p.nodesTotal > 1
+                            ? `${p.nodesRunning}/${p.nodesTotal} nodes running`
+                            : running ? "running" : "at rest"
+                        }
                       />
                     </Link>
 
@@ -347,8 +351,8 @@ export function Sidebar() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index) => {
-          const entry = await create({ name, dim, index });
+        onCreate={async (name, dim, index, replication, shardCount) => {
+          const entry = await create({ name, dim, index, replication, shardCount });
           if (!entry) return;
           await open(name);
           router.push(`/projects/${encodeURIComponent(name)}`);

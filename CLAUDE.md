@@ -248,7 +248,7 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 | `VALORI_RAFT_LOG_PATH` | Persistent redb file for Raft log + vote + SM |
 | `VALORI_STATE_HASH_CHECK_SECS` | Hash-convergence poll interval (default 30, 0 = off) |
 | `VALORI_TLS_CA` / `VALORI_TLS_CERT` / `VALORI_TLS_KEY` | mTLS on Raft channel |
-| `VALORI_SHARD_COUNT` | Phase S1 (skeleton): independent Raft groups per process, one shared gRPC listener, symmetric placement. Default 1 = today's single-Raft-group behavior, byte-identical. No namespace routing yet — shards ≥ 1 have no HTTP surface. See `docs/phases/phase-S1-multi-raft-skeleton.md` |
+| `VALORI_SHARD_COUNT` | Independent Raft groups per process, one shared gRPC listener, symmetric placement (every node runs every shard). Default 1 = single-Raft-group behavior, byte-identical to pre-S1. Namespace→shard HTTP routing is live (S3-S9: `shard_for_namespace(ns, count) = ns % count`, wired into every collection-aware handler) and every shard has its own BLAKE3-chained audit log (S13: `events-shardN.log` via `shard_path()`). Exposed in the UI project wizard as "Shards" (S14, cluster projects only). Known gap: `/v1/proof/event-log` + `/v1/timeline` still read shard 0's log only. See `docs/phases/phase-S1-multi-raft-skeleton.md` through `phase-S14-*.md` |
 
 **Object store (Phase 3.1)**
 

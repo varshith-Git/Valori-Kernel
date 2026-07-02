@@ -8,27 +8,30 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { DIMENSIONS, DEFAULT_DIMENSION } from "@/lib/dimensions";
+
+const SHARD_OPTIONS = [1, 2, 4, 8];
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, dim: number, index: "brute" | "hnsw" | "ivf") => Promise<void>;
+  onCreate: (
+    name: string,
+    dim: number,
+    index: "brute" | "hnsw" | "ivf",
+    replication: 1 | 3,
+    shardCount: number
+  ) => Promise<void>;
 }
 
-const DIMS = [
-  { value: 384,  label: "384 — MiniLM / paraphrase" },
-  { value: 768,  label: "768 — BERT-base / mpnet / nomic" },
-  { value: 1024, label: "1024 — bge-large / BERT-large" },
-  { value: 1536, label: "1536 — text-embedding-ada-002" },
-  { value: 3072, label: "3072 — text-embedding-3-large" },
-];
-
 export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
-  const [name, setName]   = useState("");
-  const [dim, setDim]     = useState(768);
-  const [index, setIndex] = useState<"brute" | "hnsw" | "ivf">("brute");
-  const [busy, setBusy]   = useState(false);
-  const [error, setError] = useState("");
+  const [name, setName]               = useState("");
+  const [dim, setDim]                 = useState(DEFAULT_DIMENSION);
+  const [index, setIndex]             = useState<"brute" | "hnsw" | "ivf">("brute");
+  const [replication, setReplication] = useState<1 | 3>(1);
+  const [shardCount, setShardCount]   = useState(1);
+  const [busy, setBusy]               = useState(false);
+  const [error, setError]             = useState("");
 
   const submit = async () => {
     const n = name.trim();
@@ -40,7 +43,10 @@ export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
     setBusy(true);
     setError("");
     try {
-      await onCreate(n, dim, index);
+      // Sharding only applies to cluster mode — a single standalone node
+      // has no shard concept at all, so pin it to 1 regardless of the
+      // control's last value (matches the server-side pin in createProject).
+      await onCreate(n, dim, index, replication, replication === 3 ? shardCount : 1);
       setName("");
       onClose();
     } catch {
@@ -83,7 +89,7 @@ export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
               onChange={(e) => setDim(Number(e.target.value))}
               className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring appearance-none cursor-pointer"
             >
-              {DIMS.map((d) => (
+              {DIMENSIONS.map((d) => (
                 <option key={d.value} value={d.value}>{d.label}</option>
               ))}
             </select>
@@ -108,6 +114,63 @@ export function CreateProjectDialog({ open, onClose, onCreate }: Props) {
               ))}
             </div>
           </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Replication</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setReplication(1)}
+                className={`flex-1 rounded-md border px-3 py-2 text-left transition-colors ${
+                  replication === 1
+                    ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)]"
+                    : "border-input bg-background hover:border-muted-foreground/40"
+                }`}
+              >
+                <p className="text-xs font-medium text-foreground">Single Node</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">One process, no replication</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setReplication(3)}
+                className={`flex-1 rounded-md border px-3 py-2 text-left transition-colors ${
+                  replication === 3
+                    ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)]"
+                    : "border-input bg-background hover:border-muted-foreground/40"
+                }`}
+              >
+                <p className="text-xs font-medium text-foreground">3-Node Cluster</p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Raft-replicated, tolerates 1 node down</p>
+              </button>
+            </div>
+          </div>
+
+          {replication === 3 && (
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] text-muted-foreground uppercase tracking-wider">Shards</label>
+              <div className="flex gap-2">
+                {SHARD_OPTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setShardCount(n)}
+                    className={`flex-1 rounded-md border px-3 py-1.5 text-xs transition-colors ${
+                      shardCount === n
+                        ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)] text-foreground"
+                        : "border-input bg-background text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+                Splits collections across {shardCount > 1 ? shardCount : "N"} independent partitions within
+                each replica — same fault tolerance, more capacity. Proof and Timeline currently only reflect
+                the default shard; per-shard views are a planned follow-up.
+              </p>
+            </div>
+          )}
 
           {error && <p className="text-xs text-red-700">{error}</p>}
           <div className="flex gap-2 justify-end">

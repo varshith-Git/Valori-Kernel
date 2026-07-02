@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProject, projectPaths, unprotectProject, touchProject } from "@/lib/server/projects";
+import { getProject, projectNodePaths, unprotectProject, touchProject } from "@/lib/server/projects";
 import { pm } from "@/lib/server/process-manager";
 import { setApiUrl } from "@/lib/server/connection";
 
@@ -30,8 +30,15 @@ function extractRecordCount(h: HealthBody): number | undefined {
   return undefined;
 }
 
-// POST — ensure the project's node is up, point the UI at it, and record the open.
-// Auto-starts the node (the data dir's snapshot + WAL are replayed by try_recover).
+// POST — ensure every node of the project is up, point the UI at the primary
+// node, and record the open. Auto-starts nodes (each node's data dir is
+// replayed by try_recover).
+//
+// For a 3-node cluster, wait for ALL nodes healthy (not just the primary)
+// before returning: Raft needs 2-of-3 quorum for writes, so the primary node
+// alone answering /health doesn't mean the cluster can take writes yet. If
+// the budget expires, proceed anyway and report reachable counts honestly —
+// same "start what we can" behavior as the single-node path already has.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
@@ -42,48 +49,70 @@ export async function POST(
     return NextResponse.json({ error: `Project "${name}" not found` }, { status: 404 });
   }
 
-  const url = `http://localhost:${entry.port}`;
+  const primaryNode = entry.nodes[0];
+  const url = `http://localhost:${primaryNode.httpPort}`;
 
-  // Clear the immutable flag so the node can append its WAL / write snapshots.
+  // Clear the immutable flag so nodes can append their WAL / write snapshots.
   unprotectProject(name);
 
-  // ── Pre-probe: if already reachable, skip spawning entirely ──────────────
-  // This handles: externally-started nodes, nodes that survived a Next.js
-  // hot-reload, and prevents double-spawn when the port is already occupied.
-  let health = await probeHealth(entry.port);
-  if (health) {
-    // Node is already up — reconcile PM state so future isRunning() calls work.
-    pm.markRunning(entry.port);
-  } else if (!pm.isRunning(entry.port)) {
-    // Not reachable and PM doesn't know about it — spawn now.
-    const { snapshotPath, eventLogPath } = projectPaths(entry);
-    pm.startProject({
-      port: entry.port,
+  // ── Pre-probe every node: skip spawning the ones already reachable ───────
+  // Handles externally-started nodes, nodes that survived a Next.js
+  // hot-reload, and prevents double-spawn when a port is already occupied.
+  const preHealth = await Promise.all(entry.nodes.map(n => probeHealth(n.httpPort)));
+  preHealth.forEach((h, i) => { if (h) pm.markRunning(entry.nodes[i].httpPort); });
+
+  const anyToStart = entry.nodes.some((n, i) => !preHealth[i] && !pm.isRunning(n.httpPort));
+  if (anyToStart) {
+    const nodeSpecs = entry.nodes.map(n => {
+      const { snapshotPath, eventLogPath, raftLogPath } = projectNodePaths(entry, n.id);
+      return {
+        id: n.id,
+        httpPort: n.httpPort,
+        raftPort: n.raftPort,
+        eventLogPath,
+        snapshotPath,
+        raftLogPath,
+        clusterInit: entry.replication > 1 && n.id === primaryNode.id,
+      };
+    });
+    // startNode's own idempotency check means already-running nodes no-op here.
+    pm.startProjectNodes({
       dim: entry.dim,
       index: entry.index,
       maxRecords: entry.maxRecords,
-      snapshotPath,
-      eventLogPath,
+      nodes: nodeSpecs,
+      shardCount: entry.shardCount,
     });
   }
 
   // ── Health-probe loop — up to 60 s (handles cargo-run cold-compile path) ──
-  if (!health) {
-    for (let i = 0; i < 120; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      health = await probeHealth(entry.port);
-      if (health) break;
-
-      // If the PM recorded an error (process exited), bail early.
-      const st = pm.getStatus(entry.port)?.status;
-      if (st === "error") break;
+  const results: (HealthBody | null)[] = [...preHealth];
+  for (let i = 0; i < 120; i++) {
+    if (results.every(h => h)) break;
+    await new Promise(r => setTimeout(r, 500));
+    await Promise.all(entry.nodes.map(async (n, idx) => {
+      if (results[idx]) return;
+      results[idx] = await probeHealth(n.httpPort);
+    }));
+    // If every not-yet-healthy node has errored out, stop waiting early.
+    const stillWaiting = entry.nodes.some((n, idx) => !results[idx]);
+    if (stillWaiting) {
+      const allErrored = entry.nodes.every((n, idx) =>
+        results[idx] || pm.getStatus(n.httpPort)?.status === "error"
+      );
+      if (allErrored) break;
     }
   }
 
-  const recordCount = health ? extractRecordCount(health) : undefined;
+  const primary = results[0];
+  const recordCount = primary ? extractRecordCount(primary) : undefined;
+  const nodesReachable = results.filter(Boolean).length;
 
-  // Point the UI proxy at this project's node and record the open.
-  setApiUrl(url, health ? { dim: health.dim as number | undefined, records: recordCount } : undefined);
+  // Point the UI proxy at the primary node and record the open. Followers
+  // forward writes to the leader internally, so pointing at the primary
+  // (lowest-id / clusterInit node) rather than the actual current leader is a
+  // safe, simple default.
+  setApiUrl(url, primary ? { dim: primary.dim as number | undefined, records: recordCount } : undefined);
   touchProject(name, {
     lastOpenedAt: new Date().toISOString(),
     ...(recordCount != null ? { records: recordCount } : {}),
@@ -92,8 +121,10 @@ export async function POST(
   return NextResponse.json({
     ok: true,
     url,
-    port: entry.port,
-    reachable: !!health,
-    ...(health ?? {}),
+    port: primaryNode.httpPort,
+    reachable: !!primary,
+    nodesReachable,
+    nodesTotal: entry.nodes.length,
+    ...(primary ?? {}),
   });
 }

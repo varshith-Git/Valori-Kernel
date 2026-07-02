@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Replication factor in the project-creation wizard (Phase 6.1)** — the
+  UI's "New Project" dialog now offers "Single Node" or "3-Node Cluster"
+  (Raft-replicated, tolerates 1 node down) as a first-class creation
+  choice, instead of clustering living only on the separate `/launch`
+  power-user page. Cluster projects get a `nodes[]` manifest entry (legacy
+  single-port manifests migrate automatically), a dedicated 4010-4999 port
+  range that never collides with single-node projects (3010-3999) or the
+  Launcher (3000-3009), per-node data files under the same project dir,
+  aggregate "2/3 running" status in the UI, and full open/close/delete
+  lifecycle across all nodes (open waits for full quorum health; close
+  snapshot-stops every node and re-locks files at rest). The two
+  previously-divergent dimension option lists are unified into one shared
+  module, and `/launch` now imports the same cluster-config helpers
+  instead of maintaining its own copies. Verified live end to end,
+  including leader election, follower reads, and close→reopen data
+  persistence. See `docs/phases/phase-6.1-project-wizard-replication.md`.
+- **Shard count in the project-creation wizard (Phase S14)** — the UI's
+  first surface for horizontal scaling. Creating a 3-node-cluster project
+  now offers a "Shards" control (1/2/4/8); the choice is persisted in the
+  project manifest and threaded to `VALORI_SHARD_COUNT` on every spawned
+  node (one process per replica still — all shards on a node share its
+  HTTP port and gRPC listener). Cluster projects only; standalone
+  projects have no shard concept and pin to 1. Verified live end to end:
+  a 3-replica/2-shard project produced six independently chain-valid
+  per-node-per-shard audit logs (`valori-verify` on each). Requires
+  Phase S13 (below) — shard count was not safe to expose while shards
+  ≥ 1 silently discarded their audit trail. Known gap, disclosed in the
+  wizard itself: Proof/Timeline pages still read shard 0's log only.
 - **Shard routing completed across the entire cluster HTTP surface (Phases
   S5-S9)** — every collection-aware endpoint now routes to the shard that
   actually owns its namespace's data, closing out the routing work started

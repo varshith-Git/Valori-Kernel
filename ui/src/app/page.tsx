@@ -289,7 +289,13 @@ function UsageStats() {
 
 // ── Project card ──────────────────────────────────────────────────────────────
 
-function StatusPill({ status }: { status: ManifestProject["status"] }) {
+function StatusPill({
+  status, nodesRunning, nodesTotal,
+}: {
+  status: ManifestProject["status"];
+  nodesRunning?: number;
+  nodesTotal?: number;
+}) {
   const map: Record<string, { cls: string; dot: string; label: string }> = {
     running:  { cls: "border-emerald-500/30 bg-emerald-500/12 text-emerald-700", dot: "bg-emerald-400",            label: "running" },
     starting: { cls: "border-amber-500/30 bg-amber-500/12 text-amber-700",       dot: "bg-amber-400 animate-pulse", label: "starting" },
@@ -297,10 +303,13 @@ function StatusPill({ status }: { status: ManifestProject["status"] }) {
     stopped:  { cls: "border-border bg-accent text-muted-foreground",            dot: "bg-muted-foreground/50",    label: "at rest" },
   };
   const s = map[status] ?? map.stopped;
+  const label = (nodesTotal && nodesTotal > 1 && status !== "stopped")
+    ? `${nodesRunning}/${nodesTotal} running`
+    : s.label;
   return (
     <span className={`inline-flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-full border ${s.cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
-      {s.label}
+      {label}
     </span>
   );
 }
@@ -319,8 +328,13 @@ function ProjectCard({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="card-shimmer animate-fade-up group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 cursor-pointer hover:border-input hover:shadow-sm hover:scale-[1.01] transition-all duration-200"
+      onKeyDown={e => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); }
+      }}
+      className="card-shimmer animate-fade-up group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 cursor-pointer hover:border-input hover:shadow-sm hover:scale-[1.01] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--v-accent)] transition-all duration-200"
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -328,10 +342,10 @@ function ProjectCard({
           <Layers size={14} className="text-[var(--v-accent)] transition-transform duration-200 group-hover:rotate-12" />
         </div>
         <div className="flex items-center gap-1.5">
-          <StatusPill status={project.status} />
+          <StatusPill status={project.status} nodesRunning={project.nodesRunning} nodesTotal={project.nodesTotal} />
           <button
             onClick={e => { e.stopPropagation(); onDelete(); }}
-            className="opacity-0 group-hover:opacity-100 rounded-md p-1 text-muted-foreground hover:text-red-700 hover:bg-red-500/15 transition-all"
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 rounded-md p-1 text-muted-foreground hover:text-red-700 hover:bg-red-500/15 transition-all"
             title="Delete project (clears lock + removes data)"
           >
             <Trash2 size={13} />
@@ -361,7 +375,8 @@ function ProjectCard({
 
       <div className="flex items-center justify-between gap-2 mt-1">
         <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent border border-border/60 text-muted-foreground">
-          :{project.port} · dim {project.dim}
+          :{project.port} · dim {project.dim}{project.nodesTotal > 1 && ` · ${project.nodesTotal} nodes`}
+          {project.shardCount > 1 && ` · ${project.shardCount} shards`}
         </span>
         <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
           {isRunning ? (
@@ -538,10 +553,10 @@ export default function HomePage() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index) => {
-          const entry = await create({ name, dim, index });
+        onCreate={async (name, dim, index, replication, shardCount) => {
+          const entry = await create({ name, dim, index, replication, shardCount });
           if (!entry) return;
-          // Boot the new project's node and route into it.
+          // Boot the new project's node(s) and route into it.
           setBusyName(name);
           const ok = await open(name);
           setBusyName(null);

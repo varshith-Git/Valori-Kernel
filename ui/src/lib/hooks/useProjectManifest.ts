@@ -3,9 +3,18 @@
 import useSWR from "swr";
 import { toast } from "@/lib/toast";
 
+export interface ManifestProjectNode {
+  id:        number;
+  httpPort:  number;
+  raftPort?: number;
+}
+
 export interface ManifestProject {
   name:          string;
   dir:           string;
+  replication:   1 | 3;
+  nodes:         ManifestProjectNode[];
+  shardCount:    number;
   port:          number;
   dim:           number;
   index:         "brute" | "hnsw" | "ivf";
@@ -14,6 +23,8 @@ export interface ManifestProject {
   lastOpenedAt?: string;
   records?:      number;
   status:        "stopped" | "starting" | "running" | "error";
+  nodesRunning:  number;
+  nodesTotal:    number;
 }
 
 const fetcher = (url: string) =>
@@ -39,6 +50,8 @@ export function useProjectManifest() {
     name: string;
     dim?: number;
     index?: "brute" | "hnsw" | "ivf";
+    replication?: 1 | 3;
+    shardCount?: number;
   }): Promise<ManifestProject | null> => {
     const res = await fetch("/api/projects", {
       method: "POST",

@@ -18,7 +18,7 @@ export function TopBar() {
           isRoot ? "opacity-0 pointer-events-none" : "opacity-100"
         }`}
       >
-        <ChevronLeft size={15} />
+        <ChevronLeft size={13} />
       </button>
       <Breadcrumb />
     </div>

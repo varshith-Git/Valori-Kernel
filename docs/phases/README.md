@@ -64,6 +64,7 @@ people and sessions that built it.
 | 3.14 — MCP server (verifiable agent memory) | [phase-3.14-mcp-server.md](phase-3.14-mcp-server.md) | `multinode` | ✅ done |
 | 3.15 — Native GraphRAG (one-call retrieval) | [phase-3.15-graphrag.md](phase-3.15-graphrag.md) | `multinode` | ✅ done |
 | 6 — Persistent, isolated projects (UI workspace) | [phase-6-persistent-projects.md](phase-6-persistent-projects.md) | `main` | ✅ done |
+| 6.1 — Replication factor in the project wizard: "Single Node" / "3-Node Cluster" cards; multi-node `ProjectEntry.nodes[]` manifest (auto-migrating), dedicated 4010-4999 cluster port range, aggregate "2/3 running" status; unifies the two divergent dimension lists and shares cluster-config helpers with `/launch` | [phase-6.1-project-wizard-replication.md](phase-6.1-project-wizard-replication.md) | `Node-scaleup` | ✅ done |
 | C5 — Valori Reranker (hybrid retrieval) | [phase-C5-valori-reranker.md](phase-C5-valori-reranker.md) | `main` | ✅ done |
 | I1 — Server-side document chunking (`/v1/ingest/document`) | [phase-I1-server-chunking.md](phase-I1-server-chunking.md) | `main` | ✅ done |
 | I2 — On-node embedding + full pipeline (`/v1/ingest`) | [phase-I2-on-node-embedding.md](phase-I2-on-node-embedding.md) | `main` | ✅ done |
@@ -87,6 +88,7 @@ people and sessions that built it.
 | S11 — Python SDK: added `collection` param to `create_node`/`get_node`/`create_edge`/`get_edges`/`subgraph`/`neighbors` on both `SyncRemoteClient` and `AsyncRemoteClient` — these six methods had no collection support at all despite the server (standalone always, cluster since S8) fully supporting it | [phase-S11-sdk-graph-collection-param.md](phase-S11-sdk-graph-collection-param.md) | `Node-scaleup` | ✅ done |
 | S12 — Fixed a standalone/cluster wire-format mismatch on `GET /v1/graph/node/:id` and `GET /v1/graph/edges/:id` (different field names per mode, e.g. `record` vs `record_id`) that made the Python SDK's `walk()`/`expand()`/`neighbors()` throw `KeyError` against cluster nodes; found while writing S11's docs | [phase-S12-graph-wire-compat.md](phase-S12-graph-wire-compat.md) | `Node-scaleup` | ✅ done |
 | S13 — Fixed a real audit-log gap: `bootstrap_cluster()` only ever gave shard 0 a real audit sink, shards ≥ 1 silently got `NullAuditSink` (events discarded, no BLAKE3 chain) — a stale S1-era assumption invalidated by S3-S9's real shard-routed HTTP traffic. Every shard now gets its own genuine, chain-verifiable `events-shardN.log`; found while scoping the UI shard-count feature | [phase-S13-per-shard-audit-sinks.md](phase-S13-per-shard-audit-sinks.md) | `Node-scaleup` | ✅ done |
+| S14 — First UI surface for sharding: "Shards" control (1/2/4/8) in the project-creation wizard, cluster projects only; `shardCount` persisted in the project manifest and threaded to `VALORI_SHARD_COUNT` on every spawned node. Verified live: 3-replica/2-shard project produced 6 independently chain-valid per-node-per-shard audit logs | [phase-S14-ui-shard-count.md](phase-S14-ui-shard-count.md) | `Node-scaleup` | ✅ done |
 
 ## Report template
 

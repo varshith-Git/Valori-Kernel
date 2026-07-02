@@ -6,21 +6,10 @@ import {
   Terminal, Plus, Trash2, UserPlus, Link2, CheckCircle2, XCircle,
 } from "lucide-react";
 import type { LaunchConfig, NodeCfg, NodeState, NodeStatus } from "@/lib/server/process-manager";
+import { buildMembers, makeDefaultNodes as makeDefaultNodesShared, nextNodeConfig as nextNodeConfigShared } from "@/lib/server/cluster-config";
+import { DIMENSIONS } from "@/lib/dimensions";
 
 // ─── constants ───────────────────────────────────────────────────────────────
-
-const DIMENSIONS = [
-  { value: 128,  label: "128  — tiny / tests"                         },
-  { value: 256,  label: "256  — lightweight"                          },
-  { value: 384,  label: "384  — MiniLM-L6-v2, paraphrase-MiniLM"     },
-  { value: 512,  label: "512  — CLIP ViT-B/32"                        },
-  { value: 768,  label: "768  — BERT-base, all-mpnet-base-v2, nomic"  },
-  { value: 1024, label: "1024 — BERT-large, bge-large-en"             },
-  { value: 1536, label: "1536 — text-embedding-ada-002, e5-large"     },
-  { value: 2048, label: "2048 — e5-mistral-7b"                        },
-  { value: 3072, label: "3072 — text-embedding-3-large"               },
-  { value: 4096, label: "4096 — Llama / Mistral hidden-state"         },
-];
 
 const INDEX_TYPES = [
   { value: "brute", label: "Brute-force L2  - exact, always consistent"      },
@@ -30,29 +19,12 @@ const INDEX_TYPES = [
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function buildMembers(nodes: NodeCfg[], host = "localhost"): string {
-  return nodes
-    .map(n => `${n.id}=${host}:${n.raftPort ?? (3100 + n.id)}/${host}:${n.httpPort}`)
-    .join(",");
-}
-
 // Advanced/cluster launches persist under ~/.valori/cluster (the everyday
 // per-project flow lives on Home and writes to ~/.valori/projects/<name>).
 const CLUSTER_DIR = "~/.valori/cluster";
 
 function makeDefaultNodes(count: number): NodeCfg[] {
-  return Array.from({ length: count }, (_, i) => {
-    const id = i + 1;
-    return {
-      id,
-      httpPort:     3000 + id,
-      raftPort:     3100 + id,
-      eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
-      snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
-      raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
-      clusterInit:  id === 1,
-    };
-  });
+  return makeDefaultNodesShared(count, { dir: CLUSTER_DIR });
 }
 
 function defaultSingle(): LaunchConfig {
@@ -68,19 +40,7 @@ function defaultCluster(count = 3): LaunchConfig {
 }
 
 function nextNodeConfig(existing: NodeCfg[]): NodeCfg {
-  const maxId   = Math.max(...existing.map(n => n.id));
-  const maxHttp = Math.max(...existing.map(n => n.httpPort));
-  const maxRaft = Math.max(...existing.map(n => n.raftPort ?? (3100 + n.id)));
-  const id = maxId + 1;
-  return {
-    id,
-    httpPort:     maxHttp + 1,
-    raftPort:     maxRaft + 1,
-    eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
-    snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
-    raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
-    clusterInit:  false,
-  };
+  return nextNodeConfigShared(existing, CLUSTER_DIR);
 }
 
 // ─── status badge ─────────────────────────────────────────────────────────────
