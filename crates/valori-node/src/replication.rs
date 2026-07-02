@@ -48,7 +48,9 @@ pub async fn spawn_replication_stream(
                             }
                             recent_hashes.push_back(hash);
 
-                            if let LogEntry::Event(_) = &chained.entry {
+                            // S15: stream both plain and namespace-scoped data
+                            // events (checkpoints/admin are not replayed here).
+                            if matches!(&chained.entry, LogEntry::Event(_) | LogEntry::EventNs { .. }) {
                                 if current_idx >= start_offset {
                                     use base64::{Engine as _, engine::general_purpose::STANDARD};
                                     let b64 = STANDARD.encode(&entry_bytes);
@@ -246,12 +248,23 @@ pub async fn run_follower_loop(
                             if let Ok(msg) = serde_json::from_str::<B64Message>(line) {
                                 use base64::{Engine as _, engine::general_purpose::STANDARD};
                                 if let Ok(bytes) = STANDARD.decode(&msg.b64) {
-                                    if let Ok((LogEntry::Event(event), _)) = bincode::serde::decode_from_slice::<LogEntry, _>(&bytes, bincode::config::standard()) {
+                                    // S15: preserve the namespace across the wire so a
+                                    // replicated collection write lands in the same
+                                    // collection on the follower.
+                                    let decoded = bincode::serde::decode_from_slice::<LogEntry, _>(&bytes, bincode::config::standard())
+                                        .ok()
+                                        .map(|(e, _)| e);
+                                    let ns_event = match decoded {
+                                        Some(LogEntry::Event(event)) => Some((valori_kernel::types::id::DEFAULT_NS.0, event)),
+                                        Some(LogEntry::EventNs { namespace_id, event }) => Some((namespace_id, event)),
+                                        _ => None,
+                                    };
+                                    if let Some((namespace_id, event)) = ns_event {
                                         let mut engine = state.write().await;
                                         if let Some(ref mut committer) = engine.event_committer {
-                                            match committer.commit_event(event.clone()) {
+                                            match committer.commit_event_ns(event.clone(), namespace_id) {
                                                 Ok(_) => {
-                                                    if let Err(e) = engine.apply_committed_event(&event) {
+                                                    if let Err(e) = engine.apply_committed_event_ns(&event, namespace_id) {
                                                         tracing::error!("Failed to apply committed event: {:?}", e);
                                                         apply_failed = true;
                                                         break 'stream;

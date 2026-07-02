@@ -133,30 +133,47 @@ impl EventCommitter {
         Ok(())
     }
 
-    /// Commit an event (the ONLY way to mutate state).
+    /// Commit an event into the default namespace (the ONLY way to mutate
+    /// state). See [`Self::commit_event_ns`] for the ordering guarantees.
+    pub fn commit_event(&mut self, event: KernelEvent) -> Result<CommitResult> {
+        self.commit_event_ns(event, valori_kernel::types::id::DEFAULT_NS.0)
+    }
+
+    /// Commit an event scoped to `namespace_id` (Phase S15).
     ///
     /// Order: shadow-apply → persist → live-apply.
     /// This guarantees the audit log never contains a phantom event (an event
     /// that was written to disk but rejected by the state machine). If shadow
     /// apply fails, the log is untouched and we return the error cleanly.
-    pub fn commit_event(&mut self, event: KernelEvent) -> Result<CommitResult> {
+    ///
+    /// The log entry records the namespace (`LogEntry::EventNs`) so recovery
+    /// can replay the event back into the same collection it was written to —
+    /// `KernelEvent` itself carries no namespace, and before S15 every replay
+    /// flattened all collections into the default namespace. Default-namespace
+    /// commits keep writing the plain `Event` variant, so their logs stay
+    /// byte-identical to pre-S15.
+    pub fn commit_event_ns(&mut self, event: KernelEvent, namespace_id: u16) -> Result<CommitResult> {
         // Step 1: Shadow apply — validate WITHOUT mutating live state.
         // If the event is invalid (dup ID, wrong dim, etc.) we bail here,
         // before touching the audit log.
         let mut shadow = self.live_state.clone();
-        shadow.apply_event(&event).map_err(CommitError::ShadowApply)?;
+        shadow.apply_event_ns(&event, namespace_id).map_err(CommitError::ShadowApply)?;
 
         // Step 2: Live apply — must succeed because shadow passed on an
         // identical state snapshot. Panic here is a programming error.
         self.live_state
-            .apply_event(&event)
+            .apply_event_ns(&event, namespace_id)
             .expect("live apply after shadow-pass must succeed");
 
         // Step 3: Buffer the log entry; flush when the buffer is full.
         // State is already live in memory (auditable); disk write is deferred
         // for throughput. Callers that need immediate durability (snapshot save,
         // clean shutdown) must call flush_pending() explicitly.
-        let entry = crate::events::event_log::LogEntry::Event(event.clone());
+        let entry = if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
+            crate::events::event_log::LogEntry::Event(event.clone())
+        } else {
+            crate::events::event_log::LogEntry::EventNs { namespace_id, event: event.clone() }
+        };
         self.write_buf.push(entry);
         if self.write_buf.len() >= self.flush_every {
             self.event_log.append_batch(&self.write_buf)?;
@@ -224,12 +241,18 @@ impl EventCommitter {
         }
     }
 
-    /// Batch commit multiple events.
-    ///
-    /// Same shadow-first guarantee as `commit_event`: all events are shadow-applied
-    /// on a clone of live state before any log write. If any event fails shadow
-    /// apply, the log is untouched.
+    /// Batch commit multiple events into the default namespace.
     pub fn commit_batch(&mut self, events: Vec<KernelEvent>) -> Result<CommitResult> {
+        self.commit_batch_ns(events, valori_kernel::types::id::DEFAULT_NS.0)
+    }
+
+    /// Batch commit multiple events scoped to `namespace_id` (Phase S15 —
+    /// a batch always targets one collection, so one namespace per call).
+    ///
+    /// Same shadow-first guarantee as `commit_event_ns`: all events are
+    /// shadow-applied on a clone of live state before any log write. If any
+    /// event fails shadow apply, the log is untouched.
+    pub fn commit_batch_ns(&mut self, events: Vec<KernelEvent>, namespace_id: u16) -> Result<CommitResult> {
         if events.is_empty() {
             return Ok(CommitResult::Committed);
         }
@@ -237,19 +260,24 @@ impl EventCommitter {
         // Step 1: Shadow apply the entire batch on a state clone.
         let mut shadow = self.live_state.clone();
         for event in &events {
-            shadow.apply_event(event).map_err(CommitError::ShadowApply)?;
+            shadow.apply_event_ns(event, namespace_id).map_err(CommitError::ShadowApply)?;
         }
 
         // Step 2: Persist all events (batch is now known-good).
+        let default_ns = valori_kernel::types::id::DEFAULT_NS.0;
         let log_entries: Vec<_> = events.iter()
-            .map(|e| crate::events::event_log::LogEntry::Event(e.clone()))
+            .map(|e| if namespace_id == default_ns {
+                crate::events::event_log::LogEntry::Event(e.clone())
+            } else {
+                crate::events::event_log::LogEntry::EventNs { namespace_id, event: e.clone() }
+            })
             .collect();
         self.event_log.append_batch(&log_entries)?;
 
         // Step 3: Live apply (must succeed — shadow passed on identical state).
         for event in &events {
             self.live_state
-                .apply_event(event)
+                .apply_event_ns(event, namespace_id)
                 .expect("live apply after shadow-pass must succeed");
         }
 

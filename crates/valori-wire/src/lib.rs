@@ -142,6 +142,18 @@ pub enum LogEntry {
     /// membership cannot change without it appearing between the data
     /// events it interleaves with. Added Phase 2.9 (append-only variant 2).
     Admin(AdminEvent),
+    /// A data event scoped to a non-default namespace (collection). Added
+    /// Phase S15 (append-only variant 3): `KernelEvent` itself carries no
+    /// namespace, so before this variant existed, standalone recovery
+    /// replayed every event into the default namespace and collections
+    /// silently lost their contents across restarts. Writers emit this
+    /// variant only when `namespace_id != 0` — default-namespace logs stay
+    /// byte-identical to pre-S15, and pre-S15 logs (all `Event`) replay
+    /// exactly as they always did.
+    EventNs {
+        namespace_id: u16,
+        event: KernelEvent,
+    },
 }
 
 /// Administrative actions worth auditing forever.

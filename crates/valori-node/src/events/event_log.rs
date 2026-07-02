@@ -149,6 +149,8 @@ impl EventLogWriter {
                         chain_head = chain_advance(version, &chain_head, &decoded)?;
                         match decoded.entry {
                             LogEntry::Event(_) => event_count += 1,
+                            // S15: namespace-scoped events count identically.
+                            LogEntry::EventNs { .. } => event_count += 1,
                             LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
                             // Admin events are chained but not kernel events.
                             LogEntry::Admin(_) => {}

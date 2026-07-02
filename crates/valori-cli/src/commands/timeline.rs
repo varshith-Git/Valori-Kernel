@@ -44,17 +44,34 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
                 offset += bytes_read;
 
                 match chained.entry {
+                    // S15: EventNs is the same as Event for the timeline, just
+                    // tagged with the collection it landed in.
                     LogEntry::Event(event) => {
                         event_num += 1;
-
                         let (type_cell, detail) = describe_event(&event);
-
                         table.add_row(vec![
                             Cell::new(event_num.to_string()),
                             type_cell,
                             Cell::new(detail),
                         ]);
+                        if limit > 0 && event_num as usize >= limit {
+                            println!("{table}");
+                            println!(
+                                "\n  … display limited to first {limit} events. \
+                                 Pass --limit 0 to show all.\n"
+                            );
+                            return Ok(());
+                        }
+                    }
 
+                    LogEntry::EventNs { namespace_id, event } => {
+                        event_num += 1;
+                        let (type_cell, detail) = describe_event(&event);
+                        table.add_row(vec![
+                            Cell::new(event_num.to_string()),
+                            type_cell,
+                            Cell::new(format!("[ns {namespace_id}] {detail}")),
+                        ]);
                         if limit > 0 && event_num as usize >= limit {
                             println!("{table}");
                             println!(

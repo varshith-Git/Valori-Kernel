@@ -72,6 +72,9 @@ fn walk(bytes: &[u8]) -> (u64, u64, [u8; 32]) {
             // Variant added in Phase 2.9 — absent from the v2/v3-era
             // fixtures, which must keep decoding forever regardless.
             LogEntry::Admin(_) => {}
+            // Variant added in Phase S15 — likewise absent from the
+            // pre-S15 fixtures; counted as a data event when present.
+            LogEntry::EventNs { .. } => events += 1,
         }
         offset += n;
     }

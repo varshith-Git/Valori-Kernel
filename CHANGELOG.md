@@ -78,6 +78,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docs/phases/phase-S4-remaining-write-handlers.md`.
 
 ### Fixed
+- **Documents in named collections vanished after close/reopen (Phase S15)**
+  — the standalone audit log recorded events without a namespace, so on
+  recovery every event replayed into the default collection and the named
+  collection came back empty. Data was never lost (the events were all on
+  disk), just re-shelved into the wrong collection on each restart. Added
+  an append-only `LogEntry::EventNs` wire variant that records the
+  namespace; commit, replay, and every log reader (`valori-verify`,
+  timeline, inspect, the legacy replication stream) are now
+  namespace-aware. Default-collection logs stay byte-identical to before,
+  and pre-S15 logs replay unchanged. Note: writes made *before* this fix
+  stay in the default collection (their log entries lack the namespace);
+  point-in-time `as_of` search in a non-default collection remains a known
+  gap (the journal is namespace-agnostic). See
+  `docs/phases/phase-S15-namespaced-event-log.md`.
 - **Shards ≥ 1 silently discarded their audit trail (Phase S13)** —
   `bootstrap_cluster()` only ever gave shard 0 a real audit sink; every
   other shard got a hardcoded `NullAuditSink` that discards events without

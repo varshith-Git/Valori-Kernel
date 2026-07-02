@@ -662,7 +662,9 @@ impl Engine {
         };
 
         if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            // S15: the log entry must record the namespace, or recovery
+            // replays this insert into the default collection.
+            committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             self.apply_committed_event_ns(&event, namespace_id)?;
         } else {
             let (rid, vector) = if let valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } = &event {
@@ -728,7 +730,7 @@ impl Engine {
                 metadata_ciphertext: None,
                 tag,
             };
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             self.apply_committed_event_ns(&event, namespace_id)?;
         } else {
             let cmd = Command::InsertRecordEncrypted {
@@ -838,7 +840,7 @@ impl Engine {
                 id_map[i] = id;
             }
 
-            committer.commit_batch(events.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            committer.commit_batch_ns(events.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             for event in &events {
                 self.apply_committed_event_ns(event, namespace_id)?;
             }
@@ -1189,7 +1191,7 @@ impl Engine {
          };
 
          if let Some(ref mut committer) = self.event_committer {
-             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
              self.apply_committed_event_ns(&event, namespace_id)?;
          } else {
              let cmd = Command::CreateNode { namespace_id, node_id, kind, record };

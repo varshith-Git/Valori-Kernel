@@ -2948,7 +2948,15 @@ async fn cluster_timeline(
                 if let Some(from) = from_unix { if ts < from { log_index += 1; continue; } }
                 if let Some(to)   = to_unix   { if ts > to   { log_index += 1; continue; } }
 
-                if let WireLogEntry::Event(ref ev) = decoded.entry {
+                // S15: unwrap both plain and namespace-scoped data events to
+                // the inner KernelEvent — the timeline shows the same rows
+                // regardless of which collection an event landed in.
+                let inner_ev = match &decoded.entry {
+                    WireLogEntry::Event(ev) => Some(ev),
+                    WireLogEntry::EventNs { event, .. } => Some(event),
+                    _ => None,
+                };
+                if let Some(ev) = inner_ev {
                     let (event_type, record_id, node_id, edge_id) = match ev {
                         KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
                         KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),

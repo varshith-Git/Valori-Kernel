@@ -137,7 +137,7 @@ pub fn run(
                         Ok((entry, n)) => {
                             offset += n;
                             match entry {
-                                LogEntry::Event(_) => event_count += 1,
+                                LogEntry::Event(_) | LogEntry::EventNs { .. } => event_count += 1,
                                 LogEntry::Checkpoint { event_count: c, .. } => {
                                     event_count = c;
                                 }

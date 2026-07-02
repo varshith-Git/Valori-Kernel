@@ -75,6 +75,12 @@ pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resu
                     crate::events::event_log::LogEntry::Event(event) => {
                         events.push(event);
                     },
+                    // S15: namespace-scoped events — this reader returns the
+                    // bare events (callers that need the namespace use
+                    // read_all_segments, which preserves it).
+                    crate::events::event_log::LogEntry::EventNs { event, .. } => {
+                        events.push(event);
+                    },
                     crate::events::event_log::LogEntry::Checkpoint { event_count: chk_count, snapshot_hash, timestamp: _ } => {
                         tracing::info!("Found checkpoint marker: count={}, hash={:?}", chk_count, snapshot_hash);
                     }
@@ -99,14 +105,16 @@ pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resu
     Ok(events)
 }
 
-/// Replay events into a fresh kernel state
+/// Replay events into a fresh kernel state, each into its recorded
+/// namespace (S15 — pre-S15 `Event` entries carry namespace 0, so old logs
+/// replay exactly as they always did).
 pub fn replay_events(
-    events: &[KernelEvent]
+    events: &[(u16, KernelEvent)]
 ) -> Result<KernelState> {
     let mut state = KernelState::new();
 
-    for (idx, event) in events.iter().enumerate() {
-        state.apply_event(event)
+    for (idx, (namespace_id, event)) in events.iter().enumerate() {
+        state.apply_event_ns(event, *namespace_id)
             .map_err(|e| {
                 tracing::error!("Event replay failed at index {}: {:?}", idx, e);
                 ReplayError::EventApplication(e)
@@ -116,13 +124,14 @@ pub fn replay_events(
     Ok(state)
 }
 
-/// One segment's replay result: its sequence number, the events it carries,
-/// the chain head it splices FROM (header), and the chain head it closes WITH.
+/// One segment's replay result: its sequence number, the events it carries
+/// (with each event's namespace, S15), the chain head it splices FROM
+/// (header), and the chain head it closes WITH.
 struct SegmentReplay {
     segment_seq: u32,
     prev_segment_chain_head: [u8; 32],
     final_chain_head: [u8; 32],
-    events: Vec<KernelEvent>,
+    events: Vec<(u16, KernelEvent)>,
 }
 
 /// Read one segment file, validating its internal hash chain, and report the
@@ -150,8 +159,14 @@ fn read_segment_full(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resul
                 chain_head = valori_wire::chain_advance(header.version, &chain_head, &decoded)
                     .map_err(|e| ReplayError::Deserialization(e.to_string()))?;
                 offset += bytes_read;
-                if let crate::events::event_log::LogEntry::Event(event) = decoded.entry {
-                    events.push(event);
+                match decoded.entry {
+                    crate::events::event_log::LogEntry::Event(event) => {
+                        events.push((valori_kernel::types::id::DEFAULT_NS.0, event));
+                    }
+                    crate::events::event_log::LogEntry::EventNs { namespace_id, event } => {
+                        events.push((namespace_id, event));
+                    }
+                    _ => {}
                 }
             }
             Err(_) if offset + 100 > buffer.len() => break, // trailing partial write
@@ -177,7 +192,7 @@ fn read_segment_full(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resul
 pub fn read_all_segments(
     live_path: impl AsRef<Path>,
     expected_dim: Option<u32>,
-) -> Result<Vec<KernelEvent>> {
+) -> Result<Vec<(u16, KernelEvent)>> {
     let live_path = live_path.as_ref();
 
     // The live file plus any `events.log.<suffix>` archives in the same dir.
@@ -233,7 +248,8 @@ pub fn recover_from_event_log(
     tracing::info!("Loaded {} events across all segments", event_count);
 
     let state = replay_events(&events)?;
-    let journal = EventJournal::from_committed(events);
+    // The journal tracks height/dedup only — it doesn't need the namespace.
+    let journal = EventJournal::from_committed(events.into_iter().map(|(_, e)| e).collect());
 
     Ok((state, journal, event_count))
 }
@@ -345,6 +361,45 @@ mod tests {
         for i in 0..5 {
             assert!(state.get_record(RecordId(i)).is_some(), "record {i} lost across rotation");
         }
+    }
+
+    #[test]
+    fn namespaced_events_recover_into_their_own_collection() {
+        // Phase S15 regression: before EventNs existed, a record written to a
+        // non-default collection replayed into the DEFAULT namespace on
+        // restart — the collection came back empty ("documents disappeared").
+        // Here we write one record into namespace 1 via commit_event_ns, drop
+        // the committer (flush), recover from scratch, and assert the record
+        // landed back in namespace 1 — not namespace 0.
+        use crate::events::event_commit::EventCommitter;
+        use crate::events::event_journal::EventJournal;
+        use valori_kernel::event::KernelEvent;
+
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("events.log");
+
+        {
+            let writer = EventLogWriter::open(&log_path, Some(16)).unwrap();
+            let mut committer = EventCommitter::new(writer, EventJournal::new(), KernelState::new());
+            // A default-namespace record (id 0) and a namespace-1 record (id 1).
+            committer.commit_event(KernelEvent::InsertRecord {
+                id: RecordId(0), vector: FxpVector::new_zeros(16), metadata: None, tag: 0,
+            }).unwrap();
+            committer.commit_event_ns(
+                KernelEvent::InsertRecord { id: RecordId(1), vector: FxpVector::new_zeros(16), metadata: None, tag: 0 },
+                1,
+            ).unwrap();
+            // Drop flushes the buffered writes to disk.
+        }
+
+        let (state, _journal, count) = recover_from_event_log(&log_path).unwrap();
+        assert_eq!(count, 2);
+
+        // Record 1 must be in namespace 1, NOT namespace 0.
+        let ns0: Vec<u32> = state.iter_records_in_ns(0).map(|r| r.id.0).collect();
+        let ns1: Vec<u32> = state.iter_records_in_ns(1).map(|r| r.id.0).collect();
+        assert_eq!(ns0, vec![0], "only the default-namespace record belongs in ns 0");
+        assert_eq!(ns1, vec![1], "the namespaced record must recover into ns 1, not ns 0");
     }
 
     #[test]

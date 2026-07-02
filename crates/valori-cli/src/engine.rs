@@ -104,6 +104,23 @@ impl ForensicEngine {
                             self.applied_events.push(event_index);
                             replayed += 1;
                         }
+                        // S15: namespace-scoped data event — replay into its
+                        // own collection so point-in-time state matches.
+                        LogEntry::EventNs { namespace_id, event } => {
+                            event_index += 1;
+
+                            if event_index > target_count {
+                                break;
+                            }
+
+                            self.state.apply_event_ns(&event, namespace_id).map_err(|e| {
+                                anyhow::anyhow!("Event #{event_index} failed: {e:?}")
+                            })?;
+
+                            self.current_event_count = event_index;
+                            self.applied_events.push(event_index);
+                            replayed += 1;
+                        }
                         LogEntry::Checkpoint { event_count, .. } => {
                             // Checkpoint entries record cumulative event count
                             // at the time a snapshot was taken.

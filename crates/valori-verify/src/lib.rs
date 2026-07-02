@@ -48,6 +48,7 @@ enum Failure {
 fn entry_summary(entry: &LogEntry) -> String {
     match entry {
         LogEntry::Event(e) => format!("{e:?}"),
+        LogEntry::EventNs { namespace_id, event } => format!("[ns {namespace_id}] {event:?}"),
         LogEntry::Checkpoint { event_count, .. } => format!("Checkpoint {{ event_count: {event_count} }}"),
         LogEntry::Admin(a) => a.describe(),
     }
@@ -102,6 +103,22 @@ fn replay(body: &[u8], header: &SegmentHeader) -> ReplayOutcome {
                             event_no: events_applied + 1,
                             byte_offset: header.header_len + offset,
                             detail: format!("{e:?} while applying {event:?}"),
+                        }),
+                    };
+                }
+                events_applied += 1;
+            }
+            // S15: namespace-scoped events must replay into their own
+            // collection, or the verifier's recomputed state hash would
+            // diverge from the node's (which applied them namespaced).
+            LogEntry::EventNs { namespace_id, event } => {
+                if let Err(e) = state.apply_event_ns(event, *namespace_id) {
+                    return ReplayOutcome {
+                        state, events_applied, checkpoints_seen, chain_head,
+                        failure: Some(Failure::Apply {
+                            event_no: events_applied + 1,
+                            byte_offset: header.header_len + offset,
+                            detail: format!("{e:?} while applying [ns {namespace_id}] {event:?}"),
                         }),
                     };
                 }
