@@ -10,6 +10,8 @@ people and sessions that built it.
 
 | Phase | Report | Commit | Status |
 |---|---|---|---|
+| E1 — Single persistence funnel: Engine's dual `Option<EventCommitter>`/`Option<WalWriter>` branches (duplicated across 10+ write methods) collapsed into `Persistence` enum + one `commit_and_apply_ns` write path; fixed missing auto-tier check on event-log batch inserts | [phase-E1-persistence-funnel.md](phase-E1-persistence-funnel.md) | `Node-scaleup` | ✅ done |
+| E0 — Dead-file cleanup: deleted 10 stale storage-layer duplicates left in valori-node by the Phase 1.1 restructure (recovery.rs had already drifted); new `tests/architecture.rs` tripwire fails on any cross-crate source-file duplication | [phase-E0-dead-file-cleanup.md](phase-E0-dead-file-cleanup.md) | `Node-scaleup` | ✅ done |
 | R5 — Async ingestion pipeline & route parity: background task-driven ingestion via `POST /v1/ingest?async=true` + `GET /v1/ingest/status/:job_id`; fixed critical state sync bug in `Engine::create_edge` and wire format v4 verification parity | [phase-R5-async-ingestion.md](phase-R5-async-ingestion.md) | `Node-scaleup` | ✅ done |
 | R3 — Dual-path unification: memory domain (upsert, search, consolidate, contradict) migrated to shared `routes/` handler pattern; eradicated the "Two Kitchens" problem | [phase-R3-dual-path-memory.md](phase-R3-dual-path-memory.md) | `Node-scaleup` | ✅ done |
 | R2 — Dual-path unification: graph/records/meta/version domains migrated to `routes/`; fixed cluster list-nodes tenant leak, kind-coercion, meta wire divergence; new `POST /v1/soft-delete` (standalone) + `DELETE /v1/graph/node/:id` (cluster); METHOD_GAPS now empty | [phase-R2-dual-path-domains.md](phase-R2-dual-path-domains.md) | `Node-scaleup` | ✅ done |

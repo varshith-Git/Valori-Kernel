@@ -27,6 +27,9 @@
 pub mod standalone;
 pub use standalone::StandaloneCommitter;
 
+pub mod persistence;
+pub use persistence::Persistence;
+
 pub mod audit;
 pub mod raft;
 pub use audit::EventLogAuditSink;

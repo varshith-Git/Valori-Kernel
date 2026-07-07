@@ -31,7 +31,7 @@ async fn test_replication_cluster() {
 
     {
         let mut engine = leader_state.write().await;
-        assert!(engine.event_committer.is_some(), "Leader must have event committer");
+        assert!(engine.event_committer().is_some(), "Leader must have event committer");
         let id0 = engine.insert_record_from_f32(&vec![0.1; 4]).unwrap();
         assert_eq!(id0, 0);
     }

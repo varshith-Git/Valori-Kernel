@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Single persistence funnel (Phase E1)** — `Engine` now owns one
+  `Persistence` enum (`EventLog` / `Wal` / `Ephemeral`) instead of
+  `Option<EventCommitter>` + `Option<WalWriter>`; every mutation flows
+  through one `commit_and_apply_ns` path. Behavior fix that fell out:
+  event-log batch inserts now run the auto-tier index check (previously
+  only per-insert WAL-path inserts did). External code reads the committer
+  via `engine.event_committer()` / `event_committer_mut()`.
+
+### Removed
+- **Dead storage-layer duplicates (Phase E0)** — 10 stale files in
+  `valori-node/src/` (`wal_writer.rs`, `wal_reader.rs`, `recovery.rs`,
+  `events/`, `object_store/`) left behind by the Phase 1.1 restructure and
+  shadowed by the `valori-storage`/`valori-state` re-exports in lib.rs.
+  `tests/architecture.rs` now fails if a source file exists in both
+  valori-node and an extracted crate.
+
 ### Added
 - **Dual-path unification, all mechanical domains (Phase R2)** — graph
   (7 endpoints), record deletion, metadata sidecar, and version handlers now

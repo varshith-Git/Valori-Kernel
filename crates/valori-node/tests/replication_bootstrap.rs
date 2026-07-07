@@ -38,7 +38,7 @@ async fn test_replication_bootstrap() {
             .expect("Failed to open leader event log");
         let journal = EventJournal::new();
         let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
     let leader_app = build_router(leader_state.clone(), None, None);
@@ -93,7 +93,7 @@ async fn test_replication_bootstrap() {
             .expect("Failed to open follower event log");
         let journal = EventJournal::new();
         let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
     let f_state = follower_state.clone();

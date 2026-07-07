@@ -5,7 +5,6 @@
 //! and node-level services.
 
 use valori_kernel::state::kernel::KernelState;
-use valori_kernel::state::command::Command;
 use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::snapshot::encode::encode_state;
 use valori_kernel::types::id::RecordId;
@@ -21,6 +20,7 @@ const AUTO_TIER_BQ_MIN: usize   = 10_000;       // BruteForce → BQ
 const AUTO_TIER_HNSW_MIN: usize = 2_000_000;    // BQ → HNSW
 use crate::structure::index::{VectorIndex, BruteForceIndex};
 use crate::structure::quant::{Quantizer, NoQuantizer, ScalarQuantizer};
+use crate::commit::Persistence;
 use crate::wal_writer::WalWriter;
 use crate::events::event_commit::EventCommitter;
 use crate::events::event_log::EventLogWriter;
@@ -179,11 +179,11 @@ pub struct Engine {
     pub max_edges: usize,
     pub dim: usize,
 
-    // WAL Persistence (Phase 20)
-    pub wal_writer: Option<WalWriter>,
-
-    // Event-sourced persistence (Phase 23 - NEW)
-    pub event_committer: Option<EventCommitter>,
+    /// Phase E1: the single durability funnel. Every mutation flows through
+    /// `commit_and_apply_ns` → `persistence.log_event_ns`. Replaces the old
+    /// `Option<EventCommitter>` + `Option<WalWriter>` pair and the dual
+    /// branch that was duplicated across every write method.
+    pub persistence: Persistence,
 
     /// Sidecar file for `MetadataStore` (JSON key-value pairs set via
     /// `set_metadata` / `meta_set`).  Written atomically on every mutation;
@@ -329,46 +329,38 @@ impl Engine {
             }
         };
 
-        // WAL is the legacy persistence path.  When the event log is active it
-        // supersedes the WAL entirely — every mutation goes through EventCommitter.
-        // Initialising both would waste an fd and create a confusing dual-write.
-        let wal_writer = if cfg.event_log_path.is_none() {
-            if let Some(ref path) = cfg.wal_path {
-                match WalWriter::open(path, cfg.dim as u32) {
-                    Ok(writer) => {
-                        tracing::info!("WAL initialized at {:?}", path);
-                        Some(writer)
-                    },
-                    Err(e) => {
-                        tracing::error!("Failed to open WAL: {}", e);
-                        None
+        // The event log supersedes the legacy WAL entirely when both are
+        // configured — initialising both would waste an fd and create a
+        // confusing dual-write. Priority: event log > WAL > ephemeral.
+        let persistence = if let Some(ref path) = cfg.event_log_path {
+            match EventLogWriter::open(path, Some(cfg.dim as u32)) {
+                Ok(log_writer) => {
+                    let journal = EventJournal::new();
+                    let live_state = KernelState::with_dim(cfg.dim);
+                    let mut committer = EventCommitter::new(log_writer, journal, live_state);
+                    if let Some(limit) = cfg.event_log_rotation_bytes {
+                        committer = committer.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
                     }
+                    Persistence::EventLog(committer)
                 }
-            } else {
-                None
+                Err(e) => {
+                    tracing::error!("Failed to open Event Log: {}", e);
+                    Persistence::Ephemeral
+                }
+            }
+        } else if let Some(ref path) = cfg.wal_path {
+            match WalWriter::open(path, cfg.dim as u32) {
+                Ok(writer) => {
+                    tracing::info!("WAL initialized at {:?}", path);
+                    Persistence::Wal(writer)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to open WAL: {}", e);
+                    Persistence::Ephemeral
+                }
             }
         } else {
-            None
-        };
-        
-        let event_committer = if let Some(ref path) = cfg.event_log_path {
-             match EventLogWriter::open(path, Some(cfg.dim as u32)) {
-                 Ok(log_writer) => {
-                     let journal = EventJournal::new();
-                     let live_state = KernelState::with_dim(cfg.dim);
-                     let mut committer = EventCommitter::new(log_writer, journal, live_state);
-                     if let Some(limit) = cfg.event_log_rotation_bytes {
-                         committer = committer.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
-                     }
-                     Some(committer)
-                 }
-                 Err(e) => {
-                     tracing::error!("Failed to open Event Log: {}", e);
-                     None
-                 }
-             }
-        } else {
-            None
+            Persistence::Ephemeral
         };
 
         // Derive the metadata sidecar path from the event log path so the two
@@ -397,8 +389,7 @@ impl Engine {
             max_nodes: cfg.max_nodes,
             max_edges: cfg.max_edges,
             dim: cfg.dim,
-            wal_writer,
-            event_committer,
+            persistence,
             record_to_node: HashMap::new(),
             created_at: HashMap::new(),
             metadata_path,
@@ -456,6 +447,28 @@ impl Engine {
     #[inline]
     pub fn shard_for_ns(&self, namespace_id: u16) -> usize {
         if self.shard_count <= 1 { 0 } else { namespace_id as usize % self.shard_count }
+    }
+
+    // ── Phase E1: the single write path ──────────────────────────────────────
+
+    /// Durably log `event` (namespace-scoped), then apply it exactly once to
+    /// engine state + search index + derived maps. This is the ONLY way a
+    /// mutation enters the engine; every write method funnels through here.
+    fn commit_and_apply_ns(&mut self, event: &valori_kernel::event::KernelEvent, namespace_id: u16) -> Result<(), EngineError> {
+        self.persistence
+            .log_event_ns(event, namespace_id)
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        self.apply_committed_event_ns(event, namespace_id)
+    }
+
+    /// Concrete access to the event committer for observability call sites
+    /// (proof, timeline, receipts, replication). `None` unless event-log backed.
+    pub fn event_committer(&self) -> Option<&EventCommitter> {
+        self.persistence.event_committer()
+    }
+
+    pub fn event_committer_mut(&mut self) -> Option<&mut EventCommitter> {
+        self.persistence.event_committer_mut()
     }
 
     /// Current wall-clock time in unix seconds (decay reference clock).
@@ -544,13 +557,10 @@ impl Engine {
             key: key.clone(),
             value: value.to_string(),
         };
-
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event_ns(&event, 0)?;
-        } else {
-            self.state.apply_event_ns(&event, 0)?;
-        }
+        // The legacy WAL format cannot represent SetMeta — Persistence skips
+        // the append on the Wal variant (matching pre-E1 behavior) and the
+        // value still lands in KernelState::meta via the apply.
+        self.commit_and_apply_ns(&event, 0)?;
 
         self.metadata.set(key, value);
         self.flush_metadata()
@@ -636,20 +646,17 @@ impl Engine {
             "ok"
         };
 
-        let persistence = if self.event_committer.is_some() {
-            "event_log"
-        } else if self.wal_writer.is_some() {
-            "wal"
-        } else if self.snapshot_path.is_some() {
-            "snapshot"
-        } else {
-            "none"
+        let persistence = match self.persistence {
+            Persistence::EventLog(_) => "event_log",
+            Persistence::Wal(_) => "wal",
+            Persistence::Ephemeral if self.snapshot_path.is_some() => "snapshot",
+            Persistence::Ephemeral => "none",
         };
 
-        let event_log_height = self.event_committer.as_ref()
+        let event_log_height = self.event_committer()
             .map(|c| c.journal().committed_height());
 
-        let event_log_path = self.event_committer.as_ref()
+        let event_log_path = self.event_committer()
             .map(|c| c.event_log().path().to_string_lossy().into_owned());
         let snapshot_path = self.snapshot_path.as_ref()
             .map(|p| p.to_string_lossy().into_owned());
@@ -718,7 +725,7 @@ impl Engine {
 
         metrics::gauge!("valori_dim", self.dim as f64);
 
-        if let Some(ref c) = self.event_committer {
+        if let Some(c) = self.event_committer() {
             metrics::gauge!("valori_event_log_height", c.journal().committed_height() as f64);
         }
     }
@@ -749,34 +756,9 @@ impl Engine {
             metadata: None,
             tag: 0,
         };
-
-        if let Some(ref mut committer) = self.event_committer {
-            // S15: the log entry must record the namespace, or recovery
-            // replays this insert into the default collection.
-            committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event_ns(&event, namespace_id)?;
-        } else {
-            let (rid, vector) = if let valori_kernel::event::KernelEvent::InsertRecord { id, vector, .. } = &event {
-                (*id, vector.clone())
-            } else {
-                unreachable!()
-            };
-
-            let cmd = Command::InsertRecord {
-                namespace_id,
-                id: rid,
-                vector,
-                metadata: None,
-                tag: 0,
-            };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-            if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
-                self.index.insert(rid.0, values);
-            }
-        }
+        // S15: the log entry must record the namespace, or recovery
+        // replays this insert into the default collection.
+        self.commit_and_apply_ns(&event, namespace_id)?;
 
         // Auto-tier: check if we've crossed a tier boundary and rebuild if so.
         self.auto_tier_check();
@@ -830,29 +812,14 @@ impl Engine {
 
         let rid = self.state.next_record_id();
 
-        if let Some(ref mut committer) = self.event_committer {
-            let event = valori_kernel::event::KernelEvent::InsertRecordEncrypted {
-                id: rid,
-                key_id,
-                ciphertext,
-                metadata_ciphertext: None,
-                tag,
-            };
-            committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event_ns(&event, namespace_id)?;
-        } else {
-            let cmd = Command::InsertRecordEncrypted {
-                namespace_id,
-                id: rid,
-                key_id,
-                ciphertext,
-                tag,
-            };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-        }
+        let event = valori_kernel::event::KernelEvent::InsertRecordEncrypted {
+            id: rid,
+            key_id,
+            ciphertext,
+            metadata_ciphertext: None,
+            tag,
+        };
+        self.commit_and_apply_ns(&event, namespace_id)?;
 
         Ok(rid.0)
     }
@@ -866,17 +833,7 @@ impl Engine {
             .map_err(|e| EngineError::InvalidInput(format!("Vault shred: {e:?}")))?;
 
         let event = valori_kernel::event::KernelEvent::ShredKey { key_id };
-
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
-        } else {
-            let cmd = Command::ShredKey { key_id };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-        }
+        self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
 
         Ok(())
     }
@@ -924,40 +881,38 @@ impl Engine {
             id_map[*i] = *id;
         }
 
-        if let Some(ref mut committer) = self.event_committer {
-            let mut events = Vec::with_capacity(insert_indices.len());
-            let start_id = self.state.next_record_id().0;
+        let mut events = Vec::with_capacity(insert_indices.len());
+        let start_id = self.state.next_record_id().0;
 
-            for (slot, &i) in insert_indices.iter().enumerate() {
-                let values = &batch[i];
-                let mut fxp_data = Vec::with_capacity(values.len());
-                for &v in values {
-                    if v > 32767.99 || v < -32768.0 {
-                        return Err(EngineError::InvalidInput("Vector values must be between -32768.0 and 32767.99".to_string()));
-                    }
-                    fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
+        for (slot, &i) in insert_indices.iter().enumerate() {
+            let values = &batch[i];
+            let mut fxp_data = Vec::with_capacity(values.len());
+            for &v in values {
+                if v > 32767.99 || v < -32768.0 {
+                    return Err(EngineError::InvalidInput("Vector values must be between -32768.0 and 32767.99".to_string()));
                 }
-                let id = start_id + slot as u32;
-                let meta = metadata.and_then(|m| m.get(i)).cloned().flatten();
-                events.push(valori_kernel::event::KernelEvent::InsertRecord {
-                    id: RecordId(id),
-                    vector: FxpVector { data: fxp_data },
-                    metadata: meta,
-                    tag: 0,
-                });
-                id_map[i] = id;
+                fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
             }
-
-            committer.commit_batch_ns(events.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            for event in &events {
-                self.apply_committed_event_ns(event, namespace_id)?;
-            }
-        } else {
-            for &i in &insert_indices {
-                let id = self.insert_record_from_f32_ns(&batch[i], namespace_id)?;
-                id_map[i] = id;
-            }
+            let id = start_id + slot as u32;
+            let meta = metadata.and_then(|m| m.get(i)).cloned().flatten();
+            events.push(valori_kernel::event::KernelEvent::InsertRecord {
+                id: RecordId(id),
+                vector: FxpVector { data: fxp_data },
+                metadata: meta,
+                tag: 0,
+            });
+            id_map[i] = id;
         }
+
+        self.persistence
+            .log_batch_ns(&events, namespace_id)
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        for event in &events {
+            self.apply_committed_event_ns(event, namespace_id)?;
+        }
+        // Tier check once per batch (the old per-insert path checked on every
+        // record; the old event-log path never checked on batches at all).
+        self.auto_tier_check();
 
         // Record new request_ids for future dedup.
         for &i in &insert_indices {
@@ -1194,18 +1149,7 @@ impl Engine {
 
         let rid = RecordId(id);
         let event = valori_kernel::event::KernelEvent::SoftDeleteRecord { id: rid };
-
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event(&event)?;
-        } else {
-            let cmd = valori_kernel::state::command::Command::SoftDeleteRecord { id: rid };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-            self.index.delete(id);
-        }
+        self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
         self.reranker.remove(id as u64);
         self.created_at.remove(&id);
         Ok(())
@@ -1220,18 +1164,7 @@ impl Engine {
 
         let rid = RecordId(id);
         let event = valori_kernel::event::KernelEvent::DeleteRecord { id: rid };
-
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event(&event)?;
-        } else {
-            let cmd = Command::DeleteRecord { id: rid };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-            self.index.delete(id);
-        }
+        self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
         self.created_at.remove(&id);
         Ok(())
     }
@@ -1243,22 +1176,8 @@ impl Engine {
         let node_id = NodeId(id);
 
         let event = valori_kernel::event::KernelEvent::DeleteNode { id: node_id };
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event(&event)?;
-        } else {
-            let cmd = Command::DeleteNode { node_id };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            // Pre-apply: clean up record_to_node before the node is gone
-            if let Some(node) = self.state.get_node(node_id) {
-                if let Some(rid) = node.record {
-                    self.record_to_node.remove(&rid.0);
-                }
-            }
-            self.state.apply(&cmd)?;
-        }
+        // record_to_node pre-clean happens inside apply_committed_event_ns.
+        self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
         Ok(())
     }
 
@@ -1269,16 +1188,7 @@ impl Engine {
         let edge_id = EdgeId(id);
 
         let event = valori_kernel::event::KernelEvent::DeleteEdge { id: edge_id };
-        if let Some(ref mut committer) = self.event_committer {
-            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            self.apply_committed_event(&event)?;
-        } else {
-            let cmd = Command::DeleteEdge { edge_id };
-            if let Some(ref mut writer) = self.wal_writer {
-                writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-            }
-            self.state.apply(&cmd)?;
-        }
+        self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
         Ok(())
     }
 
@@ -1297,21 +1207,7 @@ impl Engine {
              kind,
              record,
          };
-
-         if let Some(ref mut committer) = self.event_committer {
-             committer.commit_event_ns(event.clone(), namespace_id).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             self.apply_committed_event_ns(&event, namespace_id)?;
-         } else {
-             let cmd = Command::CreateNode { namespace_id, node_id, kind, record };
-             if let Some(ref mut writer) = self.wal_writer {
-                 writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             }
-             self.state.apply(&cmd)?;
-             // Keep derived record→node index in sync even without event log
-             if let Some(r) = record {
-                 self.record_to_node.insert(r.0, node_id.0);
-             }
-         }
+         self.commit_and_apply_ns(&event, namespace_id)?;
          Ok(node_id.0)
     }
 
@@ -1335,35 +1231,18 @@ impl Engine {
          let from = NodeId(from);
          let to = NodeId(to);
 
-         if let Some(ref mut committer) = self.event_committer {
-             // When a committer is active, engine.state is never mutated — only
-             // live_state is.  Use live_state for the edge ID so it stays in
-             // sync after each commit_event call.
-             let edge_id = EdgeId(committer.live_state().edge_count() as u32);
-             let event = valori_kernel::event::KernelEvent::CreateEdge {
-                 id: edge_id,
-                 kind,
-                 from,
-                 to,
-             };
-             // C-1: commit_event applies the event to live_state internally.
-             // Do NOT also call apply_committed_event — engine.state is never
-             // used when a committer is present (only live_state is), so the
-             // double-apply would fail with NotFound for nodes created via
-             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             self.apply_committed_event(&event)?;
-             return Ok(edge_id.0);
-         } else {
-             let edge_id = EdgeId(self.state.edge_count() as u32);
-             let cmd = Command::CreateEdge { edge_id, kind, from, to };
-             if let Some(ref mut writer) = self.wal_writer {
-                 writer.append_command(&cmd).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-             }
-             self.state.apply(&cmd)?;
-             return Ok(edge_id.0);
-         }
-         #[allow(unreachable_code)]
-         Ok(0)
+         // engine.state and the committer's live_state receive every event
+         // (commit_and_apply_ns applies to both), so their edge counts are
+         // always equal — engine.state is a safe ID source on every backend.
+         let edge_id = EdgeId(self.state.edge_count() as u32);
+         let event = valori_kernel::event::KernelEvent::CreateEdge {
+             id: edge_id,
+             kind,
+             from,
+             to,
+         };
+         self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
+         Ok(edge_id.0)
     }
 
     pub fn get_proof(&self) -> valori_kernel::proof::DeterministicProof {
@@ -1649,7 +1528,7 @@ impl Engine {
     /// through to the next priority.
     pub fn try_recover(&mut self) -> RecoveryMode {
         // ── Priority 1: event log ─────────────────────────────────────────────
-        let log_info = self.event_committer.as_ref().map(|c| {
+        let log_info = self.event_committer().map(|c| {
             (c.event_log().path().to_path_buf(), c.event_log().dim())
         });
 
@@ -1663,14 +1542,14 @@ impl Engine {
                             tracing::info!("Event-log recovery: replaying {} events from {:?}", count, log_path);
 
                             // Drop the old committer (releases its BufWriter / file handle).
-                            self.event_committer = None;
+                            self.persistence = Persistence::Ephemeral;
 
                             // Re-open the log for append (preserves existing content).
                             match EventLogWriter::open(&log_path, Some(dim)) {
                                 Ok(log_writer) => {
                                     let state_for_committer = recovered_state.clone();
                                     self.state = recovered_state;
-                                    self.event_committer = Some(EventCommitter::new(
+                                    self.persistence = Persistence::EventLog(EventCommitter::new(
                                         log_writer,
                                         recovered_journal,
                                         state_for_committer,
@@ -1802,7 +1681,7 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        if let Some(ref mut committer) = self.event_committer {
+        if let Some(committer) = self.persistence.event_committer_mut() {
             let _ = committer.flush_pending();
         }
     }

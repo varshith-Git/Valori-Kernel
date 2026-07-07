@@ -741,6 +741,22 @@ The engine state is wrapped in `Arc<RwLock<Engine>>`. Read-only handlers
 shared read lock and execute concurrently. Write handlers (insert, delete,
 restore, shred) acquire an exclusive write lock.
 
+## Persistence funnel (Phase E1)
+
+Every standalone mutation flows through ONE path:
+`Engine::commit_and_apply_ns(event, ns)` → `Persistence::log_event_ns`
+(durable log) → `apply_committed_event_ns` (state + index + derived maps).
+`Persistence` is an enum — `EventLog(EventCommitter)` (canonical),
+`Wal(WalWriter)` (legacy), or `Ephemeral` (in-memory). Do not add a write
+method that logs or applies outside this funnel. Observability code reads
+the committer via `engine.event_committer()` / `event_committer_mut()`.
+
+`tests/architecture.rs` additionally fails the build if a source file with
+the same crate-relative path exists in both `valori-node/src` and any of the
+extracted crates (`valori-storage`, `valori-state`, `valori-metadata`) —
+dead copies left behind by an extraction are a test failure, not a code
+review hope.
+
 ## Testing
 
 ```bash

@@ -153,8 +153,7 @@ pub async fn run_follower_loop(
                 let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
                 (
                     hex,
-                    engine.event_committer
-                        .as_ref()
+                    engine.event_committer()
                         .map(|c| c.journal().committed_height())
                         .unwrap_or(0),
                 )
@@ -190,7 +189,7 @@ pub async fn run_follower_loop(
 
         let (_local_height, is_empty) = {
             let engine = state.read().await;
-            if let Some(ref committer) = engine.event_committer {
+            if let Some(committer) = engine.event_committer() {
                 let h = committer.journal().committed_height();
                 (h, h == 0)
             } else {
@@ -204,7 +203,7 @@ pub async fn run_follower_loop(
 
         let start_offset = {
             let engine = state.read().await;
-            engine.event_committer.as_ref().unwrap().journal().committed_height() as u64
+            engine.event_committer().unwrap().journal().committed_height() as u64
         };
 
         // Mark the watch as seen before entering the stream loop so we only
@@ -261,7 +260,7 @@ pub async fn run_follower_loop(
                                     };
                                     if let Some((namespace_id, event)) = ns_event {
                                         let mut engine = state.write().await;
-                                        if let Some(ref mut committer) = engine.event_committer {
+                                        if let Some(committer) = engine.event_committer_mut() {
                                             match committer.commit_event_ns(event.clone(), namespace_id) {
                                                 Ok(_) => {
                                                     if let Err(e) = engine.apply_committed_event_ns(&event, namespace_id) {
@@ -317,12 +316,12 @@ async fn bootstrap_from_leader(
     let mut engine = state.write().await;
     engine.restore(&snapshot_bytes)?;
 
-    let log_path = engine.event_committer.as_ref()
+    let log_path = engine.event_committer()
         .map(|c| c.event_log().path().to_path_buf())
         .ok_or(EngineError::InvalidInput("No event log path".to_string()))?;
 
-    let dim = engine.event_committer.as_ref().map(|c| c.event_log().dim());
-    engine.event_committer = None;
+    let dim = engine.event_committer().map(|c| c.event_log().dim());
+    engine.persistence = crate::commit::Persistence::Ephemeral;
 
     let _ = tokio::fs::remove_file(&log_path).await;
 
@@ -350,7 +349,7 @@ async fn bootstrap_from_leader(
 
     committer.write_checkpoint(checkpoint)
         .map_err(|e| EngineError::InvalidInput(format!("{:?}", e)))?;
-    engine.event_committer = Some(committer);
+    engine.persistence = crate::commit::Persistence::EventLog(committer);
 
     tracing::info!("Bootstrap complete — follower synced at height {}", new_height);
     Ok(())

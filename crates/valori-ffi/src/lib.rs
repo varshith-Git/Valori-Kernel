@@ -77,7 +77,7 @@ impl ValoricoreEngine {
         // H-3: Reject mismatched dimensions before writing any event to the log.
         // Must read dim from live_state when committer is active — engine.state.dim
         // is always None in the committer path because engine.state is never mutated.
-        let current_dim = if let Some(ref c) = engine.event_committer {
+        let current_dim = if let Some(c) = engine.event_committer() {
             c.live_state().dim
         } else {
             engine.state.dim
@@ -106,7 +106,7 @@ impl ValoricoreEngine {
         // commit_event only updates live_state; engine.index is a separate structure
         // that must be populated explicitly for HNSW/IVF to work.
         let rid = {
-            let committer = engine.event_committer.as_mut()
+            let committer = engine.event_committer_mut()
                 .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
             let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord { id: rid, vector: fxp_vec, metadata: None, tag };
@@ -126,7 +126,7 @@ impl ValoricoreEngine {
 
         // When a committer is active, engine.state is never mutated — reads must
         // go to live_state.  Fall back to engine.state in the no-committer path.
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -181,7 +181,7 @@ impl ValoricoreEngine {
         let k = NodeKind::from_u8(kind)
             .ok_or_else(|| PyValueError::new_err(format!("invalid NodeKind: {}", kind)))?;
 
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             // Must read next_node_id from the committer's live_state, not engine.state.
             // engine.state is never mutated when a committer is present — only
             // committer.live_state is. Using engine.state gives a stale (always-0)
@@ -216,7 +216,7 @@ impl ValoricoreEngine {
         let nid = NodeId(node_id);
 
         // Verify node exists in live_state (engine.state is stale in committer path).
-        let exists = if let Some(ref c) = engine.event_committer {
+        let exists = if let Some(c) = engine.event_committer() {
             c.live_state().get_node(nid).is_some()
         } else {
             engine.state.get_node(nid).is_some()
@@ -228,7 +228,7 @@ impl ValoricoreEngine {
         }
 
         let event = KernelEvent::DeleteNode { id: nid };
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("Failed to delete node {}: {:?}", node_id, e))
             })?;
@@ -247,7 +247,7 @@ impl ValoricoreEngine {
 
         // Verify edge exists in live_state (engine.state is stale in committer path).
         // Edges are checked via their presence in the state's edge pool.
-        let exists = if let Some(ref c) = engine.event_committer {
+        let exists = if let Some(c) = engine.event_committer() {
             c.live_state().get_edge(eid).is_some()
         } else {
             engine.state.get_edge(eid).is_some()
@@ -259,7 +259,7 @@ impl ValoricoreEngine {
         }
 
         let event = KernelEvent::DeleteEdge { id: eid };
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("Failed to delete edge {}: {:?}", edge_id, e))
             })?;
@@ -276,7 +276,7 @@ impl ValoricoreEngine {
         let engine = lock_engine!(self);
         use valori_kernel::types::id::NodeId;
 
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -296,7 +296,7 @@ impl ValoricoreEngine {
         let engine = lock_engine!(self);
         use valori_kernel::types::id::NodeId;
 
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -318,7 +318,7 @@ impl ValoricoreEngine {
         use valori_kernel::types::id::NodeId;
         use std::collections::{HashSet, VecDeque};
 
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -357,7 +357,7 @@ impl ValoricoreEngine {
         use valori_kernel::types::id::NodeId;
         use std::collections::{HashSet, VecDeque};
 
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -409,12 +409,12 @@ impl ValoricoreEngine {
 
         // Build all events first (validate everything before touching the log).
         // Then commit as a single batch: one shadow-apply pass + one fsync.
-        if engine.event_committer.is_some() {
-            let first_id = engine.event_committer.as_ref().unwrap().live_state().next_record_id().0;
+        if engine.event_committer().is_some() {
+            let first_id = engine.event_committer().unwrap().live_state().next_record_id().0;
             let mut events = Vec::with_capacity(vectors.len());
 
             for (i, vector) in vectors.iter().enumerate() {
-                if let Some(dim) = engine.event_committer.as_ref().unwrap().live_state().dim {
+                if let Some(dim) = engine.event_committer().unwrap().live_state().dim {
                     if vector.len() != dim {
                         return Err(PyValueError::new_err(format!(
                             "vector[{i}] dimension mismatch: engine expects {dim}, got {}", vector.len()
@@ -440,7 +440,7 @@ impl ValoricoreEngine {
             }
 
             // Single shadow-apply + single fsync for the whole batch.
-            engine.event_committer.as_mut().unwrap().commit_batch(events).map_err(|e| {
+            engine.event_committer_mut().unwrap().commit_batch(events).map_err(|e| {
                 PyRuntimeError::new_err(format!("batch insert failed: {:?}", e))
             })?;
 
@@ -468,7 +468,7 @@ impl ValoricoreEngine {
         for (i, vector) in vectors.iter().enumerate() {
             // H-3: dimension check before touching the log. Read dim from
             // live_state when committer active — engine.state.dim is always None there.
-            let current_dim = if let Some(ref c) = engine.event_committer {
+            let current_dim = if let Some(c) = engine.event_committer() {
                 c.live_state().dim
             } else {
                 engine.state.dim
@@ -501,7 +501,7 @@ impl ValoricoreEngine {
             let tag = tags[i];
 
             let rid = {
-                let committer = engine.event_committer.as_mut()
+                let committer = engine.event_committer_mut()
                     .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
                 let rid = committer.live_state().next_record_id();
                 let event = KernelEvent::InsertRecord {
@@ -536,7 +536,7 @@ impl ValoricoreEngine {
 
         // 2. Fallback to Record-level metadata (proof bytes from insert_with_proof).
         // Must read from live_state when committer is active.
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -556,7 +556,7 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         // Must check live_state when committer is active.
-        let record_exists = if let Some(ref c) = engine.event_committer {
+        let record_exists = if let Some(c) = engine.event_committer() {
             c.live_state().get_record(rid).is_some()
         } else {
             engine.state.get_record(rid).is_some()
@@ -568,7 +568,7 @@ impl ValoricoreEngine {
         // H-2: Commit a SetMeta event so the metadata is in the BLAKE3 audit chain.
         let key = format!("record_{}", record_id);
         let value = hex::encode(&metadata);
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             let event = KernelEvent::SetMeta { key: key.clone(), value };
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("set_metadata commit failed: {:?}", e))
@@ -588,7 +588,7 @@ impl ValoricoreEngine {
 
     fn get_state_hash(&self) -> PyResult<String> {
         let engine = lock_engine!(self);
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -599,7 +599,7 @@ impl ValoricoreEngine {
 
     fn record_count(&self) -> PyResult<usize> {
         let engine = lock_engine!(self);
-        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(c) = engine.event_committer() {
             c.live_state()
         } else {
             &engine.state
@@ -612,7 +612,7 @@ impl ValoricoreEngine {
         // In the committer path, engine.state is never mutated — all mutations
         // land in committer.live_state. Sync live_state → engine.state before
         // snapshotting so the snapshot captures the actual current records.
-        if let Some(ref c) = engine.event_committer {
+        if let Some(c) = engine.event_committer() {
             engine.state = c.live_state().clone();
         }
         match engine.snapshot() {
@@ -626,7 +626,7 @@ impl ValoricoreEngine {
         let mut engine = lock_engine!(self);
         // Flush any buffered WAL entries before snapshotting so the snapshot
         // and WAL are in sync — crash recovery will replay from the right offset.
-        if let Some(ref mut c) = engine.event_committer {
+        if let Some(c) = engine.event_committer_mut() {
             c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
             engine.state = c.live_state().clone();
         }
@@ -640,7 +640,7 @@ impl ValoricoreEngine {
     /// Call this when you need durability before an explicit snapshot.
     fn flush(&self) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        if let Some(ref mut c) = engine.event_committer {
+        if let Some(c) = engine.event_committer_mut() {
             c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
         }
         Ok(())
@@ -655,7 +655,7 @@ impl ValoricoreEngine {
         // the committer's live_state so that reads via live_state() (search,
         // record_count, get_node, etc.) reflect the restored snapshot.
         let restored_state = engine.state.clone();
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             *committer.live_state_mut() = restored_state;
         }
         Ok(())
@@ -666,7 +666,7 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         // Verify record exists in live_state (engine.state is stale in committer path).
-        let exists = if let Some(ref c) = engine.event_committer {
+        let exists = if let Some(c) = engine.event_committer() {
             c.live_state().get_record(rid).is_some()
         } else {
             engine.state.get_record(rid).is_some()
@@ -676,7 +676,7 @@ impl ValoricoreEngine {
         }
 
         let event = KernelEvent::SoftDeleteRecord { id: rid };
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
             })?;
@@ -694,7 +694,7 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         // Verify record exists in live_state (engine.state is stale in committer path).
-        let exists = if let Some(ref c) = engine.event_committer {
+        let exists = if let Some(c) = engine.event_committer() {
             c.live_state().get_record(rid).is_some()
         } else {
             engine.state.get_record(rid).is_some()
@@ -704,7 +704,7 @@ impl ValoricoreEngine {
         }
 
         let event = KernelEvent::DeleteRecord { id: rid };
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             committer.commit_event(event).map_err(|e| {
                 PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
             })?;
@@ -723,7 +723,7 @@ impl ValoricoreEngine {
 
         // H-3: dim + range checks before any allocation so a bad vector is
         // rejected without computing proof bytes or allocating FXP vecs.
-        let current_dim = if let Some(ref c) = engine.event_committer {
+        let current_dim = if let Some(c) = engine.event_committer() {
             c.live_state().dim
         } else {
             engine.state.dim
@@ -756,7 +756,7 @@ impl ValoricoreEngine {
         let proof_hex = hex::encode(&proof_bytes);
 
         let rid = {
-            let committer = engine.event_committer.as_mut()
+            let committer = engine.event_committer_mut()
                 .ok_or_else(|| PyRuntimeError::new_err("event log not initialized"))?;
             let rid = committer.live_state().next_record_id();
             let event = KernelEvent::InsertRecord {
@@ -776,7 +776,7 @@ impl ValoricoreEngine {
 
     fn get_timeline(&self) -> PyResult<Vec<String>> {
         let engine = lock_engine!(self);
-        let Some(ref committer) = engine.event_committer else {
+        let Some(committer) = engine.event_committer() else {
             return Ok(Vec::new());
         };
 

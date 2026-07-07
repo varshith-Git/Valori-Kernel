@@ -983,7 +983,7 @@ async fn search_as_of(
 
     let engine = state.read().await;
 
-    let committer = engine.event_committer.as_ref().ok_or_else(|| {
+    let committer = engine.event_committer().ok_or_else(|| {
         EngineError::InvalidInput(
             "as-of search requires the event log (set VALORI_EVENT_LOG_PATH)".into(),
         )
@@ -1397,7 +1397,7 @@ async fn get_event_proof(
 ) -> Result<Json<EventProofResponse>, EngineError> {
     let engine = state.read().await;
     
-    if let Some(ref committer) = engine.event_committer {
+    if let Some(committer) = engine.event_committer() {
         let proof = engine.get_proof();
         let committed_height = committer.journal().committed_height();
 
@@ -1483,7 +1483,7 @@ async fn get_replication_events(
 
     let (log_path, rx) = {
         let mut engine = state.write().await; // flush requires &mut
-        if let Some(ref mut committer) = engine.event_committer {
+        if let Some(committer) = engine.event_committer_mut() {
             if let Err(e) = committer.flush_log() {
                 tracing::error!("Failed to flush event log for replication: {}", e);
             }
@@ -1549,7 +1549,7 @@ async fn get_timeline(
     use valori_kernel::event::KernelEvent;
 
     let engine = state.read().await;
-    let Some(ref committer) = engine.event_committer else {
+    let Some(committer) = engine.event_committer() else {
         return Err(EngineError::InvalidInput("Event log not enabled (set VALORI_EVENT_LOG_PATH)".to_string()));
     };
 
@@ -1610,7 +1610,7 @@ async fn get_operations(
     use valori_kernel::event::KernelEvent;
 
     let engine = state.read().await;
-    let Some(ref committer) = engine.event_committer else {
+    let Some(committer) = engine.event_committer() else {
         return Ok(Json(crate::api::OperationsListResponse { operations: vec![], total: 0 }));
     };
 
@@ -1672,7 +1672,7 @@ async fn get_operation_by_id(
     use valori_kernel::event::KernelEvent;
 
     let engine = state.read().await;
-    let Some(ref committer) = engine.event_committer else {
+    let Some(committer) = engine.event_committer() else {
         return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Event log not enabled"}))));
     };
 
@@ -1772,7 +1772,7 @@ async fn get_operation_execution(
     use valori_metadata::history::ExecutionRetentionPolicy;
 
     let engine = state.read().await;
-    let Some(ref committer) = engine.event_committer else {
+    let Some(committer) = engine.event_committer() else {
         return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Event log not enabled"}))));
     };
 
@@ -2111,7 +2111,7 @@ async fn archive_wal_segment(
     // Validate path against the configured event log directory (C-2).
     let allowed_dir = {
         let eng = state.read().await;
-        eng.event_committer.as_ref()
+        eng.event_committer()
             .map(|c| c.event_log().path().parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
             .or_else(|| eng.wal_path.as_deref().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
     };

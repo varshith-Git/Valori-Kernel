@@ -37,9 +37,9 @@ async fn test_replication_stream_endpoint() {
     engine.insert_record_from_f32(&vec).unwrap();
 
     // Verify the event was committed in-memory.
-    assert!(engine.event_committer.is_some());
+    assert!(engine.event_committer().is_some());
     assert_eq!(
-        engine.event_committer.as_ref().unwrap().journal().committed_height(),
+        engine.event_committer().unwrap().journal().committed_height(),
         1
     );
 
