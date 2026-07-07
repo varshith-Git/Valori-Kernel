@@ -53,8 +53,7 @@ fn first_out(engine: &Engine, nid: u32) -> Option<u32> {
 
 /// Collect all outgoing edge IDs for a node by walking the linked list.
 fn outgoing(engine: &Engine, nid: u32) -> Vec<u32> {
-    engine.state
-        .outgoing_edges(NodeId(nid))
+    engine.outgoing_edges(NodeId(nid))
         .map(|it| it.map(|e| e.id.0).collect())
         .unwrap_or_default()
 }
@@ -96,14 +95,14 @@ fn test_reverse_index_chains_multiple_incoming() {
     assert_eq!(first_in(&e, c), Some(e2), "most-recent incoming edge is the list head");
 
     // Walk the chain manually via `next_in`.
-    let head_edge = e.state.get_edge(EdgeId(e2)).unwrap();
+    let head_edge = e.kernel_state().get_edge(EdgeId(e2)).unwrap();
     assert_eq!(
         head_edge.next_in.map(|x| x.0),
         Some(e1),
         "next_in from e2 must reach e1",
     );
 
-    assert_eq!(e.state.get_edge(EdgeId(e1)).unwrap().next_in, None);
+    assert_eq!(e.kernel_state().get_edge(EdgeId(e1)).unwrap().next_in, None);
 }
 
 // ── 2. DeleteNode — outgoing cascade ─────────────────────────────────────────
@@ -168,8 +167,8 @@ fn test_delete_middle_node_removes_both_edges() {
     assert!(first_in(&e, c).is_none(),  "C has no more incoming edges");
 
     // A and C themselves must still exist.
-    assert!(e.state.get_node(NodeId(a)).is_some(), "A must survive");
-    assert!(e.state.get_node(NodeId(c)).is_some(), "C must survive");
+    assert!(e.kernel_state().get_node(NodeId(a)).is_some(), "A must survive");
+    assert!(e.kernel_state().get_node(NodeId(c)).is_some(), "C must survive");
 }
 
 // ── 5. DeleteNode — hub with many incoming edges ──────────────────────────────
@@ -194,7 +193,7 @@ fn test_delete_hub_clears_all_incoming_edges() {
         edge_ids.push(eid);
     }
 
-    assert_eq!(e.state.edge_count(), SPOKES as usize);
+    assert_eq!(e.edge_count(), SPOKES as usize);
 
     e.delete_node(hub).unwrap();
 
@@ -203,7 +202,7 @@ fn test_delete_hub_clears_all_incoming_edges() {
     }
     // All spoke nodes survive.
     for &s in &spoke_ids {
-        assert!(e.state.get_node(NodeId(s)).is_some(), "spoke {} must survive", s);
+        assert!(e.kernel_state().get_node(NodeId(s)).is_some(), "spoke {} must survive", s);
         assert!(
             first_out(&e, s).is_none(),
             "spoke {} must have no outgoing edges after hub deleted", s,
@@ -294,14 +293,14 @@ fn test_delete_middle_incoming_edge_stitches_list() {
 
     // Walk the surviving incoming chain: should be e3 → e1 → None.
     assert_eq!(first_in(&e, hub), Some(e3), "head must still be e3 (c→hub)");
-    let e3_next = e.state.get_edge(EdgeId(e3)).unwrap().next_in.map(|x| x.0);
+    let e3_next = e.kernel_state().get_edge(EdgeId(e3)).unwrap().next_in.map(|x| x.0);
     assert_eq!(
         e3_next,
         Some(e1),
         "e3.next_in must skip the deleted e2 and point to e1",
     );
     assert_eq!(
-        e.state.get_edge(EdgeId(e1)).unwrap().next_in,
+        e.kernel_state().get_edge(EdgeId(e1)).unwrap().next_in,
         None,
         "e1 is the tail; next_in must be None",
     );
@@ -332,7 +331,7 @@ fn test_snapshot_preserves_reverse_index() {
         Some(e2),
         "after restore, C's first_in_edge must still point to e2",
     );
-    let e2_next = e2_restored.state.get_edge(EdgeId(e2)).unwrap().next_in.map(|x| x.0);
+    let e2_next = e2_restored.kernel_state().get_edge(EdgeId(e2)).unwrap().next_in.map(|x| x.0);
     assert_eq!(
         e2_next,
         Some(e1),
