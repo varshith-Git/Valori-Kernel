@@ -198,8 +198,11 @@ impl SearchResponse {
 /// A single entry in the timeline — one committed kernel event with its metadata.
 #[derive(Serialize)]
 pub struct TimelineEntry {
-    /// Sequential index (0-based) into the committed event log.
+    /// Sequential index within this entry's shard log (0-based).
+    /// Used as a tie-breaker when two shards share the same `timestamp_unix`.
     pub log_index: u64,
+    /// Shard that committed this event. Always 0 in standalone mode.
+    pub shard_id: u32,
     /// Unix-second wall-clock timestamp when this event was committed.
     pub timestamp_unix: u64,
     /// ISO 8601 UTC string for `timestamp_unix`.
@@ -227,6 +230,39 @@ pub struct TimelineResponse {
     /// Inclusive upper bound filter applied (unix seconds), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationSummary {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub op_type: String,
+    pub status: String,
+    pub timing: String,
+    pub timestamp_unix: u64,
+    pub collection: String,
+    pub details: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationsListResponse {
+    pub operations: Vec<OperationSummary>,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationDetailResponse {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub op_type: String,
+    pub status: String,
+    pub timing: String,
+    pub timestamp_unix: u64,
+    pub collection: String,
+    pub overview: serde_json::Value,
+    pub results: serde_json::Value,
+    pub proof: serde_json::Value,
+    pub metrics: serde_json::Value,
 }
 
 #[derive(Deserialize)]

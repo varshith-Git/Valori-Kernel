@@ -296,7 +296,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
       // Build record list (limit meta fetches to first 50 to avoid flooding)
       const ids = audit.ns_record_ids;
       const metaFetches = ids.slice(0, 50).map((id) =>
-        fetch(`/api/meta?target_id=${id}`, { cache: "no-store" })
+        fetch(`/api/meta?target_id=record:${id}`, { cache: "no-store" })
           .then((r) => r.ok ? r.json() : null)
           .then((d) => {
             const val = d?.metadata ?? d?.value ?? d?.text ?? null;

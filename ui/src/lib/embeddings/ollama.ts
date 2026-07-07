@@ -10,10 +10,11 @@ export class OllamaProvider implements EmbeddingProvider {
   }
 
   async embedText(text: string): Promise<number[]> {
+    const safeText = text.slice(0, 1800);
     const res = await fetch(`${this.url}/api/embeddings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.model, prompt: text }),
+      body: JSON.stringify({ model: this.model, prompt: safeText }),
     });
     if (!res.ok) throw new Error(`Ollama error: ${res.statusText}`);
     const data = await res.json();
@@ -21,28 +22,7 @@ export class OllamaProvider implements EmbeddingProvider {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
-    const res = await fetch(`${this.url}/api/embed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.model, input: texts }),
-    });
-    
-    if (!res.ok) {
-      // Fallback to sequential for older versions
-      const results = [];
-      for (const text of texts) {
-        results.push(await this.embedText(text));
-      }
-      return results;
-    }
-    
-    const data = await res.json();
-    if (data.embeddings) {
-      return data.embeddings;
-    }
-    
-    // Safety fallback
-    const results = [];
+    const results: number[][] = [];
     for (const text of texts) {
       results.push(await this.embedText(text));
     }

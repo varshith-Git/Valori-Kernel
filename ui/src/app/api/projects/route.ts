@@ -2,48 +2,74 @@ import { NextRequest, NextResponse } from "next/server";
 import { listProjects, createProject } from "@/lib/server/projects";
 import { pm } from "@/lib/server/process-manager";
 
+// ── Health-probe cache ────────────────────────────────────────────────────────
+// Results from background health probes, keyed by port.
+// Persists across requests within the same Next.js server process so the
+// first GET returns instantly (with cached/default statuses) while probes
+// run in the background.  The next poll (≤2 s later) picks up real statuses.
+const probeCache = new Map<number, "running" | "stopped">();
+let probeInFlight = false;
+
+function probeInBackground(entries: ReturnType<typeof listProjects>) {
+  if (probeInFlight) return; // don't stack up parallel probe rounds
+  probeInFlight = true;
+
+  Promise.all(
+    entries.flatMap((p) =>
+      p.nodes.map(async (n) => {
+        const known = pm.getStatus(n.httpPort);
+        if (known && known.status !== "stopped") {
+          probeCache.set(n.httpPort, "running");
+          return;
+        }
+        try {
+          const r = await fetch(`http://127.0.0.1:${n.httpPort}/health`, {
+            signal: AbortSignal.timeout(600),
+          });
+          if (r.ok) {
+            pm.markRunning(n.httpPort);
+            probeCache.set(n.httpPort, "running");
+          } else {
+            probeCache.set(n.httpPort, "stopped");
+          }
+        } catch {
+          probeCache.set(n.httpPort, "stopped");
+        }
+      })
+    )
+  ).finally(() => {
+    probeInFlight = false;
+  });
+}
+
 // GET — all projects from the manifest, annotated with live node status.
 // Works even when every node is stopped (manifest is the source of truth).
 //
-// After a Next.js server restart the ProcessManager singleton is fresh and
-// thinks every node is stopped — even if the OS process is still listening.
-// We probe each "stopped" node's port with a quick /health fetch and
-// re-register running nodes so the UI shows the correct status and Open
-// doesn't try to spawn a second process on an already-occupied port.
+// Health probes run in the BACKGROUND so the first response is instant.
+// On the initial request the probe cache may be empty, so statuses default
+// to "stopped".  By the time the client polls again (~2 s later), the probes
+// have completed and real statuses are returned.
 //
 // Status is an aggregate across every node in a project (1 for single-node,
 // 3 for a cluster): "running" only when ALL nodes are up, "starting" if any
 // is still starting, "error" for a partial/degraded cluster (some up, some
-// not), "stopped" when none are up. Reuses the existing 4-value status enum
-// rather than inventing a "degraded" value.
+// not), "stopped" when none are up.
 export async function GET() {
   const entries = listProjects();
 
-  await Promise.all(
-    entries.flatMap((p) =>
-      p.nodes.map(async (n) => {
-        const known = pm.getStatus(n.httpPort);
-        if (known && known.status !== "stopped") return; // already tracked
-        try {
-          const r = await fetch(`http://localhost:${n.httpPort}/health`, {
-            signal: AbortSignal.timeout(600),
-          });
-          if (r.ok) {
-            // Node is alive but pm doesn't know about it — register as running.
-            pm.markRunning(n.httpPort);
-          }
-        } catch {
-          // Not reachable — genuinely stopped, nothing to do.
-        }
-      })
-    )
-  );
+  // Fire health probes in the background — never blocks the response.
+  probeInBackground(entries);
 
-  const projects = entries.map(p => {
-    const nodeStatuses = p.nodes.map(n => pm.getStatus(n.httpPort)?.status ?? "stopped");
-    const runningCount = nodeStatuses.filter(s => s === "running").length;
-    const anyStarting  = nodeStatuses.some(s => s === "starting");
-    const anyError     = nodeStatuses.some(s => s === "error");
+  // Build the response immediately using ProcessManager + probe cache.
+  const projects = entries.map((p) => {
+    const nodeStatuses = p.nodes.map((n) => {
+      const pmStatus = pm.getStatus(n.httpPort)?.status;
+      if (pmStatus && pmStatus !== "stopped") return pmStatus;
+      return probeCache.get(n.httpPort) ?? "stopped";
+    });
+    const runningCount = nodeStatuses.filter((s) => s === "running").length;
+    const anyStarting  = nodeStatuses.some((s) => s === "starting");
+    const anyError     = nodeStatuses.some((s) => s === "error");
     const status =
       runningCount === p.nodes.length ? "running" :
       anyStarting                     ? "starting" :
@@ -60,10 +86,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       name?: string;
       dim?: number;
-      index?: "brute" | "hnsw" | "ivf";
+      index?: "brute" | "hnsw" | "ivf" | "bq" | "auto";
       maxRecords?: number;
       replication?: number;
       shardCount?: number;
+      embed?: { provider: string; model: string; apiKey?: string; endpoint?: string };
     };
     if (!body.name) {
       return NextResponse.json({ error: "name required" }, { status: 400 });
@@ -81,6 +108,7 @@ export async function POST(req: NextRequest) {
       maxRecords:  body.maxRecords,
       replication: (body.replication as 1 | 3 | undefined) ?? 1,
       shardCount:  body.shardCount,
+      embed:       body.embed,
     });
     return NextResponse.json({ ok: true, project: entry }, { status: 201 });
   } catch (e) {

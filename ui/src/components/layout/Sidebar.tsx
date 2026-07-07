@@ -2,24 +2,16 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useCluster } from "@/lib/hooks/useCluster";
-import { useProjectGroups } from "@/lib/hooks/useCollections";
 import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import {
   ShieldCheck,
-  Search,
-  ScrollText,
-  BarChart2,
-  Archive,
-  ClipboardList,
-  UserCheck,
   Network,
-  FolderOpen,
   ChevronRight,
   Plus,
   Settings,
@@ -29,31 +21,14 @@ import {
   Server,
   Rocket,
   Home,
+  Archive,
+  ScrollText,
+  Search,
+  Activity,
+  BarChart2,
 } from "lucide-react";
 
-/* --- Navigation sections -------------------------------------------- */
-
-const MONITOR_NAV = [
-  { href: "/proof",     label: "Proof",          Icon: ShieldCheck },
-  { href: "/logs",      label: "Logs",           Icon: ScrollText  },
-  { href: "/metrics",   label: "Metrics",        Icon: BarChart2   },
-  { href: "/snapshots", label: "Snapshots",      Icon: Archive     },
-];
-
-const DATA_NAV = [
-  { href: "/search",    label: "Search",         Icon: Search      },
-];
-
-const CONTROL_NAV = [
-  { href: "/launch",    label: "Launcher",       Icon: Rocket      },
-];
-
-const COMPLIANCE_NAV = [
-  { href: "/audit",     label: "Audit Trail",    Icon: ClipboardList },
-  { href: "/auditor",   label: "Auditor Portal", Icon: UserCheck   },
-];
-
-/* --- Shared helpers ------------------------------------------------- */
+/* --- Helpers -------------------------------------------------------- */
 
 type NavItem = {
   href: string;
@@ -81,15 +56,7 @@ function NavLink({ item, active }: { item: NavItem; active: boolean }) {
   );
 }
 
-function SectionHeader({ label }: { label: string }) {
-  return (
-    <p className="px-2.5 pt-4 pb-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-muted-foreground select-none">
-      {label}
-    </p>
-  );
-}
-
-/* --- Status footer (replaces the old top header bar) ---------------- */
+/* --- Status footer -------------------------------------------------- */
 
 function StatusFooter() {
   const { online, status } = useHealth();
@@ -118,7 +85,7 @@ function StatusFooter() {
 
   return (
     <div className="border-t border-border/80 p-3 flex flex-col gap-2">
-      {/* Mode + connection card */}
+      {/* Mode + connection */}
       <div className="rounded-lg bg-card border border-border px-3 py-2.5 flex items-center gap-2.5">
         <ModeIcon size={14} className="shrink-0 text-muted-foreground" />
         <div className="flex-1 min-w-0">
@@ -131,27 +98,41 @@ function StatusFooter() {
             )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
-            <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${dotColor}`} />
+            <span className={`h-2 w-2 rounded-full shrink-0 ${dotColor}`} />
             <span className={`text-[10px] ${textColor}`}>{statusLabel}</span>
           </div>
         </div>
       </div>
 
-      {/* Settings + Help + theme toggle */}
-      <div className="flex gap-1">
+      {/* Footer quick-links — icon-only, evenly spaced */}
+      <div className="flex items-center justify-between px-1">
         <Link
           href="/settings"
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] text-muted-foreground hover:text-accent-foreground hover:bg-accent/60 transition-colors"
+          title="Settings"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <Settings size={11} />
-          Settings
+          <Settings size={14} />
+        </Link>
+        <Link
+          href="/snapshots"
+          title="Snapshots"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        >
+          <Archive size={14} />
+        </Link>
+        <Link
+          href="/logs"
+          title="Logs"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        >
+          <ScrollText size={14} />
         </Link>
         <Link
           href="/help"
-          className="flex-1 flex items-center justify-center gap-1.5 rounded-md py-1.5 text-[11px] text-muted-foreground hover:text-accent-foreground hover:bg-accent/60 transition-colors"
+          title="Help"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <HelpCircle size={11} />
-          Help
+          <HelpCircle size={14} />
         </Link>
         <ThemeToggle />
       </div>
@@ -164,10 +145,20 @@ function StatusFooter() {
 export function Sidebar() {
   const path = usePathname();
   const router = useRouter();
-  // All projects come from the on-disk manifest (works while nodes are stopped).
-  // Collections under the *active* project come from the live, connected node.
+
+  // ⌘K / Ctrl+K → search
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        router.push("/search");
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [router]);
+
   const { projects, isLoading, create, open } = useProjectManifest();
-  const { groups } = useProjectGroups();
   const { isStandalone } = useCluster();
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -176,7 +167,7 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="flex h-screen w-56 flex-col border-r border-border/80 bg-background flex-shrink-0">
+      <aside className="flex h-screen w-56 flex-col border-r border-border/80 bg-card flex-shrink-0">
 
         {/* Logo */}
         <div className="px-4 py-4 border-b border-border/80">
@@ -191,58 +182,38 @@ export function Sidebar() {
           </Link>
         </div>
 
-        {/* Scrollable nav area */}
+        {/* Scrollable nav */}
         <div className="flex-1 overflow-y-auto px-2 pb-2">
 
-          {/* Home */}
+          {/* Top nav */}
           <nav className="flex flex-col gap-0.5 pt-2">
-            <NavLink item={{ href: "/", label: "Home", Icon: Home }} active={path === "/"} />
-          </nav>
-
-          {/* Monitor */}
-          <SectionHeader label="Monitor" />
-          <nav className="flex flex-col gap-0.5">
-            {MONITOR_NAV.map((n) => (
-              <NavLink key={n.href} item={n} active={isActive(n.href)} />
-            ))}
-          </nav>
-
-          {/* Data */}
-          <SectionHeader label="Data" />
-          <nav className="flex flex-col gap-0.5">
-            {DATA_NAV.map((n) => (
-              <NavLink key={n.href} item={n} active={isActive(n.href)} />
-            ))}
+            <NavLink item={{ href: "/", label: "Workspace", Icon: Home }} active={path === "/"} />
             {!isStandalone && (
-              <NavLink
-                item={{ href: "/cluster", label: "Cluster", Icon: Network }}
-                active={isActive("/cluster")}
-              />
+              <NavLink item={{ href: "/cluster", label: "Cluster", Icon: Network }} active={isActive("/cluster")} />
             )}
+            <NavLink item={{ href: "/operations", label: "Operations", Icon: Activity }} active={isActive("/operations")} />
+            <NavLink item={{ href: "/metrics",    label: "Metrics",    Icon: BarChart2 }} active={isActive("/metrics")} />
+            <NavLink item={{ href: "/proof",      label: "Proof",      Icon: ShieldCheck }} active={isActive("/proof")} />
+            <NavLink item={{ href: "/audit",      label: "Audit Trail", Icon: ScrollText }} active={isActive("/audit")} />
+            <NavLink item={{ href: "/launch",     label: "Launch",     Icon: Rocket }} active={isActive("/launch")} />
           </nav>
 
-          {/* Compliance */}
-          <SectionHeader label="Compliance" />
-          <nav className="flex flex-col gap-0.5">
-            {COMPLIANCE_NAV.map((n) => (
-              <NavLink key={n.href} item={n} active={isActive(n.href)} />
-            ))}
-          </nav>
-
-          {/* Control */}
-          <SectionHeader label="Control" />
-          <nav className="flex flex-col gap-0.5">
-            {CONTROL_NAV.map((n) => (
-              <NavLink key={n.href} item={n} active={isActive(n.href)} />
-            ))}
-          </nav>
+          {/* Search hint */}
+          <button
+            onClick={() => router.push("/search")}
+            className="mt-2 w-full flex items-center gap-2 rounded-lg border border-border/60 bg-background px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border transition-colors"
+          >
+            <Search size={12} className="shrink-0" />
+            <span className="flex-1 text-left">Search vectors…</span>
+            <kbd className="text-[9px] border border-border/60 rounded px-1 py-0.5 font-mono bg-accent">⌘K</kbd>
+          </button>
 
           {/* Divider */}
           <div className="mx-1 my-3 border-t border-border/80" />
 
-          {/* Projects section header */}
+          {/* Projects */}
           <div className="flex items-center justify-between px-2.5 mb-1.5">
-            <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-muted-foreground select-none">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.10em] text-muted-foreground select-none">
               Projects
             </p>
             <button
@@ -255,7 +226,6 @@ export function Sidebar() {
             </button>
           </div>
 
-          {/* Project list */}
           <div className="flex flex-col gap-0.5">
             {isLoading ? (
               <div className="flex flex-col gap-1.5 px-2 pt-1">
@@ -276,8 +246,7 @@ export function Sidebar() {
                 const href = `/projects/${encodeURIComponent(p.name)}`;
                 const active = path === href || path.startsWith(href + "/");
                 const running = p.status === "running" || p.status === "starting";
-                // Live collections only available for the active (connected) project.
-                const cols = active ? (groups.find((g) => g.project === p.name)?.collections ?? []) : [];
+                const cols = p.collections || [];
                 return (
                   <div key={p.name}>
                     <Link
@@ -292,28 +261,16 @@ export function Sidebar() {
                       <span className="flex items-center gap-1.5 truncate">
                         <Layers
                           size={11}
-                          className={
-                            active
-                              ? "text-[var(--v-accent)]"
-                              : "text-muted-foreground group-hover:text-muted-foreground"
-                          }
+                          className={active ? "text-[var(--v-accent)]" : "text-muted-foreground group-hover:text-muted-foreground"}
                         />
                         <span className="truncate">{p.name}</span>
                       </span>
                       <span
-                        className={cn(
-                          "ml-1 h-1.5 w-1.5 rounded-full shrink-0",
-                          running ? "bg-emerald-400" : "bg-muted-foreground/40"
-                        )}
-                        title={
-                          p.nodesTotal > 1
-                            ? `${p.nodesRunning}/${p.nodesTotal} nodes running`
-                            : running ? "running" : "at rest"
-                        }
+                        className={cn("ml-1 h-2 w-2 rounded-full shrink-0", running ? "bg-emerald-400" : "bg-muted-foreground/40")}
+                        title={p.nodesTotal > 1 ? `${p.nodesRunning}/${p.nodesTotal} nodes running` : running ? "running" : "at rest"}
                       />
                     </Link>
 
-                    {/* Inline collections under active project */}
                     {active && cols.length > 0 && (
                       <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
                         {cols.map((col) => {
@@ -323,9 +280,9 @@ export function Sidebar() {
                               key={col}
                               href={colHref}
                               className={cn(
-                                "flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] transition-all duration-150 truncate",
+                                "flex items-center gap-1.5 rounded-md px-2 py-2 text-[11px] transition-all duration-150 truncate",
                                 path === colHref
-                                  ? "bg-accent text-foreground"
+                                  ? "bg-[var(--v-accent-muted)] text-foreground"
                                   : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
                               )}
                             >
@@ -341,18 +298,16 @@ export function Sidebar() {
               })
             )}
           </div>
-
         </div>
 
-        {/* Connection + mode status at the very bottom */}
         <StatusFooter />
       </aside>
 
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index, replication, shardCount) => {
-          const entry = await create({ name, dim, index, replication, shardCount });
+        onCreate={async (name, dim, index, replication, shardCount, embed) => {
+          const entry = await create({ name, dim, index, replication, shardCount, embed });
           if (!entry) return;
           await open(name);
           router.push(`/projects/${encodeURIComponent(name)}`);

@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import Link from "next/link";
-import { useEmbeddingConfig, PROVIDER_DEFAULTS } from "@/lib/hooks/useEmbeddingConfig";
+import { useEmbeddingConfig, PROVIDER_DEFAULTS, getModelDim } from "@/lib/hooks/useEmbeddingConfig";
 import { useLLMConfig } from "@/lib/hooks/useLLMConfig";
 import { useHealth } from "@/lib/hooks/useHealth";
 
@@ -25,6 +25,30 @@ interface IngestResult {
   strategy_used?: string;
 }
 
+interface TreeStructureNode {
+  id: string;
+  title: string;
+  depth: number;
+  child_count: number;
+}
+
+interface TreeBuildResult {
+  cache_key: string;
+  doc_name: string;
+  node_count: number;
+  structure_map: TreeStructureNode[];
+}
+
+function treeKey(namespace: string) {
+  return `valori:tree:${namespace}`;
+}
+
+function saveTreeCache(namespace: string, data: TreeBuildResult) {
+  try {
+    localStorage.setItem(treeKey(namespace), JSON.stringify(data));
+  } catch {}
+}
+
 interface Props {
   collection: string;
   onAskQuestion?: (question: string) => void;
@@ -37,12 +61,14 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
   const { config } = useEmbeddingConfig();
   const { config: llmCfg } = useLLMConfig();
   const { dim: serverDim } = useHealth();
-  const providerDim = PROVIDER_DEFAULTS[config.provider].dim;
+  const providerDim = getModelDim(config.provider, config.model);
   const dimMismatch = serverDim !== null && providerDim > 0 && serverDim !== providerDim;
 
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"idle" | "ingesting" | "done" | "error">("idle");
+  const [ingestStep, setIngestStep] = useState<string>("");
   const [result, setResult] = useState<IngestResult | null>(null);
+  const [treeResult, setTreeResult] = useState<TreeBuildResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showChunks, setShowChunks] = useState(false);
   const [enrichEnabled, setEnrichEnabled] = useState(false);
@@ -78,9 +104,40 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
   const ingest = async () => {
     if (!file) return;
     setStatus("ingesting");
+    setIngestStep("Reading file…");
     setError(null);
     setResult(null);
+    setTreeResult(null);
 
+    // ── Tree-RAG path: build a section tree from the raw text ────────────────
+    if (chunkMode === "tree") {
+      try {
+        setIngestStep("Parsing document structure…");
+        const form = new FormData();
+        form.append("file", file);
+        form.append("doc_name", file.name);
+        const res = await fetch("/api/tree/build", {
+          method: "POST",
+          body: form,
+        });
+        const data = await res.json() as TreeBuildResult & { error?: string };
+        if (!res.ok || data.error) {
+          setError(data.error ?? `HTTP ${res.status}`);
+          setStatus("error");
+        } else {
+          saveTreeCache(collection, data);
+          setTreeResult(data);
+          setStatus("done");
+          setFile(null);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Tree build failed");
+        setStatus("error");
+      }
+      return;
+    }
+
+    // ── Fixed chunking path (original flow) ──────────────────────────────────
     const form = new FormData();
     form.append("file", file);
     form.append("collection", collection);
@@ -90,10 +147,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
     form.append("endpoint", config.endpoint);
     form.append("chunkSize", String(config.chunkSize));
     form.append("chunkOverlap", String(config.chunkOverlap));
-
-    // Contextual enrichment (C1): pass LLM params so the server can generate
-    // a context sentence per chunk and commit it in the audited event metadata.
-    form.append("chunkMode", chunkMode);
+    form.append("chunkMode", "fixed");
     form.append("enrichEnabled", String(enrichEnabled));
     if (enrichEnabled) {
       form.append("llmProvider", llmCfg.provider);
@@ -103,7 +157,12 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
     }
 
     try {
+      const stepTimer1 = setTimeout(() => setIngestStep("Splitting into chunks…"), 800);
+      const stepTimer2 = setTimeout(() => setIngestStep("Embedding chunks…"), 2500);
+      const stepTimer3 = setTimeout(() => setIngestStep("Storing vectors…"), 6000);
+
       const res = await fetch("/api/ingest", { method: "POST", body: form });
+      clearTimeout(stepTimer1); clearTimeout(stepTimer2); clearTimeout(stepTimer3);
       const data: IngestResult = await res.json();
       if (!res.ok || data.error) {
         setError(data.error ?? `HTTP ${res.status}`);
@@ -171,19 +230,19 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
 
       {/* Dimension mismatch warning */}
       {dimMismatch && (
-        <div className="rounded-lg border border-red-900 bg-red-950/40 px-4 py-3">
-          <p className="text-sm font-medium text-red-400">Dimension mismatch — ingestion will fail</p>
-          <p className="text-xs text-red-600 mt-1">
+        <div className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 px-4 py-3">
+          <p className="text-sm font-medium text-red-700 dark:text-red-400">Dimension mismatch — ingestion will fail</p>
+          <p className="text-xs text-red-600 dark:text-red-500 mt-1">
             Server is configured for{" "}
-            <span className="font-mono text-red-400">{serverDim} dims</span> but{" "}
-            <span className="font-mono text-red-400">{config.provider}/{config.model}</span> produces{" "}
-            <span className="font-mono text-red-400">{providerDim} dims</span>.
+            <span className="font-mono text-red-700 dark:text-red-400">{serverDim} dims</span> but{" "}
+            <span className="font-mono text-red-700 dark:text-red-400">{config.provider}/{config.model}</span> produces{" "}
+            <span className="font-mono text-red-700 dark:text-red-400">{providerDim} dims</span>.
           </p>
-          <p className="text-xs text-red-700 mt-1.5">
+          <p className="text-xs text-red-600 dark:text-red-600 mt-1.5">
             Fix: restart the server with{" "}
-            <code className="font-mono text-red-500">VALORI_DIM={providerDim}</code>, or choose an embedding model that outputs{" "}
+            <code className="font-mono text-red-700 dark:text-red-400">VALORI_DIM={providerDim}</code>, or choose an embedding model that outputs{" "}
             <span className="font-mono">{serverDim}</span> dims in{" "}
-            <Link href="/settings" className="text-red-400 hover:text-red-300 underline">Settings</Link>.
+            <Link href="/settings" className="text-red-700 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 underline">Settings</Link>.
           </p>
         </div>
       )}
@@ -194,8 +253,8 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           <p className="text-xs font-medium text-card-foreground">Chunking strategy</p>
           <p className="text-[11px] text-muted-foreground">
             {chunkMode === "tree"
-              ? "Tree mode — one chunk per section (title + body). Best for structured docs."
-              : "Fixed-size mode — overlapping windows. Better for unstructured text."}
+              ? "Tree-RAG — builds a ToC index for section-cited retrieval. Works with PDF, DOCX, TXT, MD. No embedding needed."
+              : "Fixed-size — overlapping windows with embedding. Works with PDF, DOCX, TXT, MD."}
           </p>
         </div>
         <div className="flex gap-1 ml-4">
@@ -288,7 +347,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           {status === "ingesting" ? (
             <span className="flex items-center gap-2">
               <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
-              Ingesting…
+              {ingestStep || "Ingesting…"}
             </span>
           ) : (
             "Ingest document →"
@@ -296,7 +355,45 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
         </button>
       )}
 
-      {/* Result */}
+      {/* Tree-RAG result */}
+      {status === "done" && treeResult && (
+        <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
+          <div>
+            <p className="font-medium text-[var(--v-accent)]">
+              ✓ Tree index built — {treeResult.node_count} sections
+            </p>
+            <p className="text-xs text-muted-foreground mt-1 font-mono">
+              {treeResult.doc_name} · Ask tab will use Tree-RAG for this collection
+            </p>
+          </div>
+          <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
+            {treeResult.structure_map.map((node) => (
+              <div
+                key={node.id}
+                className="flex items-center gap-2 py-0.5 text-sm"
+                style={{ paddingLeft: `${node.depth * 14 + 4}px` }}
+              >
+                <span className="text-[10px] text-muted-foreground">›</span>
+                <span className="text-xs text-foreground truncate">{node.title}</span>
+                {node.child_count > 0 && (
+                  <span className="text-[10px] text-muted-foreground shrink-0">{node.child_count} sub</span>
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              setTreeResult(null);
+              setStatus("idle");
+            }}
+            className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors self-start"
+          >
+            + index another
+          </button>
+        </div>
+      )}
+
+      {/* Fixed-mode result */}
       {status === "done" && result && (
         <div className="rounded-xl border border-border bg-card p-5">
           <div className="flex items-start justify-between">
@@ -461,12 +558,8 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
         <div className="rounded-lg border border-border bg-card/40 px-4 py-3 text-xs text-muted-foreground">
           <p className="font-medium text-muted-foreground mb-1">How ingestion works</p>
           <ol className="list-decimal list-inside space-y-0.5">
-            <li>File is parsed into raw text — PDFs use position-aware extraction to preserve table columns</li>
-            <li>Text is split — <strong>Tree</strong>: one chunk per detected section (best for Q&A); <strong>Fixed</strong>: overlapping size windows</li>
-            <li>Each chunk is embedded via your configured model</li>
-            <li>Vectors are stored in this collection</li>
-            <li>Text is stored in the metadata sidecar (searchable via /audit)</li>
-            <li>A Document→Chunk graph is built for provenance</li>
+            <li><strong>Tree-RAG</strong> (PDF/DOCX/TXT/MD): extracts text, builds a ToC section tree — Ask tab navigates it by term frequency, returns cited sections + BLAKE3 receipt. No embedding needed.</li>
+            <li><strong>Fixed</strong> (PDF/DOCX/TXT/MD): splits into overlapping windows, embeds each chunk, stores vectors. Ask tab uses semantic vector search + LLM synthesis.</li>
           </ol>
         </div>
       )}

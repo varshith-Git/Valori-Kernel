@@ -312,6 +312,88 @@ impl ValoricoreEngine {
         Ok(py_edges)
     }
 
+    #[pyo3(signature = (start_node, max_depth = 2))]
+    fn walk(&self, start_node: u32, max_depth: u32) -> PyResult<Vec<u32>> {
+        let engine = lock_engine!(self);
+        use valori_kernel::types::id::NodeId;
+        use std::collections::{HashSet, VecDeque};
+
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+
+        let max_depth = std::cmp::min(max_depth, 10);
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        let mut result = Vec::new();
+
+        visited.insert(start_node);
+        queue.push_back((start_node, 0));
+
+        while let Some((current, depth)) = queue.pop_front() {
+            result.push(current);
+            if depth >= max_depth {
+                continue;
+            }
+
+            if let Some(iter) = state_ref.outgoing_edges(NodeId(current)) {
+                for edge in iter {
+                    let nxt = edge.to.0;
+                    if visited.insert(nxt) {
+                        queue.push_back((nxt, depth + 1));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    #[pyo3(signature = (start_node, max_depth = 2))]
+    fn expand(&self, start_node: u32, max_depth: u32) -> PyResult<Vec<u32>> {
+        let engine = lock_engine!(self);
+        use valori_kernel::types::id::NodeId;
+        use std::collections::{HashSet, VecDeque};
+
+        let state_ref: &valori_kernel::state::kernel::KernelState = if let Some(ref c) = engine.event_committer {
+            c.live_state()
+        } else {
+            &engine.state
+        };
+
+        let max_depth = std::cmp::min(max_depth, 10);
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        let mut record_ids = HashSet::new();
+
+        visited.insert(start_node);
+        queue.push_back((start_node, 0));
+
+        while let Some((current, depth)) = queue.pop_front() {
+            if let Some(node) = state_ref.get_node(NodeId(current)) {
+                if let Some(rid) = node.record {
+                    record_ids.insert(rid.0);
+                }
+            }
+            if depth >= max_depth {
+                continue;
+            }
+
+            if let Some(iter) = state_ref.outgoing_edges(NodeId(current)) {
+                for edge in iter {
+                    let nxt = edge.to.0;
+                    if visited.insert(nxt) {
+                        queue.push_back((nxt, depth + 1));
+                    }
+                }
+            }
+        }
+
+        Ok(record_ids.into_iter().collect())
+    }
+
     #[pyo3(signature = (vectors, tags=None))]
     fn insert_batch(&self, vectors: Vec<Vec<f32>>, tags: Option<Vec<u64>>) -> PyResult<Vec<u32>> {
         // Validate tags length upfront.

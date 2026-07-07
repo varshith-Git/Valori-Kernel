@@ -17,7 +17,7 @@ export default function ProjectPage({
   const project = decodeURIComponent(name);
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
       <Tabs defaultValue="collections">
         <TabsList className="bg-card border border-border">
           <TabsTrigger

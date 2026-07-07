@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import useSWR from "swr";
 
 // -- Constants -----------------------------------------------------------------
@@ -67,7 +67,7 @@ function fmtRate(r: number) {
 }
 
 // -- Sparkline SVG -------------------------------------------------------------
-function Sparkline({
+const Sparkline = React.memo(function Sparkline({
   data,
   color,
   fillOpacity = 0.12,
@@ -81,7 +81,7 @@ function Sparkline({
   if (data.length < 2) {
     return (
       <svg width="100%" height={height} viewBox="0 0 280 56" preserveAspectRatio="none">
-        <line x1="0" y1={height / 2} x2="280" y2={height / 2} stroke="#27272a" strokeWidth="1" />
+        <line x1="0" y1={height / 2} x2="280" y2={height / 2} stroke="var(--border)" strokeWidth="1" />
       </svg>
     );
   }
@@ -108,8 +108,8 @@ function Sparkline({
   const fill = `color-mix(in srgb, ${color} ${Math.round(fillOpacity * 100)}%, transparent)`;
 
   return (
-    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <polygon points={areaPts} fill={fill} />
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="transition-all duration-300">
+      <polygon points={areaPts} fill={fill} className="transition-all duration-300" />
       <polyline
         points={linePts}
         fill="none"
@@ -117,11 +117,12 @@ function Sparkline({
         strokeWidth="1.5"
         strokeLinejoin="round"
         strokeLinecap="round"
+        className="transition-all duration-300"
       />
-      <circle cx={lx} cy={ly} r="2.5" fill={color} />
+      <circle cx={lx} cy={ly} r="3" fill={color} className="transition-all duration-300 drop-shadow-md" style={{ filter: `drop-shadow(0 0 4px ${color})` }} />
     </svg>
   );
-}
+});
 
 // -- Metric card ---------------------------------------------------------------
 function MetricCard({
@@ -153,8 +154,10 @@ function MetricCard({
 
   return (
     <div
-      className={`rounded-xl border overflow-hidden flex flex-col ${
-        alert ? "border-destructive bg-destructive/10" : "border-border bg-card"
+      className={`rounded-xl border overflow-hidden flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl ${
+        alert 
+          ? "border-destructive/50 bg-destructive/10 shadow-[0_0_15px_rgba(239,68,68,0.2)]" 
+          : "border-border/50 bg-card/40 backdrop-blur-md shadow-[0_4px_24px_rgba(0,0,0,0.2)] hover:border-border"
       }`}
     >
       {/* Top row */}
@@ -375,7 +378,7 @@ export default function MetricsPage() {
     : "var(--color-red-500)";
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
 
       {/* -- Header -- */}
       <div className="flex items-center gap-3 flex-wrap">

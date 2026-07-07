@@ -33,6 +33,13 @@ export interface ProjectNodeEntry {
   raftPort?: number;   // present only when replication > 1
 }
 
+export interface ProjectEmbedConfig {
+  provider: string;
+  model:    string;
+  apiKey?:  string;
+  endpoint?: string;
+}
+
 export interface ProjectEntry {
   name:          string;   // unique, also the dir name (slug)
   dir:           string;   // absolute path to project data dir
@@ -49,11 +56,13 @@ export interface ProjectEntry {
   shardCount:    number;
   port:          number;   // KEPT for back-compat/display — always === nodes[0].httpPort
   dim:           number;
-  index:         "brute" | "hnsw" | "ivf";
+  index:         "brute" | "hnsw" | "ivf" | "bq" | "auto";
   maxRecords:    number;
   createdAt:     string;   // ISO
   lastOpenedAt?: string;   // ISO
   records?:      number;   // last-known record count (cosmetic)
+  embed?:        ProjectEmbedConfig;
+  collections?:  string[]; // derived from events.namespaces.json
 }
 
 // ─── name validation ───────────────────────────────────────────────────────────
@@ -95,7 +104,24 @@ function writeManifest(list: ProjectEntry[]): void {
 }
 
 export function listProjects(): ProjectEntry[] {
-  return readManifest();
+  const list = readManifest();
+  for (const p of list) {
+    try {
+      const { eventLogPath } = projectPaths(p);
+      const nsPath = eventLogPath.replace(/\.log$/, ".namespaces.json");
+      if (fs.existsSync(nsPath)) {
+        const nsData = JSON.parse(fs.readFileSync(nsPath, "utf8"));
+        const names = Object.keys(nsData.map || {});
+        const prefix = `${p.name}--`;
+        p.collections = names.filter((n) => n.startsWith(prefix)).map((n) => n.slice(prefix.length));
+      } else {
+        p.collections = [];
+      }
+    } catch {
+      p.collections = [];
+    }
+  }
+  return list;
 }
 
 export function getProject(name: string): ProjectEntry | undefined {
@@ -222,11 +248,12 @@ export function reprotect(name: string): void {
 export interface CreateProjectInput {
   name:         string;
   dim:          number;
-  index:        "brute" | "hnsw" | "ivf";
+  index:        "brute" | "hnsw" | "ivf" | "bq" | "auto";
   maxRecords?:  number;
   replication?: 1 | 3;   // default 1
   /** Only meaningful when replication === 3 — see ProjectEntry.shardCount. */
   shardCount?:  number;  // default 1
+  embed?:       ProjectEmbedConfig;
 }
 
 export function createProject(input: CreateProjectInput): ProjectEntry {
@@ -260,6 +287,7 @@ export function createProject(input: CreateProjectInput): ProjectEntry {
     index:      input.index,
     maxRecords: input.maxRecords ?? 1_000_000,
     createdAt:  new Date().toISOString(),
+    ...(input.embed ? { embed: input.embed } : {}),
   };
 
   writeManifest([...list, entry]);

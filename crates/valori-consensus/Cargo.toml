@@ -15,6 +15,7 @@ valori-kernel = { workspace = true, features = ["std"] }
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
 # Snapshot payload framing (kernel V5 bytes + dedup table + meta).
 bincode = { version = "2", features = ["serde"] }
@@ -33,7 +34,6 @@ tracing = "0.1"
 
 [dev-dependencies]
 anyhow = "1"
-serde_json = "1"
 tempfile = "3"
 # Test-only CA + leaf certificate generation for the mTLS tests.
 rcgen = "0.13"

@@ -28,15 +28,19 @@ export function DeleteCollectionDialog({
 }: Props) {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const ns = `${project}--${collection}`;
 
   const submit = async () => {
     setBusy(true);
+    setError("");
     try {
       await onDelete();
       setConfirm("");
       onOpenChange(false);
+    } catch {
+      setError("Failed to delete collection");
     } finally {
       setBusy(false);
     }
@@ -64,6 +68,7 @@ export function DeleteCollectionDialog({
             }
             className="bg-accent border-input text-foreground placeholder:text-muted-foreground"
           />
+          {error && <p className="text-xs text-red-700">{error}</p>}
         </div>
         <DialogFooter>
           <Button

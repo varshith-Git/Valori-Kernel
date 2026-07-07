@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProject, deleteProject } from "@/lib/server/projects";
+import { removeUrlFromHistory } from "@/lib/server/connection";
 import { pm } from "@/lib/server/process-manager";
 
 // DELETE — the only path that may remove project data. Stops every node,
@@ -24,5 +25,12 @@ export async function DELETE(
   }));
 
   const ok = deleteProject(name);
+  if (ok) {
+    for (const n of entry.nodes) {
+      removeUrlFromHistory(`http://localhost:${n.httpPort}`);
+      removeUrlFromHistory(`http://127.0.0.1:${n.httpPort}`);
+    }
+  }
+  
   return NextResponse.json({ ok }, { status: ok ? 200 : 404 });
 }

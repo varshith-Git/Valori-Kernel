@@ -477,6 +477,7 @@ struct IngestErrorBody { error: String }
 
 pub async fn ingest(
     State(state): State<SharedEngine>,
+    axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<IngestRequest>,
 ) -> Response {
     if payload.text.len() > MAX_INGEST_TEXT_BYTES {
@@ -531,6 +532,10 @@ pub async fn ingest(
 
     // 4. Insert vectors + register texts for reranker
     let mut engine = state.write().await;
+    let state_before: String = valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     let ns = match engine.resolve_collection(Some(&collection)) {
         Ok(n) => n,
         Err(e) => {
@@ -572,8 +577,9 @@ pub async fn ingest(
             // ParentOf edge (kind 6)
             let _ = engine.create_edge(doc_node_id, chunk_node_id, 6);
 
-            // Metadata sidecar
-            engine.metadata.set(
+            // Metadata sidecar — audited via SetMeta, not the JSON-only sidecar,
+            // so a document's chunk metadata survives sidecar file loss/corruption.
+            if let Err(e) = engine.set_meta_audited(
                 format!("record:{rid}"),
                 serde_json::json!({
                     "text": chunk.text,
@@ -589,12 +595,14 @@ pub async fn ingest(
                     "embed_model": &embed_cfg.model,
                     "embed_provider": &embed_cfg.provider,
                 }),
-            );
+            ) {
+                tracing::warn!("ingest: failed to commit chunk metadata: {e:?}");
+            }
         }
     }
 
     // Document-level metadata
-    engine.metadata.set(
+    if let Err(e) = engine.set_meta_audited(
         format!("document:{doc_node_id}"),
         serde_json::json!({
             "source": source,
@@ -604,13 +612,36 @@ pub async fn ingest(
             "embed_model": &embed_cfg.model,
             "ingested_at": &now,
         }),
-    );
-
-    if let Err(e) = engine.flush_metadata() {
-        tracing::warn!("ingest: metadata flush failed: {e:?}");
+    ) {
+        tracing::warn!("ingest: failed to commit document metadata: {e:?}");
     }
 
+    let state_after: String = valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     drop(engine);
+
+    {
+        use valori_planner::operation::{OperationInputs, OperationKind};
+        let inputs = OperationInputs::Ingest {
+            strategy: strategy_used.clone(),
+            collection: collection.clone(),
+            shard_id: 0,
+            embed_enabled: true,
+        };
+        crate::receipt_bridge::emit_write(
+            &receipts,
+            OperationKind::Ingest,
+            &inputs,
+            ns,
+            0,
+            0,
+            false,
+            state_before,
+            state_after,
+        );
+    }
 
     Json(IngestResponse {
         ok: true,
@@ -630,4 +661,328 @@ fn normalize(text: &str) -> String {
         .map(|l| l.trim_end())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// BLAKE3 content hash of a chunk's text — used by ingest/update to diff old vs new.
+pub fn chunk_content_hash(text: &str) -> [u8; 32] {
+    blake3::hash(text.as_bytes()).into()
+}
+
+// ── Phase: Document Update (chunk-level diff) ────────────────────────────────
+//
+// POST /v1/ingest/update
+//
+// Accepts a `document_node_id` (from a prior /v1/ingest response) and new text.
+// Chunks the new text, content-hashes each chunk, then diffs against the existing
+// chunks attached to the document node:
+//   - Unchanged chunks (same BLAKE3 hash): kept as-is, no re-embed
+//   - Removed chunks (old hash not in new set): soft-deleted + graph node removed
+//   - New/changed chunks: embedded, inserted, new Chunk node + ParentOf edge
+//
+// The document graph node is reused (not replaced), so any external edges pointing
+// to it remain valid. Document-level metadata is updated in place.
+
+#[derive(Deserialize)]
+pub struct IngestUpdateRequest {
+    /// The document node ID returned by the original /v1/ingest call.
+    pub document_node_id: u32,
+    /// New full text of the document.
+    pub text: String,
+    pub collection: Option<String>,
+    pub strategy:   Option<String>,
+    pub source:     Option<String>,
+    pub chunk_size:    Option<usize>,
+    pub chunk_overlap: Option<usize>,
+}
+
+#[derive(Serialize)]
+pub struct IngestUpdateResponse {
+    pub ok: bool,
+    pub document_node_id: u32,
+    pub strategy_used: String,
+    /// How many chunks the new text produced.
+    pub new_chunk_count: usize,
+    /// Chunks that were identical (by BLAKE3 content hash) — not re-embedded.
+    pub kept_count: usize,
+    /// Old chunks that no longer exist in the new text — soft-deleted.
+    pub removed_count: usize,
+    /// Genuinely new or changed chunks — embedded and inserted.
+    pub added_count: usize,
+    /// Record IDs of all live chunks after the update (kept + added), in order.
+    pub record_ids: Vec<u32>,
+    pub collection: String,
+}
+
+/// Standalone handler for POST /v1/ingest/update.
+pub async fn ingest_update(
+    State(state): State<SharedEngine>,
+    axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    Json(payload): Json<IngestUpdateRequest>,
+) -> Response {
+    if payload.text.len() > MAX_INGEST_TEXT_BYTES {
+        let body = serde_json::json!({"error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")});
+        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+    }
+    let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
+    let source     = payload.source.clone().unwrap_or_else(|| "unknown".into());
+    let strategy   = payload.strategy.as_deref().unwrap_or("auto");
+    let chunk_size = payload.chunk_size.unwrap_or(1000);
+    let overlap    = payload.chunk_overlap.unwrap_or(200);
+    let doc_node_id = payload.document_node_id;
+
+    // 1. Verify embed is configured
+    let embed_cfg = {
+        let engine = state.read().await;
+        engine.embed_config.clone()
+    };
+    let embed_cfg = match embed_cfg {
+        Some(c) => c,
+        None => {
+            let body = serde_json::to_vec(&IngestErrorBody {
+                error: "on-node embedding not configured — set VALORI_EMBED_PROVIDER".into(),
+            }).unwrap();
+            return (StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::http::header::HeaderMap::new(), body).into_response();
+        }
+    };
+
+    // 2. Chunk the new text
+    let (new_chunks, strategy_used) = chunk_document(&payload.text, strategy, chunk_size, overlap);
+    if new_chunks.is_empty() {
+        let body = serde_json::to_vec(&IngestErrorBody { error: "no chunks produced".into() }).unwrap();
+        return (StatusCode::BAD_REQUEST, axum::http::header::HeaderMap::new(), body).into_response();
+    }
+
+    // 3. Content-hash every new chunk
+    let new_hashes: Vec<[u8; 32]> = new_chunks.iter()
+        .map(|c| chunk_content_hash(&c.text))
+        .collect();
+
+    // 4. Read existing chunks from the Document node's outgoing ParentOf edges
+    let old_chunks: Vec<(u32, u32, [u8; 32])> = { // (record_id, chunk_node_id, content_hash)
+        let engine = state.read().await;
+        collect_old_chunks(&engine, doc_node_id)
+    };
+
+    // 5. Diff: build a set of new hashes, match old against new
+    use std::collections::HashMap;
+    let mut new_hash_to_idx: HashMap<[u8; 32], Vec<usize>> = HashMap::new();
+    for (i, h) in new_hashes.iter().enumerate() {
+        new_hash_to_idx.entry(*h).or_default().push(i);
+    }
+
+    let mut kept_new_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut kept_records: HashMap<usize, u32> = HashMap::new(); // new_idx -> existing record_id
+    let mut to_remove: Vec<(u32, u32)> = Vec::new(); // (record_id, chunk_node_id)
+
+    for (rid, cnid, old_hash) in &old_chunks {
+        if let Some(indices) = new_hash_to_idx.get_mut(old_hash) {
+            if let Some(idx) = indices.iter().find(|i| !kept_new_indices.contains(i)).copied() {
+                kept_new_indices.insert(idx);
+                kept_records.insert(idx, *rid);
+            } else {
+                to_remove.push((*rid, *cnid));
+            }
+        } else {
+            to_remove.push((*rid, *cnid));
+        }
+    }
+
+    let to_add: Vec<usize> = (0..new_chunks.len())
+        .filter(|i| !kept_new_indices.contains(i))
+        .collect();
+
+    let (state_before, ns) = {
+        let engine = state.read().await;
+        let ns = engine.resolve_collection(Some(&collection)).unwrap_or(0);
+        let hash = valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        (hash, ns)
+    };
+
+    // 6. Remove old chunks that are no longer present
+    {
+        let mut engine = state.write().await;
+        for (rid, _cnid) in &to_remove {
+            if let Err(e) = engine.soft_delete_record(*rid) {
+                tracing::warn!("ingest/update: failed to soft-delete record {rid}: {e:?}");
+            }
+        }
+    }
+
+    // 7. Embed only the genuinely new/changed chunks
+    let mut added_record_ids: HashMap<usize, u32> = HashMap::new();
+    if !to_add.is_empty() {
+        let texts_to_embed: Vec<String> = to_add.iter()
+            .map(|&i| new_chunks[i].text.clone())
+            .collect();
+        let http = reqwest::Client::new();
+        let vectors = match embed_batch(&texts_to_embed, &embed_cfg, &http).await {
+            Ok(v) => v,
+            Err(e) => {
+                let body = serde_json::to_vec(&IngestErrorBody { error: e.to_string() }).unwrap();
+                return (StatusCode::BAD_GATEWAY, axum::http::header::HeaderMap::new(), body).into_response();
+            }
+        };
+
+        let mut engine = state.write().await;
+        let ns = match engine.resolve_collection(Some(&collection)) {
+            Ok(n) => n,
+            Err(e) => {
+                let body = serde_json::to_vec(&IngestErrorBody { error: e.to_string() }).unwrap();
+                return (StatusCode::BAD_REQUEST, axum::http::header::HeaderMap::new(), body).into_response();
+            }
+        };
+
+        for (vec_idx, &chunk_idx) in to_add.iter().enumerate() {
+            let rid = match engine.insert_record_from_f32_ns(&vectors[vec_idx], ns) {
+                Ok(id) => id,
+                Err(e) => {
+                    let body = serde_json::to_vec(&IngestErrorBody { error: e.to_string() }).unwrap();
+                    return (StatusCode::INTERNAL_SERVER_ERROR, axum::http::header::HeaderMap::new(), body).into_response();
+                }
+            };
+            engine.reranker_insert(rid, &new_chunks[chunk_idx].text);
+
+            let chunk_node_id = match engine.create_node_for_record(
+                Some(rid),
+                valori_kernel::types::enums::NodeKind::Chunk as u8,
+                ns,
+            ) {
+                Ok(id) => id,
+                Err(e) => { tracing::warn!("ingest/update: chunk node create failed: {e:?}"); 0 }
+            };
+            if chunk_node_id > 0 {
+                let _ = engine.create_edge(
+                    doc_node_id,
+                    chunk_node_id,
+                    valori_kernel::types::enums::EdgeKind::ParentOf as u8,
+                );
+            }
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".into());
+            let _ = engine.set_meta_audited(
+                format!("record:{rid}"),
+                serde_json::json!({
+                    "text":             new_chunks[chunk_idx].text,
+                    "source":           source,
+                    "chunk_index":      chunk_idx,
+                    "total_chunks":     new_chunks.len(),
+                    "section_title":    new_chunks[chunk_idx].title,
+                    "document_node_id": doc_node_id,
+                    "chunk_node_id":    chunk_node_id,
+                    "collection":       collection,
+                    "chunk_mode":       strategy_used,
+                    "ingested_at":      &now,
+                    "embed_model":      &embed_cfg.model,
+                    "embed_provider":   &embed_cfg.provider,
+                    "content_hash":     new_hashes[chunk_idx].iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                }),
+            );
+            added_record_ids.insert(chunk_idx, rid);
+        }
+
+        // Update document-level metadata
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".into());
+        let _ = engine.set_meta_audited(
+            format!("document:{doc_node_id}"),
+            serde_json::json!({
+                "source":       source,
+                "total_chunks": new_chunks.len(),
+                "collection":   collection,
+                "strategy":     strategy_used,
+                "embed_model":  &embed_cfg.model,
+                "updated_at":   &now,
+            }),
+        );
+    }
+
+    let state_after: String = {
+        let engine = state.read().await;
+        valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect()
+    };
+    {
+        use valori_planner::operation::{OperationInputs, OperationKind};
+        let inputs = OperationInputs::Ingest {
+            strategy: strategy_used.clone(),
+            collection: collection.clone(),
+            shard_id: 0,
+            embed_enabled: true,
+        };
+        crate::receipt_bridge::emit_write(
+            &receipts,
+            OperationKind::Ingest,
+            &inputs,
+            ns,
+            0,
+            0,
+            false,
+            state_before,
+            state_after,
+        );
+    }
+
+    // 8. Build final record_ids in chunk order
+    let mut record_ids = Vec::with_capacity(new_chunks.len());
+    for i in 0..new_chunks.len() {
+        if let Some(&rid) = kept_records.get(&i) {
+            record_ids.push(rid);
+        } else if let Some(&rid) = added_record_ids.get(&i) {
+            record_ids.push(rid);
+        }
+    }
+
+    Json(IngestUpdateResponse {
+        ok: true,
+        document_node_id: doc_node_id,
+        strategy_used,
+        new_chunk_count: new_chunks.len(),
+        kept_count: kept_new_indices.len(),
+        removed_count: to_remove.len(),
+        added_count: to_add.len(),
+        record_ids,
+        collection,
+    }).into_response()
+}
+
+/// Walk the Document node's outgoing ParentOf edges, read each Chunk's metadata
+/// to get its text, and return (record_id, chunk_node_id, content_hash).
+fn collect_old_chunks(engine: &crate::engine::Engine, doc_node_id: u32) -> Vec<(u32, u32, [u8; 32])> {
+    use valori_kernel::types::id::NodeId;
+    use valori_kernel::types::enums::EdgeKind;
+
+    let mut result = Vec::new();
+    let Some(edges) = engine.state.outgoing_edges(NodeId(doc_node_id)) else {
+        return result;
+    };
+    for edge in edges {
+        if edge.kind != EdgeKind::ParentOf { continue; }
+        let chunk_node_id = edge.to.0;
+        let Some(chunk_node) = engine.state.get_node(edge.to) else { continue };
+        let Some(record_id) = chunk_node.record else { continue };
+        let rid = record_id.0;
+
+        // Read chunk text from metadata sidecar
+        let meta_key = format!("record:{rid}");
+        let text = engine.metadata.get(&meta_key)
+            .and_then(|v| v.get("text").and_then(|t| t.as_str().map(|s| s.to_string())));
+
+        let hash = match text {
+            Some(t) => chunk_content_hash(&t),
+            None => [0u8; 32], // no text found — treat as unique (will be removed)
+        };
+        result.push((rid, chunk_node_id, hash));
+    }
+    result
 }

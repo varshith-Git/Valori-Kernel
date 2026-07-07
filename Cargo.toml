@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/valori-core",
+    "crates/valori-storage",
+    "crates/valori-state",
+    "crates/valori-metadata",
+    "crates/valori-planner",
+    "crates/valori-effect",
     "crates/valori-kernel",
     "crates/valori-wire",
     "crates/valori-node",
@@ -19,6 +25,12 @@ members = [
 #  - valori-ffi: PyO3 extension module — links against Python symbols that
 #    only resolve when maturin builds it. Build: pip install ./python
 default-members = [
+    "crates/valori-core",
+    "crates/valori-storage",
+    "crates/valori-state",
+    "crates/valori-metadata",
+    "crates/valori-planner",
+    "crates/valori-effect",
     "crates/valori-kernel",
     "crates/valori-wire",
     "crates/valori-node",
@@ -45,6 +57,12 @@ repository = "https://github.com/valori-db/valori-kernel"
 # default-features = false keeps the no_std firmware (embedded/) buildable;
 # `std` is an opt-in feature on valori-kernel, so consumers that need it (the
 # PyO3 FFI) enable `features = ["std"]` explicitly.
+valori-core      = { path = "crates/valori-core",      version = "0.2.4", default-features = false }
+valori-storage   = { path = "crates/valori-storage",   version = "0.2.4" }
+valori-state     = { path = "crates/valori-state",     version = "0.2.4" }
+valori-metadata  = { path = "crates/valori-metadata",  version = "0.2.4" }
+valori-planner   = { path = "crates/valori-planner",   version = "0.2.4" }
+valori-effect    = { path = "crates/valori-effect",    version = "0.2.4" }
 valori-kernel    = { path = "crates/valori-kernel",    version = "0.2.1", default-features = false }
 valori-wire      = { path = "crates/valori-wire",      version = "0.2.1" }
 valori-consensus = { path = "crates/valori-consensus", version = "0.2.1" }
@@ -55,6 +73,20 @@ valori-verify    = { path = "crates/valori-verify",    version = "0.2.1" }
 # This also guarantees fail-closed behavior for the Node.
 [profile.dev]
 panic = "abort"
+# Line tables keep backtraces readable; full DWARF for workspace code is what
+# balloons target/debug into tens of GB.
+debug = "line-tables-only"
+
+# Dependencies don't need debug info at all — we never step into them.
+[profile.dev.package."*"]
+debug = false
+opt-level = 1
 
 [profile.release]
 panic = "abort"
+# Thin LTO: cross-crate inlining (fxp/l2 hot path benefits) at a fraction of
+# fat-LTO's compile cost. Strip DWARF but keep the symbol table so production
+# backtraces still resolve.
+lto = "thin"
+strip = "debuginfo"
+codegen-units = 1

@@ -177,6 +177,8 @@ impl ValoriReranker {
     }
 
     /// Serialize the corpus to bytes (for snapshot persistence).
+    pub fn corpus_len(&self) -> usize { self.corpus.len() }
+
     pub fn snapshot_corpus(&self) -> (&HashMap<u64, Vec<String>>, usize) {
         (&self.corpus, self.total_tokens)
     }

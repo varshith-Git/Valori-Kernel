@@ -19,7 +19,7 @@ use crate::state::kernel::KernelState;
 use crate::error::Result;
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 6; // V6: namespace_id per record/node + namespace head arrays
+pub const SCHEMA_VERSION: u32 = 7; // V7: adds the KernelState.meta sidecar (SetMeta-committed key/value pairs)
 
 // ── infallible push helpers ────────────────────────────────────────────────────
 // Writing to a Vec<u8> can only fail on OOM, which panics (same as any alloc).
@@ -76,6 +76,7 @@ pub fn encode_capacity_hint(state: &KernelState) -> usize {
     + node_count  * 30                         // nodes   (V6 layout)
     + edge_count  * 29                         // edges
     + 2 * 1024 * 4                             // namespace head arrays (2 × 1024 × u32)
+    + state.meta.len() * 128                   // V7: rough per-entry meta estimate
     + 4096                                     // small safety margin
 }
 
@@ -188,6 +189,16 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
     }
     for &head in state.namespace_node_heads.iter().take(MAX_NAMESPACES) {
         push_u32(out, head);
+    }
+
+    // V7: KernelState.meta — SetMeta-committed key/value pairs. BTreeMap
+    // iteration is key-ordered, so encoding is deterministic across replicas.
+    push_u32(out, state.meta.len() as u32);
+    for (key, value) in state.meta.iter() {
+        push_u32(out, key.len() as u32);
+        push_bytes(out, key.as_bytes());
+        push_u32(out, value.len() as u32);
+        push_bytes(out, value.as_bytes());
     }
 
     Ok(())

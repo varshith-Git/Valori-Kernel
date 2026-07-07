@@ -1,94 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getApiUrl } from "@/lib/server/connection";
+import { extractText } from "@/lib/server/extract-text";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 function apiHeaders(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
   return h;
-}
-
-// -- Text extraction ------------------------------------------------------------
-
-async function extractText(file: File): Promise<string> {
-  const buf = Buffer.from(await file.arrayBuffer());
-  const name = file.name.toLowerCase();
-
-  if (name.endsWith(".txt") || name.endsWith(".md") || file.type === "text/plain") {
-    return buf.toString("utf-8");
-  }
-
-  if (name.endsWith(".pdf") || file.type === "application/pdf") {
-    // Use lib path directly to avoid pdf-parse running its own fs test on import
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js");
-
-    // Position-aware renderer: groups text items by Y position, sorts by X,
-    // and inserts proportional whitespace so table columns survive extraction.
-    // pdf.js exposes transform[4]=x, transform[5]=y, item.width for each item.
-    function renderPageWithLayout(pageData: {
-      getTextContent: (opts: unknown) => Promise<{
-        items: { str: string; transform: number[]; width: number }[];
-      }>;
-    }) {
-      return pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: true })
-        .then((textContent: { items: { str: string; transform: number[]; width: number }[] }) => {
-          if (!textContent.items.length) return "";
-
-          // Compute avg char width across the page for space gap heuristic
-          const avgCharWidth = textContent.items.reduce((s, it) => {
-            const len = it.str.replace(/\s/g, "").length;
-            return len > 0 ? s + it.width / len : s;
-          }, 0) / (textContent.items.filter((it) => it.str.replace(/\s/g, "").length > 0).length || 1);
-          const spaceWidth = Math.max(avgCharWidth * 0.5, 3);
-
-          // Group items into rows by Y coordinate (tolerance = half of typical line height)
-          const rows = new Map<number, { x: number; w: number; str: string }[]>();
-          for (const item of textContent.items) {
-            const y = Math.round(item.transform[5]);
-            if (!rows.has(y)) rows.set(y, []);
-            rows.get(y)!.push({ x: item.transform[4], w: item.width, str: item.str });
-          }
-
-          // Sort rows top→bottom (higher Y = higher on page in PDF coords)
-          const sortedYs = [...rows.keys()].sort((a, b) => b - a);
-
-          return sortedYs.map((y) => {
-            const items = rows.get(y)!.sort((a, b) => a.x - b.x);
-            let line = "";
-            let cursor = items[0].x;
-            for (const item of items) {
-              const gap = item.x - cursor;
-              // Insert spaces if gap is larger than ~half a character width
-              if (line.length > 0 && gap > spaceWidth) {
-                const spaces = Math.min(Math.round(gap / spaceWidth), 8);
-                line += " ".repeat(spaces);
-              }
-              line += item.str;
-              cursor = item.x + item.w;
-            }
-            return line.trimEnd();
-          }).join("\n");
-        });
-    }
-
-    const data = await pdfParse(buf, { pagerender: renderPageWithLayout });
-    return data.text as string;
-  }
-
-  if (
-    name.endsWith(".docx") ||
-    file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  ) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const mammoth = require("mammoth");
-    const result = await mammoth.extractRawText({ buffer: buf });
-    return result.value as string;
-  }
-
-  // Fallback: try as UTF-8 text
-  return buf.toString("utf-8");
 }
 
 // -- Tree chunker --------------------------------------------------------------
@@ -101,7 +20,7 @@ interface TreeNode {
   text: string;   // title + own_text concatenated, ready to embed
 }
 
-function chunkTextTree(text: string): TreeNode[] {
+function chunkTextTree(text: string, maxSize: number = 1200, overlap: number = 200): TreeNode[] {
   const normalized = text
     .replace(/\r\n/g, "\n")
     .replace(/[ \t]+/g, " ")
@@ -138,7 +57,10 @@ function chunkTextTree(text: string): TreeNode[] {
     return [];
   }
 
+  const cappedSize = Math.min(maxSize, 1200);
+  const cappedOverlap = Math.min(overlap, Math.floor(cappedSize / 4));
   const nodes: TreeNode[] = [];
+
   for (let i = 0; i < headerIdxs.length; i++) {
     const start = headerIdxs[i];
     const end = i + 1 < headerIdxs.length ? headerIdxs[i + 1] : lines.length;
@@ -147,7 +69,16 @@ function chunkTextTree(text: string): TreeNode[] {
     if (!body && i + 1 < headerIdxs.length) continue; // skip empty sections
     const combined = `${title}\n${body}`.trim();
     if (combined.length >= 50) {
-      nodes.push({ title, text: combined });
+      if (combined.length > cappedSize) {
+        // Section exceeds max chunk size (~300 tokens) — sub-chunk body while preserving section title
+        const subSize = Math.max(200, cappedSize - Math.min(title.length, 100) - 2);
+        const subChunks = chunkText(body, subSize, cappedOverlap);
+        for (const sub of subChunks) {
+          nodes.push({ title, text: `${title}\n${sub}`.trim() });
+        }
+      } else {
+        nodes.push({ title, text: combined });
+      }
     }
   }
 
@@ -244,8 +175,8 @@ async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]
       const results: number[][] = [];
 
       for (const text of texts) {
-        // Truncate to ~6000 chars (~1500 tokens) to stay well within any model's limit
-        const safeText = text.slice(0, 6000);
+        // Truncate to ~1800 chars (~450 tokens) to stay safely within 512-token model context windows
+        const safeText = text.slice(0, 1800);
 
         // Try /api/embed first (Ollama ≥ 0.1.36)
         let res = await fetch(`${base}/api/embed`, {
@@ -597,6 +528,15 @@ export async function POST(req: NextRequest) {
     const chunkOverlap = parseInt((form.get("chunkOverlap") as string) || "200", 10);
     const chunkMode = (form.get("chunkMode") as string) || "tree"; // "fixed" | "tree"
 
+    // Ensure the collection exists on the node before inserting.
+    if (collection !== "default") {
+      await fetch(`${getApiUrl()}/v1/namespaces`, {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ name: collection }),
+      }).catch(() => {});
+    }
+
     // 1. Extract raw text
     const rawText = await extractText(file);
     if (!rawText.trim()) return NextResponse.json({ error: "No text extracted from file" }, { status: 400 });
@@ -675,7 +615,7 @@ export async function POST(req: NextRequest) {
     let chunks: string[];
     let chunkTitles: (string | null)[] = [];
     if (chunkMode === "tree") {
-      const treeNodes = chunkTextTree(rawText);
+      const treeNodes = chunkTextTree(rawText, chunkSize, chunkOverlap);
       if (treeNodes.length >= 2) {
         chunks = treeNodes.map((n) => n.text);
         chunkTitles = treeNodes.map((n) => n.title);

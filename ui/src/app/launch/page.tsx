@@ -15,6 +15,8 @@ const INDEX_TYPES = [
   { value: "brute", label: "Brute-force L2  - exact, always consistent"      },
   { value: "hnsw",  label: "HNSW graph      - approximate, faster at scale"  },
   { value: "ivf",   label: "IVF             - clustered, best for 100k+ vecs" },
+  { value: "bq",    label: "BQ              - binary quantization, fast scan" },
+  { value: "auto",  label: "Auto            - brute <10k, BQ 10k–2M, HNSW >2M" },
 ];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -545,7 +547,7 @@ export default function LaunchPage() {
   const singleActive = singleStatus?.status === "running" || singleStatus?.status === "starting";
 
   return (
-    <div className="flex flex-col gap-8 max-w-4xl pb-12">
+    <div className="flex flex-col gap-8 w-full max-w-[1600px] pb-12">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Cluster Launcher</h1>
@@ -594,7 +596,7 @@ export default function LaunchPage() {
           <div className="grid grid-cols-2 gap-3">
             <Sel label="Dimension"   value={singleCfg.dim}   onChange={v => setSingleCfg({ ...singleCfg, dim: Number(v) })} options={DIMENSIONS} />
             <F   label="HTTP Port"   value={sc.httpPort}      onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, httpPort: Number(v) }] })} type="number" />
-            <Sel label="Index type"  value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" | "ivf" })} options={INDEX_TYPES} />
+            <Sel label="Index type"  value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" | "ivf" | "bq" | "auto" })} options={INDEX_TYPES} />
             <F   label="Max records" value={singleCfg.maxRecords} onChange={v => setSingleCfg({ ...singleCfg, maxRecords: Number(v) })} type="number" />
             <F   label="Event log path" value={sc.eventLogPath ?? ""} onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, eventLogPath: v }] })}
                  note="Leave blank for in-memory only" />
@@ -653,9 +655,9 @@ export default function LaunchPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <Sel label="Dimension"   value={clusterCfg.dim}   onChange={v => setClusterCfg({ ...clusterCfg, dim: Number(v) })} options={DIMENSIONS} />
-              <Sel label="Index type"  value={clusterCfg.index} onChange={v => setClusterCfg({ ...clusterCfg, index: v as "brute" | "hnsw" | "ivf" })} options={INDEX_TYPES} />
+              <Sel label="Index type"  value={clusterCfg.index} onChange={v => setClusterCfg({ ...clusterCfg, index: v as "brute" | "hnsw" | "ivf" | "bq" | "auto" })} options={INDEX_TYPES} />
               <F   label="Max records" value={clusterCfg.maxRecords} onChange={v => setClusterCfg({ ...clusterCfg, maxRecords: Number(v) })} type="number" />
               <F   label="Auth token"  value={clusterCfg.authToken ?? ""} onChange={v => setClusterCfg({ ...clusterCfg, authToken: v })} type="password" />
             </div>

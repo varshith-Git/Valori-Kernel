@@ -11,6 +11,8 @@ export interface SearchResult {
   id: number;
   score: number;
   collection?: string;
+  text?: string;
+  source?: string;
 }
 
 export interface SearchResponse {

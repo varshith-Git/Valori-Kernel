@@ -1,4 +1,6 @@
 pub mod brute_force;
+pub mod bq;
+pub use bq::BinaryQuantizationIndex;
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::storage::pool::RecordPool;

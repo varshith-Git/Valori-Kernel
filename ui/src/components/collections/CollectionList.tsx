@@ -42,7 +42,7 @@ export function CollectionList({
 
       {/* Collection grid */}
       {isLoading ? (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {[1, 2, 3].map((i) => (
             <div key={i} className="h-24 animate-pulse rounded-xl bg-accent" />
           ))}
@@ -62,7 +62,7 @@ export function CollectionList({
           </Button>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {collections.map((col) => (
             <CollectionCard
               key={col}
@@ -106,14 +106,8 @@ function CollectionCard({
   collection: string;
   onDelete: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
-
   return (
-    <div
-      className="relative group rounded-xl border border-border bg-card hover:border-input transition-colors"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div className="relative group rounded-xl border border-border bg-card hover:border-input transition-colors">
       <Link
         href={`/projects/${encodeURIComponent(project)}/${encodeURIComponent(collection)}`}
         className="block p-5"
@@ -127,17 +121,15 @@ function CollectionCard({
         </p>
       </Link>
 
-      {hovered && (
-        <button
-          onClick={(e) => {
-            e.preventDefault();
-            onDelete();
-          }}
-          className="absolute top-3 right-3 rounded-md px-2 py-1 text-xs bg-accent text-muted-foreground hover:bg-red-500/15 hover:text-red-700 border border-input hover:border-red-500/30 transition-colors"
-        >
-          Delete
-        </button>
-      )}
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          onDelete();
+        }}
+        className="absolute top-3 right-3 rounded-md px-2 py-1 text-xs bg-accent text-muted-foreground hover:bg-red-500/15 hover:text-red-700 border border-input hover:border-red-500/30 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-colors"
+      >
+        Delete
+      </button>
     </div>
   );
 }

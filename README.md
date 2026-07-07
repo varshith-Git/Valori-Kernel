@@ -122,7 +122,7 @@ flowchart TB
 | **Agent memory (MCP)** | `valori-mcp` — verifiable recall with BLAKE3 receipt; works with Claude Desktop |
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
 | **Valori Reranker** | Server-side hybrid retrieval — vector top-K pooled then re-scored by term frequency; 90% accuracy on hard lexical queries, 0.4 s latency, no external dependency |
-| **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
+| **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; `POST /v1/ingest/update` — diff-based document update (BLAKE3 content hash, re-embeds only changed chunks); works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
 | **Tree-RAG** | `POST /v1/tree/{build,query,verify}` — navigate a doc's table-of-contents to the right section with breadcrumb + line citations and a replayable BLAKE3 retrieval receipt; deterministic, no embeddings, catches tampering |
 | **Self-maintaining memory** | `consolidate` (supersede a memory) and `contradict` (flag conflicts) commit `Supersedes`/`Contradicts` edges to the audit chain |
 | **Multi-tenancy** | Up to 1 024 named collections; per-tenant API keys with RBAC |
@@ -385,6 +385,10 @@ from valoricore.remote import SyncRemoteClient
 db = SyncRemoteClient("http://localhost:3000")
 result = db.ingest(text, source="paper.pdf", strategy="auto", collection="research")
 print(f"{result['chunk_count']} chunks inserted, doc node {result['document_node_id']}")
+
+# Update the document later — only changed chunks are re-embedded:
+updated = db.ingest_update(result["document_node_id"], new_text, source="paper-v2.pdf")
+print(f"kept {updated['kept_count']}, added {updated['added_count']}, removed {updated['removed_count']}")
 ```
 
 **Tree-RAG — jump to the right section instead of similar text:**
@@ -440,6 +444,7 @@ cargo build --release -p valori-node
 VALORI_DIM=128 \
 VALORI_EVENT_LOG_PATH=./data/events.log \
 VALORI_SNAPSHOT_PATH=./data/snapshot.bin \
+VALORI_SNAPSHOT_INTERVAL=60 \
   ./target/release/valori-node
 
 # Tests

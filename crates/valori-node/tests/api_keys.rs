@@ -29,6 +29,7 @@ async fn spawn_node(
         auth_token.map(|s| s.to_string()),
         None,
         key_store,
+        std::sync::Arc::new(valori_effect::ReceiptStore::new(64)),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

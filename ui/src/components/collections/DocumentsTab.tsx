@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import useSWR, { useSWRConfig } from "swr";
 
+const ACCEPT = ".pdf,.txt,.md,.docx";
+
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 interface GraphNode {
@@ -91,17 +93,27 @@ function ChunkCard({ chunk }: { chunk: ChunkMeta }) {
   );
 }
 
+interface UpdateResult {
+  ok: boolean;
+  kept_count: number;
+  removed_count: number;
+  added_count: number;
+  new_chunk_count: number;
+}
+
 // -- Document card -------------------------------------------------------------
 function DocumentCard({
   nodeId,
   meta,
   namespace,
   onDeleted,
+  onUpdated,
 }: {
   nodeId: number;
   meta: DocMeta;
   namespace: string;
   onDeleted: (id: number) => void;
+  onUpdated: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [chunks, setChunks] = useState<ChunkMeta[] | null>(null);
@@ -110,6 +122,9 @@ function DocumentCard({
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const updateFileRef = useRef<HTMLInputElement>(null);
+  const [updating, setUpdating] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
 
   const loadChunks = useCallback(async () => {
     if (chunks !== null) return;
@@ -193,6 +208,31 @@ function DocumentCard({
     }
   };
 
+  const handleUpdateFile = async (file: File) => {
+    setUpdating(true);
+    setError(null);
+    setUpdateResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("document_node_id", String(nodeId));
+      form.append("collection", namespace);
+      form.append("chunkMode", "tree");
+      const res = await fetch("/api/ingest/update", { method: "POST", body: form });
+      const data = await res.json() as UpdateResult & { error?: string };
+      if (!res.ok || data.error) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setUpdateResult(data);
+      setChunks(null);
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const fullText = chunks?.map((c) => c.text).join("\n\n") ?? "";
   const filename = meta.filename ?? `Document ${nodeId}`;
   const ext = filename.split(".").pop()?.toUpperCase() ?? "";
@@ -200,72 +240,108 @@ function DocumentCard({
   return (
     <div className="relative rounded-xl border border-border bg-card overflow-hidden">
       {/* Header row */}
-      <button
+      <div
         onClick={toggle}
-        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-accent/40 transition-colors pr-28"
+        className="w-full flex items-center justify-between gap-4 px-5 py-4 text-left hover:bg-accent/40 transition-colors cursor-pointer select-none"
       >
-        {/* File type badge */}
-        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-accent border border-input flex items-center justify-center">
-          <span className="text-[9px] font-bold text-muted-foreground">{ext || "DOC"}</span>
-        </div>
+        <div className="flex items-center gap-4 flex-1 min-w-0">
+          {/* File type badge */}
+          <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-accent border border-input flex items-center justify-center">
+            <span className="text-[9px] font-bold text-muted-foreground">{ext || "DOC"}</span>
+          </div>
 
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground truncate">{filename}</p>
-          <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-            <span className="text-[11px] text-muted-foreground">
-              {meta.total_chunks ?? "?"} chunks
-            </span>
-            {meta.file_size && (
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-foreground truncate">{filename}</p>
+            <div className="flex items-center gap-3 mt-0.5 flex-wrap">
               <span className="text-[11px] text-muted-foreground">
-                {(meta.file_size / 1024).toFixed(0)} KB
+                {meta.total_chunks ?? "?"} chunks
               </span>
-            )}
-            {meta.ingested_at && (
-              <span className="text-[11px] text-muted-foreground">
-                {new Date(meta.ingested_at).toLocaleDateString(undefined, {
-                  month: "short", day: "numeric", year: "numeric",
-                })}
-              </span>
-            )}
-            {meta.provider && (
-              <span className="text-[10px] font-mono text-muted-foreground">
-                {meta.provider}/{meta.model}
-              </span>
-            )}
+              {meta.file_size && (
+                <span className="text-[11px] text-muted-foreground">
+                  {(meta.file_size / 1024).toFixed(0)} KB
+                </span>
+              )}
+              {meta.ingested_at && (
+                <span className="text-[11px] text-muted-foreground">
+                  {new Date(meta.ingested_at).toLocaleDateString(undefined, {
+                    month: "short", day: "numeric", year: "numeric",
+                  })}
+                </span>
+              )}
+              {meta.provider && (
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  {meta.provider}/{meta.model}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
-        <span className="text-muted-foreground text-xs flex-shrink-0 ml-2">
-          {open ? "▲" : "▼"}
-        </span>
+        {/* Right side controls: Update + Delete + Expand Arrow in normal flex flow */}
+        <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+          {error && !deleting && !updating && (
+            <span className="text-[10px] text-red-500 mr-1">{error}</span>
+          )}
+          <input
+            ref={updateFileRef}
+            type="file"
+            accept={ACCEPT}
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUpdateFile(f);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => updateFileRef.current?.click()}
+            disabled={updating}
+            title="Upload a new version of this document"
+            className="text-[10px] px-2 py-1 rounded border border-border text-muted-foreground hover:border-[var(--v-accent-ring)] hover:text-[var(--v-accent)] hover:bg-[var(--v-accent-muted)] disabled:opacity-40 transition-all"
+          >
+            {updating ? "updating…" : "update"}
+          </button>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            title={confirmDelete ? "Click again to confirm delete" : "Delete document"}
+            className={`text-[10px] px-2 py-1 rounded border transition-all ${
+              confirmDelete
+                ? "border-red-700 bg-red-950/60 text-red-400 animate-pulse"
+                : "border-border text-muted-foreground hover:border-red-800 hover:text-red-500 hover:bg-red-950/30"
+            } disabled:opacity-40`}
+          >
+            {deleting ? "deleting…" : confirmDelete ? "confirm?" : "delete"}
+          </button>
 
-        {/* Delete button — outside the toggle button to avoid nested buttons */}
-      </button>
-      {/* Delete control — rendered outside the toggle button */}
-      <div className="absolute top-3.5 right-12 flex items-center gap-1.5">
-        {error && !deleting && (
-          <span className="text-[10px] text-red-500">{error}</span>
-        )}
-        <button
-          onClick={handleDelete}
-          disabled={deleting}
-          title={confirmDelete ? "Click again to confirm delete" : "Delete document"}
-          className={`text-[10px] px-2 py-1 rounded border transition-all ${
-            confirmDelete
-              ? "border-red-700 bg-red-950/60 text-red-400 animate-pulse"
-              : "border-border text-muted-foreground hover:border-red-800 hover:text-red-500 hover:bg-red-950/30"
-          } disabled:opacity-40`}
-        >
-          {deleting ? "deleting…" : confirmDelete ? "confirm?" : "delete"}
-        </button>
+          <span
+            onClick={toggle}
+            className="text-muted-foreground text-xs flex-shrink-0 ml-1 p-1 hover:text-foreground transition-colors cursor-pointer"
+            title={open ? "Collapse" : "Expand"}
+          >
+            {open ? "▲" : "▼"}
+          </span>
+        </div>
       </div>
+
+      {/* Update result banner */}
+      {updateResult && (
+        <div className="border-t border-border px-5 py-3 bg-[var(--v-accent-muted)]">
+          <p className="text-xs font-medium text-[var(--v-accent)]">
+            Document updated
+          </p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {updateResult.kept_count} chunks kept · {updateResult.added_count} added · {updateResult.removed_count} removed · {updateResult.new_chunk_count} total
+          </p>
+        </div>
+      )}
 
       {/* Expanded reader */}
       {open && (
         <div className="border-t border-border">
           {loading && (
             <div className="flex items-center gap-2.5 px-5 py-8 text-xs text-muted-foreground">
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-zinc-300" />
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-foreground/60" />
               Loading {meta.total_chunks ?? ""} chunks…
             </div>
           )}
@@ -305,20 +381,31 @@ function DocumentCard({
 }
 
 // -- Tab root ------------------------------------------------------------------
+const PAGE_SIZE = 20;
+
 export function DocumentsTab({ namespace }: { namespace: string }) {
   const { mutate } = useSWRConfig();
-  const swrKey = `/api/graph/nodes?collection=${encodeURIComponent(namespace)}`;
-  const { data, isLoading } = useSWR<{ nodes: GraphNode[] }>(swrKey, fetcher, {
+  // kind=0 filters to Document nodes server-side — the node no longer has to
+  // ship every chunk/concept node in the namespace just so the UI can pick
+  // out the handful of documents.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const swrKey = `/api/graph/nodes?collection=${encodeURIComponent(namespace)}&kind=0&limit=${visibleCount}`;
+  const { data, isLoading } = useSWR<{ nodes: GraphNode[]; count: number }>(swrKey, fetcher, {
     refreshInterval: 15000,
   });
 
   const [deleted, setDeleted] = useState<Set<number>>(new Set());
-  const docNodes = (data?.nodes ?? [])
-    .filter((n) => n.kind === 0)
-    .filter((n) => !deleted.has(n.node_id));
+  const docNodes = (data?.nodes ?? []).filter((n) => !deleted.has(n.node_id));
+  const totalCount = data?.count ?? docNodes.length;
+  const hasMore = docNodes.length < totalCount;
 
   const handleDeleted = useCallback((id: number) => {
     setDeleted((prev) => new Set([...prev, id]));
+    mutate(swrKey);
+  }, [mutate, swrKey]);
+
+  const handleUpdated = useCallback(() => {
+    setDocMetas(new Map());
     mutate(swrKey);
   }, [mutate, swrKey]);
 
@@ -350,7 +437,7 @@ export function DocumentsTab({ namespace }: { namespace: string }) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2.5 py-10 text-xs text-muted-foreground">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-zinc-300" />
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-foreground/60" />
         Loading documents…
       </div>
     );
@@ -370,7 +457,7 @@ export function DocumentsTab({ namespace }: { namespace: string }) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-[11px] text-muted-foreground">
-        {docNodes.length} document{docNodes.length !== 1 ? "s" : ""} · click to read
+        {docNodes.length} of {totalCount} document{totalCount !== 1 ? "s" : ""} · click to read
       </p>
 
       {docNodes.map((n) => (
@@ -380,8 +467,18 @@ export function DocumentsTab({ namespace }: { namespace: string }) {
           meta={docMetas.get(n.node_id) ?? {}}
           namespace={namespace}
           onDeleted={handleDeleted}
+          onUpdated={handleUpdated}
         />
       ))}
+
+      {hasMore && (
+        <button
+          onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+          className="self-center rounded-lg border border-border bg-card px-4 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+        >
+          Load {Math.min(PAGE_SIZE, totalCount - docNodes.length)} more
+        </button>
+      )}
     </div>
   );
 }

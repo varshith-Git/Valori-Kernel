@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "valori-ui",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd ui && npm run dev"],
+      "port": 3001,
+      "autoPort": false
+    }
+  ]
+}

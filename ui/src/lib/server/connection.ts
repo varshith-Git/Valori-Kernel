@@ -40,7 +40,15 @@ if (!global.__valori_conn_url__ && !process.env.VALORI_API_URL) {
 }
 
 export function getApiUrl(): string {
-  return global.__valori_conn_url__ ?? process.env.VALORI_API_URL ?? "http://localhost:3000";
+  if (process.env.VALORI_API_URL) return process.env.VALORI_API_URL;
+  
+  // Read from history to support multi-worker Next.js dev server state sync
+  // and avoid stale global variables when switching projects.
+  const last = readHistory()[0];
+  if (last) {
+    return last.url;
+  }
+  return "http://127.0.0.1:3000";
 }
 
 export function setApiUrl(url: string, info?: Pick<SavedConnection, "dim" | "records" | "status">): void {
@@ -55,4 +63,18 @@ export function resetApiUrl(): void {
 
 export function getHistory(): SavedConnection[] {
   return readHistory();
+}
+
+export function removeUrlFromHistory(url: string): void {
+  const clean = url.replace(/\/+$/, "");
+  const list = readHistory().filter(h => h.url !== clean);
+  writeHistory(list);
+  
+  if (global.__valori_conn_url__ === clean) {
+    resetApiUrl();
+    const next = list[0];
+    if (next && !process.env.VALORI_API_URL) {
+      global.__valori_conn_url__ = next.url;
+    }
+  }
 }

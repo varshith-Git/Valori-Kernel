@@ -845,6 +845,7 @@ async fn ingest_routes_to_the_collections_shard() {
         None,
         std::sync::Arc::new(valori_node::api_keys::KeyStore::new(None)),
         &node_cfg,
+        std::sync::Arc::new(valori_effect::ReceiptStore::new(64)),
     );
 
     let (_, _, body) =
@@ -879,4 +880,112 @@ async fn ingest_routes_to_the_collections_shard() {
         .with_state(|s| s.record_count())
         .await;
     assert_eq!(shard0_records, 0, "none of tenant-a's ingest traffic should touch shard 0's data");
+}
+
+/// Phase S19: /v1/timeline on a multi-shard cluster must merge events from all
+/// shards and return them sorted by (timestamp_unix, shard_id, log_index).
+/// Each shard's log_index values must be strictly increasing in the merged output.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn timeline_merges_cross_shard_events_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("events.log");
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
+            .into_iter()
+            .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+        shard_count: 3,
+    };
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+
+    let router = build_cluster_router(&handle, handle.event_log_writer.clone());
+
+    // Create two collections that land on different shards (ns_id 1 → shard 1,
+    // ns_id 2 → shard 2 with shard_count=3).
+    let (_, _, body_a) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "alpha" })).await;
+    let ns_a = body_a["id"].as_u64().unwrap() as u16;
+    let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
+
+    let (_, _, body_b) =
+        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "beta" })).await;
+    let ns_b = body_b["id"].as_u64().unwrap() as u16;
+    let shard_b = valori_consensus::types::ShardId((ns_b as u32) % 3);
+
+    assert_ne!(shard_a, shard_b, "test requires two distinct shards");
+
+    // Insert one record into each collection so both shards have at least one event.
+    let (status, _, _) = post_json(
+        router.clone(),
+        "/v1/records",
+        serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0], "collection": "alpha" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, _) = post_json(
+        router.clone(),
+        "/v1/records",
+        serde_json::json!({ "values": [5.0, 6.0, 7.0, 8.0], "collection": "beta" }),
+    ).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fetch the merged timeline.
+    let (status, body) = get_json(router, "/v1/timeline").await;
+    assert_eq!(status, StatusCode::OK, "timeline must succeed: {body}");
+
+    let events = body["events"].as_array().expect("events array");
+    assert!(!events.is_empty(), "timeline must contain events from both shards");
+
+    // Every entry must have a shard_id field.
+    for e in events {
+        assert!(e.get("shard_id").is_some(), "each entry must carry shard_id: {e}");
+    }
+
+    // Collect shard_ids present — at least two distinct shards must appear.
+    let shard_ids: std::collections::HashSet<u64> = events
+        .iter()
+        .map(|e| e["shard_id"].as_u64().unwrap())
+        .collect();
+    assert!(
+        shard_ids.len() >= 2,
+        "timeline must contain events from at least two shards, got: {shard_ids:?}"
+    );
+
+    // Per-shard log_index must be strictly increasing in the merged output.
+    let mut shard_last: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    for e in events {
+        let sid = e["shard_id"].as_u64().unwrap();
+        let idx = e["log_index"].as_u64().unwrap();
+        if let Some(&prev) = shard_last.get(&sid) {
+            assert!(
+                idx > prev,
+                "shard {sid} log_index {idx} must be > previous {prev} in merged output"
+            );
+        }
+        shard_last.insert(sid, idx);
+    }
+
+    // Merged output must be sorted by (timestamp_unix, shard_id, log_index).
+    let keys: Vec<(u64, u64, u64)> = events
+        .iter()
+        .map(|e| (
+            e["timestamp_unix"].as_u64().unwrap(),
+            e["shard_id"].as_u64().unwrap(),
+            e["log_index"].as_u64().unwrap(),
+        ))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "timeline events must be sorted by (timestamp_unix, shard_id, log_index)");
 }

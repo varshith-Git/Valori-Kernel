@@ -105,12 +105,17 @@ export async function DELETE(
     if (docOk) deletedNodes++;
     else errors.push(`doc node ${docNodeId}: delete failed`);
 
-    return NextResponse.json({
-      ok: true,
-      deleted_records: deletedRecords,
-      deleted_nodes: deletedNodes,
-      errors: errors.length > 0 ? errors : undefined,
-    });
+    const ok = errors.length === 0;
+    return NextResponse.json(
+      {
+        ok,
+        deleted_records: deletedRecords,
+        deleted_nodes: deletedNodes,
+        errors: ok ? undefined : errors,
+        error: ok ? undefined : `${errors.length} step(s) failed — some data may be orphaned`,
+      },
+      { status: ok ? 200 : 500 }
+    );
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

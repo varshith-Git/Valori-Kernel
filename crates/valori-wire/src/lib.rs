@@ -57,8 +57,16 @@ use valori_kernel::event::KernelEvent;
 
 pub const VERSION_V2: u32 = 2;
 pub const VERSION_V3: u32 = 3;
+/// V4 adds a 4-byte CRC32 suffix to every entry for cheap inline corruption detection.
+/// Format: `[bincode(EntryV4)][u32 LE CRC32 of the bincode bytes]`
+/// The chain hash, header layout, and EntryV4 fields are identical to V3.
+pub const VERSION_V4: u32 = 4;
 pub const HEADER_SIZE_V2: usize = 16;
 pub const HEADER_SIZE_V3: usize = 48;
+/// V4 reuses the V3 header layout.
+pub const HEADER_SIZE_V4: usize = HEADER_SIZE_V3;
+/// Byte length of the per-entry CRC32 suffix in V4 segments.
+pub const CRC32_SUFFIX_LEN: usize = 4;
 
 // ── Phase 1.7 hardening constants (reserved; enforced in Phase 1.7) ──────────
 
@@ -215,6 +223,11 @@ pub struct EntryV3 {
     pub entry: LogEntry,
 }
 
+/// V4 on-disk entry — identical fields to V3; the CRC32 suffix is appended
+/// after the bincode bytes by `encode_entry` and checked by `decode_entry`.
+/// The chain-hash computation is identical to V3.
+pub type EntryV4 = EntryV3;
+
 /// Version-independent view of a decoded entry.
 #[derive(Debug, Clone)]
 pub struct DecodedEntry {
@@ -277,6 +290,25 @@ pub fn parse_header(bytes: &[u8]) -> Result<SegmentHeader> {
                 header_len: HEADER_SIZE_V3,
             })
         }
+        VERSION_V4 => {
+            if bytes.len() < HEADER_SIZE_V4 {
+                return Err(WireError::TooShort(bytes.len()));
+            }
+            let format_id = bytes[8];
+            if format_id != FORMAT_Q16_16 {
+                return Err(WireError::UnsupportedFormat(format_id));
+            }
+            let segment_seq = u32::from_le_bytes(bytes[12..16].try_into().unwrap());
+            let prev_segment_chain_head: [u8; 32] = bytes[16..48].try_into().unwrap();
+            Ok(SegmentHeader {
+                version,
+                dim,
+                format_id,
+                segment_seq,
+                prev_segment_chain_head,
+                header_len: HEADER_SIZE_V4,
+            })
+        }
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }
@@ -289,6 +321,23 @@ pub fn encode_header_v3(
 ) -> [u8; HEADER_SIZE_V3] {
     let mut bytes = [0u8; HEADER_SIZE_V3];
     bytes[0..4].copy_from_slice(&VERSION_V3.to_le_bytes());
+    bytes[4..8].copy_from_slice(&dim.to_le_bytes());
+    bytes[8] = format_id;
+    // bytes[9..12] reserved, zero
+    bytes[12..16].copy_from_slice(&segment_seq.to_le_bytes());
+    bytes[16..48].copy_from_slice(prev_segment_chain_head);
+    bytes
+}
+
+/// V4 header encoder — identical layout to V3, version field set to 4.
+pub fn encode_header_v4(
+    dim: u32,
+    format_id: u8,
+    segment_seq: u32,
+    prev_segment_chain_head: &[u8; 32],
+) -> [u8; HEADER_SIZE_V4] {
+    let mut bytes = [0u8; HEADER_SIZE_V4];
+    bytes[0..4].copy_from_slice(&VERSION_V4.to_le_bytes());
     bytes[4..8].copy_from_slice(&dim.to_le_bytes());
     bytes[8] = format_id;
     // bytes[9..12] reserved, zero
@@ -352,6 +401,39 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
                 n,
             ))
         }
+        VERSION_V4 => {
+            // Decode the bincode payload, then verify the 4-byte CRC32 suffix.
+            let (e, n): (EntryV4, usize) = bincode::serde::decode_from_slice(bytes, cfg())
+                .map_err(|e| {
+                    if e.to_string().contains("LimitExceeded") || e.to_string().contains("limit") {
+                        WireError::DecodeLimitExceeded
+                    } else {
+                        WireError::Decode(e.to_string())
+                    }
+                })?;
+            // CRC32 suffix immediately follows the bincode bytes.
+            if n + CRC32_SUFFIX_LEN > bytes.len() {
+                return Err(WireError::Decode("V4 entry truncated: missing CRC32 suffix".into()));
+            }
+            let stored_crc = u32::from_le_bytes(
+                bytes[n..n + CRC32_SUFFIX_LEN].try_into().unwrap()
+            );
+            let computed_crc = crc32fast::hash(&bytes[..n]);
+            if computed_crc != stored_crc {
+                return Err(WireError::Decode(format!(
+                    "V4 entry CRC32 mismatch: stored {stored_crc:#010x}, computed {computed_crc:#010x}"
+                )));
+            }
+            Ok((
+                DecodedEntry {
+                    prev_hash: e.prev_hash,
+                    wall_time_secs: e.wall_time_secs,
+                    request_id: e.request_id,
+                    entry: e.entry,
+                },
+                n + CRC32_SUFFIX_LEN,
+            ))
+        }
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }
@@ -359,6 +441,7 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
 /// Encode one entry for the given segment version.
 /// `request_id` is dropped (with no error) when encoding legacy v2 —
 /// callers should not pass one for v2 segments.
+/// V4 appends a 4-byte LE CRC32 of the bincode bytes after the payload.
 pub fn encode_entry(
     version: u32,
     prev_hash: &[u8; 32],
@@ -386,6 +469,21 @@ pub fn encode_entry(
             cfg(),
         )
         .map_err(|e| WireError::Encode(e.to_string())),
+        VERSION_V4 => {
+            let mut payload = bincode::serde::encode_to_vec(
+                &EntryV4 {
+                    prev_hash: *prev_hash,
+                    wall_time_secs,
+                    request_id,
+                    entry: entry.clone(),
+                },
+                cfg(),
+            )
+            .map_err(|e| WireError::Encode(e.to_string()))?;
+            let crc = crc32fast::hash(&payload);
+            payload.extend_from_slice(&crc.to_le_bytes());
+            Ok(payload)
+        }
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }
@@ -422,6 +520,8 @@ pub fn chain_advance(version: u32, head: &[u8; 32], e: &DecodedEntry) -> Result<
     match version {
         VERSION_V2 => Ok(chain_advance_v2(head, e.wall_time_secs, &e.entry)),
         VERSION_V3 => Ok(chain_advance_v3(head, e.wall_time_secs, e.request_id, &e.entry)),
+        // V4 chain hash is identical to V3 — CRC32 is only a transport check, not part of the chain.
+        VERSION_V4 => Ok(chain_advance_v3(head, e.wall_time_secs, e.request_id, &e.entry)),
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }

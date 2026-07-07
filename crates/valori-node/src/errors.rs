@@ -111,3 +111,23 @@ impl From<valori_kernel::error::KernelError> for EngineError {
         EngineError::Kernel(e)
     }
 }
+
+impl From<valori_state::StateError> for EngineError {
+    fn from(e: valori_state::StateError) -> Self {
+        match e {
+            valori_state::StateError::Kernel(k) => EngineError::Kernel(k),
+            valori_state::StateError::InvalidInput(s) => EngineError::InvalidInput(s),
+            valori_state::StateError::Io(io) => EngineError::InvalidInput(io.to_string()),
+        }
+    }
+}
+
+impl From<valori_storage::StorageError> for EngineError {
+    fn from(e: valori_storage::StorageError) -> Self {
+        match e {
+            valori_storage::StorageError::Kernel(k) => EngineError::Kernel(k),
+            valori_storage::StorageError::InvalidInput(s) => EngineError::InvalidInput(s),
+            valori_storage::StorageError::Io(io) => EngineError::InvalidInput(io.to_string()),
+        }
+    }
+}

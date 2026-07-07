@@ -356,6 +356,52 @@ class SyncRemoteClient(ValoriClient):
             data["source"] = source
         return self._post("/v1/ingest", data)
 
+    def ingest_update(
+        self,
+        document_node_id: int,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Update a previously ingested document with new text.
+
+        Diffs chunks by BLAKE3 content hash: unchanged chunks are kept
+        (no re-embed), removed chunks are soft-deleted, and only new or
+        changed chunks are embedded and inserted.
+
+        Returns a dict with:
+            ``ok``               — True on success
+            ``document_node_id`` — same ID passed in
+            ``strategy_used``    — chunking strategy applied
+            ``new_chunk_count``  — chunks in the new text
+            ``kept_count``       — unchanged chunks (not re-embedded)
+            ``removed_count``    — old chunks that were soft-deleted
+            ``added_count``      — new chunks that were embedded + inserted
+            ``record_ids``       — record IDs of all live chunks after update
+            ``collection``       — collection name
+
+        Example::
+
+            orig = client.ingest(text_v1, source="report.pdf")
+            updated = client.ingest_update(orig["document_node_id"],
+                                           text_v2, source="report.pdf")
+            print(f"kept {updated['kept_count']}, added {updated['added_count']}")
+        """
+        data: dict = {
+            "document_node_id": document_node_id,
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        }
+        if source is not None:
+            data["source"] = source
+        return self._post("/v1/ingest/update", data)
+
     # ── Tree-RAG: hierarchical retrieval with citations + replayable receipts ──
 
     def tree_build(self, text: str, doc_name: Optional[str] = None) -> dict:
@@ -815,6 +861,26 @@ class SyncRemoteClient(ValoriClient):
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get event-log proof: {e}")
 
+    def get_receipt(self) -> Dict[str, Any]:
+        """Return the most recently assembled Receipt from the server."""
+        url = self.base_url + "/v1/proof/receipt"
+        try:
+            resp = self.session.get(url, timeout=5)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get receipt: {e}")
+
+    def get_receipt_by_id(self, receipt_id: str) -> Dict[str, Any]:
+        """Return a specific Receipt by its receipt ID."""
+        url = f"{self.base_url}/v1/proof/receipt/{receipt_id}"
+        try:
+            resp = self.session.get(url, timeout=5)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get receipt '{receipt_id}': {e}")
+
     def get_version(self) -> str:
         """Return the node's software version (``CARGO_PKG_VERSION``)."""
         url = self.base_url + "/v1/version"
@@ -1079,9 +1145,11 @@ class SyncRemoteClient(ValoriClient):
             raise ConnectionError(f"Failed to check key status '{key_id}': {e}")
 
     def get_index_config(self) -> Dict[str, Any]:
-        """Return current index type and HNSW parameters.
+        """Return current index type and parameters.
 
         Returns ``{"index_type": str, "hnsw": dict | None}``.
+        ``index_type`` is one of ``"brute_force"``, ``"bq"``, ``"hnsw"``,
+        ``"ivf"``, or ``"auto(brute_force|bq|hnsw)"`` when auto-tier is active.
         For HNSW: ``{"m", "m_max0", "ef_construction", "ef_search"}``.
         """
         url = self.base_url + "/v1/index/config"
@@ -1091,6 +1159,62 @@ class SyncRemoteClient(ValoriClient):
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get index config: {e}")
+
+    def set_index(self, index: str) -> Dict[str, Any]:
+        """Switch the active search index and rebuild it from the live record pool.
+
+        ``index`` must be one of:
+
+        * ``"auto"``  — smart tier: brute-force < 10 k records, BQ 10 k–2 M,
+          HNSW > 2 M.  The node picks the right implementation automatically and
+          upgrades/downgrades as data grows.
+        * ``"brute"`` — exact L2 scan, best for < 10 k records.
+        * ``"bq"``    — 1-bit binary quantization with exact L2 rescore,
+          ~10× faster scan than brute-force.
+        * ``"hnsw"``  — approximate nearest-neighbour graph, sub-linear at scale.
+        * ``"ivf"``   — inverted-file index, good for 100 k+ dense vectors.
+
+        Returns ``{"ok": True, "index": str, "effective": str, "records": int}``.
+        ``effective`` is the concrete tier selected (relevant when ``index="auto"``).
+
+        Example::
+
+            c.set_index("auto")          # let the node decide
+            c.set_index("bq")            # explicit BQ
+            cfg = c.get_index_config()   # confirm
+        """
+        url = self.base_url + "/v1/index/rebuild"
+        try:
+            resp = self.session.post(url, json={"index": index}, timeout=30)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to rebuild index: {e}")
+
+    def shard_routing(self) -> Dict[str, Any]:
+        """Return the shard routing table — which collections are on which shard.
+
+        Works on both standalone (logical shards via ``VALORI_SHARD_COUNT``) and
+        cluster (Raft group shards).
+
+        Returns::
+
+            {
+                "mode":        "standalone" | "cluster",
+                "shard_count": int,
+                "shards": [
+                    {"shard": 0, "collections": ["default", ...]},
+                    ...
+                ]
+            }
+        """
+        url = self.base_url + "/v1/shard/routing"
+        try:
+            resp = self.session.get(url, timeout=10)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get shard routing: {e}")
 
     # ─────────────────────────────────────────────────────────────────────────
 
@@ -1591,6 +1715,29 @@ class AsyncRemoteClient:
             data["source"] = source
         return await self._post("/v1/ingest", data)
 
+    async def ingest_update(
+        self,
+        document_node_id: int,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> dict:
+        """Async version of SyncRemoteClient.ingest_update. See that method for full docs."""
+        data: dict = {
+            "document_node_id": document_node_id,
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+        }
+        if source is not None:
+            data["source"] = source
+        return await self._post("/v1/ingest/update", data)
+
     # ── Tree-RAG (async) — see SyncRemoteClient for full docs ─────────────────
 
     async def tree_build(self, text: str, doc_name: Optional[str] = None) -> dict:
@@ -1881,6 +2028,20 @@ class AsyncRemoteClient:
             _raise_for_status(resp)
             return await resp.json()
 
+    async def get_receipt(self) -> Dict[str, Any]:
+        """Return the most recently assembled Receipt from the server."""
+        url = self.base_url + "/v1/proof/receipt"
+        async with self.session.get(url) as resp:
+            _raise_for_status(resp)
+            return await resp.json()
+
+    async def get_receipt_by_id(self, receipt_id: str) -> Dict[str, Any]:
+        """Return a specific Receipt by its receipt ID."""
+        url = f"{self.base_url}/v1/proof/receipt/{receipt_id}"
+        async with self.session.get(url) as resp:
+            _raise_for_status(resp)
+            return await resp.json()
+
     async def get_version(self) -> str:
         """Return the node's software version."""
         url = self.base_url + "/v1/version"
@@ -2065,6 +2226,20 @@ class AsyncRemoteClient:
     async def get_index_config(self) -> Dict[str, Any]:
         """Async version of :meth:`SyncRemoteClient.get_index_config`."""
         url = self.base_url + "/v1/index/config"
+        async with self.session.get(url) as resp:
+            _raise_for_status(resp)
+            return await resp.json()
+
+    async def set_index(self, index: str) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.set_index`."""
+        url = self.base_url + "/v1/index/rebuild"
+        async with self.session.post(url, json={"index": index}) as resp:
+            _raise_for_status(resp)
+            return await resp.json()
+
+    async def shard_routing(self) -> Dict[str, Any]:
+        """Async version of :meth:`SyncRemoteClient.shard_routing`."""
+        url = self.base_url + "/v1/shard/routing"
         async with self.session.get(url) as resp:
             _raise_for_status(resp)
             return await resp.json()
@@ -2515,6 +2690,14 @@ class ClusterClient:
         """Event-log proof from a replica (see SyncRemoteClient.event_log_proof)."""
         return self._read_client().event_log_proof()
 
+    def get_receipt(self) -> Dict[str, Any]:
+        """Return the most recently assembled Receipt from a replica."""
+        return self._read_client().get_receipt()
+
+    def get_receipt_by_id(self, receipt_id: str) -> Dict[str, Any]:
+        """Return a specific Receipt from a replica by its ID."""
+        return self._read_client().get_receipt_by_id(receipt_id)
+
     def timeline(
         self,
         from_ts: Optional[str] = None,
@@ -2691,6 +2874,14 @@ class AsyncClusterClient:
     async def event_log_proof(self) -> Dict[str, Any]:
         """Event-log proof from a replica (see SyncRemoteClient.event_log_proof)."""
         return await self._read_client().event_log_proof()
+
+    async def get_receipt(self) -> Dict[str, Any]:
+        """Return the most recently assembled Receipt from a replica."""
+        return await self._read_client().get_receipt()
+
+    async def get_receipt_by_id(self, receipt_id: str) -> Dict[str, Any]:
+        """Return a specific Receipt from a replica by its ID."""
+        return await self._read_client().get_receipt_by_id(receipt_id)
 
     async def timeline(
         self,

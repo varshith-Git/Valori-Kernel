@@ -55,7 +55,7 @@ const TYPE_COLORS: Record<string, string> = {
   DELETE: "bg-red-500/15 text-red-700 border-red-500/30",
   SOFT_DELETE: "bg-amber-500/15 text-amber-700 border-amber-500/30",
   NODE: "bg-blue-500/15 text-blue-700 border-blue-500/30",
-  EDGE: "bg-purple-950 text-purple-400 border-purple-900",
+  EDGE: "bg-purple-500/15 text-purple-700 border-purple-500/30",
   UNKNOWN: "bg-card text-muted-foreground border-border",
 };
 
@@ -364,7 +364,7 @@ export default function AuditorPage() {
   const filtered = filter === "ALL" ? events : events.filter((e) => e.type === filter);
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -375,7 +375,7 @@ export default function AuditorPage() {
             </span>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Immutable audit chain · BLAKE3 proof · Document provenance
+            For auditors — share this link for third-party verification of the event log
           </p>
         </div>
         <Link
@@ -397,7 +397,7 @@ export default function AuditorPage() {
             onClick={() => setActiveTab(t)}
             className={`px-4 py-2 text-sm transition-colors border-b-2 -mb-px ${
               activeTab === t
-                ? "border-white text-foreground"
+                ? "border-foreground text-foreground"
                 : "border-transparent text-muted-foreground hover:text-accent-foreground"
             }`}
           >
@@ -503,8 +503,13 @@ function EventTable({ events }: { events: ParsedEvent[] }) {
       {events.map((e) => (
         <div key={e.index}>
           <div
-            className="grid grid-cols-[3.5rem_7rem_1fr_6rem] gap-3 items-center rounded-lg border border-border bg-card px-3 py-2.5 text-sm hover:border-input transition-colors cursor-pointer"
+            role="button"
+            tabIndex={0}
+            className="grid grid-cols-[3.5rem_7rem_1fr_6rem] gap-3 items-center rounded-lg border border-border bg-card px-3 py-2.5 text-sm hover:border-input focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--v-accent)] transition-colors cursor-pointer"
             onClick={() => toggle(e)}
+            onKeyDown={(ev) => {
+              if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(e); }
+            }}
           >
             <span className="font-mono text-xs text-muted-foreground">{e.index}</span>
             <span>

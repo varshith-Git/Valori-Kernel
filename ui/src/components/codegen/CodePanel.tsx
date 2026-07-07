@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useTheme } from "@/lib/theme";
 
 // -- Types ---------------------------------------------------------------------
 
@@ -291,21 +292,36 @@ function tokenize(code: string, lang: "python" | "typescript" | "curl"): Token[]
   return tokens;
 }
 
-const TOKEN_COLOR: Record<Token["kind"], string> = {
+// Two full palettes rather than one set of "works everywhere" colors: the
+// dark set is tuned for a near-black background, the light set for
+// near-white — reusing one hex for both leaves "plain" (the majority of any
+// snippet — punctuation, whitespace-adjacent identifiers) illegible in
+// whichever theme it wasn't tuned for.
+const TOKEN_COLOR_DARK: Record<Token["kind"], string> = {
   kw:      "#38bdf8",   // sky
   str:     "#4ade80",   // emerald
-  comment: "#52525b",   // zinc-600
+  comment: "#71717a",   // zinc-500
   num:     "#fb923c",   // orange
   fn:      "#fbbf24",   // amber
   plain:   "#d4d4d8",   // zinc-300
 };
+const TOKEN_COLOR_LIGHT: Record<Token["kind"], string> = {
+  kw:      "#0369a1",   // sky-700
+  str:     "#15803d",   // emerald-700
+  comment: "#71717a",   // zinc-500
+  num:     "#c2410c",   // orange-700
+  fn:      "#a16207",   // amber-700
+  plain:   "#3f3f46",   // zinc-700
+};
 
 function SyntaxCode({ code, lang }: { code: string; lang: "python" | "typescript" | "curl" }) {
+  const { theme } = useTheme();
+  const tokenColor = theme === "light" ? TOKEN_COLOR_LIGHT : TOKEN_COLOR_DARK;
   const tokens = tokenize(code, lang);
   return (
     <pre className="font-mono text-[12.5px] leading-[1.65] p-5 overflow-x-auto">
       {tokens.map((t, i) => (
-        <span key={i} style={{ color: TOKEN_COLOR[t.kind] }}>
+        <span key={i} style={{ color: tokenColor[t.kind] }}>
           {t.text}
         </span>
       ))}

@@ -3,23 +3,14 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Square, Loader2 } from "lucide-react";
-import { useProjectGroups } from "@/lib/hooks/useCollections";
+import { Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Pause, ArrowRight, Loader2 } from "lucide-react";
 import { useProjectManifest, type ManifestProject } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { useRelativeTime } from "@/lib/hooks/useRelativeTime";
+import type { ActivityEvent } from "@/app/api/activity/route";
 
-function relativeTime(iso?: string): string {
-  if (!iso) return "never opened";
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
 
 // ── Count-up hook ─────────────────────────────────────────────────────────────
 
@@ -60,7 +51,7 @@ function useCountUp(target: number | null, duration = 800): string {
 
 // ── Activity heatmap helpers ──────────────────────────────────────────────────
 
-const WEEKS = 18;
+const WEEKS = 48;
 const TOTAL_DAYS = WEEKS * 7;
 
 function isoDate(d: Date) {
@@ -139,9 +130,8 @@ function StatTile({
 
 // ── Usage stats card ──────────────────────────────────────────────────────────
 
-function UsageStats() {
+function UsageStats({ projects }: { projects: ManifestProject[] }) {
   const { online, recordCount, chainHeight, dim, fillPct, index, version, status } = useHealth();
-  const { groups } = useProjectGroups();
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [prevChain, setPrevChain] = useState<number | null>(null);
   const [chainGlowing, setChainGlowing] = useState(false);
@@ -150,9 +140,9 @@ function UsageStats() {
   const recordDisplay  = useCountUp(recordCount);
   const chainDisplay   = useCountUp(chainHeight);
   const collectDisplay = useCountUp(
-    groups.reduce((s, g) => s + g.collections.length, 0),
+    projects.reduce((s, p) => s + (p.collections?.length ?? 0), 0),
   );
-  const projectDisplay = useCountUp(groups.length);
+  const projectDisplay = useCountUp(projects.length);
 
   // Load persisted daily activity from localStorage
   useEffect(() => {
@@ -186,7 +176,7 @@ function UsageStats() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, chainHeight]);
 
-  const collectionCount = groups.reduce((s, g) => s + g.collections.length, 0);
+  const collectionCount = projects.reduce((s, p) => s + (p.collections?.length ?? 0), 0);
 
   const cells    = buildDayGrid(activity);
   const maxDelta = Math.max(...cells.map(c => c.delta), 1);
@@ -195,25 +185,25 @@ function UsageStats() {
     ? index === "BruteForce" ? "Brute-force" : index
     : "—";
 
-  const row1 = [
-    { label: "Records",       value: recordDisplay },
-    { label: "Chain events",  value: chainDisplay,  glow: chainGlowing },
-    { label: "Collections",   value: collectDisplay },
-    { label: "Projects",      value: projectDisplay },
+  const mainStats = [
+    { label: "Records",      value: recordDisplay },
+    { label: "Chain events", value: chainDisplay,  glow: chainGlowing },
+    { label: "Collections",  value: collectDisplay },
+    { label: "Projects",     value: projectDisplay },
   ];
-  const row2 = [
-    { label: "Dimension",   value: dim ? String(dim) : "—" },
-    { label: "Index type",  value: fmtIndex },
-    { label: "Capacity",    value: fillPct != null ? `${fillPct.toFixed(1)}%` : "—" },
-    { label: "Status",      value: online ? (status ?? "ok") : "offline", accent: online && status === "ok" },
+
+  const metaStats = [
+    { label: "dim",      value: dim ? String(dim) : "—" },
+    { label: "index",    value: fmtIndex },
+    { label: "capacity", value: fillPct != null ? `${fillPct.toFixed(1)}%` : "—" },
+    { label: "status",   value: online ? (status ?? "ok") : "offline", accent: online && status === "ok" },
   ];
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 flex flex-col gap-4">
+    <div className="rounded-2xl border border-border bg-card px-5 py-4 flex flex-col gap-3">
       {/* Header row */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {/* Breathing dot — green when online, amber when offline */}
           <span
             className={`inline-block h-2 w-2 rounded-full animate-breathe ${
               online ? "bg-emerald-500" : "bg-amber-500"
@@ -221,16 +211,27 @@ function UsageStats() {
           />
           <p className="text-sm font-semibold text-foreground">Overview</p>
         </div>
-        {version && (
-          <span className="text-[10px] font-mono text-muted-foreground px-2 py-0.5 rounded bg-accent border border-border/60">
-            v{version}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {/* Meta stats — compact inline */}
+          {metaStats.map((s) => (
+            <span key={s.label} className="text-[10px] text-muted-foreground font-mono">
+              {s.label}{" "}
+              <span className={s.accent ? "text-emerald-500" : "text-foreground"}>
+                {s.value}
+              </span>
+            </span>
+          ))}
+          {version && (
+            <span className="text-[10px] font-mono text-muted-foreground px-2 py-0.5 rounded bg-accent border border-border/60">
+              v{version}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Stat tiles — 2 rows of 4, staggered pop-in */}
-      <div className="grid grid-cols-4 gap-2.5">
-        {([...row1, ...row2] as { label: string; value: string; accent?: boolean; glow?: boolean }[]).map(
+      {/* Stat tiles — single row of 4 */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {(mainStats as { label: string; value: string; accent?: boolean; glow?: boolean }[]).map(
           (s, i) => (
             <StatTile
               key={s.label}
@@ -244,16 +245,16 @@ function UsageStats() {
         )}
       </div>
 
-      {/* Activity heatmap with staggered cell entrance */}
-      <div className="flex flex-col gap-1.5">
-        <p className="text-[10px] text-muted-foreground/60 font-mono">audit activity · {WEEKS} weeks</p>
+      {/* Activity heatmap */}
+      <div className="flex items-center gap-4 overflow-x-auto py-1">
+        <p className="text-[10px] text-muted-foreground/60 font-mono shrink-0">activity · {WEEKS}w</p>
         <div
           style={{
             display: "grid",
-            gridTemplateRows: "repeat(7, 11px)",
+            gridTemplateRows: "repeat(7, 9px)",
             gridAutoFlow: "column",
-            gridAutoColumns: "11px",
-            gap: "3px",
+            gridAutoColumns: "9px",
+            gap: "2px",
           }}
         >
           {cells.map((c, i) => {
@@ -269,7 +270,7 @@ function UsageStats() {
                 className="heat-cell"
                 title={`${c.date}${c.delta > 0 ? ` · +${c.delta} events` : ""}`}
                 style={{
-                  borderRadius: "3px",
+                  borderRadius: "2px",
                   backgroundColor: bg,
                   "--ci": col,
                 } as React.CSSProperties}
@@ -278,11 +279,6 @@ function UsageStats() {
           })}
         </div>
       </div>
-
-      {/* Fun fact */}
-      <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-border/50 pt-3">
-        {funFact(recordCount, dim, chainHeight, collectionCount)}
-      </p>
     </div>
   );
 }
@@ -325,16 +321,12 @@ function ProjectCard({
   delay?: number;
 }) {
   const isRunning  = project.status === "running" || project.status === "starting";
+  const openedLabel = useRelativeTime(project.lastOpenedAt);
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={e => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); }
-      }}
-      className="card-shimmer animate-fade-up group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 cursor-pointer hover:border-input hover:shadow-sm hover:scale-[1.01] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--v-accent)] transition-all duration-200"
+      onClick={() => !busy && onOpen()}
+      className="card-shimmer animate-fade-up group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 hover:border-[var(--v-accent)]/80 hover:shadow-md hover:shadow-[var(--v-accent)]/5 transition-all duration-200 cursor-pointer"
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       <div className="flex items-start justify-between gap-2">
@@ -344,7 +336,7 @@ function ProjectCard({
         <div className="flex items-center gap-1.5">
           <StatusPill status={project.status} nodesRunning={project.nodesRunning} nodesTotal={project.nodesTotal} />
           <button
-            onClick={e => { e.stopPropagation(); onDelete(); }}
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
             className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 rounded-md p-1 text-muted-foreground hover:text-red-700 hover:bg-red-500/15 transition-all"
             title="Delete project (clears lock + removes data)"
           >
@@ -354,17 +346,24 @@ function ProjectCard({
       </div>
 
       <div>
-        <p className="font-semibold text-foreground truncate">{project.name}</p>
+        <button
+          onClick={(e) => { e.stopPropagation(); !busy && onOpen(); }}
+          disabled={busy}
+          className="font-semibold text-foreground truncate hover:text-[var(--v-accent)] hover:underline transition-colors text-left focus:outline-none"
+        >
+          {project.name}
+        </button>
         <p className="text-[11px] text-muted-foreground mt-0.5">
-          opened {relativeTime(project.lastOpenedAt)}
+          opened {openedLabel}
           {project.records != null && project.records > 0 && <> · {project.records.toLocaleString()} records</>}
+          {project.collections && project.collections.length > 0 && <> · {project.collections.length} collection{project.collections.length !== 1 ? 's' : ''}</>}
         </p>
         {project.status === "error" && (
           <p className="text-[11px] text-red-500 mt-1">
             Node failed to start —{" "}
             <Link
               href="/logs"
-              onClick={e => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
               className="underline hover:text-red-400 transition-colors"
             >
               view logs →
@@ -378,30 +377,113 @@ function ProjectCard({
           :{project.port} · dim {project.dim}{project.nodesTotal > 1 && ` · ${project.nodesTotal} nodes`}
           {project.shardCount > 1 && ` · ${project.shardCount} shards`}
         </span>
-        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center gap-1.5">
           {isRunning ? (
-            <button
-              onClick={onClose}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-md border border-border bg-accent hover:bg-muted px-2.5 py-1 text-[11px] text-foreground disabled:opacity-50 transition-colors"
-              title="Snapshot & close session"
-            >
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <Square size={11} />}
-              Close
-            </button>
+            <>
+              <button
+                onClick={(e) => { e.stopPropagation(); onClose(); }}
+                disabled={busy}
+                className="h-7 w-7 flex items-center justify-center rounded-lg border border-red-500/40 bg-red-500/15 hover:bg-red-500/25 active:scale-[0.95] text-red-700 dark:text-red-400 disabled:opacity-50 transition-all shadow-sm"
+                title="Pause session (snapshot state & stop node)"
+              >
+                {busy ? <Loader2 size={13} className="animate-spin" /> : <Pause size={13} className="fill-current" />}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); !busy && onOpen(); }}
+                disabled={busy}
+                className="h-7 w-7 flex items-center justify-center rounded-lg border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 active:scale-[0.95] text-emerald-700 dark:text-emerald-400 disabled:opacity-50 transition-all shadow-sm"
+                title="Enter project dashboard"
+              >
+                {busy ? <Loader2 size={13} className="animate-spin" /> : <ArrowRight size={14} />}
+              </button>
+            </>
           ) : (
             <button
-              onClick={onOpen}
+              onClick={(e) => { e.stopPropagation(); !busy && onOpen(); }}
               disabled={busy}
-              className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-2.5 py-1 text-[11px] text-emerald-700 disabled:opacity-50 transition-colors"
-              title="Open session"
+              className="h-7 w-7 flex items-center justify-center rounded-lg border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 active:scale-[0.95] text-emerald-700 dark:text-emerald-400 disabled:opacity-50 transition-all shadow-sm"
+              title="Resume session (start node & open dashboard)"
             >
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-              Open
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} className="fill-current ml-0.5" />}
             </button>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Recent Activity ────────────────────────────────────────────────────────────
+
+const EVENT_DOT: Record<string, string> = {
+  InsertRecord:    "bg-emerald-400",
+  SoftDeleteRecord:"bg-amber-400",
+  DeleteRecord:    "bg-red-400",
+  CreateNode:      "bg-blue-400",
+  CreateEdge:      "bg-purple-400",
+  DeleteNode:      "bg-red-400",
+  DeleteEdge:      "bg-red-400",
+  CreateNamespace: "bg-sky-400",
+  DropNamespace:   "bg-orange-400",
+};
+
+function timeAgo(iso: string) {
+  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+function RecentActivity() {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [disabled, setDisabled] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/activity?limit=10")
+      .then((r) => r.json())
+      .then((d: { events?: ActivityEvent[]; disabled?: boolean }) => {
+        setDisabled(d.disabled === true);
+        setEvents(d.events ?? []);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (disabled || (events.length === 0 && !loading)) return null;
+
+  return (
+    <div className="animate-fade-up rounded-xl border border-border bg-card overflow-hidden" style={{ animationDelay: "140ms" }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <p className="text-xs font-semibold text-foreground">Recent activity</p>
+        <Link href="/search" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+          View timeline →
+        </Link>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-6">
+          <div className="h-4 w-4 rounded-full border-2 border-[var(--v-accent)] border-t-transparent animate-spin" />
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {events.map((e) => {
+            const dot = EVENT_DOT[e.event_type] ?? "bg-muted-foreground/40";
+            const detail = Object.entries(e.detail)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+              .join("  ");
+            return (
+              <div key={e.log_index} className="flex items-center gap-3 px-4 py-2 text-xs hover:bg-accent/30 transition-colors">
+                <span className={`h-2 w-2 rounded-full shrink-0 ${dot}`} />
+                <span className="font-mono font-medium text-foreground shrink-0 w-36 truncate">{e.event_type}</span>
+                <span className="font-mono text-muted-foreground flex-1 min-w-0 truncate" title={detail}>{detail}</span>
+                <span className="font-mono text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">{timeAgo(e.timestamp_iso)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -431,7 +513,7 @@ export default function HomePage() {
 
   return (
     <>
-      <div className="flex flex-col gap-6 max-w-5xl">
+      <div className="flex flex-col gap-6 w-full max-w-[1920px] mx-auto">
 
         {/* ── Header ── */}
         <div
@@ -442,7 +524,14 @@ export default function HomePage() {
             <h1 className="text-2xl font-semibold text-foreground tracking-tight">Projects</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {online
-                ? <>Active session · <span className="font-mono">{(recordCount ?? 0).toLocaleString()}</span> records · dim <span className="font-mono">{dim ?? "—"}</span></>
+                ? <>
+                    {projects.find(p => p.status === "running") && (
+                      <span className="font-medium text-foreground mr-1.5">
+                        {projects.find(p => p.status === "running")!.name}
+                      </span>
+                    )}
+                    <span className="font-mono">{(recordCount ?? 0).toLocaleString()}</span> records · dim <span className="font-mono">{dim ?? "—"}</span>
+                  </>
                 : <>Open a project to start its session — your data stays put between restarts.</>
               }
             </p>
@@ -470,8 +559,11 @@ export default function HomePage() {
           className="animate-fade-up"
           style={{ animationDelay: "80ms" }}
         >
-          <UsageStats />
+          <UsageStats projects={projects} />
         </div>
+
+        {/* ── Recent Activity ── */}
+        <RecentActivity />
 
         {/* ── Projects section header ── */}
         <div
@@ -488,7 +580,7 @@ export default function HomePage() {
 
         {/* ── Project grid ── */}
         {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
             {[1, 2, 3].map((_, i) => (
               <div
                 key={i}
@@ -499,31 +591,81 @@ export default function HomePage() {
           </div>
         ) : projects.length === 0 ? (
           <div
-            className="animate-fade-up rounded-xl border border-dashed border-border py-20 flex flex-col items-center gap-5"
+            className="animate-fade-up flex flex-col gap-6"
             style={{ animationDelay: "200ms" }}
           >
-            <div className="h-14 w-14 rounded-2xl bg-card border border-border flex items-center justify-center"
-              style={{ animation: "breathe 3s ease-in-out infinite" }}
-            >
-              <FolderOpen size={22} className="text-muted-foreground" />
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-foreground">No projects yet</p>
-              <p className="mt-1 text-xs text-muted-foreground max-w-xs">
-                Each project is its own isolated, persistent store under <code className="font-mono">~/.valori/projects</code>.
-                Create one to start ingesting documents.
+            {/* Quick-start guide */}
+            <div className="rounded-xl border border-[var(--v-accent)]/30 bg-[var(--v-accent-muted)] p-6">
+              <p className="text-xs font-semibold uppercase tracking-widest text-[var(--v-accent)] mb-4">
+                Get started in 3 steps
               </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {[
+                  {
+                    step: "1",
+                    title: "Create a project",
+                    desc: "Each project is an isolated, persistent vector store. Pick a name, leave dim at 768 for most embedding models.",
+                    action: "Create project →",
+                    onClick: () => setCreateOpen(true),
+                  },
+                  {
+                    step: "2",
+                    title: "Upload documents",
+                    desc: "Drop a PDF, DOCX, or TXT file. Valori chunks, embeds, and stores it — all linked in a tamper-evident audit chain.",
+                    action: null,
+                    onClick: null,
+                  },
+                  {
+                    step: "3",
+                    title: "Search & ask",
+                    desc: "Run vector similarity search or ask natural-language questions. Every answer is linked to its source chunks.",
+                    action: null,
+                    onClick: null,
+                  },
+                ].map((s) => (
+                  <div key={s.step} className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="h-5 w-5 rounded-full bg-[var(--v-accent)] text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+                        {s.step}
+                      </span>
+                      <span className="text-sm font-medium text-foreground">{s.title}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{s.desc}</p>
+                    {s.action && s.onClick && (
+                      <button
+                        onClick={s.onClick}
+                        className="mt-1 self-start text-xs font-medium text-[var(--v-accent)] hover:underline"
+                      >
+                        {s.action}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-            <button
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-border hover:border-[var(--v-accent)] hover:scale-[1.03] active:scale-[0.97] px-5 py-2.5 text-sm text-muted-foreground hover:text-foreground transition-all duration-150"
-            >
-              <Plus size={14} />
-              Create first project
-            </button>
+
+            {/* Quick-start preset CTA */}
+            <div className="rounded-xl border border-dashed border-border py-12 flex flex-col items-center gap-4">
+              <div className="h-12 w-12 rounded-2xl bg-card border border-border flex items-center justify-center">
+                <FolderOpen size={20} className="text-muted-foreground" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-foreground">No projects yet</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Recommended preset: <span className="font-mono">dim 768 · brute · 1M records</span> — works with OpenAI, nomic, and most open models.
+                </p>
+              </div>
+              <button
+                onClick={() => setCreateOpen(true)}
+                className="flex items-center gap-2 rounded-lg bg-[var(--v-accent)] px-5 py-2.5 text-sm font-medium text-white hover:opacity-90 transition-opacity"
+              >
+                <Plus size={14} />
+                Create first project
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
             {projects.map((p, i) => (
               <ProjectCard
                 key={p.name}
@@ -553,8 +695,8 @@ export default function HomePage() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index, replication, shardCount) => {
-          const entry = await create({ name, dim, index, replication, shardCount });
+        onCreate={async (name, dim, index, replication, shardCount, embed) => {
+          const entry = await create({ name, dim, index, replication, shardCount, embed });
           if (!entry) return;
           // Boot the new project's node(s) and route into it.
           setBusyName(name);

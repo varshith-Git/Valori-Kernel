@@ -59,8 +59,8 @@ pub fn decode_state(
     offset += 4;
 
     let schema_ver = read_u32(buf, &mut offset)?;
-    // We support V1 through V6
-    if schema_ver < 1 || schema_ver > 6 {
+    // We support V1 through V7
+    if schema_ver < 1 || schema_ver > 7 {
         return Err(KernelError::InvalidOperation); // Version mismatch
     }
 
@@ -298,6 +298,31 @@ pub fn decode_state(
     } else {
         // Reconstruct namespace lists — all records/nodes are in namespace 0
         state.rebuild_namespace_lists();
+    }
+
+    // V7: KernelState.meta. Absent in V1-V6 snapshots — those simply have no
+    // audited metadata (pre-dates the SetMeta-on-standalone-path fix).
+    if schema_ver >= 7 {
+        let meta_count = read_u32(buf, &mut offset)?;
+        for _ in 0..meta_count {
+            let key_len = read_u32(buf, &mut offset)? as usize;
+            if offset + key_len > buf.len() { return Err(KernelError::InvalidOperation); }
+            let key = alloc::string::String::from(
+                core::str::from_utf8(&buf[offset..offset + key_len])
+                    .map_err(|_| KernelError::InvalidOperation)?
+            );
+            offset += key_len;
+
+            let value_len = read_u32(buf, &mut offset)? as usize;
+            if offset + value_len > buf.len() { return Err(KernelError::InvalidOperation); }
+            let value = alloc::string::String::from(
+                core::str::from_utf8(&buf[offset..offset + value_len])
+                    .map_err(|_| KernelError::InvalidOperation)?
+            );
+            offset += value_len;
+
+            state.meta.insert(key, value);
+        }
     }
 
     Ok(state)

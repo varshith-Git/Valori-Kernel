@@ -15,6 +15,10 @@ use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 
 use crate::config::{NodeConfig, IndexKind, QuantizationKind};
+
+/// Auto-tier thresholds for `IndexKind::Auto`.
+const AUTO_TIER_BQ_MIN: usize   = 10_000;       // BruteForce → BQ
+const AUTO_TIER_HNSW_MIN: usize = 2_000_000;    // BQ → HNSW
 use crate::structure::index::{VectorIndex, BruteForceIndex};
 use crate::structure::quant::{Quantizer, NoQuantizer, ScalarQuantizer};
 use crate::wal_writer::WalWriter;
@@ -75,6 +79,8 @@ pub struct EngineHealth {
     /// Which embed provider is configured (e.g. "ollama", "openai"). Null if disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embed_provider: Option<String>,
+    /// Number of logical shards (VALORI_SHARD_COUNT). 1 = no sharding.
+    pub shard_count: usize,
 }
 
 /// Result of `Engine::try_recover()`.
@@ -159,6 +165,9 @@ pub struct Engine {
 
     // Config tracking
     pub index_kind: IndexKind,
+    /// For Auto mode: the concrete tier currently active. Equals `index_kind`
+    /// for all other modes (so health/metrics can always read this field).
+    pub current_effective_kind: IndexKind,
     pub quantization_kind: QuantizationKind,
     pub wal_path: Option<PathBuf>,
     pub snapshot_path: Option<PathBuf>,
@@ -253,35 +262,62 @@ pub struct Engine {
     /// Populated by `POST /v1/community/detect`; consumed by `/v1/community/search`.
     /// `None` until detection has run at least once.
     pub community_store: Option<crate::community::CommunityStore>,
+
+    // ── Standalone sharding ──────────────────────────────────────────────────
+    /// Number of logical shards in standalone mode (read from VALORI_SHARD_COUNT).
+    /// Namespaces are routed to shards via `namespace_id % shard_count`.
+    /// The shared KernelState and event log are still unified; sharding here is
+    /// routing metadata — it partitions namespace ownership for observability and
+    /// future per-shard index isolation. Default 1 = no sharding.
+    pub shard_count: usize,
 }
 
 impl Engine {
+    /// Construct a concrete index box for a given `IndexKind`.
+    /// `Auto` maps to BruteForce here — the caller is responsible for calling
+    /// `auto_tier_check()` after records are loaded so the right tier is selected.
+    fn make_index(kind: IndexKind, cfg: &NodeConfig) -> Box<dyn VectorIndex + Send + Sync> {
+        match kind {
+            IndexKind::BruteForce | IndexKind::Auto => Box::new(BruteForceIndex::new()),
+            IndexKind::Hnsw => {
+                use crate::structure::hnsw::{HnswIndex, HnswConfig};
+                let mut hnsw_cfg = HnswConfig::default();
+                if let Some(m) = cfg.hnsw_m {
+                    hnsw_cfg.m = m;
+                    hnsw_cfg.m_max0 = m * 2;
+                    hnsw_cfg.lambda = 1.0 / (m as f64).ln();
+                }
+                if let Some(ef) = cfg.hnsw_ef_construction { hnsw_cfg.ef_construction = ef; }
+                if let Some(ef) = cfg.hnsw_ef_search       { hnsw_cfg.ef_search = ef; }
+                Box::new(HnswIndex::new_with_config(hnsw_cfg))
+            }
+            IndexKind::Ivf => {
+                use crate::structure::ivf::{IvfIndex, IvfConfig};
+                let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
+                let ivf_cfg = IvfConfig {
+                    n_list:  cfg.ivf_n_list.unwrap_or(100),
+                    n_probe: cfg.ivf_n_probe.unwrap_or(10),
+                    auto_scale,
+                };
+                Box::new(IvfIndex::new(ivf_cfg, cfg.dim))
+            }
+            IndexKind::Bq => {
+                use crate::structure::bq::BqIndex;
+                Box::new(BqIndex::new())
+            }
+        }
+    }
+
     pub fn new(cfg: &NodeConfig) -> Self {
          // Initialize Index
-         let index: Box<dyn VectorIndex + Send + Sync> = match cfg.index_kind {
-              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
-              IndexKind::Hnsw => {
-                  use crate::structure::hnsw::{HnswIndex, HnswConfig};
-                  let mut hnsw_cfg = HnswConfig::default();
-                  if let Some(m) = cfg.hnsw_m {
-                      hnsw_cfg.m = m;
-                      hnsw_cfg.m_max0 = m * 2;
-                      hnsw_cfg.lambda = 1.0 / (m as f64).ln();
-                  }
-                  if let Some(ef) = cfg.hnsw_ef_construction { hnsw_cfg.ef_construction = ef; }
-                  if let Some(ef) = cfg.hnsw_ef_search       { hnsw_cfg.ef_search = ef; }
-                  Box::new(HnswIndex::new_with_config(hnsw_cfg))
-              },
-              IndexKind::Ivf => {
-                  use crate::structure::ivf::IvfIndex;
-                  let ivf_cfg = {
-                      use crate::structure::ivf::IvfConfig;
-                      let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
-                      IvfConfig { n_list: cfg.ivf_n_list.unwrap_or(100), n_probe: cfg.ivf_n_probe.unwrap_or(10), auto_scale }
-                  };
-                  Box::new(IvfIndex::new(ivf_cfg, cfg.dim))
-              }
+         // For Auto mode, start with BruteForce (empty DB) and let auto_tier_check
+         // upgrade it once records are inserted.
+         let initial_kind = match cfg.index_kind {
+             IndexKind::Auto => IndexKind::BruteForce,
+             other => other,
          };
+         let index: Box<dyn VectorIndex + Send + Sync> = Self::make_index(initial_kind, cfg);
+         let current_effective_kind = initial_kind;
 
         // Initialize Quantizer
         let quant: Box<dyn Quantizer + Send + Sync> = match cfg.quantization_kind {
@@ -353,6 +389,7 @@ impl Engine {
             index,
             quant,
             index_kind: cfg.index_kind,
+            current_effective_kind,
             quantization_kind: cfg.quantization_kind,
             wal_path: cfg.wal_path.clone(),
             snapshot_path: cfg.snapshot_path.clone(),
@@ -410,7 +447,15 @@ impl Engine {
             embed_config: crate::embedder::EmbedConfig::from_node_config(cfg),
             tree_cache: HashMap::new(),
             community_store: None,
+            shard_count: cfg.shard_count,
         }
+    }
+
+    /// Which logical shard owns a given namespace in standalone mode.
+    /// Mirrors `shard_for_namespace` in cluster_server.rs: `ns % shard_count`.
+    #[inline]
+    pub fn shard_for_ns(&self, namespace_id: u16) -> usize {
+        if self.shard_count <= 1 { 0 } else { namespace_id as usize % self.shard_count }
     }
 
     /// Current wall-clock time in unix seconds (decay reference clock).
@@ -470,6 +515,45 @@ impl Engine {
                 ))?;
         }
         Ok(())
+    }
+
+    /// Rebuild the `self.metadata` sidecar cache from the authoritative
+    /// `KernelState.meta` map (populated by event-log replay or a V7+
+    /// snapshot). Called after every recovery branch so `set_meta_audited`
+    /// data survives loss/corruption of the JSON sidecar file — the sidecar
+    /// is a convenience cache, `state.meta` is the source of truth.
+    fn sync_metadata_from_state(&mut self) {
+        for (key, value) in self.state.meta.iter() {
+            if let Ok(parsed) = serde_json::from_str(value) {
+                self.metadata.set(key.clone(), parsed);
+            }
+        }
+    }
+
+    /// Set a metadata key through the audited `KernelEvent::SetMeta` path
+    /// instead of writing only to the JSON sidecar. The value lands in the
+    /// BLAKE3-chained event log and `KernelState::meta` (the same field the
+    /// cluster path reads/writes), so it survives sidecar file loss/corruption
+    /// and is reconstructible by WAL replay — matching cluster-mode durability.
+    ///
+    /// The in-memory `self.metadata` sidecar is still updated (and flushed) so
+    /// existing read call sites (`engine.metadata.get`) keep working unchanged;
+    /// it is now a cache of `state.meta`, not the source of truth.
+    pub fn set_meta_audited(&mut self, key: String, value: serde_json::Value) -> Result<(), EngineError> {
+        let event = valori_kernel::event::KernelEvent::SetMeta {
+            key: key.clone(),
+            value: value.to_string(),
+        };
+
+        if let Some(ref mut committer) = self.event_committer {
+            committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+            self.apply_committed_event_ns(&event, 0)?;
+        } else {
+            self.state.apply_event_ns(&event, 0)?;
+        }
+
+        self.metadata.set(key, value);
+        self.flush_metadata()
     }
 
     /// Atomically persist the `NamespaceRegistry` to its sidecar file.
@@ -574,7 +658,11 @@ impl Engine {
             status,
             version: env!("CARGO_PKG_VERSION"),
             dim: self.state.dim.unwrap_or(self.dim),
-            index: format!("{:?}", self.index_kind),
+            index: if self.index_kind == IndexKind::Auto {
+                format!("auto({})", format!("{:?}", self.current_effective_kind).to_lowercase())
+            } else {
+                format!("{:?}", self.index_kind)
+            },
             persistence: persistence.to_string(),
             records: PoolStats {
                 live: live_records,
@@ -599,6 +687,7 @@ impl Engine {
             snapshot_path,
             embed_enabled: self.embed_config.is_some(),
             embed_provider: self.embed_config.as_ref().map(|c| c.provider.clone()),
+            shard_count: self.shard_count,
         }
     }
 
@@ -689,6 +778,9 @@ impl Engine {
             }
         }
 
+        // Auto-tier: check if we've crossed a tier boundary and rebuild if so.
+        self.auto_tier_check();
+
         // C4.1: stamp creation time for decay (live inserts only).
         self.created_at.insert(rid.0, Self::now_unix());
 
@@ -700,6 +792,22 @@ impl Engine {
     /// the client sent alongside the vector.
     pub fn reranker_insert(&mut self, record_id: u32, text: &str) {
         self.reranker.insert(record_id as u64, text);
+    }
+
+    /// Number of records currently indexed in the BM25 reranker corpus.
+    /// Used by tests to verify BCRP snapshot section survives roundtrip.
+    pub fn reranker_corpus_len(&self) -> usize {
+        self.reranker.corpus_len()
+    }
+
+    /// Rerank candidates using BM25 against `query_text`. Thin wrapper for tests.
+    pub fn reranker_rerank(&self, query_text: &str, _query_vec: &[f32], candidates: &[(u32, f32)]) -> Vec<(u32, f32)> {
+        let u64_candidates: Vec<(u64, f32)> = candidates.iter().map(|&(id, s)| (id as u64, s)).collect();
+        self.reranker
+            .rerank(query_text, u64_candidates)
+            .into_iter()
+            .map(|(id, s)| (id as u32, s))
+            .collect()
     }
 
     // ── Phase 3.6: Crypto-shredding ───────────────────────────────────────────
@@ -1460,9 +1568,10 @@ impl Engine {
     /// indexes like IVF, which need to see the full data distribution before
     /// computing centroids.
     pub fn rebuild_index(&mut self) {
-         // Replace the live index with a fresh empty one of the same type.
-         let blank: Box<dyn VectorIndex + Send + Sync> = match self.index_kind {
-              IndexKind::BruteForce => Box::new(BruteForceIndex::new()),
+         // For Auto mode use the currently active effective tier.
+         let target = self.effective_index_kind();
+         let blank: Box<dyn VectorIndex + Send + Sync> = match target {
+              IndexKind::BruteForce | IndexKind::Auto => Box::new(BruteForceIndex::new()),
               IndexKind::Hnsw => {
                   use crate::structure::hnsw::HnswIndex;
                   Box::new(HnswIndex::new_with_config(self.hnsw_config.clone()))
@@ -1472,11 +1581,55 @@ impl Engine {
                   let dim = self.state.dim.unwrap_or(0);
                   Box::new(IvfIndex::new(self.ivf_config.clone(), dim))
               }
+              IndexKind::Bq => {
+                  use crate::structure::bq::BqIndex;
+                  Box::new(BqIndex::new())
+              }
          };
          self.index = blank;
 
          // Batch-build from the full record set (critical for IVF centroid init).
          self.build_index();
+    }
+
+    /// Returns the concrete `IndexKind` that should be active right now.
+    /// For `Auto`, maps live record count to the appropriate tier.
+    /// For all other kinds, returns `self.index_kind` unchanged.
+    pub fn effective_index_kind(&self) -> IndexKind {
+        match self.index_kind {
+            IndexKind::Auto => {
+                let n = self.state.record_count();
+                if n >= AUTO_TIER_HNSW_MIN {
+                    IndexKind::Hnsw
+                } else if n >= AUTO_TIER_BQ_MIN {
+                    IndexKind::Bq
+                } else {
+                    IndexKind::BruteForce
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// For `Auto` mode: after every insert, check whether the live record count
+    /// has crossed a tier boundary and rebuild the index if so.
+    pub fn auto_tier_check(&mut self) {
+        if self.index_kind != IndexKind::Auto {
+            return;
+        }
+        let target = self.effective_index_kind();
+        // Determine what the current index type actually is.
+        let current = self.current_effective_kind;
+        if target != current {
+            tracing::info!(
+                from = ?current,
+                to   = ?target,
+                records = self.state.record_count(),
+                "auto-tier: switching index"
+            );
+            self.current_effective_kind = target;
+            self.rebuild_index();
+        }
     }
 
     /// Attempt crash recovery using the best available source, in priority order:
@@ -1523,8 +1676,13 @@ impl Engine {
                                         state_for_committer,
                                     ));
                                     self.rebuild_index();
+                                    self.auto_tier_check();
                                     self.rebuild_record_to_node();
                                     self.load_metadata().ok();
+                                    // state.meta (replayed from SetMeta events) is
+                                    // authoritative — fills in anything the JSON
+                                    // sidecar file lost or never had.
+                                    self.sync_metadata_from_state();
                                     // The event log does not carry collection
                                     // names; restore them from the sidecar.
                                     self.load_namespaces().ok();
@@ -1552,6 +1710,10 @@ impl Engine {
                         Ok(()) => {
                             tracing::info!("Snapshot recovery succeeded from {:?}", path);
                             self.load_metadata().ok();
+                            // state.meta (decoded from a V7+ snapshot) is
+                            // authoritative — fills in anything the JSON
+                            // sidecar file lost or never had.
+                            self.sync_metadata_from_state();
                             // Sidecar wins if present (it is written on every
                             // create/drop, so it is at least as fresh as NSRG).
                             self.load_namespaces().ok();
@@ -1592,6 +1754,8 @@ impl Engine {
         } else {
              self.rebuild_index();
         }
+        // After any restore, let auto-tier pick the right index for the loaded size.
+        self.auto_tier_check();
 
         // Always rebuild the derived record→node map after any restore
         self.rebuild_record_to_node();

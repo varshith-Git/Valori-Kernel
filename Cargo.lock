@@ -3702,6 +3702,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
+name = "ulid"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470dbf6591da1b39d43c14523b2b469c86879a53e8b758c8e090a470fe7b1fbe"
+dependencies = [
+ "rand 0.9.4",
+ "serde",
+ "web-time",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3875,6 +3886,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "valori-core"
+version = "0.2.4"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "valori-effect"
+version = "0.2.4"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "valori-core",
+ "valori-planner",
+]
+
+[[package]]
 name = "valori-kernel"
 version = "0.2.4"
 dependencies = [
@@ -3887,6 +3922,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.18",
+ "valori-core",
 ]
 
 [[package]]
@@ -3907,10 +3943,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "valori-metadata"
+version = "0.2.4"
+dependencies = [
+ "redb",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "ulid",
+ "valori-core",
+ "valori-wire",
+]
+
+[[package]]
 name = "valori-node"
 version = "0.2.4"
 dependencies = [
  "aes-gcm",
+ "async-trait",
  "axum",
  "axum-extra",
  "base64 0.22.1",
@@ -3941,6 +3993,65 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "valori-consensus",
+ "valori-core",
+ "valori-effect",
+ "valori-kernel",
+ "valori-metadata",
+ "valori-planner",
+ "valori-state",
+ "valori-storage",
+ "valori-wire",
+]
+
+[[package]]
+name = "valori-planner"
+version = "0.2.4"
+dependencies = [
+ "bincode",
+ "blake3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "valori-core",
+ "valori-metadata",
+]
+
+[[package]]
+name = "valori-state"
+version = "0.2.4"
+dependencies = [
+ "bincode",
+ "blake3",
+ "metrics",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "valori-core",
+ "valori-kernel",
+ "valori-storage",
+]
+
+[[package]]
+name = "valori-storage"
+version = "0.2.4"
+dependencies = [
+ "bincode",
+ "blake3",
+ "bytes",
+ "crc32fast",
+ "metrics",
+ "opendal",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "valori-core",
  "valori-kernel",
  "valori-wire",
 ]
@@ -3969,6 +4080,7 @@ version = "0.2.4"
 dependencies = [
  "bincode",
  "blake3",
+ "crc32fast",
  "serde",
  "thiserror 1.0.69",
  "valori-kernel",

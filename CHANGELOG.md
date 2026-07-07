@@ -7,6 +7,226 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Snapshot autosave + cluster lifecycle hardening (Phase 6.2)** — UI-launched project
+  nodes now pass `VALORI_SNAPSHOT_INTERVAL=60` so a periodic snapshot is written even if
+  the node is killed without a graceful close (the WAL was always durable; this keeps the
+  next open instant and survives WAL-file loss). The deprecation warning on
+  `VALORI_SNAPSHOT_INTERVAL` was removed — the replacement knobs
+  (`VALORI_SNAPSHOT_EVERY_EVENTS/BYTES`) were parsed but never implemented, so the
+  interval knob is the supported cadence control. Cluster mode gained a graceful-shutdown
+  handler (SIGTERM/Ctrl-C drains axum and lets redb close cleanly). The UI close route
+  now records the final record count in the manifest so at-rest project cards stay accurate.
+  Verified end-to-end: standalone and 3-node cluster projects survive
+  create → insert → close → reopen with records, collections, and search intact.
+  See `docs/phases/phase-6.2-snapshot-autosave.md`.
+
+### Fixed
+- **Cluster search returned raw Q16.16 fixed-point scores** — `/search` on the cluster
+  path serialized `score` as the raw `i64` kernel distance (e.g. `42954916`) instead of
+  the float conversion the standalone path applies (`0.0100…`). The cluster `SearchHit`
+  now divides by SCALE², matching standalone byte-for-byte across the plain, reranked,
+  and decay-ranked paths. One SDK client now sees identical score scales on both.
+- **Effect bus wiring for `POST /v1/records` (Phase A12)** — the standalone insert handler
+  now routes through `EffectBus → EngineKernelCapability → Engine` via `run_graph_inline`,
+  making the effect/planner pipeline live for the first time. `CapabilityRegistry` and
+  `TaskRegistry` are built at router startup and injected as axum Extensions.
+  `EffectError::Capacity` added so HTTP 507 (pool full) is still propagated correctly.
+  `capabilities.rs` updated to the final `apply_command(body: &KernelCommandBody) → serde_json::Value`
+  signature across all three kernel capability impls (`EngineKernelCapability`,
+  `RaftKernelCapability`, `NoRaftKernelCapability`).
+  See `docs/phases/phase-A12-effect-bus-wiring.md`.
+- **Cross-shard timeline ordering validation (Phase S19)** — `GET /v1/timeline` on a
+  multi-shard cluster now tags every event with `shard_id`, merges all shards' logs
+  with a deterministic composite sort key `(timestamp_unix, shard_id, log_index)`,
+  and actively rejects any shard log whose `log_index` sequence is non-monotonic in
+  the merged output (HTTP 500 with a descriptive error). Standalone path unchanged
+  (single shard, `shard_id: 0`). Covered by 1 new integration test.
+  See `docs/phases/phase-S19-cross-shard-ordering.md`.
+- **V4 event-log format with per-entry CRC32 (Phase S18)** — closes the silent
+  corruption window where a bit-flipped entry decoded as valid bincode and was applied
+  silently. New `VERSION_V4` segment: `encode_entry` appends a 4-byte LE CRC32 of the
+  bincode payload; `decode_entry` rejects on mismatch with a descriptive error before
+  the entry reaches the kernel. Chain hash is unchanged (CRC is transport-only, not
+  part of the BLAKE3 chain formula). V2/V3 segments decode unchanged. 6 new hardening
+  tests cover clean roundtrip, payload bit-flip, CRC tamper, and truncation.
+  See `docs/phases/phase-S18-v4-per-entry-crc32.md`.
+- **CRTS/BCRP snapshot roundtrip tests (Phase S17)** — 5 new tests in
+  `engine_snapshot_roundtrip.rs` covering: decay timestamps (`created_at`) survive
+  snapshot/restore; BM25 reranker corpus survives; both sections forward-compatible with
+  snapshots that predate them (silent skip, no panic). Added `Engine::reranker_corpus_len()`,
+  `Engine::reranker_rerank()`, `ValoriReranker::corpus_len()`.
+  See `docs/phases/phase-S17-crts-bcrp-snapshot-tests.md`.
+- **Multi-shard audit surface (Phase S16)** — `/v1/proof/event-log` now returns
+  BLAKE3 hashes for every shard under `shards: { "0": {...}, "1": {...} }` (top-level
+  `event_log_hash` is shard 0 for backward compat); `/v1/timeline` reads and merges
+  all shards' audit logs sorted by wall-clock time; root cause fixed:
+  `DataPlaneState.event_log_path` (shard 0 only) replaced with
+  `shard_event_log_paths: BTreeMap<ShardId, PathBuf>`.
+  See `docs/phases/phase-S16-multi-shard-audit-surface.md`.
+- **Real `OperationHash` + extended write coverage (Phase A11)** — receipt bridge now
+  uses the canonical RFC-0003 `OperationHash = BLAKE3(kind_discriminant ‖ bincode(inputs) ‖
+  bincode(policy))` — reproducible from planning parameters, no timestamps involved.
+  New `OperationKind`/`OperationInputs` variants: `Delete` and `BatchInsert`.
+  Receipt emission extended to `batch_insert`, `delete_record`, and `soft_delete_record`
+  on both standalone and cluster paths; cluster `delete_record` and `soft_delete_record`
+  switched to `raft_write_data` to capture `log_index` as `committed_height`.
+  See `docs/phases/phase-A11-real-op-hash.md`.
+- **Receipt bridge wired into live handlers (Phase A10)** — `GET /v1/proof/receipt` now
+  returns real per-operation receipts from actual HTTP traffic:
+  - New `receipt_bridge.rs` — `emit_write()` (mutating ops) and `emit_read()` (read-only
+    ops); each assembles a `Receipt` via `ReceiptAssembler` and pushes it into `ReceiptStore`.
+  - Standalone `insert_record` — captures `state_before`/`state_after` via `hash_state_blake3`
+    while holding the write lock; emits receipt after every successful insert.
+  - Standalone `search` — captures current state hash at entry; emits read receipt on both
+    no-decay and decay exit paths.
+  - Cluster `insert_record` — gets `state_before` from `sm.state_hash().await`; switches to
+    `raft_write_data` to read `resp.state_hash` + `resp.log_index` from the committed
+    `ClientResponse`; emits receipt with real Raft log index as `committed_height`.
+  - Cluster `search` — emits read receipt with shard state hash after results are computed.
+  See `docs/phases/phase-A10-receipt-bridge.md`.
+- **`RaftKernelCapability` in `valori-node` (Phase A9)** — real cluster `KernelCapability`
+  backed by `raft.client_write()`. `apply_command()` deserializes `event_json → KernelEvent`,
+  wraps in `ClientRequest { CURRENT_SCHEMA_VERSION, namespace_id, event, request_id }`, submits
+  via Raft, and returns the post-apply `state_hash` hex from `ValoriStateMachine::state_hash()`.
+  `NoRaftKernelCapability` renamed to a test-only stub (`is_available = false`).
+  See `docs/phases/phase-A9-node-cleanup.md`.
+- **`ReceiptAssembler` + `/v1/proof/receipt` (Phase A8)** — unified RFC-0003 proof type:
+  - `Receipt` — identity, what ran, execution contract, state transition, Merkle DAG.
+  - `ReceiptHash = BLAKE3(op_hash ‖ graph_hash ‖ state_before ‖ state_after ‖ sorted(parent_hashes) ‖ shard_id ‖ committed_height)` — `produced_at` excluded for determinism.
+  - `ReceiptAssembler` — collects `ReceiptFragment`s per execution, sorts by `task_index`, assembles the final `Receipt`.
+  - `verify_receipt()` — offline verifier: recompute hash, check fragment state chain, outer consistency.
+  - `ReceiptStore` — in-process last-256 cache; evicts oldest on overflow.
+  - `GET /v1/proof/receipt` — latest assembled receipt (both standalone and cluster).
+  - `GET /v1/proof/receipt/:id` — receipt by receipt_id (both standalone and cluster).
+  - `ReceiptStore` injected as `axum::Extension` into both routers.
+  See `docs/phases/phase-A8-receipt-assembler.md`.
+- **TaskRunner + real capabilities in `valori-node` (Phase A7)** — wires the effect
+  system into the live node:
+  - `EngineKernelCapability` — implements `KernelCapability` against `SharedEngine`:
+    deserializes `event_json → KernelEvent`, calls `apply_committed_event_ns()`,
+    returns the BLAKE3 state hash. Non-blocking `state_hash()` via `try_read()`.
+  - `HttpEmbedCapability` — implements `EmbedCapability` by delegating to the
+    existing `embed_batch()` HTTP client (Ollama / OpenAI / custom).
+  - `PassthroughHttpCapability` — implements `HttpCapability` for outbound fetches.
+  - `CapabilityRegistryBuilder` — assembles a `CapabilityRegistry` for standalone mode.
+  - `TaskRegistry` — maps all 12 `TaskKind`s to `Arc<dyn Task>` (Embed/InsertRecord/Search
+    are real; remaining kinds use `NoOpTask` until A8).
+  - `TaskRunner` — drives one `ExecutionGraph` in topological order: builds `TaskContext`,
+    resolves predecessor outputs, retries `TaskFailed` up to `policy.retry_limit`, marks
+    `ExecutionHandle` at each step.
+  - `run_graph()` — spawns a `TaskRunner` on the tokio runtime, returns `ExecutionHandle`.
+  3 unit tests; 0 failures. All prior tests unaffected.
+  See `docs/phases/phase-A7-task-runner.md`.
+- **`valori-effect` effect system crate (Phase A6)** — defines the single routing
+  layer between task execution and subsystems.
+  - `EffectId = BLAKE3(execution_id ‖ task_topological_index ‖ effect_index)` — stable
+    across retries; the bus deduplicates by this id, preventing double-writes.
+  - `EffectDurability`: `Durable` (bus awaits completion) vs `Ephemeral` (fire-and-forget).
+  - `EffectPayload` variants: `KernelWrite`, `Receipt`, `Audit`, `Counter`, `Gauge`.
+  - `EffectBus`: `dispatch()` (dedup-checked for Durable) + `dispatch_all()` (skips
+    duplicates silently). Routes `KernelWrite` → `KernelCapability::apply_command`,
+    `Receipt`/`Audit` → `ProofCapability::append_fragment`.
+  - 7 capability traits: `KernelCapability`, `EmbedCapability`, `LlmCapability`,
+    `StorageCapability`, `HttpCapability`, `ProofCapability`, `SchedulerCapability`.
+  - `CapabilityRegistry` — optional capabilities return `Err(CapabilityUnavailable)`.
+  - `Task` async trait + `TaskContext` (bus, capabilities, budget) + `TaskOutput`.
+  - Concrete tasks: `EmbedTask`, `InsertRecordTask` (Durable KernelWrite), `SearchTask`
+    (Durable ReceiptFragment, read-only proof), `NoOpTask`.
+  - `NoOpKernelCapability` for tests. 9 tests; 0 failures.
+  See `docs/phases/phase-A6-valori-effect.md`.
+- **`valori-planner` execution planning crate (Phase A5)** — converts `Operation`
+  + `PlanningContext` into a deterministic `ExecutionGraph` DAG.
+  - `Operation` — immutable unit of user intent: `hash = BLAKE3(kind ‖ inputs ‖ policy)`.
+    `OperationInputs` captures planning parameters only (k, collection, shard_id,
+    rerank, embed flags) — not actual data — so two searches with the same config
+    share the same cached graph.
+  - `PlannerFingerprint` — `BLAKE3(version ‖ routing_config_hash ‖ feature_flags_hash ‖ schema_version)`.
+    Changes when planner behavior changes.
+  - `PlanningContext` — fully-typed (no HashMap), deterministically serializable.
+    `PlanningContextHash = BLAKE3(bincode(context))`.
+  - `ExecutionGraph` — DAG of `TaskSpec`s. `GraphHash = BLAKE3(op_hash ‖ fp.hash ‖ ctx_hash ‖ topo_order)`.
+    Built with Kahn's topological sort; equal inputs always produce equal hash.
+  - `ExecutionCache` — bounded in-process `RwLock<HashMap>` cache.
+  - `ExecutionHandle` — `tokio::watch` channel wrapping `ExecutionStatus` lifecycle.
+  - `ExecutionRegistry` — top-level cache + active-handle index with `retire()`.
+  - `NoOpPlanner` + `IngestPlanner` — concrete `Planner` implementations.
+  - `plan_with_cache()` — two-layer cache lookup (in-process → durable `MetadataDb`) before fresh planning.
+  16 tests; 0 failures. See `docs/phases/phase-A5-valori-planner.md`.
+- **`valori-metadata` control-plane crate (Phase A4)** — redb-backed persistent
+  store for all control-plane types: `Project` (name, dir, port, dim, index,
+  shard_count, node_count, mode), `Collection` + `CollectionRegistry` (elevated
+  form of the node's inline `NamespaceRegistry`), `ShardTopology`, `SnapshotCatalog`
+  with `prunable(keep)` policy enforcement, `ExecutionRecord` + `ExecutionRetentionPolicy`
+  (stub), `PlannerCacheKey/Entry` (stub). `MetadataDb` uses 5 typed redb tables.
+  `valori-metadata` has no dependency on `valori-kernel` or `valori-storage` —
+  pure control-plane. 13 tests.
+  See `docs/phases/phase-A4-valori-metadata.md`.
+- **`valori-state` state lifecycle crate (Phase A3)** — corrects the Phase A2
+  placement error (`recovery.rs` was in `valori-storage` but orchestrates state
+  lifecycle, not raw I/O). New crate owns: `bootstrap` (crash recovery via event
+  log, WAL, or snapshot), `manifest` (`StateManifest` — which files make up
+  durable state), `lifecycle` (`StateLifecycle`: Recovering/Ready/Snapshotting),
+  `shutdown` (`shutdown_snapshot` — synchronous snapshot-on-close). `StateError`
+  wraps `StorageError` and `KernelError`. `valori-node` re-exports
+  `valori_state::bootstrap as recovery` — zero call-site changes.
+  See `docs/phases/phase-A3-valori-state.md`.
+- **Architecture specification (RFC-0)** — six RFC documents freeze the Valori
+  execution model before further crate creation:
+  - `rfcs/0000-glossary.md` — 16 canonical terms (Operation, ExecutionGraph,
+    Task, Effect, EffectBus, EffectDurability, KernelCommand, KernelEvent,
+    KernelABI, Receipt, KernelSnapshot, ExecutionSnapshot, KnowledgeGraph,
+    KernelState, ClusterState, PlannerFingerprint, PlanningContextHash,
+    Collection, Shard) each with Definition, Owner, Lifetime, and Invariant.
+  - `INVARIANTS.md` — 15 numbered system invariants (I-01 through I-15)
+    covering immutability, content-addressing, determinism, apply protocol,
+    task isolation, effect routing, shard atomicity, receipt assembly order,
+    and `no_std` boundary. Each tagged with the crates it governs.
+  - `COMPATIBILITY.md` — version policy for KernelABI, snapshot format (V5/V6),
+    event log format (v2/v3), PlannerFingerprint, wire types, HTTP API, and
+    rolling upgrade (two consecutive minor versions allowed simultaneously).
+  - `rfcs/0001-operation-lifecycle.md` — Operation, PlanningContext,
+    PlannerFingerprint, ExecutionGraph, ExecutionHandle, ExecutionRegistry
+    (split into Cache + History + Analytics), planner cache, lifecycle diagram.
+  - `rfcs/0002-kernel-contract.md` — KernelCommand, CommandId, exactly-once
+    dedup, apply protocol (DEDUP→APPLY→AUDIT), namespace isolation (3 points),
+    no_std boundary, one-Task-one-transaction, verifier contract, valori-state scope.
+  - `rfcs/0003-receipt-spec.md` — unified Receipt schema (KernelABI +
+    PlannerFingerprint + CapabilitySet + state_hash_before/after + Merkle DAG
+    parent_receipts), ReceiptFragment, ReceiptAssembler (topological sort, not
+    completion order), offline verification algorithm, migration path from
+    EventProof / MCP receipt / Tree-RAG receipt.
+  - `rfcs/0004-capability-model.md` — Capability trait hierarchy
+    (Kernel/Embed/Llm/Storage/Http/Proof/Scheduler), Effect enum variants with
+    EffectDurability, EffectBus (dispatch + dedup), Task trait + TaskContext,
+    capability checking at plan time.
+  - `rfcs/0005-crate-boundaries.md` — full dependency graph, per-crate ownership
+    table, no_std boundary line, phase sequencing constraints (A3→A9),
+    cargo-deny enforcement rules.
+- **`valori-storage` durable storage crate (Phase A2)** — WAL, event log,
+  event journal, crash recovery, and object store (S3/file) extracted from
+  `valori-node` into a new `valori-storage` crate. All 2,400+ lines of
+  storage code now live in one place with their own 23 tests. `valori-node`
+  re-exports all modules via `pub use valori_storage::*` so no existing
+  imports change. `StorageError` defined; `From<StorageError> for EngineError`
+  added for ergonomic propagation. See `docs/phases/phase-A2-valori-storage.md`.
+- **`valori-core` zero-dependency type crate (Phase A1)** — all platform
+  identity types (`RecordId`, `NodeId`, `EdgeId`, `NamespaceId`,
+  `CollectionId`, `ExecutionId`, `ShardId`, `ClusterEpoch`), domain enums
+  (`NodeKind`, `EdgeKind`), `Version`, and `CoreError` extracted into a new
+  `no_std` crate. `valori-kernel` re-exports from it; every other crate will
+  follow in subsequent phases. `valori-core` builds for
+  `wasm32-unknown-unknown` with no OS dependencies.
+  See `docs/phases/phase-A1-valori-core.md`.
+- **Document update with chunk-level diffing (Phase I8)** — new
+  `POST /v1/ingest/update` endpoint accepts a `document_node_id` (from a
+  prior `/v1/ingest` response) plus new text. Diffs old vs new chunks by
+  BLAKE3 content hash: unchanged chunks are kept in place (no re-embed),
+  removed chunks are soft-deleted (vector + graph node), and only genuinely
+  new or changed chunks hit the embedding provider. The document graph
+  node is reused so external edges remain valid. Works in both standalone
+  and cluster mode (shard-routed, all writes via Raft). Python SDK:
+  `ingest_update()` on both `SyncRemoteClient` and `AsyncRemoteClient`.
+  See `docs/phases/phase-I8-document-update.md`.
 - **Replication factor in the project-creation wizard (Phase 6.1)** — the
   UI's "New Project" dialog now offers "Single Node" or "3-Node Cluster"
   (Raft-replicated, tolerates 1 node down) as a first-class creation

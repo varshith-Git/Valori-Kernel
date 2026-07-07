@@ -1,6 +1,7 @@
 "use client";
 
-import { useEmbeddingConfig, PROVIDER_DEFAULTS, EmbeddingProvider } from "@/lib/hooks/useEmbeddingConfig";
+import { useState, useEffect } from "react";
+import { useEmbeddingConfig, PROVIDER_DEFAULTS, MODEL_DIMS, getModelDim, registerModelDims, EmbeddingProvider } from "@/lib/hooks/useEmbeddingConfig";
 
 const PROVIDERS: { id: EmbeddingProvider; label: string; note: string }[] = [
   { id: "openai", label: "OpenAI", note: "text-embedding-3-small / ada-002" },
@@ -18,6 +19,32 @@ const MODELS: Record<EmbeddingProvider, string[]> = {
 
 export function EmbeddingSelector() {
   const { config, setConfig, setProvider } = useEmbeddingConfig();
+
+  // Fetch live Ollama embedding models when provider is ollama
+  const [ollamaModels, setOllamaModels] = useState<string[] | null>(null);
+  const [ollamaErr, setOllamaErr] = useState(false);
+
+  useEffect(() => {
+    if (config.provider !== "ollama") return;
+    setOllamaModels(null);
+    setOllamaErr(false);
+    fetch("/api/ollama-models?type=embed")
+      .then((r) => r.json())
+      .then((d: { models: string[]; dims?: Record<string, number>; error?: string }) => {
+        if (d.error || d.models.length === 0) { setOllamaErr(true); return; }
+        if (d.dims) registerModelDims(d.dims);
+        setOllamaModels(d.models);
+        if (!d.models.includes(config.model)) setConfig({ model: d.models[0] });
+      })
+      .catch(() => setOllamaErr(true));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.provider]);
+
+  // Effective model list — live for Ollama, static for others
+  const modelList =
+    config.provider === "ollama"
+      ? (ollamaModels ?? MODELS[config.provider])
+      : MODELS[config.provider];
 
   return (
     <div className="flex flex-col gap-5">
@@ -50,14 +77,21 @@ export function EmbeddingSelector() {
       {/* Model selection */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-xs text-muted-foreground block mb-1.5">Model</label>
-          {MODELS[config.provider].length > 0 ? (
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs text-muted-foreground">Model</label>
+            {config.provider === "ollama" && (
+              <span className={`text-[10px] ${ollamaErr ? "text-amber-500" : ollamaModels ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+                {ollamaErr ? "⚠ ollama not reachable" : ollamaModels ? `${ollamaModels.length} embed models found` : "detecting…"}
+              </span>
+            )}
+          </div>
+          {modelList.length > 0 ? (
             <select
               value={config.model}
               onChange={(e) => setConfig({ model: e.target.value })}
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-card-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              {MODELS[config.provider].map((m) => (
+              {modelList.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>
@@ -66,7 +100,7 @@ export function EmbeddingSelector() {
               type="text"
               value={config.model}
               onChange={(e) => setConfig({ model: e.target.value })}
-              placeholder="e.g. text-embedding-3-small"
+              placeholder="e.g. nomic-embed-text"
               className="w-full rounded-lg border border-input bg-card px-3 py-2 text-sm text-card-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
           )}
@@ -112,53 +146,71 @@ export function EmbeddingSelector() {
       {/* Chunking */}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="text-xs text-muted-foreground block mb-1.5">
-            Chunk size <span className="text-muted-foreground">({config.chunkSize} chars)</span>
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs text-muted-foreground">Chunk size</label>
+            <input
+              type="number"
+              min="100"
+              max="100000"
+              value={config.chunkSize}
+              onChange={(e) => setConfig({ chunkSize: parseInt(e.target.value, 10) || 1000 })}
+              className="w-20 rounded border bg-background px-1.5 py-0.5 text-right text-xs font-mono text-foreground"
+            />
+          </div>
           <input
             type="range"
             min="200"
-            max="4000"
+            max="16000"
             step="100"
-            value={config.chunkSize}
+            value={Math.min(16000, config.chunkSize)}
             onChange={(e) => setConfig({ chunkSize: parseInt(e.target.value, 10) })}
             className="w-full"
           />
           <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-            <span>200</span><span>4000</span>
+            <span>200</span><span>16,000+</span>
           </div>
         </div>
         <div>
-          <label className="text-xs text-muted-foreground block mb-1.5">
-            Overlap <span className="text-muted-foreground">({config.chunkOverlap} chars)</span>
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs text-muted-foreground">Overlap</label>
+            <input
+              type="number"
+              min="0"
+              max="50000"
+              value={config.chunkOverlap}
+              onChange={(e) => setConfig({ chunkOverlap: parseInt(e.target.value, 10) || 0 })}
+              className="w-20 rounded border bg-background px-1.5 py-0.5 text-right text-xs font-mono text-foreground"
+            />
+          </div>
           <input
             type="range"
             min="0"
-            max="500"
+            max="4000"
             step="50"
-            value={config.chunkOverlap}
+            value={Math.min(4000, config.chunkOverlap)}
             onChange={(e) => setConfig({ chunkOverlap: parseInt(e.target.value, 10) })}
             className="w-full"
           />
           <div className="flex justify-between text-[10px] text-muted-foreground mt-0.5">
-            <span>0</span><span>500</span>
+            <span>0</span><span>4,000+</span>
           </div>
         </div>
       </div>
 
-      {/* Dimension hint */}
-      {PROVIDER_DEFAULTS[config.provider].dim > 0 && (
-        <div className="rounded-lg border border-border bg-card/50 px-4 py-3 text-xs text-muted-foreground">
-          Output dimension:{" "}
-          <span className="font-mono text-accent-foreground">
-            {PROVIDER_DEFAULTS[config.provider].dim}
-          </span>
-          {" "}— make sure{" "}
-          <code className="text-muted-foreground">VALORI_DIM={PROVIDER_DEFAULTS[config.provider].dim}</code>
-          {" "}on the server.
-        </div>
-      )}
+      {/* Dimension hint — driven by selected model, falls back to provider default */}
+      {(() => {
+        const dim = MODEL_DIMS[config.model] ?? PROVIDER_DEFAULTS[config.provider].dim;
+        if (!dim) return null;
+        return (
+          <div className="rounded-lg border border-border bg-card/50 px-4 py-3 text-xs text-muted-foreground">
+            Output dimension:{" "}
+            <span className="font-mono text-foreground font-medium">{dim}</span>
+            {" "}— make sure{" "}
+            <code className="font-mono">VALORI_DIM={dim}</code>
+            {" "}on the server.
+          </div>
+        );
+      })()}
     </div>
   );
 }

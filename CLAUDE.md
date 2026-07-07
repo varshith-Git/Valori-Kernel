@@ -2,6 +2,64 @@
 
 ---
 
+## Behavioral Guidelines (LLM Coding Standards)
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think Before Coding
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+**Minimum code that solves the problem. Nothing speculative.**
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+### 3. Surgical Changes
+**Touch only what you must. Clean up only your own mess.**
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+### 4. Goal-Driven Execution
+**Define success criteria. Loop until verified.**
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
 ## MANDATORY: after every phase is complete
 
 Do ALL of these before reporting the phase as done. No exceptions.
@@ -33,13 +91,19 @@ Read this first. It replaces cold-start greping for structure, invariants, and c
 
 | Crate | One-liner |
 |---|---|
-| `crates/valori-kernel` | The deterministic core: fixed-point vector store, knowledge graph, BLAKE3 audit chain, snapshot encode/decode |
-| `crates/valori-consensus` | Raft state machine + log store (openraft 0.9). Wraps the kernel as an openraft `RaftStateMachine`. |
-| `crates/valori-node` | HTTP server (axum) + cluster orchestration. Dispatches to either standalone engine or cluster mode. |
+| `crates/valori-kernel` | The deterministic core: fixed-point vector store, knowledge graph, BLAKE3 audit chain, snapshot encode/decode. `no_std`. |
+| `crates/valori-core` | Zero-dependency `no_std` type foundation (shared IDs, error types, traits). Every other crate depends on this; it depends on nothing except `serde` + `thiserror`. |
+| `crates/valori-wire` | Shared serialization types (serde structs) + V2/V3/V4 event-log format (encode/decode/chain). Used by node ↔ Python SDK ↔ CLI. |
+| `crates/valori-storage` | Durable storage layer: WAL, append-only event log (V4), crash recovery, object-store backend (S3/file). |
+| `crates/valori-state` | State lifecycle orchestration: transitions `KernelState` between durable storage and in-memory operation (snapshot restore, WAL replay). |
+| `crates/valori-metadata` | Control-plane persistence (redb): project config, collection name mappings, shard topology, snapshot catalog, execution history, planner cache. |
+| `crates/valori-planner` | Operation lifecycle + execution planning: turns `Operation` + `PlanningContext` into a DAG of `TaskSpec`s; two-layer cache (in-process + `MetadataDb`). Wired via `run_graph_inline` into `POST /v1/records` (standalone path, Phase A12). |
+| `crates/valori-effect` | Effect system: `EffectBus` routes kernel writes, receipt fragments, audit entries, and metrics from task execution. Defines the seven capability traits. Live for `POST /v1/records` (standalone path, Phase A12). |
+| `crates/valori-consensus` | Raft state machine + log store (openraft 0.9). Wraps the kernel as an openraft `RaftStateMachine`. Multi-shard: one `ValoriStateMachine` per `ShardId`. |
+| `crates/valori-node` | HTTP server (axum) + cluster orchestration. Dispatches to either standalone engine or cluster mode. Dual-path: `server.rs` (standalone) + `cluster_server.rs` (cluster). |
 | `crates/valori-cli` | `valori` binary — `setup` wizard, `cluster` subcommand, `timeline` subcommand |
-| `crates/valori-wire` | Shared serialization types (serde structs) used by node ↔ Python SDK ↔ CLI |
 | `crates/valori-ffi` | PyO3 FFI layer for the embedded (in-process) Python SDK |
-| `crates/valori-verify` | Standalone verifier binary — replays a `events.log` and checks the BLAKE3 chain |
+| `crates/valori-verify` | Standalone verifier binary — replays a `events.log` and checks the BLAKE3 chain; surfaces V4 CRC violations |
 | `crates/valori-mcp` | `valori-mcp` binary — Model Context Protocol server (stdio) exposing the node as verifiable agent memory; `memory_recall` returns a BLAKE3 receipt |
 | `python/valoricore` | Python SDK: `SyncRemoteClient`, `AsyncRemoteClient`, embedded `local.py` via FFI |
 
@@ -227,8 +291,10 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 | `VALORI_BIND` | 0.0.0.0:3000 | HTTP listen address |
 | `VALORI_EVENT_LOG_PATH` | — | Audit log path (omit = in-memory only) |
 | `VALORI_SNAPSHOT_PATH` | — | Snapshot file path |
+| `VALORI_SNAPSHOT_INTERVAL` | — | Periodic autosave interval in seconds (standalone only; needs `VALORI_SNAPSHOT_PATH`). UI-launched nodes set 60. Omit = snapshot only on graceful shutdown |
 | `VALORI_AUTH_TOKEN` | — | Bearer token (omit = no auth) |
-| `VALORI_INDEX` | brute | `brute`, `hnsw`, or `ivf` |
+| `VALORI_INDEX` | brute | `brute`, `hnsw`, `ivf`, `bq`, or `auto` (`auto` = brute-force < 10k, BQ 10k–2M, HNSW > 2M; `mstg` is an alias) |
+| `VALORI_SHARD_COUNT` | 1 | Standalone logical shards. Namespaces route via `ns_id % shard_count`. 1 = no sharding. |
 | `VALORI_IVF_N_LIST` | auto | IVF centroid count. Absent = auto-scale: `max(16, sqrt(N))` computed at each `build()`. Setting this disables auto-scale. |
 | `VALORI_IVF_N_PROBE` | auto | IVF probe count. Absent = auto-scale: `max(1, sqrt(n_list))`. Setting this disables auto-scale. |
 | `VALORI_DECAY_HALF_LIFE_SECS` | — | Phase C4.1 default decay half-life for search ranking; per-request `decay_half_life_secs` overrides. Omit/0 = no decay |
@@ -333,6 +399,11 @@ c.chunk_document(text, strategy="auto")  # chunking only — no embed
 c.ingest(text, source="paper.pdf", strategy="auto", collection="default")
 # → {"ok":True,"document_node_id":42,"chunk_count":31,"record_ids":[...],"strategy_used":"tree"}
 # Requires VALORI_EMBED_PROVIDER on the node. Returns 422 if not configured.
+
+# Document update (Phase I8) — diff by BLAKE3 content hash, re-embed only changed chunks
+c.ingest_update(42, new_text, source="paper-v2.pdf", collection="default")
+# → {"ok":True,"document_node_id":42,"new_chunk_count":35,"kept_count":28,
+#    "removed_count":3,"added_count":7,"record_ids":[...]}
 ```
 
 > SDK wraps all 40 product endpoints. `list_contradictions()` /
@@ -345,6 +416,10 @@ c.ingest(text, source="paper.pdf", strategy="auto", collection="default")
 >
 > **Phase I1/I2 additions:** `chunk_document(text, strategy=)`,
 > `ingest(text, source=, strategy=, collection=)` — available on both
+> `SyncRemoteClient` and `AsyncRemoteClient`.
+>
+> **Phase I8 addition:** `ingest_update(document_node_id, text, source=, strategy=, collection=)` —
+> diff-based document update; re-embeds only changed chunks. Available on both
 > `SyncRemoteClient` and `AsyncRemoteClient`.
 >
 > **Phase I5 additions:** `tree_build(text, doc_name=)`, `tree_query(tree_or_none, query, cache_key=, k=, prev_hash=)`,

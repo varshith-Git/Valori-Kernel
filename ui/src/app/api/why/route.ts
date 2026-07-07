@@ -166,6 +166,8 @@ interface WhyRequest {
   k?: number;
   collection?: string;
   question?: string;
+  /** How many top chunks to send to the LLM (default: 3). */
+  max_context_chunks?: number;
   // LLM config (optional — omit to skip synthesis)
   llm?: LLMConfig;
   // Tier-2 reranker (optional — omit to skip reranking)
@@ -202,7 +204,7 @@ function isReferenceChunk(text: string): boolean {
 export async function POST(req: NextRequest) {
   try {
     const body: WhyRequest = await req.json();
-    const { record_id, query_vector, k = 5, collection = "default", question, llm, reranker } = body;
+    const { record_id, query_vector, k = 5, collection = "default", question, max_context_chunks, llm, reranker } = body;
 
     const results: {
       record_id: number;
@@ -416,7 +418,8 @@ export async function POST(req: NextRequest) {
       // appears at char ~1100 of chunk 7). 3 chunks × 1500 = ~4500 chars, well
       // within llama3.2:3b's 8k token window.
       const MAX_CHUNK_CHARS = 1500;
-      const MAX_CHUNKS_FOR_LLM = 3;
+      // Use caller-supplied value (clamped 1–20); fall back to 3.
+      const MAX_CHUNKS_FOR_LLM = Math.min(20, Math.max(1, max_context_chunks ?? 3));
 
       const topChunks = rankedResults
         .filter((r) => r.metadata?.text)

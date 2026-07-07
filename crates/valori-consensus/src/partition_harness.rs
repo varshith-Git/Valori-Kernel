@@ -322,6 +322,267 @@ pub async fn insert_vector(
     resp.data.allocated_record_id.expect("no allocated_record_id in response")
 }
 
+// ── Sharded partition harness ─────────────────────────────────────────────────
+//
+// Per-shard partition simulation: each shard has its own independent Raft group
+// and its own partition plane. Blocking shard 0 between nodes 1↔3 does NOT
+// affect shard 1 between the same nodes — exactly the failure mode that a
+// per-shard TCP connection or port-level firewall rule would produce.
+
+use crate::types::ShardId;
+
+#[derive(Default, Clone)]
+pub struct ShardPartitionTable {
+    blocked: Arc<std::sync::Mutex<HashSet<(ShardId, NodeId, NodeId)>>>,
+}
+
+impl ShardPartitionTable {
+    pub fn block(&self, shard: ShardId, from: NodeId, to: NodeId) {
+        self.blocked.lock().unwrap().insert((shard, from, to));
+    }
+    pub fn block_both(&self, shard: ShardId, a: NodeId, b: NodeId) {
+        self.block(shard, a, b);
+        self.block(shard, b, a);
+    }
+    pub fn is_blocked(&self, shard: ShardId, from: NodeId, to: NodeId) -> bool {
+        self.blocked.lock().unwrap().contains(&(shard, from, to))
+    }
+    pub fn clear(&self) {
+        self.blocked.lock().unwrap().clear();
+    }
+
+    fn as_plain(&self, shard: ShardId) -> ShardPartitionView {
+        ShardPartitionView { inner: self.clone(), shard }
+    }
+}
+
+#[derive(Clone)]
+pub struct ShardPartitionView {
+    inner: ShardPartitionTable,
+    shard: ShardId,
+}
+
+impl ShardPartitionView {
+    pub fn is_blocked(&self, from: NodeId, to: NodeId) -> bool {
+        self.inner.is_blocked(self.shard, from, to)
+    }
+}
+
+pub struct ShardPartitionNetworkFactory {
+    source: NodeId,
+    view: ShardPartitionView,
+    registry: RaftRegistry,
+}
+
+impl RaftNetworkFactory<TypeConfig> for ShardPartitionNetworkFactory {
+    type Network = ShardPartitionNetwork;
+
+    async fn new_client(&mut self, target: NodeId, _node: &ValoriNode) -> ShardPartitionNetwork {
+        ShardPartitionNetwork {
+            source: self.source,
+            target,
+            view: self.view.clone(),
+            registry: self.registry.clone(),
+        }
+    }
+}
+
+pub struct ShardPartitionNetwork {
+    source: NodeId,
+    target: NodeId,
+    view: ShardPartitionView,
+    registry: RaftRegistry,
+}
+
+impl ShardPartitionNetwork {
+    fn check_partition<E: std::error::Error>(
+        &self,
+    ) -> Result<(), RPCError<NodeId, ValoriNode, E>> {
+        if self.view.is_blocked(self.source, self.target) {
+            Err(RPCError::Network(NetworkError::new(&PartitionedError)))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn target_raft<E: std::error::Error>(
+        &self,
+    ) -> Result<Raft, RPCError<NodeId, ValoriNode, E>> {
+        self.registry
+            .get(self.target)
+            .await
+            .ok_or_else(|| RPCError::Network(NetworkError::new(&PartitionedError)))
+    }
+}
+
+impl RaftNetwork<TypeConfig> for ShardPartitionNetwork {
+    async fn append_entries(
+        &mut self,
+        rpc: AppendEntriesRequest<TypeConfig>,
+        _option: RPCOption,
+    ) -> Result<AppendEntriesResponse<NodeId>, RPCError<NodeId, ValoriNode, RaftError<NodeId>>>
+    {
+        self.check_partition()?;
+        self.target_raft()
+            .await?
+            .append_entries(rpc)
+            .await
+            .map_err(|e| RPCError::RemoteError(RemoteError::new(self.target, e)))
+    }
+
+    async fn vote(
+        &mut self,
+        rpc: VoteRequest<NodeId>,
+        _option: RPCOption,
+    ) -> Result<VoteResponse<NodeId>, RPCError<NodeId, ValoriNode, RaftError<NodeId>>> {
+        self.check_partition()?;
+        self.target_raft()
+            .await?
+            .vote(rpc)
+            .await
+            .map_err(|e| RPCError::RemoteError(RemoteError::new(self.target, e)))
+    }
+
+    async fn install_snapshot(
+        &mut self,
+        rpc: InstallSnapshotRequest<TypeConfig>,
+        _option: RPCOption,
+    ) -> Result<
+        InstallSnapshotResponse<NodeId>,
+        RPCError<NodeId, ValoriNode, RaftError<NodeId, InstallSnapshotError>>,
+    > {
+        self.check_partition()?;
+        self.target_raft()
+            .await?
+            .install_snapshot(rpc)
+            .await
+            .map_err(|e| RPCError::RemoteError(RemoteError::new(self.target, e)))
+    }
+}
+
+/// Per-shard Raft + state machine pair.
+pub struct ShardRaftPair {
+    pub raft: Raft,
+    pub sm: ValoriStateMachine,
+}
+
+/// Spin up `n` nodes × `shard_count` independent Raft groups, all wired
+/// through a single `ShardPartitionTable` that supports per-shard blocking.
+///
+/// Returns `(shards, partition)` where `shards[shard_idx][node_idx]` is the
+/// `ShardRaftPair` for that shard on that node.
+pub async fn make_sharded_cluster(
+    n: usize,
+    shard_count: usize,
+) -> (Vec<Vec<ShardRaftPair>>, ShardPartitionTable) {
+    let partition = ShardPartitionTable::default();
+
+    let config = Arc::new(
+        Config {
+            heartbeat_interval: 50,
+            election_timeout_min: 150,
+            election_timeout_max: 300,
+            ..Default::default()
+        }
+        .validate()
+        .unwrap(),
+    );
+
+    let mut members: BTreeMap<NodeId, ValoriNode> = BTreeMap::new();
+    for i in 1..=(n as NodeId) {
+        members.insert(
+            i,
+            ValoriNode {
+                api_addr: format!("test-{i}:0"),
+                raft_addr: String::new(),
+            },
+        );
+    }
+
+    let mut shards: Vec<Vec<ShardRaftPair>> = Vec::with_capacity(shard_count);
+
+    for s in 0..shard_count {
+        let shard_id = ShardId(s as u32);
+        let registry = RaftRegistry::default();
+        let mut pairs = Vec::with_capacity(n);
+
+        for i in 1..=(n as NodeId) {
+            let sm = ValoriStateMachine::new(Box::new(MemoryAuditSink::new()), 0);
+            let factory = ShardPartitionNetworkFactory {
+                source: i,
+                view: partition.as_plain(shard_id),
+                registry: registry.clone(),
+            };
+            let raft = Raft::new(i, config.clone(), factory, ValoriLogStore::new(), sm.clone())
+                .await
+                .unwrap();
+            registry.register(i, raft.clone()).await;
+            pairs.push(ShardRaftPair { raft, sm });
+        }
+
+        pairs[0].raft.initialize(members.clone()).await.unwrap();
+        shards.push(pairs);
+    }
+
+    (shards, partition)
+}
+
+/// Wait for a leader in the given shard's Raft group. Returns `(node_index, leader_node_id)`.
+pub async fn wait_for_shard_leader(shard: &[ShardRaftPair]) -> (usize, NodeId) {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    loop {
+        for (i, pair) in shard.iter().enumerate() {
+            let m = pair.raft.metrics().borrow().clone();
+            if m.current_leader == Some(m.id) {
+                return (i, m.id);
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timeout: no shard leader after 5s");
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+    }
+}
+
+/// Wait until all state machines in the shard agree on BLAKE3 hash.
+pub async fn wait_for_shard_convergence(shard: &[ShardRaftPair]) {
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    loop {
+        let mut hashes = Vec::with_capacity(shard.len());
+        for pair in shard {
+            hashes.push(pair.sm.state_hash().await);
+        }
+        if hashes.windows(2).all(|w| w[0] == w[1]) {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timeout: shard hashes did not converge after 5s — {hashes:?}");
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+    }
+}
+
+/// Insert a vector into a shard's Raft leader.
+pub async fn insert_shard_vector(
+    raft: &Raft,
+    values: Vec<valori_kernel::types::scalar::FxpScalar>,
+) -> u32 {
+    let resp = raft
+        .client_write(ClientRequest {
+            event: valori_kernel::event::KernelEvent::AutoInsertRecord {
+                vector: valori_kernel::types::vector::FxpVector { data: values },
+                metadata: None,
+                tag: 0,
+            },
+            request_id: None,
+            schema_version: 0,
+            namespace_id: 0,
+        })
+        .await
+        .expect("client_write failed");
+    resp.data.allocated_record_id.expect("no allocated_record_id in response")
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ const TYPE_COLORS: Record<ParsedEvent["type"], string> = {
   DELETE: "bg-red-500/15 text-red-700 border-red-500/30",
   SOFT_DELETE: "bg-amber-500/15 text-amber-700 border-amber-500/30",
   NODE: "bg-blue-500/15 text-blue-700 border-blue-500/30",
-  EDGE: "bg-purple-950 text-purple-400 border-purple-900",
+  EDGE: "bg-purple-500/15 text-purple-700 border-purple-500/30",
   UNKNOWN: "bg-card text-muted-foreground border-border",
 };
 
@@ -82,10 +82,12 @@ export default function AuditPage() {
     ];
     const csv = rows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `valori-audit-${Date.now()}.csv`;
     a.click();
+    URL.revokeObjectURL(url);
   };
 
   const filtered =
@@ -93,7 +95,7 @@ export default function AuditPage() {
 
   if (error === "event-log-disabled") {
     return (
-      <div className="max-w-2xl">
+      <div className="w-full max-w-[1600px]">
         <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
         <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-6">
           <p className="text-sm font-medium text-amber-400">
@@ -114,12 +116,12 @@ cargo run -p valori-node`}
   }
 
   return (
-    <div className="flex flex-col gap-5 max-w-4xl">
+    <div className="flex flex-col gap-5 w-full max-w-[1600px]">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every mutation, in order, with BLAKE3 chaining
+            For you — browse every mutation in order, each BLAKE3-chained
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -19,6 +19,23 @@ interface SearchResult {
   score: number;
 }
 
+// `score` is Valori's raw L2² distance — SMALLER is a BETTER match. Convert
+// to a 0-100 "closeness" so the relevance bar's length matches the visual
+// convention (longer bar = better match) instead of the raw number's inverse
+// semantics (a bug: rendering `score` directly made worse matches draw longer
+// bars). Same formula as CodePanel's `cosineFromScore`.
+function closenessPct(score: number): number {
+  return Math.max(0, Math.min(100, (1 - score * 32768) * 100));
+}
+
+/** Extract a readable message from a failed /api/search response — the
+ *  backend returns `{ error }` JSON, so dumping the raw body (as this file
+ *  used to) showed the user a literal `{"error":"..."}` string. */
+async function searchErrorMessage(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null) as { error?: string } | null;
+  return body?.error ?? `Search failed (${res.status})`;
+}
+
 interface Props {
   namespace: string;
   dim: number | null;
@@ -111,7 +128,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
             collection: namespace,
           }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error(await searchErrorMessage(res));
         const data = await res.json();
         setResults(data.results ?? []);
         setStateHash(data.state_hash ?? null);
@@ -120,14 +137,15 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         // Search all and filter to that ID client-side
         const idNum = parseInt(idQuery, 10);
         if (isNaN(idNum)) throw new Error("Enter a valid integer ID");
+        if (dim == null) throw new Error("Server dimension not known yet — wait for health to load");
         // Zero-vec to get all, then filter
-        const zeroVec = Array(dim ?? 4).fill(0);
+        const zeroVec = Array(dim).fill(0);
         const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: zeroVec, k: 1000, collection: namespace }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error(await searchErrorMessage(res));
         const data = await res.json();
         const filtered = (data.results ?? []).filter(
           (r: SearchResult) => r.id === idNum
@@ -142,13 +160,14 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         } catch {
           throw new Error("Invalid regex pattern");
         }
-        const zeroVec = Array(dim ?? 4).fill(0);
+        if (dim == null) throw new Error("Server dimension not known yet — wait for health to load");
+        const zeroVec = Array(dim).fill(0);
         const res = await fetch("/api/search", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: zeroVec, k, collection: namespace }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) throw new Error(await searchErrorMessage(res));
         const data = await res.json();
         const filtered = (data.results ?? []).filter((r: SearchResult) =>
           re.test(String(r.id))
@@ -393,9 +412,15 @@ function HybridInput({
 }) {
   return (
     <>
-      <div className="rounded-lg border border-amber-900 bg-amber-950/40 px-4 py-3">
-        <p className="text-xs text-amber-400 font-medium">Hybrid mode — semantic only for now</p>
-        <p className="text-xs text-amber-700 mt-0.5">
+      <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground font-mono">⊕</span>
+          <p className="text-xs font-semibold text-foreground">Hybrid mode — semantic only for now</p>
+          <span className="text-[10px] rounded px-1.5 py-0.5 bg-accent text-muted-foreground border border-input">
+            preview
+          </span>
+        </div>
+        <p className="text-xs text-muted-foreground leading-relaxed">
           Text component requires an embedding model. The vector below will be used
           at full weight. Text+vector fusion is a planned backend feature.
         </p>
@@ -406,7 +431,7 @@ function HybridInput({
         busyLabel="Searching…" subMode="vector" setSubMode={() => {}} embedLabel=""
       />
       <div className="flex items-center gap-3">
-        <label className="text-xs text-muted-foreground">Semantic weight</label>
+        <label className="text-xs font-medium text-foreground">Semantic weight</label>
         <input
           type="range"
           min={0}
@@ -414,9 +439,9 @@ function HybridInput({
           step={0.05}
           value={weight}
           onChange={(e) => setWeight(parseFloat(e.target.value))}
-          className="w-32 accent-white"
+          className="w-32 accent-primary cursor-pointer"
         />
-        <span className="text-xs font-mono text-muted-foreground">{weight.toFixed(2)}</span>
+        <span className="text-xs font-mono font-medium text-foreground">{weight.toFixed(2)}</span>
       </div>
     </>
   );
@@ -619,7 +644,7 @@ function ResultsTable({
                     <div className="flex items-center gap-3">
                       <div
                         className="h-1.5 rounded-full bg-emerald-500/60"
-                        style={{ width: `${Math.max(4, (r.score * 80))}px` }}
+                        style={{ width: `${Math.max(4, closenessPct(r.score) * 0.8)}px` }}
                       />
                       <span className="font-mono text-xs text-muted-foreground">
                         {r.score.toFixed(4)}

@@ -43,7 +43,7 @@ async function embedOne(text: string, cfg: EmbedConfig): Promise<number[]> {
         .replace(/\/api\/embed(?:dings)?$/, "")
         .replace(/\/$/, "");
       const model = cfg.model || "nomic-embed-text";
-      const safeText = text.slice(0, 6000);
+      const safeText = text.slice(0, 1800);
 
       let res = await fetch(`${base}/api/embed`, {
         method: "POST",

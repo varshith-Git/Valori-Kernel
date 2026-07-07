@@ -77,9 +77,9 @@ replication may briefly lag behind the leader's list.
 
 ---
 
-## Built-in Ingest Pipeline (Phase I1/I2/I3)
+## Built-in Ingest Pipeline (Phase I1/I2/I3/I8)
 
-Two endpoints that handle chunking and optionally embedding entirely on the node.
+Three endpoints that handle chunking, embedding, and document lifecycle entirely on the node.
 
 ### Chunking only — `POST /v1/ingest/document`
 
@@ -132,9 +132,35 @@ curl -X POST http://localhost:3000/v1/ingest \
 
 `/health` now includes `"embed_enabled": true` and `"embed_provider": "ollama"` when embedding is configured. The UI uses this to auto-detect which pipeline to use.
 
+### Document update — `POST /v1/ingest/update` (Phase I8)
+
+Updates a previously ingested document without re-embedding unchanged chunks.
+Uses BLAKE3 content hashing to diff old vs new chunks at the text level.
+
+```bash
+curl -X POST http://localhost:3000/v1/ingest/update \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_node_id": 42,
+    "text": "1 Introduction\nUpdated content...\n2 Methods\n...",
+    "source": "paper-v2.pdf",
+    "collection": "default"
+  }'
+# → {"ok":true,"document_node_id":42,"strategy_used":"tree",
+#    "new_chunk_count":35,"kept_count":28,"removed_count":3,
+#    "added_count":7,"record_ids":[1,2,...35],"collection":"default"}
+```
+
+**Diff algorithm:**
+- Unchanged chunks (same BLAKE3 hash) → kept as-is, not re-embedded
+- Removed chunks (old hash not in new set) → soft-deleted + graph node removed
+- New/changed chunks → embedded, inserted, new Chunk node + ParentOf edge
+
+The Document graph node is reused — external edges pointing to it remain valid.
+
 ### Cluster mode (Phase I4)
 
-`POST /v1/ingest` works identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
+`POST /v1/ingest` and `POST /v1/ingest/update` work identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
 
 ---
 
@@ -443,6 +469,13 @@ handler: on `SIGTERM` or `Ctrl-C` it writes a final snapshot to `VALORI_SNAPSHOT
 (when set) before exiting, so the next start is instant. The event log already guarantees
 durability — this only avoids a full replay. No configuration required.
 
+**Periodic autosave (Phase 6.2).** Set `VALORI_SNAPSHOT_INTERVAL=<secs>` (with
+`VALORI_SNAPSHOT_PATH`) to also write the snapshot on a fixed cadence, so an
+ungraceful kill (`SIGKILL`, power loss) still leaves a recent snapshot behind.
+UI-launched project nodes set 60. Standalone only — cluster durability rides on
+the persisted Raft log instead. Cluster mode has its own graceful-shutdown
+handler (drains HTTP, lets redb close cleanly); it does not write snapshot files.
+
 ---
 
 ## Proofs & Audit
@@ -451,6 +484,8 @@ durability — this only avoids a full replay. No configuration required.
 |---|---|---|
 | `/v1/proof/state` | `GET` | BLAKE3 hash of the current engine state (hex). |
 | `/v1/proof/event-log` | `GET` | BLAKE3 hash of the immutable event log (hex). |
+| `/v1/proof/receipt` | `GET` | Most recently assembled `Receipt` (RFC-0003); `404` if none. |
+| `/v1/proof/receipt/:id` | `GET` | Receipt by `receipt_id`; `404` if not found. |
 
 ```bash
 curl http://localhost:3000/v1/proof/state
@@ -714,3 +749,30 @@ Key test suites:
 | `tests/api.rs` | All HTTP endpoints, status codes, and response shapes. |
 | `tests/api_batch_idempotency.rs` | 4 tests: per-item dedup, mixed batches, backward compat, fully-deduped batch. |
 | `tests/api_index_config.rs` | 5 tests: brute-force config, HNSW defaults, custom M derivation, ef_search, all params. |
+
+## Effect system integration (Phases A7–A9)
+
+`valori-node` wires the `valori-effect` capability model into the live node subsystems:
+
+| Module | Role |
+|---|---|
+| `src/capabilities.rs` | Concrete capability implementations: `EngineKernelCapability` (standalone — `SharedEngine`), `RaftKernelCapability` (cluster — `raft.client_write()` + `state_hash()`), `HttpEmbedCapability`, `PassthroughHttpCapability`, `CapabilityRegistryBuilder` |
+| `src/runner.rs` | `TaskRegistry` (maps 12 `TaskKind`s to `Arc<dyn Task>`), `TaskRunner` (topological execution, predecessor threading, retry), `run_graph()` |
+
+`ReceiptStore` is available as `axum::Extension<Arc<ReceiptStore>>` in every handler.
+Receipts are assembled by `ReceiptAssembler` (in `valori-effect`) and stored in the node-local
+in-process store (last 256 receipts).
+
+**Handlers that emit receipts (Phase A10/A11) — standalone + cluster:**
+
+| Handler | Kind | State captured |
+|---|---|---|
+| `insert_record` | `OperationKind::Ingest` | `state_before` + `state_after` via `hash_state_blake3` (standalone) or SM hash (cluster) |
+| `batch_insert` | `OperationKind::BatchInsert` | Same pattern; `count` captured in `OperationInputs` |
+| `delete_record` | `OperationKind::Delete { mode: "hard" }` | Cluster path uses `raft_write_data` for `log_index` |
+| `soft_delete_record` | `OperationKind::Delete { mode: "soft" }` | Cluster path uses `raft_write_data` for `log_index` |
+| `search` | `OperationKind::Search` | Read-only; state captured at handler entry |
+
+The `op_hash` in every receipt is `BLAKE3(kind_discriminant ‖ bincode(inputs) ‖ bincode(policy))` —
+reproducible from the planning parameters alone, with no timestamps or data.
+Remaining write handlers (`memory_upsert`, `consolidate`, `contradict`, `ingest`) are deferred to A12.

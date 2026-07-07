@@ -11,9 +11,12 @@ function authHeaders(): Record<string, string> {
 
 export async function GET(req: NextRequest) {
   try {
-    const collection = req.nextUrl.searchParams.get("collection");
+    const params = req.nextUrl.searchParams;
     const url = new URL(`${getApiUrl()}/graph/nodes`);
-    if (collection) url.searchParams.set("collection", collection);
+    for (const key of ["collection", "kind", "limit", "offset"]) {
+      const v = params.get(key);
+      if (v !== null) url.searchParams.set(key, v);
+    }
     const res = await fetch(url.toString(), {
       headers: authHeaders(),
       cache: "no-store",

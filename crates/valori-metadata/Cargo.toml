@@ -1,0 +1,20 @@
+[package]
+name = "valori-metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Control-plane persistence for Valori: Project, Collection, Shard topology, ExecutionHistory, PlannerCache, SnapshotCatalog"
+
+[dependencies]
+valori-core  = { workspace = true, features = ["std"] }
+valori-wire  = { workspace = true }
+
+redb       = "2"
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror  = "2.0"
+tracing    = "0.1"
+ulid       = { version = "1.1", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"

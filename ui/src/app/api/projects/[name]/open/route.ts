@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProject, projectNodePaths, unprotectProject, touchProject } from "@/lib/server/projects";
+import { getProject, projectNodePaths, unprotectProject, touchProject, type ProjectEmbedConfig } from "@/lib/server/projects";
 import { pm } from "@/lib/server/process-manager";
 import { setApiUrl } from "@/lib/server/connection";
+
+const DIM_TO_EMBED: Record<number, ProjectEmbedConfig> = {
+  384:  { provider: "ollama", model: "all-minilm",             endpoint: "http://localhost:11434/api/embed" },
+  768:  { provider: "ollama", model: "nomic-embed-text",       endpoint: "http://localhost:11434/api/embed" },
+  1024: { provider: "ollama", model: "mxbai-embed-large",      endpoint: "http://localhost:11434/api/embed" },
+  1536: { provider: "openai", model: "text-embedding-3-small", endpoint: "https://api.openai.com/v1/embeddings" },
+  3072: { provider: "openai", model: "text-embedding-3-large", endpoint: "https://api.openai.com/v1/embeddings" },
+};
 
 interface HealthBody {
   dim?: number;
@@ -11,8 +19,8 @@ interface HealthBody {
 
 async function probeHealth(port: number): Promise<HealthBody | null> {
   try {
-    const r = await fetch(`http://localhost:${port}/health`, {
-      signal: AbortSignal.timeout(2000),
+    const r = await fetch(`http://127.0.0.1:${port}/health`, {
+      signal: AbortSignal.timeout(400),
     });
     if (!r.ok) return null;
     return (await r.json()) as HealthBody;
@@ -50,7 +58,7 @@ export async function POST(
   }
 
   const primaryNode = entry.nodes[0];
-  const url = `http://localhost:${primaryNode.httpPort}`;
+  const url = `http://127.0.0.1:${primaryNode.httpPort}`;
 
   // Clear the immutable flag so nodes can append their WAL / write snapshots.
   unprotectProject(name);
@@ -59,6 +67,26 @@ export async function POST(
   // Handles externally-started nodes, nodes that survived a Next.js
   // hot-reload, and prevents double-spawn when a port is already occupied.
   const preHealth = await Promise.all(entry.nodes.map(n => probeHealth(n.httpPort)));
+
+  // If a node is already running but was started WITHOUT an event log
+  // (event_log_height is null/absent), snapshot + kill it so it respawns
+  // below with the correct VALORI_EVENT_LOG_PATH.  This covers the common
+  // case of a node that survived a Next.js hot-reload with stale env vars.
+  for (let i = 0; i < entry.nodes.length; i++) {
+    const h = preHealth[i] as (HealthBody & { event_log_height?: number | null }) | null;
+    if (h && h.event_log_height == null) {
+      const port = entry.nodes[i].httpPort;
+      const { snapshotPath } = projectNodePaths(entry, entry.nodes[i].id);
+      // snapshot-then-stop works for both managed and orphaned processes
+      await pm.snapshotThenStop(port, snapshotPath);
+      // CRITICAL: wait for the exit event so pm.isRunning() returns false.
+      // Without this, startNode's idempotency guard (status === "running") will
+      // skip the spawn even though the process is dead.
+      await pm.waitForExit(port, 3000);
+      preHealth[i] = null; // treat as down so spawn logic fires
+    }
+  }
+
   preHealth.forEach((h, i) => { if (h) pm.markRunning(entry.nodes[i].httpPort); });
 
   const anyToStart = entry.nodes.some((n, i) => !preHealth[i] && !pm.isRunning(n.httpPort));
@@ -89,7 +117,9 @@ export async function POST(
   const results: (HealthBody | null)[] = [...preHealth];
   for (let i = 0; i < 120; i++) {
     if (results.every(h => h)) break;
-    await new Promise(r => setTimeout(r, 500));
+    if (i > 0) {
+      await new Promise(r => setTimeout(r, 150));
+    }
     await Promise.all(entry.nodes.map(async (n, idx) => {
       if (results[idx]) return;
       results[idx] = await probeHealth(n.httpPort);
@@ -118,6 +148,8 @@ export async function POST(
     ...(recordCount != null ? { records: recordCount } : {}),
   });
 
+  const embed = entry.embed ?? DIM_TO_EMBED[entry.dim];
+
   return NextResponse.json({
     ok: true,
     url,
@@ -126,5 +158,6 @@ export async function POST(
     nodesReachable,
     nodesTotal: entry.nodes.length,
     ...(primary ?? {}),
+    ...(embed ? { embed } : {}),
   });
 }

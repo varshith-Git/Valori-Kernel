@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import useSWR from "swr";
 import { toast } from "@/lib/toast";
 
@@ -17,14 +18,16 @@ export interface ManifestProject {
   shardCount:    number;
   port:          number;
   dim:           number;
-  index:         "brute" | "hnsw" | "ivf";
+  index:         "brute" | "hnsw" | "ivf" | "bq" | "auto";
   maxRecords:    number;
   createdAt:     string;
   lastOpenedAt?: string;
   records?:      number;
+  embed?:        { provider: string; model: string; apiKey?: string; endpoint?: string };
   status:        "stopped" | "starting" | "running" | "error";
   nodesRunning:  number;
   nodesTotal:    number;
+  collections?:  string[];
 }
 
 const fetcher = (url: string) =>
@@ -34,24 +37,66 @@ const fetcher = (url: string) =>
     return Array.isArray(d.projects) ? d.projects : [];
   });
 
+// ── localStorage cache for instant first paint ────────────────────────────────
+
+const PROJECTS_CACHE_KEY = "valori:projects-list";
+
+function readProjectCache(): ManifestProject[] | undefined {
+  try {
+    const raw = localStorage.getItem(PROJECTS_CACHE_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeProjectCache(projects: ManifestProject[]) {
+  try {
+    localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
+  } catch {}
+}
+
 /**
  * The workspace project list, sourced from the on-disk manifest
  * (`~/.valori/projects.json`). Unlike {@link useProjects}, this works even when
  * every node is stopped — it is the Home picker's source of truth.
+ *
+ * Uses localStorage as a SWR fallback so the project grid renders instantly
+ * on page load instead of flashing an empty skeleton.
  */
 export function useProjectManifest() {
   const { data, error, isLoading, mutate } = useSWR<ManifestProject[]>(
     "/api/projects",
     fetcher,
-    { refreshInterval: 4000 }
+    {
+      refreshInterval: 2000,
+      onSuccess: writeProjectCache,
+    }
   );
+
+  // Seed SWR cache from localStorage AFTER hydration to avoid SSR mismatch.
+  // The first render matches the server (no data); the useEffect fires
+  // immediately after mount and populates the cache so the second render
+  // shows the cached project list — imperceptible to the user.
+  useEffect(() => {
+    if (!data) {
+      const cached = readProjectCache();
+      if (cached && cached.length > 0) {
+        mutate(cached, { revalidate: false });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const create = async (input: {
     name: string;
     dim?: number;
-    index?: "brute" | "hnsw" | "ivf";
+    index?: "brute" | "hnsw" | "ivf" | "bq" | "auto";
     replication?: 1 | 3;
     shardCount?: number;
+    embed?: { provider: string; model: string; endpoint?: string };
   }): Promise<ManifestProject | null> => {
     const res = await fetch("/api/projects", {
       method: "POST",
@@ -98,6 +143,9 @@ export function useProjectManifest() {
       toast(`Failed to delete "${name}"`, "error");
       return;
     }
+    // Immediately evict from localStorage so a page refresh doesn't show it.
+    const cached = readProjectCache();
+    if (cached) writeProjectCache(cached.filter((p) => p.name !== name));
     await mutate();
   };
 

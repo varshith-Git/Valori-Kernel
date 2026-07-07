@@ -9,6 +9,10 @@ pub enum IndexKind {
     BruteForce,
     Hnsw,
     Ivf,
+    Bq,
+    /// Automatically selects the index based on live record count:
+    /// < 10 000 → BruteForce, 10 000–2 000 000 → BQ, > 2 000 000 → HNSW
+    Auto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +136,13 @@ pub struct NodeConfig {
     // Env: VALORI_IVF_N_PROBE — fix probe count (disables auto-scale)
     pub ivf_n_probe: Option<usize>,
 
+    // ── Standalone sharding ──────────────────────────────────────────────────
+    // Number of independent shards in standalone mode.
+    // Namespaces are routed to shards via `namespace_id % shard_count`.
+    // Each shard gets its own event-log file: events-shard0.log, events-shard1.log, ...
+    // Env: VALORI_SHARD_COUNT (default: 1 = no sharding, byte-identical to pre-sharding)
+    pub shard_count: usize,
+
     // ── Phase C4.1: time-decay re-ranking ────────────────────────────────────
     // Default half-life (seconds) applied to search ranking when a request does
     // not specify its own. Absent or 0 = decay off (pure distance ranking).
@@ -178,6 +189,8 @@ impl Default for NodeConfig {
         let index_kind = match std::env::var("VALORI_INDEX").as_deref() {
             Ok("hnsw") => IndexKind::Hnsw,
             Ok("ivf") => IndexKind::Ivf,
+            Ok("bq") => IndexKind::Bq,
+            Ok("auto") | Ok("mstg") => IndexKind::Auto,
             _ => IndexKind::BruteForce,
         };
 
@@ -213,17 +226,6 @@ impl Default for NodeConfig {
             
         let auto_snapshot_interval_secs = std::env::var("VALORI_SNAPSHOT_INTERVAL")
             .ok().and_then(|v| v.parse::<u64>().ok());
-
-        // Warn if deprecated knob is set without the new cadence knobs.
-        // (Tracing may not be initialised yet — use eprintln so the warning
-        //  always reaches the operator regardless of log config.)
-        if auto_snapshot_interval_secs.is_some() {
-            eprintln!(
-                "WARN  valori: VALORI_SNAPSHOT_INTERVAL is deprecated. \
-                 Use VALORI_SNAPSHOT_EVERY_EVENTS and/or VALORI_SNAPSHOT_EVERY_BYTES instead. \
-                 Will be removed in Phase 3."
-            );
-        }
 
         let snapshot_every_events = std::env::var("VALORI_SNAPSHOT_EVERY_EVENTS")
             .ok().and_then(|v| v.parse::<u64>().ok());
@@ -275,6 +277,11 @@ impl Default for NodeConfig {
         let event_log_path = std::env::var("VALORI_EVENT_LOG_PATH")
             .ok().map(PathBuf::from);
 
+        let shard_count = std::env::var("VALORI_SHARD_COUNT")
+            .ok().and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1)
+            .max(1);
+
         let event_log_rotation_bytes = std::env::var("VALORI_EVENT_LOG_ROTATION_BYTES")
             .ok().and_then(|v| v.parse::<u64>().ok());
 
@@ -310,6 +317,7 @@ impl Default for NodeConfig {
             hnsw_ef_search,
             ivf_n_list,
             ivf_n_probe,
+            shard_count,
             decay_half_life_secs,
             embed_provider,
             embed_model,

@@ -5,19 +5,20 @@ import { useHealth } from "@/lib/hooks/useHealth";
 import { ProofHash } from "@/components/proof/ProofHash";
 import { MetricCard } from "@/components/proof/MetricCard";
 import { ProofExport } from "@/components/proof/ProofExport";
+import { ReceiptCard } from "@/components/proof/ReceiptCard";
 
 export default function DashboardPage() {
   const { hash, isLoading, error } = useProof();
   const { chainHeight, recordCount, dim, online } = useHealth();
 
   return (
-    <div className="flex flex-col gap-8 max-w-4xl">
+    <div className="flex flex-col gap-8 w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">Proof Dashboard</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Live BLAKE3 state hash — updates on every committed event
+            For you — live BLAKE3 state hash, updates on every committed event
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -45,8 +46,11 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* Operation Receipt */}
+      <ReceiptCard />
+
       {/* Metrics row */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard
           label="Chain height"
           value={chainHeight?.toLocaleString() ?? null}

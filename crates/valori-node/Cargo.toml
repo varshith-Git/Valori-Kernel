@@ -5,9 +5,16 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-valori-kernel = { workspace = true, features = ["std"] }
-valori-wire = { workspace = true }
+valori-kernel  = { workspace = true, features = ["std"] }
+valori-wire    = { workspace = true }
+valori-storage = { workspace = true }
+valori-state   = { workspace = true }
 valori-consensus = { workspace = true }
+valori-core     = { workspace = true, features = ["std"] }
+valori-planner  = { workspace = true }
+valori-effect   = { workspace = true }
+valori-metadata = { workspace = true }
+async-trait = "0.1"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 tokio = { version = "1.0", features = ["full"] }
 axum = "0.7"

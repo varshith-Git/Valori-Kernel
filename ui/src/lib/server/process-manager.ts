@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from "child_process";
+import { spawn, execFileSync, ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -36,7 +36,7 @@ export interface NodeCfg {
 
 export interface LaunchConfig {
   dim: number;
-  index: "brute" | "hnsw" | "ivf";
+  index: "brute" | "hnsw" | "ivf" | "bq" | "auto";
   maxRecords: number;
   authToken?: string;
   nodes: NodeCfg[];
@@ -71,7 +71,7 @@ class ProcessManager {
 
   constructor() {
     // process.cwd() inside Next.js is the ui/ dir; go up one to repo root
-    this.repoRoot = path.resolve(process.cwd(), "..");
+    this.repoRoot = path.resolve(/* turbopackIgnore: true */ process.cwd(), "..");
   }
 
   private ensure(id: number): ManagedNode {
@@ -126,7 +126,13 @@ class ProcessManager {
     }
 
     if (eventLogPath) env.VALORI_EVENT_LOG_PATH = eventLogPath;
-    if (snapshotPath) env.VALORI_SNAPSHOT_PATH  = snapshotPath;
+    if (snapshotPath) {
+      env.VALORI_SNAPSHOT_PATH = snapshotPath;
+      // Periodic autosave — keeps the snapshot fresh even if the node is
+      // killed without a graceful close (WAL still guarantees durability;
+      // this keeps the next open instant and survives WAL file loss).
+      env.VALORI_SNAPSHOT_INTERVAL = "60";
+    }
     if (cfg.authToken) env.VALORI_AUTH_TOKEN     = cfg.authToken;
     if (cfg.clusterMembers) {
       env.VALORI_NODE_ID           = String(nc.id);
@@ -242,7 +248,7 @@ class ProcessManager {
    */
   startProjectNodes(p: {
     dim: number;
-    index: "brute" | "hnsw" | "ivf";
+    index: "brute" | "hnsw" | "ivf" | "bq" | "auto";
     maxRecords: number;
     authToken?: string;
     nodes: NodeCfg[];
@@ -268,9 +274,15 @@ class ProcessManager {
    */
   async snapshotThenStop(port: number, snapshotPath: string): Promise<boolean> {
     const node = this.nodes.get(port);
-    if (!node?.proc) return false;
+
+    // Orphaned node: process was started in a previous Next.js session so we
+    // have no `proc` handle. Snapshot via HTTP, then kill by PID from the port.
+    if (!node?.proc) {
+      return this.snapshotThenStopOrphan(port, snapshotPath);
+    }
+
     try {
-      await fetch(`http://localhost:${port}/v1/snapshot/save`, {
+      await fetch(`http://127.0.0.1:${port}/v1/snapshot/save`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: snapshotPath }),
@@ -281,6 +293,39 @@ class ProcessManager {
       this.pushLog(node, "[launcher] snapshot-on-close failed (WAL still durable)");
     }
     return this.stopNode(port);
+  }
+
+  private async snapshotThenStopOrphan(port: number, snapshotPath: string): Promise<boolean> {
+    const node = this.ensure(port);
+
+    // Try to snapshot via HTTP before killing
+    try {
+      await fetch(`http://127.0.0.1:${port}/v1/snapshot/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: snapshotPath }),
+        signal: AbortSignal.timeout(8000),
+      });
+      this.pushLog(node, "[launcher] snapshot saved (orphan) before stop");
+    } catch {
+      this.pushLog(node, "[launcher] snapshot-on-close failed for orphan (WAL still durable)");
+    }
+
+    // Find PID by port and send SIGTERM
+    try {
+      const pidStr = execFileSync("lsof", ["-ti", `:${port}`], { encoding: "utf8", timeout: 3000 }).trim();
+      const pids = pidStr.split("\n").map(s => parseInt(s, 10)).filter(n => !isNaN(n));
+      for (const pid of pids) {
+        try { process.kill(pid, "SIGTERM"); } catch {}
+      }
+      this.pushLog(node, `[launcher] SIGTERM sent to orphan PID(s): ${pids.join(", ")}`);
+    } catch {
+      this.pushLog(node, "[launcher] could not find orphan PID — may already be stopped");
+    }
+
+    node.state.status    = "stopped";
+    node.state.stoppedAt = new Date().toISOString();
+    return true;
   }
 
   /**

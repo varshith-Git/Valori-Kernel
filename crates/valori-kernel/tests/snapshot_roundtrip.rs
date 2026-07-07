@@ -106,3 +106,36 @@ fn empty_state_roundtrips() {
     let restored = decode_state(&buf).unwrap();
     assert_eq!(hash_state_blake3(&restored), hash_state_blake3(&state));
 }
+
+#[test]
+fn v7_meta_roundtrips() {
+    // SetMeta-committed key/value pairs must survive a snapshot round-trip —
+    // this is what makes standalone document metadata durable across
+    // snapshot-based recovery, not just full event-log replay.
+    let mut state = populated_state();
+    state
+        .apply_event(&KernelEvent::SetMeta {
+            key: "document:0".into(),
+            value: r#"{"filename":"Composer2.pdf","collection":"firstone--c1"}"#.into(),
+        })
+        .unwrap();
+    state
+        .apply_event(&KernelEvent::SetMeta {
+            key: "record:1".into(),
+            value: r#"{"text":"chunk body"}"#.into(),
+        })
+        .unwrap();
+
+    let buf = encode(&state);
+    let restored = decode_state(&buf).unwrap();
+
+    assert_eq!(restored.meta.len(), 2);
+    assert_eq!(
+        restored.meta.get("document:0").map(String::as_str),
+        Some(r#"{"filename":"Composer2.pdf","collection":"firstone--c1"}"#)
+    );
+    assert_eq!(
+        restored.meta.get("record:1").map(String::as_str),
+        Some(r#"{"text":"chunk body"}"#)
+    );
+}

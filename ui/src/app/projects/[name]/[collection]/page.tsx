@@ -17,6 +17,7 @@ import { ContradictionTab } from "@/components/collections/ContradictionTab";
 import { CompliancePackTab } from "@/components/collections/CompliancePackTab";
 import { CommunityTab } from "@/components/collections/CommunityTab";
 import { EntityExtractionTab } from "@/components/collections/EntityExtractionTab";
+import { TreeRagTab } from "@/components/collections/TreeRagTab";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { makeNs } from "@/lib/hooks/useCollections";
 import { cn } from "@/lib/utils";
@@ -31,35 +32,48 @@ const PRIMARY_TABS = [
   { value: "docs",    label: "Documents", tip: "Browse ingested documents and their chunks" },
 ];
 
-/** Power-user tabs hidden behind the overflow menu */
-const OVERFLOW_TABS = [
+/** Analyze tabs — graph, entities, evaluation */
+const ANALYZE_TABS = [
+  { value: "treerag",    label: "Tree-RAG",      tip: "Navigate a document's section tree by term frequency — line-cited answers + BLAKE3 receipt chain" },
   { value: "community",  label: "Communities",   tip: "Label Propagation community detection + centroid search — find themes across the entire graph" },
   { value: "entities",   label: "Entity Extract",tip: "LLM extracts named entities + relationships from text and inserts them as graph nodes + edges" },
   { value: "graph",      label: "Graph",         tip: "Visualise Document→Chunk relationships and entity links" },
-  { value: "verify",     label: "Verify",        tip: "Compute SHA-256 namespace proof hash — reproducible from events.log" },
   { value: "eval",       label: "Eval",          tip: "Score retrieval quality with ground-truth QA pairs: Precision@K, MRR" },
-  { value: "certify",    label: "Certify",       tip: "Signed JSON + PDF proof certificate with tamper detection" },
-  { value: "gdpr",       label: "GDPR",          tip: "Right-to-erasure with BLAKE3-chained erasure certificate" },
   { value: "diff",       label: "Diff",          tip: "Compare two namespaces by record/node ID set difference" },
   { value: "contradict", label: "Contradictions",tip: "Find semantically opposing chunks by negating embeddings" },
-  { value: "compliance", label: "Compliance",    tip: "Regulator evidence bundle (EU AI Act / GDPR / SOC 2)" },
   { value: "info",       label: "Info",          tip: "Collection metadata: namespace ID, vector dimension, storage details" },
 ];
 
+/** Compliance tabs — proof, audit, certification */
+const COMPLIANCE_TABS = [
+  { value: "verify",     label: "Verify",        tip: "Compute SHA-256 namespace proof hash — reproducible from events.log" },
+  { value: "certify",    label: "Certify",       tip: "Signed JSON + PDF proof certificate with tamper detection" },
+  { value: "gdpr",       label: "GDPR",          tip: "Right-to-erasure with BLAKE3-chained erasure certificate" },
+  { value: "compliance", label: "Compliance",    tip: "Regulator evidence bundle (EU AI Act / GDPR / SOC 2)" },
+];
+
+const OVERFLOW_TABS = [...ANALYZE_TABS, ...COMPLIANCE_TABS];
+
 const ALL_TABS = [...PRIMARY_TABS, ...OVERFLOW_TABS];
 
-/* -- Overflow dropdown ----------------------------------------------- */
+/* -- Group overflow dropdown ----------------------------------------- */
 
-function OverflowMenu({
+type TabDef = { value: string; label: string; tip: string };
+
+function GroupMenu({
+  label,
+  tabs,
   activeValue,
   onSelect,
 }: {
+  label: string;
+  tabs: TabDef[];
   activeValue: string;
   onSelect: (v: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const activeOverflow = OVERFLOW_TABS.find((t) => t.value === activeValue);
+  const activeTab = tabs.find((t) => t.value === activeValue);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -75,18 +89,18 @@ function OverflowMenu({
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all",
-          activeOverflow
-            ? "bg-muted text-foreground"
+          activeTab
+            ? "bg-[var(--v-accent-muted)] text-foreground"
             : "text-muted-foreground hover:bg-accent hover:text-card-foreground"
         )}
       >
-        {activeOverflow ? activeOverflow.label : "Tools"}
+        {activeTab ? activeTab.label : label}
         <ChevronDown size={13} className={cn("transition-transform", open && "rotate-180")} />
       </button>
 
       {open && (
         <div className="absolute left-0 top-full z-50 mt-1.5 w-52 rounded-xl border border-input bg-card shadow-xl shadow-black/40 py-1 overflow-hidden">
-          {OVERFLOW_TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.value}
               title={t.tip}
@@ -137,11 +151,12 @@ export default function CollectionPage({
     });
   };
 
-  const isOverflow = OVERFLOW_TABS.some((t) => t.value === activeTab);
+  const isAnalyze = ANALYZE_TABS.some((t) => t.value === activeTab);
+  const isCompliance = COMPLIANCE_TABS.some((t) => t.value === activeTab);
 
   return (
-    <div className="flex flex-col gap-5 max-w-4xl">
-      {/* Tab bar: primary + overflow */}
+    <div className="flex flex-col gap-5 w-full max-w-[1600px]">
+      {/* Tab bar: primary + two named group menus */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="flex items-center gap-1 flex-wrap">
           <code className="text-[10px] text-muted-foreground font-mono bg-card px-2 py-0.5 rounded border border-border self-center">
@@ -160,12 +175,20 @@ export default function CollectionPage({
             ))}
           </TabsList>
 
-          {/* Overflow dropdown lives beside the TabsList (not inside it so it doesn't break Radix) */}
+          {/* Analyze group */}
           <div className={cn(
             "h-9 flex items-center rounded-md border px-0.5",
-            isOverflow ? "border-input bg-card" : "border-transparent bg-transparent"
+            isAnalyze ? "border-input bg-card" : "border-transparent bg-transparent"
           )}>
-            <OverflowMenu activeValue={activeTab} onSelect={setActiveTab} />
+            <GroupMenu label="Analyze" tabs={ANALYZE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
+          </div>
+
+          {/* Compliance group */}
+          <div className={cn(
+            "h-9 flex items-center rounded-md border px-0.5",
+            isCompliance ? "border-input bg-card" : "border-transparent bg-transparent"
+          )}>
+            <GroupMenu label="Compliance" tabs={COMPLIANCE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
           </div>
         </div>
 
@@ -181,6 +204,9 @@ export default function CollectionPage({
         </TabsContent>
         <TabsContent value="docs" className="mt-5">
           <DocumentsTab namespace={namespace} />
+        </TabsContent>
+        <TabsContent value="treerag" className="mt-5">
+          <TreeRagTab namespace={namespace} />
         </TabsContent>
         <TabsContent value="community" className="mt-5">
           <CommunityTab namespace={namespace} />

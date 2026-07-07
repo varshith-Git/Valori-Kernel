@@ -104,7 +104,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2.5 py-10 text-xs text-muted-foreground">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-zinc-300" />
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-foreground/60" />
         Computing namespace audit…
       </div>
     );

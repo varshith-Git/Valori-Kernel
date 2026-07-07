@@ -45,13 +45,17 @@ export default function SettingsPage() {
   const [rerankerModel, setRerankerModel] = useState("rerank-english-v3.0");
   const [rerankerEndpoint, setRerankerEndpoint] = useState("");
 
+  const [configLoadFailed, setConfigLoadFailed] = useState(false);
+
   useEffect(() => {
     fetch("/api/health").then(r => r.ok ? r.json() : null).then(d => {
       if (d) setServerPaths({ event_log_path: d.event_log_path, snapshot_path: d.snapshot_path, dim: d.dim });
-    }).catch(() => {});
+      else setConfigLoadFailed(true);
+    }).catch(() => setConfigLoadFailed(true));
     fetch("/api/config").then(r => r.ok ? r.json() : null).then(d => {
       if (d) setServerConfig(d);
-    }).catch(() => {});
+      else setConfigLoadFailed(true);
+    }).catch(() => setConfigLoadFailed(true));
   }, []);
 
   useEffect(() => {
@@ -64,7 +68,11 @@ export default function SettingsPage() {
         setRerankerModel(c.model ?? "rerank-english-v3.0");
         setRerankerEndpoint(c.endpoint ?? "");
       }
-    } catch {}
+    } catch {
+      // Corrupted reranker config from an older schema — drop it rather than
+      // silently pretending the form is showing real saved values.
+      localStorage.removeItem(RERANKER_STORAGE_KEY);
+    }
   }, []);
 
   const saveReranker = (update: Partial<{ provider: string; apiKey: string; model: string; endpoint: string }>) => {
@@ -100,7 +108,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="flex flex-col max-w-4xl pb-10">
+    <div className="flex flex-col w-full max-w-[1600px] pb-10">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Configuration</h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -146,6 +154,11 @@ export default function SettingsPage() {
               </button>
             </div>
             {testResult && <TestResult ok={testResult.ok} msg={testResult.msg} />}
+            {configLoadFailed && !serverConfig && (
+              <p className="text-xs text-amber-600">
+                Couldn&apos;t load server configuration — the backend may be unreachable.
+              </p>
+            )}
 
             {/* Auth status */}
             {serverConfig && (

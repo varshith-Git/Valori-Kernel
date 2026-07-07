@@ -97,8 +97,19 @@ export function AskTab({
     } catch {}
   }, []);
 
+  // Tree-RAG: check if a tree index was built for this collection in Upload tab
+  const [treeCache, setTreeCache] = useState<{ cache_key: string; node_count: number; doc_name: string } | null>(null);
+  const [treePrevHash, setTreePrevHash] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`valori:tree:${namespace}`);
+      if (raw) setTreeCache(JSON.parse(raw));
+    } catch {}
+  }, [namespace]);
+
   const [question, setQuestion] = useState(initialQuestion ?? "");
   const [k, setK] = useState(5);
+  const [maxContextChunks, setMaxContextChunks] = useState(3);
   const [useLLM, setUseLLM] = useState(true);
   const [status, setStatus] = useState<"idle" | "embedding" | "searching" | "answering" | "done" | "error">("idle");
   const [result, setResult] = useState<AskResult | null>(null);
@@ -131,8 +142,58 @@ export function AskTab({
 
   const ask = async (q: string) => {
     if (!q.trim()) return;
-    setStatus("embedding");
     setResult(null);
+
+    // ── Tree-RAG path ────────────────────────────────────────────────────────
+    if (treeCache) {
+      setStatus("searching");
+      try {
+        const res = await fetch("/api/tree/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cache_key: treeCache.cache_key, query: q, k, prev_hash: treePrevHash }),
+        });
+        if (!res.ok) throw new Error(`Tree query failed (${res.status})`);
+        const data = await res.json() as {
+          query: string;
+          answer: string;
+          citations: { node_id: string; title: string; breadcrumb: string; lines: [number, number] }[];
+          reasoning: string;
+          receipt: { receipt_hash: string; prev_hash: string; query_hash: string; answer_hash: string; hash_algo: string; timestamp: number };
+        };
+        // Chain receipts for the next query
+        setTreePrevHash(data.receipt.receipt_hash);
+        // Map into AskResult so the existing history/display works
+        const treeResult: AskResult = {
+          question: q,
+          answer: data.answer,
+          answerError: null,
+          sources: data.citations.map((c, i) => ({
+            record_id: i,
+            score: 1,
+            text: `[${c.breadcrumb}] lines ${c.lines[0]}–${c.lines[1]}`,
+            source: c.title,
+            chunk_index: null,
+            total_chunks: null,
+          })),
+          graphContext: [],
+          askedAt: new Date().toISOString(),
+          topK: k,
+          collection: namespace,
+        };
+        const updated = [treeResult, ...history].slice(0, MAX_HISTORY);
+        setResult(treeResult);
+        setHistory(updated);
+        setStatus("done");
+      } catch (e) {
+        setResult({ question: q, answer: null, answerError: e instanceof Error ? e.message : "Tree query failed", sources: [], graphContext: [], askedAt: new Date().toISOString() });
+        setStatus("error");
+      }
+      return;
+    }
+
+    // ── Vector-search path (original) ────────────────────────────────────────
+    setStatus("embedding");
 
     try {
       // 1. Embed the question
@@ -163,6 +224,7 @@ export function AskTab({
           k,
           collection: namespace,
           question: q,
+          max_context_chunks: maxContextChunks,
           llm: useLLM && llmReady ? {
             provider: llmCfg.provider,
             model: llmCfg.model,
@@ -269,8 +331,8 @@ export function AskTab({
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Config strip */}
-      <div className="flex items-center gap-3 flex-wrap text-xs">
+      {/* Config strip (hidden when tree-RAG is active) */}
+      <div className={`flex items-center gap-3 flex-wrap text-xs ${treeCache ? "hidden" : ""}`}>
         <span className="text-muted-foreground">Embed:</span>
         <span className={`font-mono ${embeddingReady ? "text-accent-foreground" : "text-amber-500"}`}>
           {embedCfg.provider}/{embedCfg.model || "—"}
@@ -310,11 +372,47 @@ export function AskTab({
             </select>
             chunks
           </label>
+          {useLLM && (
+            <label className="flex items-center gap-1.5 text-muted-foreground">
+              LLM context
+              <select
+                value={maxContextChunks}
+                onChange={(e) => setMaxContextChunks(parseInt(e.target.value, 10))}
+                className="bg-card border border-input rounded px-1.5 py-0.5 text-accent-foreground text-xs focus:outline-none"
+              >
+                {[1, 2, 3, 5, 8, 10].map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              chunks
+            </label>
+          )}
         </div>
       </div>
 
-      {/* Not ready */}
-      {!embeddingReady && (
+      {/* Tree-RAG active banner */}
+      {treeCache && (
+        <div className="flex items-center gap-3 rounded-lg border border-[var(--v-accent)]/30 bg-[var(--v-accent-muted)] px-4 py-2.5">
+          <span className="text-[var(--v-accent)] text-sm">🌳</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-[var(--v-accent)]">Tree-RAG active</p>
+            <p className="text-[11px] text-muted-foreground">
+              {treeCache.doc_name} · {treeCache.node_count} sections · section-cited retrieval, no embedding
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              localStorage.removeItem(`valori:tree:${namespace}`);
+              setTreeCache(null);
+              setTreePrevHash(undefined);
+            }}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors shrink-0"
+          >
+            × clear tree
+          </button>
+        </div>
+      )}
+
+      {/* Not ready (vector mode only) */}
+      {!treeCache && !embeddingReady && (
         <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-500">
           Configure an embedding model in{" "}
           <Link href="/settings" className="underline hover:text-amber-600">Settings</Link>{" "}
@@ -335,7 +433,7 @@ export function AskTab({
         />
         <button
           type="submit"
-          disabled={!question.trim() || !embeddingReady || (status !== "idle" && status !== "done" && status !== "error")}
+          disabled={!question.trim() || (!treeCache && !embeddingReady) || (status !== "idle" && status !== "done" && status !== "error")}
           className="rounded-lg border border-input bg-card px-4 py-2.5 text-sm text-accent-foreground hover:bg-accent disabled:opacity-40 transition-colors whitespace-nowrap"
         >
           Ask →
@@ -345,7 +443,7 @@ export function AskTab({
       {/* Status */}
       {statusLabel[status] && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-zinc-300" />
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-foreground/60" />
           {statusLabel[status]}
         </div>
       )}

@@ -1,0 +1,35 @@
+// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+//! # valori-core
+//!
+//! Zero-dependency shared foundation for the Valori platform.
+//!
+//! Every Valori crate depends on `valori-core`. `valori-core` depends on
+//! nothing (only `serde` for serialization and `thiserror` for ergonomic
+//! error derives — both support `no_std`).
+//!
+//! ## Contents
+//! - **IDs** — `RecordId`, `NodeId`, `EdgeId`, `NamespaceId`, `CollectionId`,
+//!   `ExecutionId`, `ShardId`, `ClusterEpoch`
+//! - **Enums** — `NodeKind`, `EdgeKind`
+//! - **Version** — monotonic schema/data version counter
+//! - **Errors** — `CoreError`, `Result<T>`
+//! - **Constants** — `DEFAULT_NS`, `NS_LIST_NIL`, `MAX_NAMESPACES`
+
+#![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
+
+extern crate alloc;
+
+pub mod id;
+pub mod enums;
+pub mod error;
+pub mod version;
+
+pub use id::{
+    RecordId, NodeId, EdgeId, NamespaceId, CollectionId, ExecutionId,
+    ShardId, ClusterEpoch,
+    DEFAULT_NS, NS_LIST_NIL, MAX_NAMESPACES,
+};
+pub use enums::{NodeKind, EdgeKind};
+pub use error::{CoreError, Result};
+pub use version::Version;

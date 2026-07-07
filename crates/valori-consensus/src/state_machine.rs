@@ -491,6 +491,15 @@ impl ValoriStateMachine {
         f(&self.inner.lock().await.state)
     }
 
+    /// Look up a `SetMeta`-committed value by key and parse it as JSON.
+    /// Reads the replicated `KernelState::meta` map, not any per-node sidecar,
+    /// so every replica answers identically regardless of which node handled
+    /// the original write.
+    pub async fn get_meta_json(&self, key: &str) -> Option<serde_json::Value> {
+        self.inner.lock().await.state.meta.get(key)
+            .and_then(|s| serde_json::from_str(s).ok())
+    }
+
     /// C4.1b: unix-second creation timestamp for a record, or None if unknown.
     pub async fn record_created_at(&self, id: u32) -> Option<u64> {
         self.inner.lock().await.created_at.get(&id).copied()

@@ -326,7 +326,7 @@ function TabCheatSheet() {
   return (
     <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
       <p className="text-sm font-semibold text-card-foreground">Collection page tabs — at a glance</p>
-      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {tabs.map((t) => (
           <div
             key={t.name}
@@ -348,7 +348,7 @@ function TabCheatSheet() {
 
 export default function HelpPage() {
   return (
-    <div className="flex flex-col gap-6 max-w-4xl py-2">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px] py-2">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

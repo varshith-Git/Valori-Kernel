@@ -1,4 +1,5 @@
 use valori_node::config::NodeConfig;
+use valori_effect;
 use valori_node::server::{build_router_with_keys, SharedEngine};
 use valori_node::api_keys::KeyStore;
 use valori_node::engine::Engine;
@@ -81,7 +82,8 @@ async fn main() {
     }
 
     let key_store = Arc::new(KeyStore::new(cfg.keys_path.clone()));
-    let app = build_router_with_keys(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone(), key_store);
+    let receipt_store = Arc::new(valori_effect::ReceiptStore::new(256));
+    let app = build_router_with_keys(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone(), key_store, receipt_store);
 
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);
@@ -210,5 +212,33 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         eprintln!("FATAL: {msg}");
         std::process::exit(1);
     });
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(cluster_shutdown_signal())
+        .await
+        .unwrap();
+}
+
+/// Resolve on SIGTERM / Ctrl-C so axum drains in-flight requests and the
+/// process exits cleanly — Raft's redb log is the durable store in cluster
+/// mode, and a clean exit lets redb release its file lock and flush.
+async fn cluster_shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => { s.recv().await; }
+            Err(_)    => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c   => {}
+        _ = terminate => {}
+    }
+    tracing::info!("Shutdown signal received — draining and exiting (Raft log is durable)");
 }

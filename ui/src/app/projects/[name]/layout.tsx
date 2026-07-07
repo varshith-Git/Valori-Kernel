@@ -2,7 +2,9 @@
 
 import { use, useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { mutate } from "swr";
 import { Loader2, AlertTriangle, ArrowLeft, Square, RotateCcw, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 /**
  * Wraps every `/projects/<name>/*` route. On mount (and whenever the project
@@ -27,12 +29,31 @@ export default function ProjectLayout({
   const [startLogs,  setStartLogs]  = useState<string[]>([]);
   const logsRef = useRef<HTMLDivElement>(null);
 
+  const primaryPortRef = useRef<number | null>(null);
+
+  const syncEmbedConfig = useCallback((embed: { provider: string; model: string; apiKey?: string; endpoint?: string }) => {
+    try {
+      const STORAGE_KEY = "valori:embedding_config";
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const existing = raw ? JSON.parse(raw) : {};
+      const updated = {
+        ...existing,
+        provider: embed.provider,
+        model: embed.model,
+        ...(embed.endpoint ? { endpoint: embed.endpoint } : {}),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    } catch {}
+  }, []);
+
   const openProject = useCallback(async (): Promise<boolean> => {
     const r = await fetch(`/api/projects/${encodeURIComponent(project)}/open`, { method: "POST" });
     if (!r.ok) return false;
-    const d = await r.json().catch(() => ({})) as { reachable?: boolean };
+    const d = await r.json().catch(() => ({})) as { reachable?: boolean; port?: number; embed?: { provider: string; model: string; apiKey?: string; endpoint?: string } };
+    if (d.port != null) primaryPortRef.current = d.port;
+    if (d.embed) syncEmbedConfig(d.embed);
     return d.reachable !== false;
-  }, [project]);
+  }, [project, syncEmbedConfig]);
 
   // On mount — ensure the node is running.
   useEffect(() => {
@@ -43,17 +64,20 @@ export default function ProjectLayout({
       if (cancelled) return;
       setState(ok ? "ready" : "failed");
       setNodeStatus(ok ? "running" : "error");
-      if (!ok) {
-        // Pull the last few startup log lines so the user can diagnose.
-        fetch(`/api/launch/logs?nodeId=3010`)
-          .then(r => r.text())
-          .then(raw => {
-            const lines = raw.split("\n")
-              .filter(l => l.startsWith("data:"))
-              .map(l => { try { return JSON.parse(l.slice(5).trim()) as string; } catch { return ""; } })
-              .filter(Boolean)
-              .slice(-20);
-            if (!cancelled) setStartLogs(lines);
+      if (ok) {
+        // Immediately invalidate and fetch fresh data from the newly opened project node
+        mutate("/api/namespaces");
+        mutate("/api/health");
+        mutate("/api/meta");
+        mutate("/api/proof");
+        mutate("/api/projects");
+      }
+      if (!ok && primaryPortRef.current != null) {
+        // Pull the last few buffered startup log lines so the user can diagnose.
+        fetch(`/api/launch/logs?nodeId=${primaryPortRef.current}&snapshot=1`)
+          .then(r => r.json())
+          .then((lines: string[]) => {
+            if (!cancelled) setStartLogs(lines.slice(-20));
           }).catch(() => {});
       }
     }).catch(() => {
@@ -136,18 +160,12 @@ export default function ProjectLayout({
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleRetry}
-            className="flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm hover:bg-primary/90 transition-colors"
-          >
+          <Button size="sm" onClick={handleRetry} className="gap-1.5">
             <RefreshCw size={13} /> Retry
-          </button>
-          <button
-            onClick={() => router.push("/")}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          >
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => router.push("/")} className="gap-1.5">
             <ArrowLeft size={13} /> Back to projects
-          </button>
+          </Button>
         </div>
 
         {startLogs.length > 0 && (
@@ -206,49 +224,77 @@ export default function ProjectLayout({
           {nodeStatus === "running" ? (
             <>
               {/* Restart */}
-              <button
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={handleRestart}
                 disabled={actionBusy}
                 title="Snapshot, stop, then restart"
-                className="flex items-center gap-1.5 rounded-md border border-border bg-accent hover:bg-muted px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+                className="gap-1.5 h-7 text-xs"
               >
                 {actionBusy ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
                 Restart
-              </button>
+              </Button>
               {/* Stop */}
-              <button
+              <Button
+                size="sm"
+                variant="outline"
                 onClick={handleStop}
                 disabled={actionBusy}
                 title="Snapshot & stop session"
-                className="flex items-center gap-1.5 rounded-md border border-border bg-accent hover:bg-muted px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+                className="gap-1.5 h-7 text-xs"
               >
                 {actionBusy ? <Loader2 size={11} className="animate-spin" /> : <Square size={11} />}
                 Stop
-              </button>
+              </Button>
             </>
           ) : (
             /* Start */
-            <button
+            <Button
+              size="sm"
               onClick={handleStart}
               disabled={actionBusy}
               title="Start session"
-              className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-2.5 py-1 text-[11px] text-emerald-700 disabled:opacity-40 transition-colors"
+              className="gap-1.5 h-7 text-xs border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-400"
+              variant="outline"
             >
               {actionBusy ? <Loader2 size={11} className="animate-spin" /> : null}
               Start
-            </button>
+            </Button>
           )}
 
           {/* Back to projects */}
-          <button
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => router.push("/")}
             title="Back to all projects"
-            className="flex items-center gap-1.5 rounded-md border border-border bg-accent hover:bg-muted px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            className="gap-1.5 h-7 text-xs"
           >
             <ArrowLeft size={11} /> Projects
-          </button>
+          </Button>
         </div>
       </div>
+
+      {/* Stopped-node banner — shown instead of silent empty tabs */}
+      {nodeStatus === "stopped" && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <span className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0" />
+          <p className="text-xs text-amber-700 dark:text-amber-400 flex-1">
+            Node is stopped — tabs will appear empty until you start the session.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleStart}
+            disabled={actionBusy}
+            className="gap-1.5 border-amber-500/40 bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-400 text-xs"
+          >
+            {actionBusy ? <Loader2 size={11} className="animate-spin" /> : null}
+            Start node
+          </Button>
+        </div>
+      )}
 
       {children}
     </div>
