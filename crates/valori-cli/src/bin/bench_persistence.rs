@@ -58,7 +58,7 @@ fn main() -> Result<()> {
             ingested += 1;
         }
     }
-    println!("✅ Ingested {} records", engine.state.record_count());
+    println!("✅ Ingested {} records", engine.record_count());
 
     // ── 3. Save snapshot ─────────────────────────────────────────────────────
     let snap_path = "valori_bench_persist.val";
@@ -74,7 +74,7 @@ fn main() -> Result<()> {
     println!("✅ Saved  {:.2} KB  in {:.2?}", snap_bytes.len() as f64 / 1024.0, save_time);
 
     // ── 4. Drop the old engine ───────────────────────────────────────────────
-    let original_count = engine.state.record_count();
+    let original_count = engine.record_count();
     drop(engine);
     println!("🗑️  Original engine dropped.");
 
@@ -88,9 +88,9 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("restore failed: {e:?}"))?;
     let load_time = t_load.elapsed();
 
-    println!("✅ Restored {} records in {:.2?}", restored.state.record_count(), load_time);
+    println!("✅ Restored {} records in {:.2?}", restored.record_count(), load_time);
     assert_eq!(
-        restored.state.record_count(),
+        restored.record_count(),
         original_count,
         "Restored record count must match original"
     );

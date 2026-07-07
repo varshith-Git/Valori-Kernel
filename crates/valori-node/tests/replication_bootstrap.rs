@@ -37,7 +37,7 @@ async fn test_replication_bootstrap() {
         let log_writer = EventLogWriter::open(&log_path, Some(4))
             .expect("Failed to open leader event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
+        let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
@@ -92,7 +92,7 @@ async fn test_replication_bootstrap() {
         let log_writer = EventLogWriter::open(&log_path, Some(4))
             .expect("Failed to open follower event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
+        let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
@@ -108,7 +108,7 @@ async fn test_replication_bootstrap() {
 
     let count = {
         let engine = follower_state.read().await;
-        engine.state.record_count()
+        engine.record_count()
     };
     assert_eq!(count, 10, "Follower should have bootstrapped 10 records from snapshot");
 
@@ -124,7 +124,7 @@ async fn test_replication_bootstrap() {
 
     let count_after = {
         let engine = follower_state.read().await;
-        engine.state.record_count()
+        engine.record_count()
     };
     assert_eq!(count_after, 11, "Follower should have replicated the new event (11 total)");
 }

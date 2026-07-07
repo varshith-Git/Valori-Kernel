@@ -140,7 +140,7 @@ async fn rejected_collection_does_not_mutate_state() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(shared.read().await.state.record_count(), 0);
+    assert_eq!(shared.read().await.record_count(), 0);
 }
 
 // ── HTTP: collection CRUD ─────────────────────────────────────────────────────

@@ -48,13 +48,13 @@ pub fn run(
 
     cmp.add_row(vec![
         "Records",
-        &engine_a.state.record_count().to_string(),
-        &engine_b.state.record_count().to_string(),
+        &engine_a.record_count().to_string(),
+        &engine_b.record_count().to_string(),
     ]);
     cmp.add_row(vec![
         "Nodes",
-        &engine_a.state.node_count().to_string(),
-        &engine_b.state.node_count().to_string(),
+        &engine_a.node_count().to_string(),
+        &engine_b.node_count().to_string(),
     ]);
     cmp.add_row(vec![
         "Edges",
@@ -194,7 +194,7 @@ fn floats_to_fxp(floats: &[f64]) -> FxpVector {
 
 fn search(engine: &ForensicEngine, query: &FxpVector, k: usize) -> Vec<SearchResult> {
     let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
-    let found   = engine.state.search_l2(query, &mut buf, None);
+    let found   = engine.kernel_state().search_l2(query, &mut buf, None);
     buf.truncate(found);
     buf
 }

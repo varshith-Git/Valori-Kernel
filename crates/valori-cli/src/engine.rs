@@ -139,6 +139,12 @@ impl ForensicEngine {
         Ok(replayed)
     }
 
+    // Mirror the Engine accessor API so CLI commands compile unchanged.
+    pub fn record_count(&self) -> usize { self.state.record_count() }
+    pub fn node_count(&self) -> usize { self.state.node_count() }
+    pub fn edge_count(&self) -> usize { self.state.edge_count() }
+    pub fn kernel_state(&self) -> &KernelState { &self.state }
+
     /// Returns the BLAKE3 content hash of the current kernel state as raw bytes.
     ///
     /// This is the same hash exposed by the Python `db.get_state_hash()` API.

@@ -38,17 +38,17 @@ fn add_node(engine: &mut Engine) -> u32 {
 
 /// Return true when the edge slot is occupied.
 fn edge_alive(engine: &Engine, eid: u32) -> bool {
-    engine.state.is_edge_active(EdgeId(eid))
+    engine.kernel_state().is_edge_active(EdgeId(eid))
 }
 
 /// Return the `first_in_edge` head for a node, or None if the node is gone / empty.
 fn first_in(engine: &Engine, nid: u32) -> Option<u32> {
-    engine.state.get_node(NodeId(nid))?.first_in_edge.map(|e| e.0)
+    engine.kernel_state().get_node(NodeId(nid))?.first_in_edge.map(|e| e.0)
 }
 
 /// Return the `first_out_edge` head for a node, or None.
 fn first_out(engine: &Engine, nid: u32) -> Option<u32> {
-    engine.state.get_node(NodeId(nid))?.first_out_edge.map(|e| e.0)
+    engine.kernel_state().get_node(NodeId(nid))?.first_out_edge.map(|e| e.0)
 }
 
 /// Collect all outgoing edge IDs for a node by walking the linked list.

@@ -47,9 +47,9 @@ pub fn run(
     table.add_row(vec!["Current event",   &engine.current_event_count.to_string()]);
     table.add_row(vec!["Events replayed", &replayed.to_string()]);
     table.add_row(vec!["Replay time",     &format!("{:.3} ms", elapsed.as_secs_f64() * 1000.0)]);
-    table.add_row(vec!["Records",         &engine.state.record_count().to_string()]);
-    table.add_row(vec!["Nodes",           &engine.state.node_count().to_string()]);
-    table.add_row(vec!["Edges",           &engine.state.edge_count().to_string()]);
+    table.add_row(vec!["Records",         &engine.record_count().to_string()]);
+    table.add_row(vec!["Nodes",           &engine.node_count().to_string()]);
+    table.add_row(vec!["Edges",           &engine.edge_count().to_string()]);
     table.add_row(vec!["State Hash (BLAKE3)", &engine.blake3_hex()]);
 
     println!("\nSimulation Report");
@@ -69,7 +69,7 @@ pub fn run(
         let mut buf   = vec![SearchResult { id: RecordId(0), score: i64::MAX }; top_k];
 
         let qt = Instant::now();
-        let found = engine.state.search_l2(&query_fxp, &mut buf, None);
+        let found = engine.kernel_state().search_l2(&query_fxp, &mut buf, None);
         let query_ms = qt.elapsed().as_secs_f64() * 1000.0;
 
         buf.truncate(found);

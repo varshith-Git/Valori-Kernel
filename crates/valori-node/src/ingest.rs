@@ -1127,13 +1127,13 @@ fn collect_old_chunks(engine: &crate::engine::Engine, doc_node_id: u32) -> Vec<(
     use valori_kernel::types::enums::EdgeKind;
 
     let mut result = Vec::new();
-    let Some(edges) = engine.state.outgoing_edges(NodeId(doc_node_id)) else {
+    let Some(edges) = engine.outgoing_edges(NodeId(doc_node_id)) else {
         return result;
     };
     for edge in edges {
         if edge.kind != EdgeKind::ParentOf { continue; }
         let chunk_node_id = edge.to.0;
-        let Some(chunk_node) = engine.state.get_node(edge.to) else { continue };
+        let Some(chunk_node) = engine.get_node(edge.to) else { continue };
         let Some(record_id) = chunk_node.record else { continue };
         let rid = record_id.0;
 

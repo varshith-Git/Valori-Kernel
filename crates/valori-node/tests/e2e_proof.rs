@@ -63,7 +63,7 @@ fn test_state_hash_round_trips_through_snapshot() {
         hash_before, hash_after,
         "BLAKE3 state hash must be identical after snapshot round-trip"
     );
-    assert_eq!(engine2.state.record_count(), 30, "record count must be preserved");
+    assert_eq!(engine2.record_count(), 30, "record count must be preserved");
 }
 
 // ── Test 2: verify_embedding round-trip ──────────────────────────────────────

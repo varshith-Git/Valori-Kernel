@@ -37,7 +37,7 @@ async fn test_replication_divergence() {
         let log_writer = EventLogWriter::open(&log_path, Some(4))
             .expect("Failed to open leader event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
+        let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
@@ -72,7 +72,7 @@ async fn test_replication_divergence() {
         let log_writer = EventLogWriter::open(&log_path, Some(4))
             .expect("Failed to open follower event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
+        let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(log_writer, journal, state_clone));
     }
 
@@ -124,7 +124,7 @@ async fn test_replication_divergence() {
         let cmd = Command::DeleteRecord {
             id: RecordId(record_id_val as u32),
         };
-        engine.state.apply(&cmd).unwrap();
+        engine.apply_raw_for_test(&cmd).unwrap();
     }
 
     // ── 6. Wait for divergence loop to fire (runs every 5 s) ─────────────────

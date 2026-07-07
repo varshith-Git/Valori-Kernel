@@ -325,7 +325,7 @@ async fn bootstrap_from_leader(
 
     let _ = tokio::fs::remove_file(&log_path).await;
 
-    let new_height = engine.state.record_count() as u64;
+    let new_height = engine.record_count() as u64;
     let state_hash = engine.get_proof().final_state_hash;
 
     let log_writer = crate::events::event_log::EventLogWriter::open(&log_path, dim)

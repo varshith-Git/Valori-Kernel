@@ -88,6 +88,16 @@ impl CollectionRegistry {
         pairs.sort_by_key(|(_, &id)| id);
         pairs.into_iter().map(|(n, _)| n.as_str()).collect()
     }
+
+    /// All collections including the implicit "default", sorted by id.
+    /// Mirrors `NamespaceRegistry::list` for Engine compatibility.
+    pub fn list(&self) -> Vec<(String, u16)> {
+        let mut out = vec![("default".to_string(), 0u16)];
+        let mut rest: Vec<_> = self.map.iter().map(|(k, &v)| (k.clone(), v)).collect();
+        rest.sort_by_key(|&(_, id)| id);
+        out.extend(rest);
+        out
+    }
 }
 
 #[cfg(test)]

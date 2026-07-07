@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **ExecutionResources (Phase E4)** — `tree_cache` and `community_store` extracted
+  from `Engine` into `pub resources: ExecutionResources`; application-layer
+  boundary is now explicit in the type.
+- **Hide pub state (Phase E3)** — `Engine.state` is now `pub(crate)`; 10 public
+  read accessor methods added (`record_count`, `node_count`, `edge_count`,
+  `kernel_dim`, `get_node`, `outgoing_edges`, `get_record`, `get_edge`,
+  `kernel_state`, `clone_kernel_state`). Stale pre-E1 dual-branch patterns in
+  valori-ffi removed. FFI `create_node` now routes through `create_node_for_record`.
+- **NamespaceRegistry → CollectionRegistry (Phase E2)** — duplicate
+  `NamespaceRegistry` struct deleted from engine.rs; `valori-metadata::CollectionRegistry`
+  is the single implementation. `list()` added to `CollectionRegistry`.
 - **Single persistence funnel (Phase E1)** — `Engine` now owns one
   `Persistence` enum (`EventLog` / `Wal` / `Ephemeral`) instead of
   `Option<EventCommitter>` + `Option<WalWriter>`; every mutation flows

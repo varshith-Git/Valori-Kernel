@@ -46,7 +46,7 @@ fn test_event_log_recovery_basic() {
             engine.insert_record_from_f32(&v).expect("insert failed");
         }
 
-        assert_eq!(engine.state.record_count(), n_inserted);
+        assert_eq!(engine.record_count(), n_inserted);
         pre_crash_hash = engine.get_proof().final_state_hash;
 
         // Engine is dropped here → BufWriter flushes → events reach disk.
@@ -64,7 +64,7 @@ fn test_event_log_recovery_basic() {
             mode
         );
 
-        assert_eq!(engine2.state.record_count(), n_inserted,
+        assert_eq!(engine2.record_count(), n_inserted,
             "record count must match after recovery");
 
         let post_recovery_hash = engine2.get_proof().final_state_hash;
@@ -113,7 +113,7 @@ fn test_snapshot_fallback_recovery() {
 
         assert_eq!(mode, RecoveryMode::Snapshot,
             "should recover from snapshot when no event log");
-        assert_eq!(engine2.state.record_count(), 20);
+        assert_eq!(engine2.record_count(), 20);
         assert_eq!(pre_crash_hash, engine2.get_proof().final_state_hash,
             "state hash must match after snapshot recovery");
     }
@@ -144,7 +144,7 @@ fn test_event_log_wins_over_snapshot() {
             engine.insert_record_from_f32(&v).unwrap();
         }
 
-        assert_eq!(engine.state.record_count(), 30);
+        assert_eq!(engine.record_count(), 30);
         hash_after_30 = engine.get_proof().final_state_hash;
         // Drop → flush event log (30 events on disk, snapshot has only 20)
     }
@@ -158,7 +158,7 @@ fn test_event_log_wins_over_snapshot() {
             matches!(mode, RecoveryMode::EventLog(30)),
             "event log must win over snapshot; got {:?}", mode
         );
-        assert_eq!(engine2.state.record_count(), 30,
+        assert_eq!(engine2.record_count(), 30,
             "should have 30 records (10 post-snapshot events replayed)");
         assert_eq!(hash_after_30, engine2.get_proof().final_state_hash,
             "post-snapshot events must be in recovered state");
@@ -176,7 +176,7 @@ fn test_fresh_start_when_nothing_exists() {
     let mode = engine.try_recover();
 
     assert_eq!(mode, RecoveryMode::Fresh);
-    assert_eq!(engine.state.record_count(), 0);
+    assert_eq!(engine.record_count(), 0);
 }
 
 // ── Test 6: metadata sidecar survives crash and event-log recovery ─────────────

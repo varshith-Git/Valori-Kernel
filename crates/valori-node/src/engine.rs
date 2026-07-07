@@ -28,6 +28,8 @@ use crate::events::event_journal::EventJournal;
 use crate::errors::EngineError;
 use valori_kernel::error::KernelError;
 
+use valori_metadata::CollectionRegistry;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -94,71 +96,24 @@ pub enum RecoveryMode {
     Fresh,
 }
 
-/// Namespace registry: maps collection name → NamespaceId (u16).
-///
-/// "default" is always id 0 and is never stored in the map (hardcoded).
-/// All other names are allocated sequentially starting at 1.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct NamespaceRegistry {
-    pub map: HashMap<String, u16>,
-    pub next_id: u16,
+/// Application-layer caches that sit above the database layer.
+/// Extracted from Engine to make the boundary explicit (E4).
+pub struct ExecutionResources {
+    /// Phase I5: in-process tree cache keyed by BLAKE3(text).
+    pub tree_cache: HashMap<String, crate::tree_rag::TreeIndex>,
+    /// Phase I6: last community detection result.
+    pub community_store: Option<crate::community::CommunityStore>,
 }
 
-impl NamespaceRegistry {
-    pub fn new() -> Self {
-        Self { map: HashMap::new(), next_id: 1 }
-    }
-
-    /// Resolve a collection name to a NamespaceId.
-    /// Returns `Some(0)` for `None` or `"default"`, `Some(id)` for registered names,
-    /// `None` for unknown names.
-    pub fn resolve(&self, name: Option<&str>) -> Option<u16> {
-        match name {
-            None | Some("default") => Some(0),
-            Some(n) => self.map.get(n).copied(),
-        }
-    }
-
-    /// Create a collection; idempotent — returns existing id if already registered.
-    /// Returns error if `MAX_NAMESPACES` (1024) would be exceeded or name is "default".
-    pub fn create(&mut self, name: &str) -> Result<u16, EngineError> {
-        if name == "default" {
-            return Ok(0);
-        }
-        if let Some(&id) = self.map.get(name) {
-            return Ok(id);
-        }
-        if self.next_id as usize >= valori_kernel::types::id::MAX_NAMESPACES {
-            return Err(EngineError::InvalidInput(format!(
-                "namespace limit reached ({} max)", valori_kernel::types::id::MAX_NAMESPACES
-            )));
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        self.map.insert(name.to_string(), id);
-        Ok(id)
-    }
-
-    /// Drop a collection by name. Returns its former id, or None if not found.
-    /// "default" (id 0) cannot be dropped.
-    pub fn drop_collection(&mut self, name: &str) -> Option<u16> {
-        if name == "default" { return None; }
-        self.map.remove(name)
-    }
-
-    /// All collections including the implicit "default".
-    pub fn list(&self) -> Vec<(String, u16)> {
-        let mut out = vec![("default".to_string(), 0u16)];
-        let mut rest: Vec<_> = self.map.iter().map(|(k, &v)| (k.clone(), v)).collect();
-        rest.sort_by_key(|&(_, id)| id);
-        out.extend(rest);
-        out
+impl ExecutionResources {
+    fn new() -> Self {
+        Self { tree_cache: HashMap::new(), community_store: None }
     }
 }
 
 /// The Node Engine orchestrates state, persistence, and indexing.
 pub struct Engine {
-    pub state: KernelState,
+    pub(crate) state: KernelState,
     pub metadata: crate::metadata::MetadataStore,
     pub index: Box<dyn VectorIndex + Send + Sync>,
     pub quant: Box<dyn Quantizer + Send + Sync>,
@@ -204,7 +159,7 @@ pub struct Engine {
     pub created_at: HashMap<u32, u64>,
 
     /// Collection (namespace) registry — maps names to NamespaceIds.
-    pub namespaces: NamespaceRegistry,
+    pub namespaces: CollectionRegistry,
 
     /// Sidecar file for the `NamespaceRegistry` (collection name → id map).
     /// Written on every create/drop; loaded by `try_recover()` after recovery.
@@ -252,16 +207,8 @@ pub struct Engine {
     /// `None` when embedding is not configured.
     pub embed_config: Option<crate::embedder::EmbedConfig>,
 
-    /// Phase I5: in-process tree cache keyed by BLAKE3(text).
-    /// Populated by `/v1/tree/build`; consumed by `/v1/tree/query` (cache_key path)
-    /// and `/v1/tree/hybrid`. Bounded informally by typical session usage —
-    /// no eviction yet; a future phase adds LRU or size cap.
-    pub tree_cache: HashMap<String, crate::tree_rag::TreeIndex>,
-
-    /// Phase I6: last community detection result.
-    /// Populated by `POST /v1/community/detect`; consumed by `/v1/community/search`.
-    /// `None` until detection has run at least once.
-    pub community_store: Option<crate::community::CommunityStore>,
+    /// Application-layer caches (tree index, community store). See `ExecutionResources`.
+    pub resources: ExecutionResources,
 
     // ── Standalone sharding ──────────────────────────────────────────────────
     /// Number of logical shards in standalone mode (read from VALORI_SHARD_COUNT).
@@ -393,7 +340,7 @@ impl Engine {
             record_to_node: HashMap::new(),
             created_at: HashMap::new(),
             metadata_path,
-            namespaces: NamespaceRegistry::new(),
+            namespaces: CollectionRegistry::new(),
             namespaces_path,
             object_store: crate::object_store::ObjectStoreBackend::from_env(),
             object_store_keep: cfg.object_store_keep,
@@ -436,8 +383,7 @@ impl Engine {
             decay_half_life_secs: cfg.decay_half_life_secs,
             reranker: crate::valori_reranker::ValoriReranker::new(),
             embed_config: crate::embedder::EmbedConfig::from_node_config(cfg),
-            tree_cache: HashMap::new(),
-            community_store: None,
+            resources: ExecutionResources::new(),
             shard_count: cfg.shard_count,
         }
     }
@@ -605,7 +551,7 @@ impl Engine {
         if let Some(ref path) = self.namespaces_path {
             match std::fs::read(path) {
                 Ok(bytes) => {
-                    let reg: NamespaceRegistry = serde_json::from_slice(&bytes)
+                    let reg: CollectionRegistry = serde_json::from_slice(&bytes)
                         .map_err(|e| EngineError::InvalidInput(
                             format!("Failed to parse namespace sidecar: {}", e),
                         ))?;
@@ -969,7 +915,11 @@ impl Engine {
 
     /// Create a new collection. Idempotent — returns existing id if already present.
     pub fn create_collection(&mut self, name: &str) -> Result<u16, EngineError> {
-        let id = self.namespaces.create(name)?;
+        let id = self.namespaces.create(name).ok_or_else(|| {
+            EngineError::InvalidInput(format!(
+                "namespace limit reached ({} max)", valori_kernel::types::id::MAX_NAMESPACES
+            ))
+        })?;
         // Tell the kernel about the namespace (no-op if already exists).
         let cmd = valori_kernel::state::command::Command::CreateNamespace { namespace_id: id };
         self.state.apply(&cmd)?;
@@ -986,7 +936,7 @@ impl Engine {
                 "the 'default' collection cannot be dropped".into(),
             ));
         }
-        let id = self.namespaces.drop_collection(name).ok_or_else(|| {
+        let id = self.namespaces.drop(name).ok_or_else(|| {
             EngineError::InvalidInput(format!("collection '{name}' not found"))
         })?;
         // collect record ids in this namespace before applying the drop
@@ -1113,7 +1063,7 @@ impl Engine {
         offset += i_len;
 
         // Namespace registry section (optional — older snapshots lack it).
-        let ns_registry: Option<NamespaceRegistry> = if offset + 4 <= data.len()
+        let ns_registry: Option<CollectionRegistry> = if offset + 4 <= data.len()
             && &data[offset..offset + 4] == b"NSRG"
         {
             offset += 4;
@@ -1349,14 +1299,46 @@ impl Engine {
     /// Store a tree under `BLAKE3(text)` and return the cache key.
     pub fn cache_tree(&mut self, text: &str, tree: crate::tree_rag::TreeIndex) -> String {
         let key = crate::tree_rag::hash_text(text);
-        self.tree_cache.insert(key.clone(), tree);
+        self.resources.tree_cache.insert(key.clone(), tree);
         key
     }
 
     /// Look up a cached tree by key. Returns `None` if not in cache (e.g. after
     /// a server restart — the caller must re-send the full tree in that case).
     pub fn get_cached_tree(&self, key: &str) -> Option<&crate::tree_rag::TreeIndex> {
-        self.tree_cache.get(key)
+        self.resources.tree_cache.get(key)
+    }
+
+    // ── KernelState read accessors (E3) ─────────────────────────────────────────
+    // These delegate to self.state so external crates never need to access
+    // the field directly. state is pub(crate); valori-ffi uses these methods.
+
+    pub fn record_count(&self) -> usize { self.state.record_count() }
+
+    /// Apply a kernel command directly to state without going through persistence.
+    /// Only valid in tests that deliberately corrupt state to simulate divergence.
+    pub fn apply_raw_for_test(&mut self, cmd: &valori_kernel::state::command::Command) -> Result<(), valori_kernel::error::KernelError> {
+        self.state.apply(cmd)
+    }
+    pub fn clone_kernel_state(&self) -> KernelState { self.state.clone() }
+    /// Read-only reference to the kernel state. For operations (e.g. tag-filtered
+    /// search in the FFI) that have no Engine-level wrapper. Do not write through this.
+    pub fn kernel_state(&self) -> &KernelState { &self.state }
+    pub fn node_count(&self) -> usize { self.state.node_count() }
+    pub fn edge_count(&self) -> usize { self.state.edge_count() }
+    /// Dimension set at first insert; `None` when the engine is still empty.
+    pub fn kernel_dim(&self) -> Option<usize> { self.state.dim }
+    pub fn get_node(&self, id: valori_kernel::types::id::NodeId) -> Option<&valori_kernel::graph::node::GraphNode> {
+        self.state.get_node(id)
+    }
+    pub fn outgoing_edges(&self, id: valori_kernel::types::id::NodeId) -> Option<impl Iterator<Item = &valori_kernel::graph::edge::GraphEdge>> {
+        self.state.outgoing_edges(id)
+    }
+    pub fn get_record(&self, id: valori_kernel::types::id::RecordId) -> Option<&valori_kernel::storage::record::Record> {
+        self.state.get_record(id)
+    }
+    pub fn get_edge(&self, id: valori_kernel::types::id::EdgeId) -> Option<&valori_kernel::graph::edge::GraphEdge> {
+        self.state.get_edge(id)
     }
 
     /// Add a namespace-scoped search method.
@@ -1617,7 +1599,7 @@ impl Engine {
         RecoveryMode::Fresh
     }
 
-    fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>, ns_registry: Option<NamespaceRegistry>) -> Result<(), EngineError> {
+    fn restore_from_components(&mut self, k_data: &[u8], m_data: &[u8], i_data: Option<&[u8]>, ns_registry: Option<CollectionRegistry>) -> Result<(), EngineError> {
         self.state = decode_state(k_data)?;
 
         if !m_data.is_empty() {

@@ -130,6 +130,6 @@ async fn fully_deduped_batch_does_not_grow_record_count() {
     assert_eq!(ids1, ids2);
 
     // State should not have grown — record count stays at 3.
-    let count = shared.read().await.state.record_count();
+    let count = shared.read().await.record_count();
     assert_eq!(count, 3, "fully deduped batch must not insert new records");
 }

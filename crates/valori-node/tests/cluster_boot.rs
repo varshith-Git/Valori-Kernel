@@ -356,9 +356,11 @@ async fn raft_metrics_appear_in_prometheus_output() {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let rendered = loop {
         let r = valori_node::telemetry::get_metrics();
-        if r.contains("valori_raft_is_leader 1")
-            && r.contains("valori_raft_last_applied_index")
-        {
+        let applied_ok = r.lines()
+            .find(|l| l.starts_with("valori_raft_last_applied_index"))
+            .and_then(|l| l.split_whitespace().last()?.parse::<f64>().ok())
+            .map_or(false, |v| v >= 3.0);
+        if r.contains("valori_raft_is_leader 1") && applied_ok {
             break r;
         }
         assert!(

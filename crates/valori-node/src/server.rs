@@ -1188,7 +1188,7 @@ impl crate::routes::graph::GraphOps for SharedEngine {
     async fn get_node(&self, _ns: u16, id: u32) -> Result<Option<GetNodeResponse>, Response> {
         use valori_kernel::types::id::NodeId;
         let engine = self.read().await;
-        Ok(engine.state.get_node(NodeId(id)).map(|n| GetNodeResponse {
+        Ok(engine.get_node(NodeId(id)).map(|n| GetNodeResponse {
             kind: n.kind as u8,
             record_id: n.record.map(|r| r.0),
             namespace_id: n.namespace_id,
@@ -1198,7 +1198,7 @@ impl crate::routes::graph::GraphOps for SharedEngine {
     async fn node_edges(&self, _ns: u16, id: u32) -> Result<Option<Vec<EdgeData>>, Response> {
         use valori_kernel::types::id::NodeId;
         let engine = self.read().await;
-        Ok(engine.state.outgoing_edges(NodeId(id)).map(|iter| {
+        Ok(engine.outgoing_edges(NodeId(id)).map(|iter| {
             iter.map(|e| EdgeData {
                 edge_id: e.id.0,
                 to_node: e.to.0,
@@ -2329,7 +2329,7 @@ async fn index_rebuild_handler(
         "ok": true,
         "index": kind_str,
         "effective": effective,
-        "records": engine.state.record_count(),
+        "records": engine.record_count(),
     }))
 }
 
@@ -2554,7 +2554,7 @@ async fn community_detect(
             .collect();
 
         let out = (store.community_count, store.node_count, store.receipt.clone(), communities);
-        eng.community_store = Some(store);
+        eng.resources.community_store = Some(store);
         out
     };
 
@@ -2577,7 +2577,7 @@ async fn community_search(
 ) -> Result<Json<crate::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
     let eng = engine.read().await;
 
-    let store = eng.community_store.as_ref().ok_or_else(|| {
+    let store = eng.resources.community_store.as_ref().ok_or_else(|| {
         (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
             "error": "community index not built — call POST /v1/community/detect first"
         })))
@@ -2616,7 +2616,7 @@ async fn community_overview(
     State(engine): State<SharedEngine>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let eng = engine.read().await;
-    let store = eng.community_store.as_ref().ok_or_else(|| {
+    let store = eng.resources.community_store.as_ref().ok_or_else(|| {
         (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
             "error": "community index not built — call POST /v1/community/detect first"
         })))
