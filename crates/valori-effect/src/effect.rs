@@ -63,6 +63,15 @@ pub enum KernelCommandBody {
     },
     SoftDeleteRecord { record_id: u32 },
     HardDeleteRecord { record_id: u32 },
+    CreateNode {
+        kind: u8,
+        record_id: Option<u32>,
+    },
+    CreateEdge {
+        from: u32,
+        to: u32,
+        kind: u8,
+    },
 }
 
 // ── KernelCommand ─────────────────────────────────────────────────────────────

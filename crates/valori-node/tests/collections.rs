@@ -194,9 +194,12 @@ async fn cannot_drop_default_collection() {
 }
 
 #[tokio::test]
-async fn drop_unknown_collection_is_400() {
+async fn drop_unknown_collection_is_404() {
+    // Unified behavior (routes::collections): unknown collection is 404 on
+    // BOTH paths. Standalone previously returned 400 while cluster returned
+    // 404 — a silent dual-path divergence.
     let status = delete_req(make_shared(), "/v1/namespaces/ghost").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 // ── HTTP: namespace isolation ────────────────────────────────────────────────

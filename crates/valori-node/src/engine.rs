@@ -1350,8 +1350,8 @@ impl Engine {
              // Do NOT also call apply_committed_event — engine.state is never
              // used when a committer is present (only live_state is), so the
              // double-apply would fail with NotFound for nodes created via
-             // create_node (which also only wrote to live_state).
-             committer.commit_event(event).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             committer.commit_event(event.clone()).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+             self.apply_committed_event(&event)?;
              return Ok(edge_id.0);
          } else {
              let edge_id = EdgeId(self.state.edge_count() as u32);

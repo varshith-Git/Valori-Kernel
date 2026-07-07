@@ -59,7 +59,7 @@ pub struct IngestDocumentRequest {
     pub chunk_overlap: Option<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct IngestChunk {
     /// 0-based index of this chunk.
     pub index: usize,
@@ -459,6 +459,12 @@ pub struct IngestRequest {
     pub source:     Option<String>,
     pub chunk_size:    Option<usize>,
     pub chunk_overlap: Option<usize>,
+    pub r#async:       Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct IngestQuery {
+    pub r#async: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -475,9 +481,23 @@ pub struct IngestResponse {
 #[derive(Serialize)]
 struct IngestErrorBody { error: String }
 
+/// `GET /v1/ingest/status/:job_id` — return status of an asynchronous ingestion job.
+pub async fn get_ingest_status(
+    axum::extract::Path(job_id): axum::extract::Path<String>,
+    axum::Extension(tasks): axum::Extension<std::sync::Arc<crate::runner::TaskRegistry>>,
+) -> Response {
+    let jobs = tasks.jobs.read().await;
+    match jobs.get(&job_id) {
+        Some(status) => axum::Json(status.clone()).into_response(),
+        None => (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": format!("job '{job_id}' not found")}))).into_response(),
+    }
+}
+
 pub async fn ingest(
     State(state): State<SharedEngine>,
     axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    axum::Extension(tasks): axum::Extension<std::sync::Arc<crate::runner::TaskRegistry>>,
+    axum::extract::Query(query): axum::extract::Query<IngestQuery>,
     Json(payload): Json<IngestRequest>,
 ) -> Response {
     if payload.text.len() > MAX_INGEST_TEXT_BYTES {
@@ -489,6 +509,7 @@ pub async fn ingest(
     let strategy   = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size = payload.chunk_size.unwrap_or(1000);
     let overlap    = payload.chunk_overlap.unwrap_or(200);
+    let is_async   = query.r#async.or(payload.r#async).unwrap_or(false);
 
     // 1. Check embed is configured
     let embed_cfg = {
@@ -512,6 +533,149 @@ pub async fn ingest(
     if chunks.is_empty() {
         let body = serde_json::to_vec(&IngestErrorBody { error: "no chunks produced".into() }).unwrap();
         return (StatusCode::BAD_REQUEST, axum::http::header::HeaderMap::new(), body).into_response();
+    }
+
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+
+    if is_async {
+        let job_id = format!("job_{}", valori_core::id::ExecutionId::new_random());
+        {
+            let mut jobs_map = tasks.jobs.write().await;
+            jobs_map.insert(job_id.clone(), serde_json::json!({
+                "status": "processing",
+                "job_id": job_id,
+                "chunk_count": chunks.len(),
+                "collection": collection,
+                "strategy_used": strategy_used,
+            }));
+        }
+        let resp = serde_json::json!({
+            "ok": true,
+            "job_id": job_id,
+            "status": "processing",
+            "chunk_count": chunks.len(),
+            "strategy_used": strategy_used,
+            "collection": collection,
+        });
+
+        let state_clone = state.clone();
+        let texts_clone = texts.clone();
+        let embed_cfg_clone = embed_cfg.clone();
+        let collection_clone = collection.clone();
+        let source_clone = source.clone();
+        let job_id_clone = job_id.clone();
+        let receipts_clone = receipts.clone();
+        let jobs_clone = tasks.jobs.clone();
+        let strategy_used_clone = strategy_used.clone();
+        let chunks_clone = chunks.clone();
+
+        tokio::spawn(async move {
+            let http = reqwest::Client::new();
+            match embed_batch(&texts_clone, &embed_cfg_clone, &http).await {
+                Ok(vectors) if !vectors.is_empty() && !vectors[0].is_empty() => {
+                    let mut engine = state_clone.write().await;
+                    let state_before = valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+                        .iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                    if let Ok(ns) = engine.resolve_collection(Some(&collection_clone)) {
+                        if let Ok(record_ids) = engine.insert_batch_ns(&vectors, None, ns, None) {
+                            for (id, text) in record_ids.iter().zip(texts_clone.iter()) {
+                                engine.reranker_insert(*id, text);
+                            }
+                            let doc_node_id = engine.create_node_for_record(None, 0, ns).unwrap_or(0);
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs().to_string())
+                                .unwrap_or_else(|_| "0".into());
+                            for (idx, (chunk, &rid)) in chunks_clone.iter().zip(record_ids.iter()).enumerate() {
+                                if let Ok(chunk_node_id) = engine.create_node_for_record(Some(rid), 1, ns) {
+                                    let _ = engine.create_edge(doc_node_id, chunk_node_id, 6);
+                                    let _ = engine.set_meta_audited(
+                                        format!("record:{rid}"),
+                                        serde_json::json!({
+                                            "text": chunk.text,
+                                            "source": source_clone,
+                                            "chunk_index": idx,
+                                            "total_chunks": chunks_clone.len(),
+                                            "section_title": chunk.title,
+                                            "document_node_id": doc_node_id,
+                                            "chunk_node_id": chunk_node_id,
+                                            "collection": collection_clone,
+                                            "chunk_mode": strategy_used_clone,
+                                            "ingested_at": &now,
+                                            "embed_model": &embed_cfg_clone.model,
+                                            "embed_provider": &embed_cfg_clone.provider,
+                                        }),
+                                    );
+                                }
+                            }
+                            let _ = engine.set_meta_audited(
+                                format!("document:{doc_node_id}"),
+                                serde_json::json!({
+                                    "source": source_clone,
+                                    "total_chunks": chunks_clone.len(),
+                                    "collection": collection_clone,
+                                    "strategy": strategy_used_clone,
+                                    "embed_model": &embed_cfg_clone.model,
+                                    "ingested_at": &now,
+                                }),
+                            );
+                            let state_after = valori_kernel::snapshot::blake3::hash_state_blake3(&engine.state)
+                                .iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                            {
+                                use valori_planner::operation::{OperationInputs, OperationKind};
+                                let inputs = OperationInputs::Ingest {
+                                    strategy: strategy_used_clone.clone(),
+                                    collection: collection_clone.clone(),
+                                    shard_id: 0,
+                                    embed_enabled: true,
+                                };
+                                crate::receipt_bridge::emit_write(
+                                    &receipts_clone,
+                                    OperationKind::Ingest,
+                                    &inputs,
+                                    ns, 0, 0, false, state_before, state_after,
+                                );
+                            }
+
+                            let mut jobs_map = jobs_clone.write().await;
+                            jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                                "status": "completed",
+                                "job_id": job_id_clone,
+                                "document_node_id": doc_node_id,
+                                "chunk_count": record_ids.len(),
+                                "record_ids": record_ids,
+                                "collection": collection_clone,
+                                "strategy_used": strategy_used_clone,
+                            }));
+                            return;
+                        }
+                    }
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "failed",
+                        "job_id": job_id_clone,
+                        "error": "database insertion failed",
+                    }));
+                }
+                Ok(_) => {
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "failed",
+                        "job_id": job_id_clone,
+                        "error": "embed provider returned empty vectors",
+                    }));
+                }
+                Err(e) => {
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "failed",
+                        "job_id": job_id_clone,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        });
+        return (StatusCode::ACCEPTED, axum::Json(resp)).into_response();
     }
 
     // 3. Embed — one HTTP call per chunk for Ollama, batched for OpenAI
@@ -985,4 +1149,37 @@ fn collect_old_chunks(engine: &crate::engine::Engine, doc_node_id: u32) -> Vec<(
         result.push((rid, chunk_node_id, hash));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::TaskRegistry;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_get_ingest_status_not_found() {
+        let registry = Arc::new(TaskRegistry::default_registry());
+        let ext = axum::Extension(registry);
+        let path = axum::extract::Path("job_nonexistent".to_string());
+        let resp = get_ingest_status(path, ext).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_get_ingest_status_found() {
+        let registry = Arc::new(TaskRegistry::default_registry());
+        {
+            let mut jobs = registry.jobs.write().await;
+            jobs.insert("job_123".to_string(), serde_json::json!({
+                "status": "processing",
+                "job_id": "job_123",
+                "chunk_count": 5
+            }));
+        }
+        let ext = axum::Extension(registry);
+        let path = axum::extract::Path("job_123".to_string());
+        let resp = get_ingest_status(path, ext).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }

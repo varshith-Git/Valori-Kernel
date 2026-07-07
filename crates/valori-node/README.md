@@ -63,7 +63,14 @@ curl http://localhost:3000/v1/namespaces
 curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
 # → 204 No Content
 # Dropping "default" → 400 Bad Request
+# Dropping an unknown collection → 404 Not Found
 ```
+
+Collection names must be non-empty, at most 64 characters, and contain only
+`[a-zA-Z0-9_-]`. These rules — and the status codes above — are identical on
+the standalone and cluster paths: since Phase R1 the handler bodies are
+shared (`src/routes/collections.rs`), and `tests/route_parity.rs` asserts the
+two routers expose the same `/v1` surface.
 
 ### Cluster mode (Phase S2)
 
@@ -212,7 +219,8 @@ curl -s localhost:3000/v1/tree/hybrid \
 ## Vector Operations
 
 All endpoints accept an optional `"collection"` field. If the named collection
-does not exist the request is rejected with `400 Bad Request`.
+does not exist, delete and graph endpoints answer `404 Not Found` (Phase R2,
+both paths); insert and search answer `400 Bad Request`.
 
 | Endpoint | Method | Description |
 |---|---|---|

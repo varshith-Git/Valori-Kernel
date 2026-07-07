@@ -222,6 +222,23 @@ Every feature must be evaluated against **both** execution paths before you writ
 
 Adding a new endpoint only to `server.rs` and calling it "done". The cluster path silently 404s or returns "method not allowed" — no compile error, no test failure, only a runtime surprise when someone runs `docker compose up`.
 
+### Shared-handler pattern (Phases R1/R2) — use it for new endpoints
+
+`crates/valori-node/src/routes/` holds handler bodies written ONCE and served
+by both routers: a per-domain `*Ops` trait carries only the state-touching
+primitives (standalone impl = engine locks in `server.rs`; cluster impl =
+`raft_write_data()` / state-machine reads in `cluster_server.rs`), and the
+shared generic function owns validation + response shaping. Migrated domains:
+`collections`, `graph`, `records` (delete/soft-delete), `meta`, `version`.
+Not yet migrated (each needs a design pass): insert, search, memory
+upsert/consolidate/contradict. Intentionally path-specific (do NOT unify):
+index config/rebuild, proof/timeline mechanics.
+
+`tests/route_parity.rs` enforces parity mechanically: it diffs the `/v1`
+route declarations of both server files (paths AND methods). Adding a route
+to one router only fails the test — either add it to both, or add it to the
+`STANDALONE_ONLY` / `CLUSTER_ONLY` allowlist with a reason.
+
 ---
 
 ## Where to add things

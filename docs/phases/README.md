@@ -10,6 +10,10 @@ people and sessions that built it.
 
 | Phase | Report | Commit | Status |
 |---|---|---|---|
+| R5 — Async ingestion pipeline & route parity: background task-driven ingestion via `POST /v1/ingest?async=true` + `GET /v1/ingest/status/:job_id`; fixed critical state sync bug in `Engine::create_edge` and wire format v4 verification parity | [phase-R5-async-ingestion.md](phase-R5-async-ingestion.md) | `Node-scaleup` | ✅ done |
+| R3 — Dual-path unification: memory domain (upsert, search, consolidate, contradict) migrated to shared `routes/` handler pattern; eradicated the "Two Kitchens" problem | [phase-R3-dual-path-memory.md](phase-R3-dual-path-memory.md) | `Node-scaleup` | ✅ done |
+| R2 — Dual-path unification: graph/records/meta/version domains migrated to `routes/`; fixed cluster list-nodes tenant leak, kind-coercion, meta wire divergence; new `POST /v1/soft-delete` (standalone) + `DELETE /v1/graph/node/:id` (cluster); METHOD_GAPS now empty | [phase-R2-dual-path-domains.md](phase-R2-dual-path-domains.md) | `Node-scaleup` | ✅ done |
+| R1 — Dual-path unification: shared `routes/` handler pattern (collections migrated first), route-parity test guarding all `/v1` endpoints across both routers; fixed 400/404 drop divergence + missing cluster name validation | [phase-R1-dual-path-unification.md](phase-R1-dual-path-unification.md) | `Node-scaleup` | ✅ done |
 | 0 — Baseline durability & verifier | [phase-0-baseline.md](phase-0-baseline.md) | merged via PR #3 (`57da43e`) | ✅ done |
 | 1.1 — Workspace restructure | [phase-1.1-workspace-restructure.md](phase-1.1-workspace-restructure.md) | `2bd793d` | ✅ done |
 | 1.1b — Per-crate test layout + kernel fixes | [phase-1.1b-per-crate-tests.md](phase-1.1b-per-crate-tests.md) | `1db62c9` | ✅ done |

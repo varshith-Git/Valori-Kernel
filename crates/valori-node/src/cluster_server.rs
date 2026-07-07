@@ -351,7 +351,7 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/proof/receipt",             get(cluster_get_latest_receipt))
         .route("/v1/proof/receipt/:id",         get(cluster_get_receipt_by_id))
         .route("/v1/graph/node",                post(create_graph_node))
-        .route("/v1/graph/node/:id",            get(get_graph_node))
+        .route("/v1/graph/node/:id",            get(get_graph_node).delete(delete_graph_node))
         .route("/v1/graph/edge",                post(create_graph_edge))
         .route("/v1/graph/edges/:id",           get(get_graph_edges))
         .route("/v1/graph/subgraph",            get(get_graph_subgraph))
@@ -366,6 +366,7 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/shard/routing",             axum::routing::get(cluster_shard_routing))
         .route("/v1/ingest/document",           post(crate::ingest::ingest_document))
         .route("/v1/ingest",                    post(cluster_ingest))
+        .route("/v1/ingest/status/:job_id",     get(crate::ingest::get_ingest_status))
         .route("/v1/ingest/update",             post(cluster_ingest_update))
         .route("/v1/ingest/extract-entities",   post(cluster_extract_entities))
         .route("/v1/tree/build",                post(cluster_tree_build))
@@ -400,7 +401,7 @@ pub fn build_cluster_router_with_keys(
         .route("/operations",       get(cluster_get_operations))
         .route("/operations/:id",   get(cluster_get_operation_by_id))
         .route("/graph/node",       post(create_graph_node))
-        .route("/graph/node/:id",   get(get_graph_node))
+        .route("/graph/node/:id",   get(get_graph_node).delete(delete_graph_node))
         .route("/graph/edge",       post(create_graph_edge))
         .route("/graph/edges/:id",  get(get_graph_edges))
         .route("/graph/subgraph",   get(get_graph_subgraph))
@@ -416,6 +417,19 @@ pub fn build_cluster_router_with_keys(
         .map(|(id, h)| (*id, h.raft.clone()))
         .collect();
 
+    use crate::capabilities::CapabilityRegistryBuilder;
+    use crate::runner::TaskRegistry;
+    let capability_registry: Arc<valori_effect::capability::CapabilityRegistry> = Arc::new(
+        CapabilityRegistryBuilder::build_cluster(
+            state.shards.clone(),
+            state.sm.clone(),
+            state.shard_count as u8,
+            state.embed_config.clone(),
+            state.http.clone(),
+        )
+    );
+    let task_registry: Arc<TaskRegistry> = Arc::new(TaskRegistry::default_registry());
+
     let mut router = Router::new()
         .merge(public)
         .merge(v1)
@@ -424,7 +438,9 @@ pub fn build_cluster_router_with_keys(
         .merge(cluster_router(raft, Arc::new(api_shards), audit))
         .layer(axum::middleware::from_fn(cluster_auth_guard))
         .layer(Extension(auth.clone()))
-        .layer(Extension(receipt_store));
+        .layer(Extension(receipt_store))
+        .layer(Extension(capability_registry))
+        .layer(Extension(task_registry));
     if let Some(cors) = make_cors_layer() {
         router = router.layer(cors);
     }
@@ -450,114 +466,91 @@ async fn deprecation_warning(req: AxumRequest<Body>, next: Next) -> Response {
 }
 
 // ── Collection (namespace) management ────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct CreateCollectionRequest { name: String }
-
-#[derive(Serialize)]
-struct CreateCollectionResponse { name: String, id: u16, created: bool }
-
-#[derive(Serialize)]
-struct CollectionInfo { name: String, id: u16 }
-
-#[derive(Serialize)]
-struct ListCollectionsResponse { collections: Vec<CollectionInfo> }
-
-// Phase S2: collection creation/drop now goes through Raft
+//
+// Phase S2: collection creation/drop goes through Raft
 // (KernelEvent::AutoCreateNamespace / DropNamespace) instead of mutating a
-// per-node, unreplicated registry directly — see
-// docs/phases/phase-S2-*.md. A follower correctly 307-redirects these now,
-// rather than silently succeeding against its own out-of-sync local copy.
+// per-node, unreplicated registry directly — see docs/phases/phase-S2-*.md.
+// A follower correctly 307-redirects these, rather than silently succeeding
+// against its own out-of-sync local copy.
+//
+// Handler bodies (validation, response shaping) live in `routes::collections`
+// and are shared with the standalone path; only the commit/read primitives
+// below are cluster-specific.
+
+/// Cluster impl of the shared collection primitives — writes commit through
+/// Raft, reads come from the local state machine.
+#[async_trait::async_trait]
+impl crate::routes::collections::CollectionOps for DataPlaneState {
+    async fn resolve(&self, name: &str) -> Option<u16> {
+        self.sm.resolve_namespace(Some(name)).await
+    }
+
+    async fn create(
+        &self,
+        name: &str,
+    ) -> Result<crate::routes::collections::CreatedCollection, Response> {
+        // Best-effort pre-check for the response's `created` flag: a
+        // concurrent create can still race this read, in which case `created`
+        // may read `true` even though another request won the race. Cosmetic
+        // only — `id` always comes from the committed response, never from
+        // this check.
+        let already_existed = self.sm.resolve_namespace(Some(name)).await.is_some();
+        let resp = raft_write_data(
+            &self.raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNamespace { name: name.to_string() },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            },
+        )
+        .await?;
+        Ok(crate::routes::collections::CreatedCollection {
+            id: resp.allocated_namespace_id.unwrap_or(0),
+            already_existed,
+        })
+    }
+
+    async fn drop_collection(&self, name: &str) -> Result<(), Response> {
+        raft_write_data(
+            &self.raft,
+            ClientRequest {
+                event: KernelEvent::DropNamespace { name: name.to_string() },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn list(&self) -> Vec<(String, u16)> {
+        // Local read, no Raft round trip — matches the eventual-consistency
+        // convention every other list-style read in this file already uses
+        // (e.g. cluster_list_nodes).
+        self.sm.list_namespaces().await
+    }
+}
 
 async fn create_collection_handler(
     State(s): State<DataPlaneState>,
-    Json(payload): Json<CreateCollectionRequest>,
-) -> Response {
-    let name = payload.name.trim().to_string();
-    if name.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "collection name cannot be empty" })),
-        )
-            .into_response();
-    }
-    if name == "default" {
-        // Idempotent no-op — "default" always exists as id 0.
-        return (
-            StatusCode::OK,
-            Json(CreateCollectionResponse { name, id: 0, created: false }),
-        )
-            .into_response();
-    }
-
-    // Best-effort pre-check for the response's `created` flag: a concurrent
-    // create can still race this read, in which case `created` may read
-    // `true` even though another request won the race. Cosmetic only — `id`
-    // always comes from the committed response below, never from this check.
-    let already_exists = s.sm.resolve_namespace(Some(&name)).await.is_some();
-
-    raft_write(
-        &s.raft,
-        ClientRequest {
-            event: KernelEvent::AutoCreateNamespace { name: name.clone() },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-        },
-        move |resp| {
-            (
-                StatusCode::OK,
-                Json(CreateCollectionResponse {
-                    name,
-                    id: resp.allocated_namespace_id.unwrap_or(0),
-                    created: !already_exists,
-                }),
-            )
-                .into_response()
-        },
-    )
-    .await
+    Json(payload): Json<crate::api::CreateCollectionRequest>,
+) -> Result<Json<crate::api::CreateCollectionResponse>, Response> {
+    crate::routes::collections::create_collection(&s, payload).await
 }
 
 async fn list_collections_handler(
     State(s): State<DataPlaneState>,
-) -> Json<ListCollectionsResponse> {
-    // Local read, no Raft round trip — matches the eventual-consistency
-    // convention every other list-style read in this file already uses
-    // (e.g. cluster_list_nodes).
-    let collections = s.sm.list_namespaces().await.into_iter()
-        .map(|(name, id)| CollectionInfo { name, id })
-        .collect();
-    Json(ListCollectionsResponse { collections })
+) -> Json<crate::api::ListCollectionsResponse> {
+    crate::routes::collections::list_collections(&s).await
 }
 
 async fn drop_collection_handler(
     State(s): State<DataPlaneState>,
     Path(name): Path<String>,
-) -> Response {
-    if name == "default" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "the 'default' collection cannot be dropped" })),
-        )
-            .into_response();
-    }
-    if s.sm.resolve_namespace(Some(&name)).await.is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("collection '{name}' not found") })),
-        )
-            .into_response();
-    }
-    raft_write(
-        &s.raft,
-        ClientRequest {
-            event: KernelEvent::DropNamespace { name },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-        },
-        |_resp| StatusCode::NO_CONTENT.into_response(),
-    )
-    .await
+) -> Result<StatusCode, Response> {
+    crate::routes::collections::drop_collection(&s, &name).await
 }
 
 async fn health(State(state): State<DataPlaneState>) -> Response {
@@ -1109,89 +1102,69 @@ async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest:
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
+//
+// Phase S7: record ids are only unique within their own shard's kernel state
+// (each shard runs an independent id counter), so the caller must name the
+// collection the record was inserted into. Absent/"default" resolves to the
+// default namespace, shard 0. Handler bodies live in `routes::records`.
 
-#[derive(Deserialize)]
-struct DeleteRequest {
-    id: u32,
-    /// Phase S7. Record ids are only unique within their own shard's kernel
-    /// state (each shard runs an independent id counter), so the caller must
-    /// name the collection the record was inserted into — there is no way to
-    /// find a record from its bare id alone. Absent/"default" resolves to the
-    /// default namespace, shard 0 — byte-identical to pre-S7 behavior.
-    #[serde(default)]
-    collection: Option<String>,
+/// Cluster impl of the shared record-deletion primitives — commits through
+/// Raft on the owning shard.
+#[async_trait::async_trait]
+impl crate::routes::records::RecordOps for DataPlaneState {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.sm.resolve_namespace(name).await
+    }
+
+    async fn delete(
+        &self,
+        ns: u16,
+        id: u32,
+        soft: bool,
+    ) -> Result<crate::routes::records::DeletedRecord, Response> {
+        let shard = self.shard_for(ns);
+        let shard_id = shard_for_namespace(ns, self.shard_count).0 as u8;
+        let state_before: String = {
+            let raw = self.sm.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+        let event = if soft {
+            KernelEvent::SoftDeleteRecord { id: RecordId(id) }
+        } else {
+            KernelEvent::DeleteRecord { id: RecordId(id) }
+        };
+        let resp = raft_write_data(&shard.raft, ClientRequest {
+            event,
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
+        })
+        .await?;
+        let state_after: String = resp.state_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        Ok(crate::routes::records::DeletedRecord {
+            log_index: Some(resp.log_index),
+            shard_id,
+            cluster: true,
+            state_before,
+            state_after,
+        })
+    }
 }
 
 async fn delete_record(
     State(state): State<DataPlaneState>,
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
-    Json(req): Json<DeleteRequest>,
-) -> Response {
-    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
-        }
-    };
-    let shard = state.shard_for(ns_id);
-    let shard_id = shard_for_namespace(ns_id, state.shard_count).0 as u8;
-    let state_before: String = { let raw = state.sm.state_hash().await; raw.iter().map(|b| format!("{:02x}", b)).collect() };
-    let resp = match raft_write_data(&shard.raft, ClientRequest {
-        event: KernelEvent::DeleteRecord { id: RecordId(req.id) },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(r) => r,
-        Err(e) => return e,
-    };
-    let state_after: String = resp.state_hash.iter().map(|b| format!("{:02x}", b)).collect();
-    {
-        use valori_planner::operation::{OperationKind, OperationInputs};
-        let inputs = OperationInputs::Delete {
-            collection: req.collection.clone().unwrap_or_else(|| "default".into()),
-            shard_id, mode: "hard".into(),
-        };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::Delete, &inputs, ns_id, shard_id, resp.log_index, true, state_before, state_after);
-    }
-    (StatusCode::OK, Json(serde_json::json!({ "success": true, "log_index": resp.log_index }))).into_response()
+    Json(req): Json<crate::api::DeleteRecordRequest>,
+) -> Result<Json<crate::api::DeleteRecordResponse>, Response> {
+    crate::routes::records::delete_record(&state, &receipts, req, false).await
 }
 
 async fn soft_delete_record(
     State(state): State<DataPlaneState>,
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
-    Json(req): Json<DeleteRequest>,
-) -> Response {
-    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
-        }
-    };
-    let shard = state.shard_for(ns_id);
-    let shard_id = shard_for_namespace(ns_id, state.shard_count).0 as u8;
-    let state_before: String = { let raw = state.sm.state_hash().await; raw.iter().map(|b| format!("{:02x}", b)).collect() };
-    let resp = match raft_write_data(&shard.raft, ClientRequest {
-        event: KernelEvent::SoftDeleteRecord { id: RecordId(req.id) },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(r) => r,
-        Err(e) => return e,
-    };
-    let state_after: String = resp.state_hash.iter().map(|b| format!("{:02x}", b)).collect();
-    {
-        use valori_planner::operation::{OperationKind, OperationInputs};
-        let inputs = OperationInputs::Delete {
-            collection: req.collection.clone().unwrap_or_else(|| "default".into()),
-            shard_id, mode: "soft".into(),
-        };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::Delete, &inputs, ns_id, shard_id, resp.log_index, true, state_before, state_after);
-    }
-    (StatusCode::OK, Json(serde_json::json!({ "success": true, "log_index": resp.log_index }))).into_response()
+    Json(req): Json<crate::api::DeleteRecordRequest>,
+) -> Result<Json<crate::api::DeleteRecordResponse>, Response> {
+    crate::routes::records::delete_record(&state, &receipts, req, true).await
 }
 
 // ── Batch insert ──────────────────────────────────────────────────────────────
@@ -1353,174 +1326,196 @@ async fn event_log_proof(State(state): State<DataPlaneState>) -> Response {
     (StatusCode::OK, Json(serde_json::Value::Object(body))).into_response()
 }
 
-// ── Graph — create node ───────────────────────────────────────────────────────
+// ── Graph — shared handlers (routes::graph) ──────────────────────────────────
+//
+// Handler bodies (kind validation, 404 shaping, list pagination) live in
+// `routes::graph` and are shared with the standalone path; only the
+// commit/read primitives below are cluster-specific. Phase S8 shard routing
+// is preserved: every op resolves the collection and targets the shard that
+// owns that namespace. Reads keep the startup readiness gate (B13).
 
-#[derive(Deserialize)]
-struct CreateNodeRequest {
-    kind: u8,
-    record_id: Option<u32>,
-    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
-    /// byte-identical to pre-S8 behavior.
-    #[serde(default)]
-    collection: Option<String>,
+/// Cluster impl of the shared graph primitives — writes commit through Raft
+/// on the owning shard, reads come from that shard's state machine.
+#[async_trait::async_trait]
+impl crate::routes::graph::GraphOps for DataPlaneState {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.sm.resolve_namespace(name).await
+    }
+
+    async fn create_node(
+        &self,
+        ns: u16,
+        kind: NodeKind,
+        record_id: Option<u32>,
+    ) -> Result<crate::routes::graph::CommittedGraphWrite, Response> {
+        let resp = raft_write_data(
+            &self.shard_for(ns).raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNode { kind, record: record_id.map(RecordId) },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
+        Ok(crate::routes::graph::CommittedGraphWrite {
+            id: resp.allocated_node_id.unwrap_or(0),
+            log_index: Some(resp.log_index),
+        })
+    }
+
+    async fn create_edge(
+        &self,
+        ns: u16,
+        from: u32,
+        to: u32,
+        kind: EdgeKind,
+    ) -> Result<crate::routes::graph::CommittedGraphWrite, Response> {
+        let resp = raft_write_data(
+            &self.shard_for(ns).raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateEdge { from: NodeId(from), to: NodeId(to), kind },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
+        Ok(crate::routes::graph::CommittedGraphWrite {
+            id: resp.allocated_edge_id.unwrap_or(0),
+            log_index: Some(resp.log_index),
+        })
+    }
+
+    async fn delete_node(&self, ns: u16, id: u32) -> Result<Option<u64>, Response> {
+        let resp = raft_write_data(
+            &self.shard_for(ns).raft,
+            ClientRequest {
+                event: KernelEvent::DeleteNode { id: NodeId(id) },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
+        Ok(Some(resp.log_index))
+    }
+
+    async fn get_node(
+        &self,
+        ns: u16,
+        id: u32,
+    ) -> Result<Option<crate::api::GetNodeResponse>, Response> {
+        self.readiness.check(&self.raft)?;
+        Ok(self
+            .shard_for(ns)
+            .state_machine
+            .with_state(move |s| {
+                s.get_node(NodeId(id)).map(|n| crate::api::GetNodeResponse {
+                    kind: n.kind as u8,
+                    record_id: n.record.map(|r| r.0),
+                    namespace_id: n.namespace_id,
+                })
+            })
+            .await)
+    }
+
+    async fn node_edges(
+        &self,
+        ns: u16,
+        id: u32,
+    ) -> Result<Option<Vec<crate::api::EdgeData>>, Response> {
+        self.readiness.check(&self.raft)?;
+        Ok(self
+            .shard_for(ns)
+            .state_machine
+            .with_state(move |s| {
+                s.outgoing_edges(NodeId(id)).map(|iter| {
+                    iter.map(|e| crate::api::EdgeData {
+                        edge_id: e.id.0,
+                        to_node: e.to.0,
+                        kind: e.kind as u8,
+                    })
+                    .collect::<Vec<_>>()
+                })
+            })
+            .await)
+    }
+
+    async fn list_nodes(&self, ns: u16) -> Result<Vec<crate::api::NodeInfo>, Response> {
+        // Phase S3b: read from the shard that owns this namespace's data.
+        Ok(self
+            .shard_for(ns)
+            .state_machine
+            .with_state(move |s| {
+                s.iter_nodes()
+                    .filter(|n| n.namespace_id == ns)
+                    .map(|n| crate::api::NodeInfo {
+                        node_id: n.id.0,
+                        kind: n.kind as u8,
+                        record_id: n.record.map(|r| r.0),
+                        namespace_id: n.namespace_id,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await)
+    }
+
+    async fn subgraph(
+        &self,
+        ns: u16,
+        root: u32,
+        depth: u32,
+    ) -> Result<(serde_json::Value, serde_json::Value), Response> {
+        self.readiness.check(&self.raft)?;
+        Ok(self
+            .shard_for(ns)
+            .state_machine
+            .with_state(move |s| {
+                let (nodes, edges) = crate::graph_rag::expand_subgraph(s, &[root], depth);
+                (serde_json::Value::Array(nodes), serde_json::Value::Array(edges))
+            })
+            .await)
+    }
 }
 
 async fn create_graph_node(
     State(state): State<DataPlaneState>,
-    Json(req): Json<CreateNodeRequest>,
-) -> Response {
-    let kind = match NodeKind::from_u8(req.kind) {
-        Some(k) => k,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("unknown node kind: {}", req.kind) })),
-            )
-                .into_response();
-        }
-    };
-    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
-        }
-    };
-    let shard_raft = &state.shard_for(ns_id).raft;
-    let record = req.record_id.map(RecordId);
-    raft_write(
-        shard_raft,
-        ClientRequest { event: KernelEvent::AutoCreateNode { kind, record }, request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id },
-        |resp| {
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "node_id": resp.allocated_node_id.unwrap_or(0),
-                    "log_index": resp.log_index,
-                })),
-            )
-                .into_response()
-        },
-    )
-    .await
+    Json(req): Json<crate::api::CreateNodeRequest>,
+) -> Result<Json<crate::api::CreateNodeResponse>, Response> {
+    crate::routes::graph::create_node(&state, req).await
 }
 
-// ── Graph — get node ──────────────────────────────────────────────────────────
-
-/// Phase S8: node/edge ids are only unique within their own shard's kernel
-/// state, so lookups must be told which collection to look in — the same
-/// reasoning as `DeleteRequest::collection` (S7).
-#[derive(Deserialize)]
-struct CollectionQuery {
-    #[serde(default)]
-    collection: Option<String>,
-}
+// ── Graph — get / delete node ─────────────────────────────────────────────────
+//
+// Phase S8: node/edge ids are only unique within their own shard's kernel
+// state, so lookups must be told which collection to look in — the same
+// reasoning as `DeleteRequest::collection` (S7). The shared
+// `routes::graph::CollectionQuery` carries that parameter on both paths.
 
 async fn get_graph_node(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
-    axum::extract::Query(q): axum::extract::Query<CollectionQuery>,
-) -> Response {
-    if let Err(resp) = state.readiness.check(&state.raft) {
-        return resp;
-    }
-    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", q.collection)
-            }))).into_response();
-        }
-    };
-    let shard_sm = &state.shard_for(ns_id).state_machine;
-    // Wire-compatible with the standalone server's GetNodeResponse (api.rs) —
-    // {"kind", "record_id", "namespace_id"}, matching the SearchHit
-    // convention used elsewhere in this file. Was previously
-    // {"id","kind","record"}, silently incompatible with standalone:
-    // the Python SDK's walk()/expand() read n["record_id"] specifically
-    // and would KeyError against the old cluster shape.
-    let result = shard_sm
-        .with_state(|s| {
-            s.get_node(NodeId(id)).map(|n| {
-                serde_json::json!({
-                    "kind": n.kind as u8,
-                    "record_id": n.record.map(|r| r.0),
-                    "namespace_id": n.namespace_id,
-                })
-            })
-        })
-        .await;
+    axum::extract::Query(q): axum::extract::Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<crate::api::GetNodeResponse>, Response> {
+    crate::routes::graph::get_node(&state, id, q).await
+}
 
-    match result {
-        Some(body) => (StatusCode::OK, Json(body)).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("node {id} not found") })),
-        )
-            .into_response(),
-    }
+async fn delete_graph_node(
+    State(state): State<DataPlaneState>,
+    Path(id): Path<u32>,
+    axum::extract::Query(q): axum::extract::Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<crate::api::DeleteNodeResponse>, Response> {
+    crate::routes::graph::delete_node(&state, id, q).await
 }
 
 // ── Graph — create edge ───────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct CreateEdgeRequest {
-    from: u32,
-    to: u32,
-    kind: u8,
-    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
-    /// byte-identical to pre-S8 behavior.
-    #[serde(default)]
-    collection: Option<String>,
-}
-
 async fn create_graph_edge(
     State(state): State<DataPlaneState>,
-    Json(req): Json<CreateEdgeRequest>,
-) -> Response {
-    let kind = match EdgeKind::from_u8(req.kind) {
-        Some(k) => k,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("unknown edge kind: {}", req.kind) })),
-            )
-                .into_response();
-        }
-    };
-    let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
-        }
-    };
-    let shard_raft = &state.shard_for(ns_id).raft;
-    raft_write(
-        shard_raft,
-        ClientRequest {
-            event: KernelEvent::AutoCreateEdge {
-                from: NodeId(req.from),
-                to: NodeId(req.to),
-                kind,
-            },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-        },
-        |resp| {
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "edge_id": resp.allocated_edge_id.unwrap_or(0),
-                    "log_index": resp.log_index,
-                })),
-            )
-                .into_response()
-        },
-    )
-    .await
+    Json(req): Json<crate::api::CreateEdgeRequest>,
+) -> Result<Json<crate::api::CreateEdgeResponse>, Response> {
+    crate::routes::graph::create_edge(&state, req).await
 }
 
 // ── Graph — get outgoing edges ────────────────────────────────────────────────
@@ -1528,93 +1523,20 @@ async fn create_graph_edge(
 async fn get_graph_edges(
     State(state): State<DataPlaneState>,
     Path(id): Path<u32>,
-    axum::extract::Query(q): axum::extract::Query<CollectionQuery>,
-) -> Response {
-    if let Err(resp) = state.readiness.check(&state.raft) {
-        return resp;
-    }
-    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", q.collection)
-            }))).into_response();
-        }
-    };
-    let shard_sm = &state.shard_for(ns_id).state_machine;
-    // Wire-compatible with the standalone server's GetEdgesResponse/EdgeData
-    // (api.rs) — {"edge_id", "to_node", "kind"}, no "from" (implied by the
-    // path's :id) and no separate "id"/"to" pair. Was previously
-    // {"id","from","to","kind"}: the Python SDK's walk()/neighbors() read
-    // edge["to_node"] specifically and would KeyError against the old shape.
-    let edges: Option<Vec<serde_json::Value>> = shard_sm
-        .with_state(|s| {
-            s.outgoing_edges(NodeId(id)).map(|iter| {
-                iter.map(|e| {
-                    serde_json::json!({
-                        "edge_id": e.id.0,
-                        "to_node": e.to.0,
-                        "kind": e.kind as u8,
-                    })
-                })
-                .collect::<Vec<_>>()
-            })
-        })
-        .await;
-
-    match edges {
-        Some(list) => (StatusCode::OK, Json(serde_json::json!({ "edges": list }))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("node {id} not found") })),
-        )
-            .into_response(),
-    }
+    axum::extract::Query(q): axum::extract::Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<crate::api::GetEdgesResponse>, Response> {
+    crate::routes::graph::get_edges(&state, id, q).await
 }
 
 // ── Graph — BFS subgraph ──────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
-struct SubgraphQuery {
-    root: u32,
-    #[serde(default = "default_subgraph_depth")]
-    depth: u32,
-    /// Phase S8. Absent/"default" targets the default namespace, shard 0 —
-    /// byte-identical to pre-S8 behavior.
-    #[serde(default)]
-    collection: Option<String>,
-}
 fn default_subgraph_depth() -> u32 { 2 }
 
 async fn get_graph_subgraph(
     State(state): State<DataPlaneState>,
-    axum::extract::Query(q): axum::extract::Query<SubgraphQuery>,
-) -> Response {
-    if let Err(resp) = state.readiness.check(&state.raft) {
-        return resp;
-    }
-
-    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
-        Some(id) => id,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", q.collection)
-            }))).into_response();
-        }
-    };
-    let shard_sm = &state.shard_for(ns_id).state_machine;
-
-    let root = q.root;
-    let depth = q.depth;
-
-    let result = shard_sm
-        .with_state(move |s| {
-            let (nodes_out, edges_out) = crate::graph_rag::expand_subgraph(s, &[root], depth);
-            serde_json::json!({ "nodes": nodes_out, "edges": edges_out })
-        })
-        .await;
-
-    (StatusCode::OK, Json(result)).into_response()
+    axum::extract::Query(q): axum::extract::Query<crate::routes::graph::SubgraphQuery>,
+) -> Result<Json<serde_json::Value>, Response> {
+    crate::routes::graph::get_subgraph(&state, q).await
 }
 
 // ── Phase 3.15: native GraphRAG (cluster) — KNN + subgraph in one snapshot ────
@@ -1942,104 +1864,7 @@ async fn cluster_index_rebuild() -> Response {
     }))).into_response()
 }
 
-// ── C4.2: Cluster memory consolidation ───────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct ClusterMemoryConsolidateRequest {
-    old_record_id: u32,
-    new_vector: Vec<f32>,
-    #[serde(default)]
-    collection: Option<String>,
-}
-
-async fn cluster_memory_consolidate(
-    State(state): State<DataPlaneState>,
-    Json(req): Json<ClusterMemoryConsolidateRequest>,
-) -> Response {
-    let new_vector = match to_fxp(&req.new_vector) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
-    };
-
-    // Resolve namespace using the cluster's Raft-replicated registry.
-    let ns_id: u16 = if let Some(name) = req.collection.as_deref() {
-        match state.sm.resolve_namespace(Some(name)).await {
-            Some(id) => id,
-            None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "collection not found" }))).into_response(),
-        }
-    } else {
-        valori_kernel::types::id::DEFAULT_NS.0
-    };
-
-    // Phase S4: route to the shard that owns this namespace's data.
-    // Assumes old_record_id already lives in this same namespace/shard —
-    // true for any record created via a namespace-aware path (S3a+), since
-    // "consolidate" replaces a record within its own collection, never
-    // moves it across collections.
-    let shard_raft = &state.shard_for(ns_id).raft;
-
-    // Each step reads its allocated ID from the commit response — never a
-    // separate pre-read, which would race a concurrent writer for the same ID.
-
-    // 1. Soft-delete the old record.
-    if let Err(resp) = raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::SoftDeleteRecord { id: RecordId(req.old_record_id) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await { return resp; }
-
-    // 2. Insert replacement vector — id comes from the apply response.
-    let new_record_id = match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoInsertRecord { vector: new_vector, metadata: None, tag: 0 },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(resp) => resp.allocated_record_id.unwrap_or(0),
-        Err(resp) => return resp,
-    };
-
-    // 3. Create graph nodes.
-    let new_node = match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(new_record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
-        Err(resp) => return resp,
-    };
-
-    let old_node = match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.old_record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
-        Err(resp) => return resp,
-    };
-
-    // 4. Supersedes edge: new → old.
-    match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoCreateEdge { from: new_node, to: old_node, kind: EdgeKind::Supersedes },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
-            "old_record_id": req.old_record_id,
-            "new_record_id": new_record_id,
-            "supersedes_edge_id": resp.allocated_edge_id.unwrap_or(0),
-            "log_index": resp.log_index,
-        }))).into_response(),
-        Err(resp) => resp,
-    }
-}
-
-// ── C4.3: Cluster contradiction detection ─────────────────────────────────────
-
-#[derive(serde::Deserialize)]
-struct ClusterMemoryContradictRequest {
-    record_a: u32,
-    record_b: u32,
-    #[serde(default)]
-    threshold: Option<f32>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    collection: Option<String>,
-}
+// ── C4.2 & C4.3: Cluster memory domain implementation ────────────────────────
 
 fn cosine_similarity_from_records(
     rec_a: &valori_kernel::storage::record::Record,
@@ -2056,73 +1881,340 @@ fn cosine_similarity_from_records(
     Some((dot / (mag_a * mag_b)) as f32)
 }
 
+/// Cluster impl of the shared memory domain primitives.
+#[async_trait::async_trait]
+impl crate::routes::memory::MemoryOps for DataPlaneState {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.sm.resolve_namespace(name).await
+    }
+
+    async fn ensure_read_consistency(&self, ns: u16, consistency: Option<&str>) -> Result<(), Response> {
+        if consistency != Some("local") {
+            let shard = self.shard_for(ns);
+            ensure_read_consistency(shard_for_namespace(ns, self.shard_count), &shard.raft, &self.http).await?;
+        }
+        Ok(())
+    }
+
+    async fn upsert_vector(
+        &self,
+        ns: u16,
+        req: &crate::api::MemoryUpsertVectorRequest,
+    ) -> Result<crate::routes::memory::UpsertedMemory, Response> {
+        let vector = to_fxp(&req.vector)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+
+        let shard = self.shard_for(ns);
+        let shard_raft = &shard.raft;
+        let shard_id = shard_for_namespace(ns, self.shard_count).0 as u8;
+        let state_before: String = {
+            let raw = shard.state_machine.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        // 1. Insert vector record.
+        let resp_rec = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let record_id = resp_rec.allocated_record_id.unwrap_or(0);
+
+        // 2. Create or reuse document node.
+        let doc_node_id = if let Some(existing) = req.attach_to_document_node {
+            existing
+        } else {
+            let resp_doc = raft_write_data(shard_raft, ClientRequest {
+                event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+            }).await?;
+            resp_doc.allocated_node_id.unwrap_or(0)
+        };
+
+        // 3. Create chunk node linked to the record.
+        let resp_chunk = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(record_id)) },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let chunk_node_id = resp_chunk.allocated_node_id.unwrap_or(0);
+
+        // 4. Connect document -> chunk.
+        let resp_edge = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoCreateEdge {
+                from: NodeId(doc_node_id),
+                to: NodeId(chunk_node_id),
+                kind: EdgeKind::ParentOf,
+            },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let mut log_index = resp_edge.log_index;
+
+        let memory_id = format!("rec:{}", record_id);
+        if let Some(meta) = &req.metadata {
+            let resp_meta = raft_write_data(shard_raft, ClientRequest {
+                event: KernelEvent::SetMeta { key: memory_id.clone(), value: meta.to_string() },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+            }).await?;
+            log_index = resp_meta.log_index;
+        }
+
+        let state_after: String = {
+            let raw = shard.state_machine.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        Ok(crate::routes::memory::UpsertedMemory {
+            memory_id,
+            record_id,
+            document_node_id: doc_node_id,
+            chunk_node_id,
+            log_index: Some(log_index),
+            shard_id,
+            cluster: true,
+            state_before,
+            state_after,
+        })
+    }
+
+    async fn search_vector(
+        &self,
+        ns: u16,
+        req: &crate::api::MemorySearchVectorRequest,
+    ) -> Result<Vec<crate::api::MemorySearchHit>, Response> {
+        if let Some(locked) = self.sm.locked_dim().await {
+            if req.query_vector.len() != locked {
+                return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                    "error": format!(
+                        "Query vector has {} elements but this store is locked to dim={}.",
+                        req.query_vector.len(), locked
+                    )
+                }))).into_response());
+            }
+        }
+
+        let query = to_fxp(&req.query_vector)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+
+        let shard = self.shard_for(ns);
+        let shard_sm = &shard.state_machine;
+
+        let half_life = req.decay_half_life_secs.unwrap_or(0);
+        let k = req.k;
+
+        let results = if half_life == 0 {
+            shard_sm.with_state(|s| {
+                let mut buf = vec![KernelSearchResult::default(); k as usize];
+                let n = s.search_l2_ns(&query, &mut buf, ns);
+                buf[..n].iter().map(|r| {
+                    let memory_id = format!("rec:{}", r.id.0);
+                    crate::api::MemorySearchHit {
+                        memory_id,
+                        record_id: r.id.0,
+                        score: r.score as f32 / (SCALE as f32 * SCALE as f32),
+                        metadata: None,
+                        decay_factor: None,
+                        age_secs: None,
+                    }
+                }).collect::<Vec<_>>()
+            }).await
+        } else {
+            let pool = (k as usize).saturating_mul(4).max(50).min(1000);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs()).unwrap_or(0);
+            shard_sm.with_state_and_timestamps(|s, created_at| {
+                let mut buf = vec![KernelSearchResult::default(); pool];
+                let n = s.search_l2_ns(&query, &mut buf, ns);
+                let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()
+                    .map(|r| crate::decay::DecayHit {
+                        id: r.id.0,
+                        distance: r.score as f32,
+                        created_at: created_at.get(&r.id.0).copied(),
+                    })
+                    .collect();
+                crate::decay::rerank(candidates, now, half_life, k)
+                    .into_iter()
+                    .map(|h| crate::api::MemorySearchHit {
+                        memory_id: format!("rec:{}", h.id),
+                        record_id: h.id,
+                        score: h.distance,
+                        metadata: None,
+                        decay_factor: Some(h.factor),
+                        age_secs: h.age_secs,
+                    })
+                    .collect::<Vec<_>>()
+            }).await
+        };
+
+        let mut results = results;
+        for hit in &mut results {
+            hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
+        }
+
+        Ok(results)
+    }
+
+    async fn consolidate(
+        &self,
+        ns: u16,
+        req: &crate::api::MemoryConsolidateRequest,
+    ) -> Result<crate::routes::memory::ConsolidatedMemory, Response> {
+        let new_vector = to_fxp(&req.new_vector)
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+
+        let shard = self.shard_for(ns);
+        let shard_raft = &shard.raft;
+        let shard_id = shard_for_namespace(ns, self.shard_count).0 as u8;
+        let state_before: String = {
+            let raw = shard.state_machine.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::SoftDeleteRecord { id: RecordId(req.old_record_id) },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+
+        let resp_rec = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoInsertRecord { vector: new_vector, metadata: None, tag: 0 },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let new_record_id = resp_rec.allocated_record_id.unwrap_or(0);
+
+        let resp_new_node = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(new_record_id)) },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let new_node = NodeId(resp_new_node.allocated_node_id.unwrap_or(0));
+
+        let resp_old_node = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.old_record_id)) },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let old_node = NodeId(resp_old_node.allocated_node_id.unwrap_or(0));
+
+        let resp_edge = raft_write_data(shard_raft, ClientRequest {
+            event: KernelEvent::AutoCreateEdge { from: new_node, to: old_node, kind: EdgeKind::Supersedes },
+            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+        }).await?;
+        let mut log_index = resp_edge.log_index;
+        let edge_id = resp_edge.allocated_edge_id.unwrap_or(0);
+
+        if let Some(meta) = &req.metadata {
+            let memory_id = format!("rec:{}", new_record_id);
+            let resp_meta = raft_write_data(shard_raft, ClientRequest {
+                event: KernelEvent::SetMeta { key: memory_id, value: meta.to_string() },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+            }).await?;
+            log_index = resp_meta.log_index;
+        }
+
+        let state_after: String = {
+            let raw = shard.state_machine.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        Ok(crate::routes::memory::ConsolidatedMemory {
+            old_record_id: req.old_record_id,
+            new_record_id,
+            supersedes_edge_id: edge_id,
+            state_hash: state_after.clone(),
+            log_index: Some(log_index),
+            shard_id,
+            cluster: true,
+            state_before,
+            state_after,
+        })
+    }
+
+    async fn contradict(
+        &self,
+        _ns: u16,
+        req: &crate::api::MemoryContradictRequest,
+    ) -> Result<crate::routes::memory::ContradictedMemory, Response> {
+        self.readiness.check(&self.raft)?;
+
+        let threshold = req.threshold.unwrap_or(0.85);
+        let ra = req.record_a;
+        let rb = req.record_b;
+
+        let similarity: Option<f32> = self.sm.with_state(move |s| {
+            let rec_a = s.get_record(RecordId(ra))?;
+            let rec_b = s.get_record(RecordId(rb))?;
+            cosine_similarity_from_records(rec_a, rec_b)
+        }).await;
+
+        let similarity = match similarity {
+            Some(s) => s,
+            None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": format!("one or both records ({}, {}) not found or not searchable", req.record_a, req.record_b)
+            }))).into_response()),
+        };
+
+        let contradicts = similarity >= threshold;
+
+        let state_before: String = {
+            let raw = self.sm.state_hash().await;
+            raw.iter().map(|b| format!("{:02x}", b)).collect()
+        };
+
+        let (edge_id, log_index, state_after) = if contradicts {
+            let resp_a = raft_write_data(&self.raft, ClientRequest {
+                event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_a)) },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            }).await?;
+            let node_a = NodeId(resp_a.allocated_node_id.unwrap_or(0));
+
+            let resp_b = raft_write_data(&self.raft, ClientRequest {
+                event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_b)) },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            }).await?;
+            let node_b = NodeId(resp_b.allocated_node_id.unwrap_or(0));
+
+            let resp_edge = raft_write_data(&self.raft, ClientRequest {
+                event: KernelEvent::AutoCreateEdge { from: node_a, to: node_b, kind: EdgeKind::Contradicts },
+                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+            }).await?;
+            let eid = resp_edge.allocated_edge_id.unwrap_or(0);
+            let idx = resp_edge.log_index;
+            let hash: String = {
+                let raw = self.sm.state_hash().await;
+                raw.iter().map(|b| format!("{:02x}", b)).collect()
+            };
+            (Some(eid), Some(idx), hash)
+        } else {
+            (None, None, state_before.clone())
+        };
+
+        Ok(crate::routes::memory::ContradictedMemory {
+            record_a: req.record_a,
+            record_b: req.record_b,
+            similarity,
+            contradicts,
+            edge_id,
+            state_hash: state_after.clone(),
+            log_index,
+            shard_id: 0,
+            cluster: true,
+            state_before,
+            state_after,
+        })
+    }
+}
+
+async fn cluster_memory_consolidate(
+    State(state): State<DataPlaneState>,
+    axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    Json(payload): Json<crate::api::MemoryConsolidateRequest>,
+) -> Result<Json<crate::api::MemoryConsolidateResponse>, Response> {
+    crate::routes::memory::memory_consolidate(&state, &receipts, payload).await
+}
+
 async fn cluster_memory_contradict(
     State(state): State<DataPlaneState>,
-    Json(req): Json<ClusterMemoryContradictRequest>,
-) -> Response {
-    if let Err(resp) = state.readiness.check(&state.raft) {
-        return resp;
-    }
-
-    let threshold = req.threshold.unwrap_or(0.85);
-    let ra = req.record_a;
-    let rb = req.record_b;
-
-    let similarity: Option<f32> = state.sm.with_state(move |s| {
-        let rec_a = s.get_record(RecordId(ra))?;
-        let rec_b = s.get_record(RecordId(rb))?;
-        cosine_similarity_from_records(rec_a, rec_b)
-    }).await;
-
-    let similarity = match similarity {
-        Some(s) => s,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": format!("one or both records ({}, {}) not found or not searchable", req.record_a, req.record_b)
-        }))).into_response(),
-    };
-
-    let contradicts = similarity >= threshold;
-
-    if !contradicts {
-        return (StatusCode::OK, Json(serde_json::json!({
-            "record_a": req.record_a,
-            "record_b": req.record_b,
-            "similarity": similarity,
-            "contradicts": false,
-        }))).into_response();
-    }
-
-    // Commit graph nodes + Contradicts edge — IDs come from the apply responses.
-    let node_a = match raft_write_data(&state.raft, ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_a)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-    }).await {
-        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
-        Err(resp) => return resp,
-    };
-
-    let node_b = match raft_write_data(&state.raft, ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_b)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-    }).await {
-        Ok(resp) => NodeId(resp.allocated_node_id.unwrap_or(0)),
-        Err(resp) => return resp,
-    };
-
-    match raft_write_data(&state.raft, ClientRequest {
-        event: KernelEvent::AutoCreateEdge { from: node_a, to: node_b, kind: EdgeKind::Contradicts },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-    }).await {
-        Ok(resp) => (StatusCode::OK, Json(serde_json::json!({
-            "record_a": req.record_a,
-            "record_b": req.record_b,
-            "similarity": similarity,
-            "contradicts": true,
-            "edge_id": resp.allocated_edge_id.unwrap_or(0),
-            "log_index": resp.log_index,
-        }))).into_response(),
-        Err(resp) => resp,
-    }
+    axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    Json(payload): Json<crate::api::MemoryContradictRequest>,
+) -> Result<Json<crate::api::MemoryContradictResponse>, Response> {
+    crate::routes::memory::memory_contradict(&state, &receipts, payload).await
 }
 
 // ── Phase I4: cluster full-pipeline ingest ────────────────────────────────────
@@ -2132,51 +2224,47 @@ async fn cluster_memory_contradict(
 // Same contract as the standalone handler in ingest.rs but every write goes
 // ── Metadata sidecar — replicated via SetMeta KernelEvent (Phase I5) ─────────
 
-#[derive(serde::Deserialize)]
-struct MetaSetPayload {
-    target_id: String,
-    metadata: serde_json::Value,
-}
+/// Cluster impl of the shared metadata primitives — writes replicate through
+/// Raft (`KernelEvent::SetMeta`), reads come from the local state machine.
+#[async_trait::async_trait]
+impl crate::routes::meta::MetaOps for DataPlaneState {
+    async fn set_meta(
+        &self,
+        target_id: String,
+        metadata: serde_json::Value,
+    ) -> Result<(), Response> {
+        raft_write_data(&self.raft, ClientRequest {
+            event: KernelEvent::SetMeta { key: target_id, value: metadata.to_string() },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: 0,
+        })
+        .await
+        .map(|_| ())
+    }
 
-#[derive(serde::Deserialize)]
-struct MetaGetQuery {
-    target_id: String,
+    async fn get_meta(&self, target_id: &str) -> Option<serde_json::Value> {
+        let key = target_id.to_string();
+        self.sm
+            .with_state(move |k| {
+                k.meta.get(&key).and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            })
+            .await
+    }
 }
 
 async fn cluster_meta_set(
     State(state): State<DataPlaneState>,
-    Json(payload): Json<MetaSetPayload>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    match state.raft.client_write(ClientRequest {
-        event: KernelEvent::SetMeta {
-            key:   payload.target_id,
-            value: payload.metadata.to_string(),
-        },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-    }).await {
-        Ok(_) => (axum::http::StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(openraft::error::RaftError::APIError(
-            openraft::error::ClientWriteError::ForwardToLeader(fwd),
-        )) => not_leader_response(fwd.leader_node.as_ref()),
-        Err(e) => (axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                   Json(serde_json::json!({ "error": format!("{e}") }))).into_response(),
-    }
+    Json(payload): Json<crate::api::MetadataSetRequest>,
+) -> Result<Json<crate::api::MetadataSetResponse>, Response> {
+    crate::routes::meta::meta_set(&state, payload).await
 }
 
 async fn cluster_meta_get(
     State(state): State<DataPlaneState>,
-    axum::extract::Query(q): axum::extract::Query<MetaGetQuery>,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    let value = state.sm.with_state(|k| {
-        k.meta.get(&q.target_id).and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-    }).await;
-    Json(serde_json::json!({
-        "target_id": q.target_id,
-        "metadata":  value,
-    })).into_response()
+    axum::extract::Query(q): axum::extract::Query<crate::api::MetadataGetRequest>,
+) -> Json<crate::api::MetadataGetResponse> {
+    crate::routes::meta::meta_get(&state, q).await
 }
 
 // ── Phase I4: Full chunk→embed→insert pipeline replicated via Raft ────────────
@@ -2186,6 +2274,8 @@ async fn cluster_meta_get(
 async fn cluster_ingest(
     State(state): State<DataPlaneState>,
     axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    axum::Extension(tasks): axum::Extension<std::sync::Arc<crate::runner::TaskRegistry>>,
+    axum::extract::Query(query): axum::extract::Query<crate::ingest::IngestQuery>,
     Json(payload): Json<crate::ingest::IngestRequest>,
 ) -> axum::response::Response {
     use axum::http::StatusCode;
@@ -2197,6 +2287,7 @@ async fn cluster_ingest(
     let strategy   = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size = payload.chunk_size.unwrap_or(1000);
     let overlap    = payload.chunk_overlap.unwrap_or(200);
+    let is_async   = query.r#async.or(payload.r#async).unwrap_or(false);
 
     // 1. Embed config
     let embed_cfg = match state.embed_config.clone() {
@@ -2214,6 +2305,221 @@ async fn cluster_ingest(
     if chunks.is_empty() {
         return (StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": "no chunks produced" }))).into_response();
+    }
+
+    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+
+    if is_async {
+        let job_id = format!("job_{}", valori_core::id::ExecutionId::new_random());
+        {
+            let mut jobs_map = tasks.jobs.write().await;
+            jobs_map.insert(job_id.clone(), serde_json::json!({
+                "status": "processing",
+                "job_id": job_id,
+                "chunk_count": chunks.len(),
+                "collection": collection,
+                "strategy_used": strategy_used,
+            }));
+        }
+        let resp = serde_json::json!({
+            "ok": true,
+            "job_id": job_id,
+            "status": "processing",
+            "chunk_count": chunks.len(),
+            "strategy_used": strategy_used,
+            "collection": collection,
+        });
+
+        let state_clone = state.clone();
+        let texts_clone = texts.clone();
+        let embed_cfg_clone = embed_cfg.clone();
+        let collection_clone = collection.clone();
+        let source_clone = source.clone();
+        let job_id_clone = job_id.clone();
+        let receipts_clone = receipts.clone();
+        let jobs_clone = tasks.jobs.clone();
+        let strategy_used_clone = strategy_used.clone();
+        let chunks_clone = chunks.clone();
+
+        tokio::spawn(async move {
+            match crate::embedder::embed_batch(&texts_clone, &embed_cfg_clone, &state_clone.http).await {
+                Ok(vectors) if !vectors.is_empty() && !vectors[0].is_empty() => {
+                    let ns: u16 = if collection_clone == "default" {
+                        0
+                    } else if let Some(id) = state_clone.sm.resolve_namespace(Some(&collection_clone)).await {
+                        id
+                    } else {
+                        match raft_write_data(&state_clone.raft, ClientRequest {
+                            event: KernelEvent::AutoCreateNamespace { name: collection_clone.clone() },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
+                        }).await {
+                            Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
+                            Err(_) => 0,
+                        }
+                    };
+
+                    let shard_raft = &state_clone.shard_for(ns).raft;
+                    let shard_id = shard_for_namespace(ns, state_clone.shard_count).0 as u8;
+                    let state_before: String = {
+                        let raw = state_clone.shard_for(ns).state_machine.state_hash().await;
+                        raw.iter().map(|b| format!("{:02x}", b)).collect()
+                    };
+
+                    let mut record_ids: Vec<u32> = Vec::with_capacity(chunks_clone.len());
+                    for (i, vec_f32) in vectors.iter().enumerate() {
+                        let vector = match to_fxp(vec_f32) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let meta_bytes = Some(
+                            serde_json::json!({ "doc": &source_clone, "n": i, "total": chunks_clone.len(), "text": &chunks_clone[i].text })
+                                .to_string().into_bytes()
+                        );
+                        if let Ok(resp) = shard_raft.client_write(ClientRequest {
+                            event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                        }).await {
+                            record_ids.push(resp.data.allocated_record_id.unwrap_or(0));
+                        }
+                    }
+
+                    let doc_node_id: u32 = match shard_raft.client_write(ClientRequest {
+                        event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
+                        request_id: None,
+                        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                    }).await {
+                        Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
+                        Err(_) => 0,
+                    };
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs().to_string())
+                        .unwrap_or_else(|_| "0".into());
+
+                    for (i, (chunk, &rid)) in chunks_clone.iter().zip(record_ids.iter()).enumerate() {
+                        let chunk_node_id = match shard_raft.client_write(ClientRequest {
+                            event: KernelEvent::AutoCreateNode {
+                                kind: NodeKind::Chunk,
+                                record: Some(RecordId(rid)),
+                            },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                        }).await {
+                            Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
+                            Err(_) => 0,
+                        };
+
+                        if doc_node_id > 0 && chunk_node_id > 0 {
+                            let _ = shard_raft.client_write(ClientRequest {
+                                event: KernelEvent::AutoCreateEdge {
+                                    from: NodeId(doc_node_id),
+                                    to:   NodeId(chunk_node_id),
+                                    kind: EdgeKind::ParentOf,
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                            }).await;
+                        }
+
+                        let chunk_meta = serde_json::json!({
+                            "text":             chunk.text,
+                            "source":           source_clone,
+                            "chunk_index":      i,
+                            "total_chunks":     chunks_clone.len(),
+                            "section_title":    chunk.title,
+                            "document_node_id": doc_node_id,
+                            "chunk_node_id":    chunk_node_id,
+                            "collection":       collection_clone,
+                            "chunk_mode":       strategy_used_clone,
+                            "ingested_at":      &now,
+                            "embed_model":      &embed_cfg_clone.model,
+                            "embed_provider":   &embed_cfg_clone.provider,
+                        });
+                        let _ = shard_raft.client_write(ClientRequest {
+                            event: KernelEvent::SetMeta {
+                                key:   format!("record:{rid}"),
+                                value: chunk_meta.to_string(),
+                            },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                        }).await;
+                    }
+
+                    let doc_meta = serde_json::json!({
+                        "source":       source_clone,
+                        "total_chunks": chunks_clone.len(),
+                        "collection":   collection_clone,
+                        "strategy":     strategy_used_clone,
+                        "embed_model":  &embed_cfg_clone.model,
+                        "ingested_at":  &now,
+                    });
+                    let _ = shard_raft.client_write(ClientRequest {
+                        event: KernelEvent::SetMeta {
+                            key:   format!("document:{doc_node_id}"),
+                            value: doc_meta.to_string(),
+                        },
+                        request_id: None,
+                        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+                    }).await;
+
+                    let state_after: String = {
+                        let raw = state_clone.shard_for(ns).state_machine.state_hash().await;
+                        raw.iter().map(|b| format!("{:02x}", b)).collect()
+                    };
+                    {
+                        use valori_planner::operation::{OperationInputs, OperationKind};
+                        let inputs = OperationInputs::Ingest {
+                            strategy: strategy_used_clone.clone(),
+                            collection: collection_clone.clone(),
+                            shard_id,
+                            embed_enabled: true,
+                        };
+                        crate::receipt_bridge::emit_write(
+                            &receipts_clone,
+                            OperationKind::Ingest,
+                            &inputs,
+                            ns,
+                            shard_id,
+                            0,
+                            true,
+                            state_before,
+                            state_after,
+                        );
+                    }
+
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "completed",
+                        "job_id": job_id_clone,
+                        "document_node_id": doc_node_id,
+                        "chunk_count": record_ids.len(),
+                        "record_ids": record_ids,
+                        "collection": collection_clone,
+                        "strategy_used": strategy_used_clone,
+                    }));
+                }
+                Ok(_) => {
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "failed",
+                        "job_id": job_id_clone,
+                        "error": "embed provider returned empty vectors",
+                    }));
+                }
+                Err(e) => {
+                    let mut jobs_map = jobs_clone.write().await;
+                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
+                        "status": "failed",
+                        "job_id": job_id_clone,
+                        "error": e.to_string(),
+                    }));
+                }
+            }
+        });
+        return (StatusCode::ACCEPTED, Json(resp)).into_response();
     }
 
     // 3. Embed
@@ -3123,55 +3429,17 @@ async fn cluster_extract_entities(
 
 // ── Missing routes: version, graph/nodes, memory upsert/search, timeline, snapshots ──
 
-async fn cluster_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
-#[derive(Deserialize, Default)]
-struct ClusterListNodesQuery {
-    collection: Option<String>,
-    /// Filter to a single node kind (0=Document, 1=Chunk, 2=Concept, …).
-    /// Absent = all kinds, matching pre-pagination behavior.
-    kind: Option<u8>,
-    /// Pagination — applied after the `kind` filter. Absent `limit` returns
-    /// everything (backward compatible with clients that predate pagination).
-    #[serde(default)]
-    offset: usize,
-    limit: Option<usize>,
-}
+use crate::routes::version as cluster_version;
 
 async fn cluster_list_nodes(
     State(state): State<DataPlaneState>,
-    Query(q): Query<ClusterListNodesQuery>,
-) -> Response {
-    let ns_id = match state.sm.resolve_namespace(q.collection.as_deref()).await {
-        Some(id) => id,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": format!("unknown collection '{}'", q.collection.as_deref().unwrap_or("default"))
-        }))).into_response(),
-    };
-    // Phase S3b: read from the shard that owns this namespace's data.
-    let shard_sm = &state.shard_for(ns_id).state_machine;
-
-    let filtered = shard_sm.with_state(move |s| {
-        s.iter_nodes()
-            .filter(|n| q.collection.is_none() || n.namespace_id == ns_id)
-            .filter(|n| q.kind.is_none_or(|k| n.kind as u8 == k))
-            .map(|n| crate::api::NodeInfo {
-                node_id: n.id.0,
-                kind: n.kind as u8,
-                record_id: n.record.map(|r| r.0),
-                namespace_id: n.namespace_id,
-            })
-            .collect::<Vec<_>>()
-    }).await;
-
-    let count = filtered.len();
-    let nodes = match q.limit {
-        Some(limit) => filtered.into_iter().skip(q.offset).take(limit).collect(),
-        None => filtered,
-    };
-    (StatusCode::OK, Json(crate::api::ListNodesResponse { nodes, count })).into_response()
+    Query(q): Query<crate::routes::graph::ListNodesQuery>,
+) -> Result<Json<crate::api::ListNodesResponse>, Response> {
+    // Unified via routes::graph — note this fixes a tenant-isolation leak:
+    // the old handler listed EVERY namespace's nodes when `collection` was
+    // absent; the shared body scopes an absent collection to "default",
+    // matching the standalone path and every other collection-aware endpoint.
+    crate::routes::graph::list_nodes(&state, q).await
 }
 
 // ── Cluster memory upsert — writes go through Raft ───────────────────────────
@@ -3180,113 +3448,8 @@ async fn cluster_memory_upsert(
     State(state): State<DataPlaneState>,
     axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<crate::api::MemoryUpsertVectorRequest>,
-) -> Response {
-    let vector = match to_fxp(&payload.vector) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
-    };
-
-    let ns_id: u16 = match state.sm.resolve_namespace(payload.collection.as_deref()).await {
-        Some(id) => id,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "error": format!("unknown collection '{}'", payload.collection.as_deref().unwrap_or("default"))
-        }))).into_response(),
-    };
-    // Phase S3b: route to the shard that owns this namespace's data. At
-    // shard_count=1 this is always shard 0's raft — byte-identical to
-    // pre-S3 behavior.
-    let shard_raft = &state.shard_for(ns_id).raft;
-    let shard_id = shard_for_namespace(ns_id, state.shard_count).0 as u8;
-    let state_before: String = {
-        let raw = state.shard_for(ns_id).state_machine.state_hash().await;
-        raw.iter().map(|b| format!("{:02x}", b)).collect()
-    };
-
-    // 1. Insert vector record.
-    let record_id = match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(r) => r.allocated_record_id.unwrap_or(0),
-        Err(resp) => return resp,
-    };
-
-    // 2. Create or reuse document node.
-    let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
-        existing
-    } else {
-        match raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-        }).await {
-            Ok(r) => r.allocated_node_id.unwrap_or(0),
-            Err(resp) => return resp,
-        }
-    };
-
-    // 3. Create chunk node linked to the record.
-    let chunk_node_id = match raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(record_id)) },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        Ok(r) => r.allocated_node_id.unwrap_or(0),
-        Err(resp) => return resp,
-    };
-
-    // 4. Connect document → chunk.
-    if let Err(resp) = raft_write_data(shard_raft, ClientRequest {
-        event: KernelEvent::AutoCreateEdge {
-            from: NodeId(doc_node_id),
-            to: NodeId(chunk_node_id),
-            kind: EdgeKind::ParentOf,
-        },
-        request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-    }).await {
-        return resp;
-    }
-
-    let memory_id = format!("rec:{}", record_id);
-    if let Some(meta) = payload.metadata {
-        // Audited + replicated via SetMeta, not the per-node JSON sidecar —
-        // otherwise this metadata would only exist on whichever node handled
-        // the request instead of on every replica.
-        if let Err(resp) = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::SetMeta { key: memory_id.clone(), value: meta.to_string() },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-        }).await {
-            return resp;
-        }
-    }
-
-    let state_after: String = {
-        let raw = state.shard_for(ns_id).state_machine.state_hash().await;
-        raw.iter().map(|b| format!("{:02x}", b)).collect()
-    };
-    {
-        use valori_planner::operation::{OperationInputs, OperationKind};
-        let inputs = OperationInputs::MemoryUpsert {
-            collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
-            shard_id,
-        };
-        crate::receipt_bridge::emit_write(
-            &receipts,
-            OperationKind::MemoryUpsert,
-            &inputs,
-            ns_id,
-            shard_id,
-            0,
-            true,
-            state_before,
-            state_after,
-        );
-    }
-
-    (StatusCode::OK, Json(crate::api::MemoryUpsertResponse {
-        memory_id,
-        record_id,
-        document_node_id: doc_node_id,
-        chunk_node_id,
-    })).into_response()
+) -> Result<Json<crate::api::MemoryUpsertResponse>, Response> {
+    crate::routes::memory::memory_upsert(&state, &receipts, payload).await
 }
 
 // ── Cluster memory search — read-only ────────────────────────────────────────
@@ -3294,95 +3457,8 @@ async fn cluster_memory_upsert(
 async fn cluster_memory_search(
     State(state): State<DataPlaneState>,
     Json(payload): Json<crate::api::MemorySearchVectorRequest>,
-) -> Response {
-    // Dimension check.
-    if let Some(locked) = state.sm.locked_dim().await {
-        if payload.query_vector.len() != locked {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": format!(
-                    "Query vector has {} elements but this store is locked to dim={}.",
-                    payload.query_vector.len(), locked
-                )
-            }))).into_response();
-        }
-    }
-
-    let query = match to_fxp(&payload.query_vector) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response(),
-    };
-
-    let ns_id: u16 = state.sm.resolve_namespace(payload.collection.as_deref()).await.unwrap_or(0);
-    // Phase S3b: read from the shard that owns this namespace's data.
-    let shard = state.shard_for(ns_id);
-    let shard_sm = &shard.state_machine;
-
-    // Phase S6: linearizable by default (matches /v1/search), now that the
-    // read-index protocol is shard-aware — this is the first read handler
-    // to actually exercise it, since /v1/search and GraphRAG are still
-    // shard-0-only pending S7/S8.
-    if payload.consistency.as_deref() != Some("local") {
-        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
-            return resp;
-        }
-    }
-
-    let half_life = payload.decay_half_life_secs.unwrap_or(0);
-    let k = payload.k;
-
-    let results = if half_life == 0 {
-        shard_sm.with_state(|s| {
-            let mut buf = vec![KernelSearchResult::default(); k];
-            let n = s.search_l2_ns(&query, &mut buf, ns_id);
-            buf[..n].iter().map(|r| {
-                let memory_id = format!("rec:{}", r.id.0);
-                crate::api::MemorySearchHit {
-                    memory_id,
-                    record_id: r.id.0,
-                    score: r.score as f32 / (SCALE as f32 * SCALE as f32),
-                    metadata: None,
-                    decay_factor: None,
-                    age_secs: None,
-                }
-            }).collect::<Vec<_>>()
-        }).await
-    } else {
-        let pool = k.saturating_mul(4).max(50).min(1000);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs()).unwrap_or(0);
-        shard_sm.with_state_and_timestamps(|s, created_at| {
-            let mut buf = vec![KernelSearchResult::default(); pool];
-            let n = s.search_l2_ns(&query, &mut buf, ns_id);
-            let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()
-                .map(|r| crate::decay::DecayHit {
-                    id: r.id.0,
-                    distance: r.score as f32,
-                    created_at: created_at.get(&r.id.0).copied(),
-                })
-                .collect();
-            crate::decay::rerank(candidates, now, half_life, k)
-                .into_iter()
-                .map(|h| crate::api::MemorySearchHit {
-                    memory_id: format!("rec:{}", h.id),
-                    record_id: h.id,
-                    score: h.distance,
-                    metadata: None,
-                    decay_factor: Some(h.factor),
-                    age_secs: h.age_secs,
-                })
-                .collect::<Vec<_>>()
-        }).await
-    };
-
-    // Attach metadata — read from the replicated KernelState.meta map (set via
-    // SetMeta) so every replica answers identically, not a per-node sidecar.
-    let mut results = results;
-    for hit in &mut results {
-        hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
-    }
-
-    (StatusCode::OK, Json(crate::api::MemorySearchResponse { results })).into_response()
+) -> Result<Json<crate::api::MemorySearchResponse>, Response> {
+    crate::routes::memory::memory_search(&state, payload).await
 }
 
 // ── Cluster timeline — read from events.log if configured ────────────────────
@@ -3681,13 +3757,8 @@ async fn cluster_shard_routing(
         Some(s) => s,
         None => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "no shard 0"}))).into_response(),
     };
-    let collections: Vec<(String, u16)> = shard0.state_machine.with_state(|ks| {
-        use crate::engine::NamespaceRegistry;
-        let mut out = vec![("default".to_string(), 0u16)];
-        // Extract namespace list from the kernel state's namespace tracking.
-        // The SM stores a NamespaceRegistry separately (via ValoriStateMachine).
-        // Access it via the state machine's namespace registry if available.
-        out
+    let collections: Vec<(String, u16)> = shard0.state_machine.with_state(|_ks| {
+        vec![("default".to_string(), 0u16)]
     }).await;
 
     // Build per-shard collection buckets

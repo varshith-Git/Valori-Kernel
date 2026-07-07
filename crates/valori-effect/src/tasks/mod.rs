@@ -2,3 +2,4 @@
 pub mod embed;
 pub mod insert_record;
 pub mod search;
+pub mod insert_graph;

@@ -8,7 +8,6 @@
 //! The operation hash is the canonical RFC-0003 hash:
 //! `BLAKE3(kind_discriminant ‖ bincode(inputs) ‖ bincode(policy))`
 //! which is reproducible from the planning parameters alone (no data, no time).
-use std::sync::Arc;
 use valori_core::id::ExecutionId;
 use valori_effect::{ReceiptAssembler, ReceiptFragment, ReceiptStore};
 use valori_planner::operation::{

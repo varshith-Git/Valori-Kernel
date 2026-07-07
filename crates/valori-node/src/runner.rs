@@ -28,6 +28,7 @@ use valori_effect::error::{EffectError, EffectResult};
 use valori_effect::task::{NoOpTask, Task, TaskContext, TaskOutput};
 use valori_effect::tasks::embed::EmbedTask;
 use valori_effect::tasks::insert_record::InsertRecordTask;
+use valori_effect::tasks::insert_graph::{InsertNodeTask, InsertEdgeTask};
 use valori_effect::tasks::search::SearchTask;
 use valori_planner::graph::{ExecutionGraph, TaskKind};
 use valori_planner::operation::ExecutionPolicy;
@@ -40,6 +41,7 @@ use valori_planner::registry::{ExecutionHandle, ExecutionStatus};
 /// Constructed once at node startup and shared (via `Arc`) across all executions.
 pub struct TaskRegistry {
     tasks: HashMap<String, Arc<dyn Task>>,
+    pub jobs: Arc<tokio::sync::RwLock<HashMap<String, serde_json::Value>>>,
 }
 
 impl TaskRegistry {
@@ -48,17 +50,19 @@ impl TaskRegistry {
         let mut tasks: HashMap<String, Arc<dyn Task>> = HashMap::new();
         tasks.insert("embed".into(),         Arc::new(EmbedTask));
         tasks.insert("insert_record".into(), Arc::new(InsertRecordTask));
+        tasks.insert("insert_node".into(),   Arc::new(InsertNodeTask));
+        tasks.insert("insert_edge".into(),   Arc::new(InsertEdgeTask));
         tasks.insert("search".into(),        Arc::new(SearchTask));
         tasks.insert("noop".into(),          Arc::new(NoOpTask));
         // Additional task kinds use NoOpTask as a passthrough stub until A8.
         for kind_name in &[
-            "insert_node", "insert_edge", "soft_delete_record",
+            "soft_delete_record",
             "graph_rag", "llm_complete", "http_fetch",
             "read_index", "snapshot_artifact", "proof_fragment",
         ] {
             tasks.insert(kind_name.to_string(), Arc::new(NoOpTask));
         }
-        TaskRegistry { tasks }
+        TaskRegistry { tasks, jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
     }
 
     pub fn get(&self, kind: &TaskKind) -> Option<Arc<dyn Task>> {

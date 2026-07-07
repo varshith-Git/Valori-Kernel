@@ -245,6 +245,7 @@ pub fn build_router_with_keys(
         .route("/v1/graph/edges/:id",           axum::routing::get(get_edges))
         .route("/v1/graph/subgraph",            axum::routing::get(get_subgraph))
         .route("/v1/delete",                    post(delete_record))
+        .route("/v1/soft-delete",               post(soft_delete_record))
         .route("/v1/vectors/batch-insert",      post(batch_insert))
         .route("/v1/graphrag",                  post(graphrag))
         .route("/v1/snapshot/download",         axum::routing::get(snapshot))
@@ -285,6 +286,7 @@ pub fn build_router_with_keys(
         .route("/v1/shard/routing",             axum::routing::get(shard_routing_handler))
         .route("/v1/ingest/document",           post(crate::ingest::ingest_document))
         .route("/v1/ingest",                    post(crate::ingest::ingest))
+        .route("/v1/ingest/status/:job_id",     get(crate::ingest::get_ingest_status))
         .route("/v1/ingest/update",             post(crate::ingest::ingest_update))
         .route("/v1/ingest/extract-entities",   post(extract_entities))
         .route("/v1/tree/build",                post(tree_build))
@@ -386,32 +388,56 @@ async fn health_check(
     (status_code, Json(h))
 }
 
-async fn version_handler() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+use crate::routes::version as version_handler;
+
+/// Standalone impl of the shared record-deletion primitives.
+#[async_trait::async_trait]
+impl crate::routes::records::RecordOps for SharedEngine {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.read().await.namespaces.resolve(name)
+    }
+
+    async fn delete(
+        &self,
+        _ns: u16,
+        id: u32,
+        soft: bool,
+    ) -> Result<crate::routes::records::DeletedRecord, Response> {
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        let mut engine = self.write().await;
+        let state_before: String =
+            hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        if soft {
+            engine.soft_delete_record(id).map_err(|e| e.into_response())?;
+        } else {
+            engine.delete_record(id).map_err(|e| e.into_response())?;
+        }
+        let state_after: String =
+            hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        Ok(crate::routes::records::DeletedRecord {
+            log_index: None,
+            shard_id: 0,
+            cluster: false,
+            state_before,
+            state_after,
+        })
+    }
 }
 
 async fn delete_record(
     State(state): State<SharedEngine>,
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<DeleteRecordRequest>,
-) -> Result<Json<DeleteRecordResponse>, EngineError> {
-    use valori_kernel::snapshot::blake3::hash_state_blake3;
-    let mut engine = state.write().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-    engine.delete_record(payload.id)?;
-    let state_after: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-    drop(engine);
-    {
-        use valori_planner::operation::{OperationKind, OperationInputs};
-        let inputs = OperationInputs::Delete {
-            collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
-            shard_id: 0,
-            mode: "hard".into(),
-        };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::Delete, &inputs, ns, 0, 0, false, state_before, state_after);
-    }
-    Ok(Json(DeleteRecordResponse { success: true }))
+) -> Result<Json<DeleteRecordResponse>, Response> {
+    crate::routes::records::delete_record(&state, &receipts, payload, false).await
+}
+
+async fn soft_delete_record(
+    State(state): State<SharedEngine>,
+    axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
+    Json(payload): Json<DeleteRecordRequest>,
+) -> Result<Json<DeleteRecordResponse>, Response> {
+    crate::routes::records::delete_record(&state, &receipts, payload, true).await
 }
 
 async fn snapshot_save(
@@ -452,25 +478,233 @@ async fn snapshot_restore(
     Ok(Json(SnapshotRestoreResponse { success: true }))
 }
 
+/// Standalone impl of the shared metadata primitives.
+#[async_trait::async_trait]
+impl crate::routes::meta::MetaOps for SharedEngine {
+    async fn set_meta(
+        &self,
+        target_id: String,
+        metadata: serde_json::Value,
+    ) -> Result<(), Response> {
+        self.write()
+            .await
+            .set_meta_audited(target_id, metadata)
+            .map_err(|e| e.into_response())
+    }
+
+    async fn get_meta(&self, target_id: &str) -> Option<serde_json::Value> {
+        self.read().await.metadata.get(target_id)
+    }
+}
+
+/// Standalone impl of the shared memory domain primitives.
+#[async_trait::async_trait]
+impl crate::routes::memory::MemoryOps for SharedEngine {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.read().await.resolve_collection(name).ok()
+    }
+
+    async fn ensure_read_consistency(&self, _ns: u16, _consistency: Option<&str>) -> Result<(), Response> {
+        Ok(())
+    }
+
+    async fn upsert_vector(
+        &self,
+        ns: u16,
+        req: &MemoryUpsertVectorRequest,
+    ) -> Result<crate::routes::memory::UpsertedMemory, Response> {
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        let mut engine = self.write().await;
+        let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        let record_id = engine.insert_record_from_f32_ns(&req.vector, ns)
+            .map_err(|e| EngineError::from(e).into_response())?;
+
+        let doc_node_id = if let Some(existing) = req.attach_to_document_node {
+            existing
+        } else {
+            engine.create_node_for_record(None, NodeKind::Document as u8, ns)
+                .map_err(|e| EngineError::from(e).into_response())?
+        };
+
+        let chunk_node_id = engine.create_node_for_record(Some(record_id), NodeKind::Chunk as u8, ns)
+            .map_err(|e| EngineError::from(e).into_response())?;
+        engine.create_edge(doc_node_id, chunk_node_id, EdgeKind::ParentOf as u8)
+            .map_err(|e| EngineError::from(e).into_response())?;
+
+        let memory_id = format!("rec:{}", record_id);
+        if let Some(meta) = &req.metadata {
+            engine.set_meta_audited(memory_id.clone(), meta.clone())
+                .map_err(|e| EngineError::from(e).into_response())?;
+        }
+        let state_after: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        Ok(crate::routes::memory::UpsertedMemory {
+            memory_id,
+            record_id,
+            document_node_id: doc_node_id,
+            chunk_node_id,
+            log_index: None,
+            shard_id: 0,
+            cluster: false,
+            state_before,
+            state_after,
+        })
+    }
+
+    async fn search_vector(
+        &self,
+        ns: u16,
+        req: &MemorySearchVectorRequest,
+    ) -> Result<Vec<MemorySearchHit>, Response> {
+        let engine = self.read().await;
+        let half_life = req.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+
+        let results = if half_life == 0 {
+            let hits = engine.search_l2_ns(&req.query_vector, req.k, ns)
+                .map_err(|e| EngineError::from(e).into_response())?;
+            hits.into_iter()
+                .map(|(record_id, score)| {
+                    let memory_id = format!("rec:{}", record_id);
+                    let metadata = engine.metadata.get(&memory_id);
+                    MemorySearchHit { memory_id, record_id, score, metadata,
+                        decay_factor: None, age_secs: None }
+                })
+                .collect()
+        } else {
+            let pool = req.k.saturating_mul(4).max(50).min(1000);
+            let raw = engine.search_l2_ns(&req.query_vector, pool, ns)
+                .map_err(|e| EngineError::from(e).into_response())?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs()).unwrap_or(0);
+            let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
+                .map(|(id, score)| crate::decay::DecayHit {
+                    id, distance: score, created_at: engine.record_created_at(id),
+                })
+                .collect();
+            crate::decay::rerank(candidates, now, half_life, req.k)
+                .into_iter()
+                .map(|h| {
+                    let memory_id = format!("rec:{}", h.id);
+                    let metadata = engine.metadata.get(&memory_id);
+                    MemorySearchHit {
+                        memory_id, record_id: h.id, score: h.distance, metadata,
+                        decay_factor: Some(h.factor), age_secs: h.age_secs,
+                    }
+                })
+                .collect()
+        };
+        Ok(results)
+    }
+
+    async fn consolidate(
+        &self,
+        ns: u16,
+        req: &MemoryConsolidateRequest,
+    ) -> Result<crate::routes::memory::ConsolidatedMemory, Response> {
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        let mut engine = self.write().await;
+        let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        engine.soft_delete_record(req.old_record_id)
+            .map_err(|e| EngineError::from(e).into_response())?;
+
+        let new_record_id = engine.insert_record_from_f32_ns(&req.new_vector, ns)
+            .map_err(|e| EngineError::from(e).into_response())?;
+
+        let new_node = engine.create_node_for_record(Some(new_record_id), NodeKind::Chunk as u8, ns)
+            .map_err(|e| EngineError::from(e).into_response())?;
+        let old_node = engine.create_node_for_record(Some(req.old_record_id), NodeKind::Chunk as u8, ns)
+            .map_err(|e| EngineError::from(e).into_response())?;
+        let edge_id = engine.create_edge(new_node, old_node, EdgeKind::Supersedes as u8)
+            .map_err(|e| EngineError::from(e).into_response())?;
+
+        if let Some(meta) = &req.metadata {
+            let memory_id = format!("rec:{}", new_record_id);
+            engine.set_meta_audited(memory_id, meta.clone())
+                .map_err(|e| EngineError::from(e).into_response())?;
+        }
+
+        let proof = engine.get_proof();
+        let state_hash: String = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+        let state_after: String = state_hash.clone();
+
+        Ok(crate::routes::memory::ConsolidatedMemory {
+            old_record_id: req.old_record_id,
+            new_record_id,
+            supersedes_edge_id: edge_id,
+            state_hash,
+            log_index: None,
+            shard_id: 0,
+            cluster: false,
+            state_before,
+            state_after,
+        })
+    }
+
+    async fn contradict(
+        &self,
+        ns: u16,
+        req: &MemoryContradictRequest,
+    ) -> Result<crate::routes::memory::ContradictedMemory, Response> {
+        use valori_kernel::snapshot::blake3::hash_state_blake3;
+        const DEFAULT_CONTRADICT_THRESHOLD: f32 = 0.85;
+        let threshold = req.threshold.unwrap_or(DEFAULT_CONTRADICT_THRESHOLD);
+
+        let similarity = {
+            let engine = self.read().await;
+            engine.cosine_similarity(req.record_a, req.record_b)
+                .ok_or_else(|| EngineError::InvalidInput(
+                    format!("one or both records ({}, {}) not found or not searchable",
+                        req.record_a, req.record_b)
+                ).into_response())?
+        };
+
+        let contradicts = similarity >= threshold;
+
+        let (edge_id, state_before, state_after) = if contradicts {
+            let mut engine = self.write().await;
+            let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+            let node_a = engine.create_node_for_record(Some(req.record_a), NodeKind::Chunk as u8, ns)
+                .map_err(|e| EngineError::from(e).into_response())?;
+            let node_b = engine.create_node_for_record(Some(req.record_b), NodeKind::Chunk as u8, ns)
+                .map_err(|e| EngineError::from(e).into_response())?;
+            let eid = engine.create_edge(node_a, node_b, EdgeKind::Contradicts as u8)
+                .map_err(|e| EngineError::from(e).into_response())?;
+            let hash: String = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+            (Some(eid), state_before, hash)
+        } else {
+            let engine = self.read().await;
+            let hash: String = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+            (None, hash.clone(), hash)
+        };
+
+        Ok(crate::routes::memory::ContradictedMemory {
+            record_a: req.record_a,
+            record_b: req.record_b,
+            similarity,
+            contradicts,
+            edge_id,
+            state_hash: state_after.clone(),
+            log_index: None,
+            shard_id: 0,
+            cluster: false,
+            state_before,
+            state_after,
+        })
+    }
+}
+
 async fn meta_set(
     State(state): State<SharedEngine>,
     Json(payload): Json<MetadataSetRequest>,
-) -> Result<Json<MetadataSetResponse>, EngineError> {
-    let mut engine = state.write().await;
-    engine.set_meta_audited(payload.target_id, payload.metadata)?;
-    Ok(Json(MetadataSetResponse { success: true }))
+) -> Result<Json<MetadataSetResponse>, Response> {
+    crate::routes::meta::meta_set(&state, payload).await
 }
 
 async fn meta_get(
     State(state): State<SharedEngine>,
     Query(payload): Query<MetadataGetRequest>,
-) -> Result<Json<MetadataGetResponse>, EngineError> {
-    let engine = state.read().await;
-    let val = engine.metadata.get(&payload.target_id);
-    Ok(Json(MetadataGetResponse {
-        target_id: payload.target_id,
-        metadata: val,
-    }))
+) -> Json<MetadataGetResponse> {
+    crate::routes::meta::meta_get(&state, payload).await
 }
 
 async fn insert_record(
@@ -906,120 +1140,147 @@ pub fn unix_to_iso8601(unix_secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
 }
 
+// ── Graph — shared handlers (routes::graph) ──────────────────────────────────
+//
+// Handler bodies (kind validation, 404 shaping, list pagination) live in
+// `routes::graph` and are shared with the cluster path; only the engine-lock
+// primitives below are standalone-specific.
+
+/// Standalone impl of the shared graph primitives — direct engine locks.
+/// The namespace parameter exists for cluster shard routing; the standalone
+/// kernel is a single state, so reads ignore it (ids are globally unique here).
+#[async_trait::async_trait]
+impl crate::routes::graph::GraphOps for SharedEngine {
+    async fn resolve_collection(&self, name: Option<&str>) -> Option<u16> {
+        self.read().await.namespaces.resolve(name)
+    }
+
+    async fn create_node(
+        &self,
+        ns: u16,
+        kind: NodeKind,
+        record_id: Option<u32>,
+    ) -> Result<crate::routes::graph::CommittedGraphWrite, Response> {
+        let mut engine = self.write().await;
+        let id = engine
+            .create_node_for_record(record_id, kind as u8, ns)
+            .map_err(|e| e.into_response())?;
+        Ok(crate::routes::graph::CommittedGraphWrite { id, log_index: None })
+    }
+
+    async fn create_edge(
+        &self,
+        _ns: u16,
+        from: u32,
+        to: u32,
+        kind: EdgeKind,
+    ) -> Result<crate::routes::graph::CommittedGraphWrite, Response> {
+        let mut engine = self.write().await;
+        let id = engine.create_edge(from, to, kind as u8).map_err(|e| e.into_response())?;
+        Ok(crate::routes::graph::CommittedGraphWrite { id, log_index: None })
+    }
+
+    async fn delete_node(&self, _ns: u16, id: u32) -> Result<Option<u64>, Response> {
+        self.write().await.delete_node(id).map_err(|e| e.into_response())?;
+        Ok(None)
+    }
+
+    async fn get_node(&self, _ns: u16, id: u32) -> Result<Option<GetNodeResponse>, Response> {
+        use valori_kernel::types::id::NodeId;
+        let engine = self.read().await;
+        Ok(engine.state.get_node(NodeId(id)).map(|n| GetNodeResponse {
+            kind: n.kind as u8,
+            record_id: n.record.map(|r| r.0),
+            namespace_id: n.namespace_id,
+        }))
+    }
+
+    async fn node_edges(&self, _ns: u16, id: u32) -> Result<Option<Vec<EdgeData>>, Response> {
+        use valori_kernel::types::id::NodeId;
+        let engine = self.read().await;
+        Ok(engine.state.outgoing_edges(NodeId(id)).map(|iter| {
+            iter.map(|e| EdgeData {
+                edge_id: e.id.0,
+                to_node: e.to.0,
+                kind: e.kind as u8,
+            })
+            .collect()
+        }))
+    }
+
+    async fn list_nodes(&self, ns: u16) -> Result<Vec<NodeInfo>, Response> {
+        let engine = self.read().await;
+        Ok(engine
+            .nodes_in_ns(ns)
+            .into_iter()
+            .map(|(node_id, kind, record_id)| NodeInfo { node_id, kind, record_id, namespace_id: ns })
+            .collect())
+    }
+
+    async fn subgraph(
+        &self,
+        _ns: u16,
+        root: u32,
+        depth: u32,
+    ) -> Result<(serde_json::Value, serde_json::Value), Response> {
+        let engine = self.read().await;
+        let (nodes, edges) = crate::graph_rag::expand_subgraph(&engine.state, &[root], depth);
+        Ok((serde_json::Value::Array(nodes), serde_json::Value::Array(edges)))
+    }
+}
+
 async fn create_node(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateNodeRequest>,
-) -> Result<Json<CreateNodeResponse>, EngineError> {
-    let mut engine = state.write().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let node_id = engine.create_node_for_record(payload.record_id, payload.kind, ns)?;
-    Ok(Json(CreateNodeResponse { node_id }))
+) -> Result<Json<CreateNodeResponse>, Response> {
+    crate::routes::graph::create_node(&state, payload).await
 }
 
 async fn create_edge(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateEdgeRequest>,
-) -> Result<Json<CreateEdgeResponse>, EngineError> {
-    let mut engine = state.write().await;
-    engine.resolve_collection(payload.collection.as_deref())?;
-    let edge_id = engine.create_edge(payload.from, payload.to, payload.kind)?;
-    Ok(Json(CreateEdgeResponse { edge_id }))
+) -> Result<Json<CreateEdgeResponse>, Response> {
+    crate::routes::graph::create_edge(&state, payload).await
 }
 
 async fn get_node(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
-) -> Result<Json<GetNodeResponse>, EngineError> {
-    let engine = state.read().await;
-    use valori_kernel::types::id::NodeId;
-    match engine.state.get_node(NodeId(id)) {
-        Some(node) => Ok(Json(GetNodeResponse {
-            kind: node.kind as u8,
-            record_id: node.record.map(|r| r.0),
-            namespace_id: node.namespace_id,
-        })),
-        None => Err(EngineError::Kernel(valori_kernel::error::KernelError::NotFound)),
-    }
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<GetNodeResponse>, Response> {
+    crate::routes::graph::get_node(&state, id, q).await
 }
 
 async fn delete_node(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
-) -> Result<Json<DeleteNodeResponse>, EngineError> {
-    let mut engine = state.write().await;
-    engine.delete_node(id)?;
-    Ok(Json(DeleteNodeResponse { success: true }))
-}
-
-#[derive(serde::Deserialize)]
-struct ListNodesQuery {
-    collection: Option<String>,
-    /// Filter to a single node kind (0=Document, 1=Chunk, 2=Concept, …).
-    /// Absent = all kinds, matching pre-pagination behavior.
-    kind: Option<u8>,
-    /// Pagination — applied after the `kind` filter. Absent `limit` returns
-    /// everything (backward compatible with clients that predate pagination).
-    #[serde(default)]
-    offset: usize,
-    limit: Option<usize>,
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<DeleteNodeResponse>, Response> {
+    crate::routes::graph::delete_node(&state, id, q).await
 }
 
 async fn list_nodes(
     State(state): State<SharedEngine>,
-    Query(q): Query<ListNodesQuery>,
-) -> Result<Json<ListNodesResponse>, EngineError> {
-    let engine = state.read().await;
-    let ns = engine.resolve_collection(q.collection.as_deref())?;
-    let raw = engine.nodes_in_ns(ns);
-    let filtered = raw
-        .into_iter()
-        .filter(|(_, kind, _)| q.kind.is_none_or(|k| *kind == k))
-        .map(|(node_id, kind, record_id)| NodeInfo { node_id, kind, record_id, namespace_id: ns })
-        .collect::<Vec<_>>();
-    let count = filtered.len();
-    let nodes = match q.limit {
-        Some(limit) => filtered.into_iter().skip(q.offset).take(limit).collect(),
-        None => filtered,
-    };
-    Ok(Json(ListNodesResponse { nodes, count }))
+    Query(q): Query<crate::routes::graph::ListNodesQuery>,
+) -> Result<Json<ListNodesResponse>, Response> {
+    crate::routes::graph::list_nodes(&state, q).await
 }
 
 async fn get_edges(
     State(state): State<SharedEngine>,
     axum::extract::Path(id): axum::extract::Path<u32>,
-) -> Result<Json<GetEdgesResponse>, EngineError> {
-    let engine = state.read().await;
-    use valori_kernel::types::id::NodeId;
-    
-    let mut edges = Vec::new();
-    if let Some(iter) = engine.state.outgoing_edges(NodeId(id)) {
-        for edge in iter {
-            edges.push(EdgeData {
-                edge_id: edge.id.0,
-                to_node: edge.to.0,
-                kind: edge.kind as u8,
-            });
-        }
-    }
-    Ok(Json(GetEdgesResponse { edges }))
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<GetEdgesResponse>, Response> {
+    crate::routes::graph::get_edges(&state, id, q).await
 }
 
-#[derive(serde::Deserialize)]
-struct SubgraphQuery {
-    root: u32,
-    #[serde(default = "default_depth")]
-    depth: u32,
-}
 fn default_depth() -> u32 { 2 }
 
 async fn get_subgraph(
     State(state): State<SharedEngine>,
-    Query(q): Query<SubgraphQuery>,
-) -> impl IntoResponse {
-    let engine = state.read().await;
-    let (nodes_out, edges_out) =
-        crate::graph_rag::expand_subgraph(&engine.state, &[q.root], q.depth);
-    (StatusCode::OK, Json(serde_json::json!({ "nodes": nodes_out, "edges": edges_out })))
+    Query(q): Query<crate::routes::graph::SubgraphQuery>,
+) -> Result<Json<serde_json::Value>, Response> {
+    crate::routes::graph::get_subgraph(&state, q).await
 }
 
 // ── Phase 3.15: native GraphRAG — KNN + subgraph expansion in one call ────────
@@ -1089,102 +1350,17 @@ async fn restore(
 
 async fn memory_upsert_vector(
     State(state): State<SharedEngine>,
-    axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
+    axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<MemoryUpsertVectorRequest>,
-) -> Result<Json<MemoryUpsertResponse>, EngineError> {
-    use valori_kernel::snapshot::blake3::hash_state_blake3;
-    let mut engine = state.write().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-    let record_id = engine.insert_record_from_f32_ns(&payload.vector, ns)?;
-
-    let doc_node_id = if let Some(existing) = payload.attach_to_document_node {
-        existing
-    } else {
-        engine.create_node_for_record(None, NodeKind::Document as u8, ns)?
-    };
-
-    let chunk_node_id = engine.create_node_for_record(Some(record_id), NodeKind::Chunk as u8, ns)?;
-    engine.create_edge(doc_node_id, chunk_node_id, EdgeKind::ParentOf as u8)?;
-
-    let memory_id = format!("rec:{}", record_id);
-    if let Some(meta) = payload.metadata {
-        engine.set_meta_audited(memory_id.clone(), meta)?;
-    }
-    let state_after: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-    drop(engine);
-    {
-        use valori_planner::operation::{OperationInputs, OperationKind};
-        let inputs = OperationInputs::MemoryUpsert {
-            collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
-            shard_id: 0,
-        };
-        crate::receipt_bridge::emit_write(
-            &receipts,
-            OperationKind::MemoryUpsert,
-            &inputs,
-            ns,
-            0,
-            0,
-            false,
-            state_before,
-            state_after,
-        );
-    }
-
-    Ok(Json(MemoryUpsertResponse {
-        memory_id,
-        record_id,
-        document_node_id: doc_node_id,
-        chunk_node_id,
-    }))
+) -> Result<Json<MemoryUpsertResponse>, Response> {
+    crate::routes::memory::memory_upsert(&state, &receipts, payload).await
 }
 
 async fn memory_search_vector(
     State(state): State<SharedEngine>,
     Json(payload): Json<MemorySearchVectorRequest>,
-) -> Result<Json<MemorySearchResponse>, EngineError> {
-    let engine = state.read().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-
-    let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
-
-    let results = if half_life == 0 {
-        let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
-        hits.into_iter()
-            .map(|(record_id, score)| {
-                let memory_id = format!("rec:{}", record_id);
-                let metadata = engine.metadata.get(&memory_id);
-                MemorySearchHit { memory_id, record_id, score, metadata,
-                    decay_factor: None, age_secs: None }
-            })
-            .collect()
-    } else {
-        // Recency-aware recall: over-fetch, decay re-rank, trim to k.
-        let pool = payload.k.saturating_mul(4).max(50).min(1000);
-        let raw = engine.search_l2_ns(&payload.query_vector, pool, ns)?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs()).unwrap_or(0);
-        let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
-            .map(|(id, score)| crate::decay::DecayHit {
-                id, distance: score, created_at: engine.record_created_at(id),
-            })
-            .collect();
-        crate::decay::rerank(candidates, now, half_life, payload.k)
-            .into_iter()
-            .map(|h| {
-                let memory_id = format!("rec:{}", h.id);
-                let metadata = engine.metadata.get(&memory_id);
-                MemorySearchHit {
-                    memory_id, record_id: h.id, score: h.distance, metadata,
-                    decay_factor: Some(h.factor), age_secs: h.age_secs,
-                }
-            })
-            .collect()
-    };
-
-    Ok(Json(MemorySearchResponse { results }))
+) -> Result<Json<MemorySearchResponse>, Response> {
+    crate::routes::memory::memory_search(&state, payload).await
 }
 
 async fn get_proof(
@@ -1202,85 +1378,18 @@ async fn get_proof(
 
 async fn memory_consolidate(
     State(state): State<SharedEngine>,
+    axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<MemoryConsolidateRequest>,
-) -> Result<Json<MemoryConsolidateResponse>, EngineError> {
-    let mut engine = state.write().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-
-    // 1. Soft-delete the old record — committed event in the BLAKE3 chain.
-    engine.soft_delete_record(payload.old_record_id)?;
-
-    // 2. Insert the replacement vector — committed AutoInsertRecord event.
-    let new_record_id = engine.insert_record_from_f32_ns(&payload.new_vector, ns)?;
-
-    // 3. Wire a Supersedes edge: new → old — committed AutoCreateEdge event.
-    //    Create graph nodes for both ends first (if they don't already exist).
-    let new_node = engine.create_node_for_record(Some(new_record_id), NodeKind::Chunk as u8, ns)?;
-    let old_node = engine.create_node_for_record(Some(payload.old_record_id), NodeKind::Chunk as u8, ns)?;
-    let edge_id = engine.create_edge(new_node, old_node, EdgeKind::Supersedes as u8)?;
-
-    // Persist optional metadata for the new record.
-    if let Some(meta) = payload.metadata {
-        let memory_id = format!("rec:{}", new_record_id);
-        engine.set_meta_audited(memory_id, meta)?;
-    }
-
-    let proof = engine.get_proof();
-    let state_hash = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
-
-    Ok(Json(MemoryConsolidateResponse {
-        old_record_id: payload.old_record_id,
-        new_record_id,
-        supersedes_edge_id: edge_id,
-        state_hash,
-    }))
+) -> Result<Json<MemoryConsolidateResponse>, Response> {
+    crate::routes::memory::memory_consolidate(&state, &receipts, payload).await
 }
-
-// ── C4.3: Contradiction detection ────────────────────────────────────────────
-
-const DEFAULT_CONTRADICT_THRESHOLD: f32 = 0.85;
 
 async fn memory_contradict(
     State(state): State<SharedEngine>,
+    axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<MemoryContradictRequest>,
-) -> Result<Json<MemoryContradictResponse>, EngineError> {
-    let threshold = payload.threshold.unwrap_or(DEFAULT_CONTRADICT_THRESHOLD);
-
-    // Read phase — compute similarity without holding write lock.
-    let similarity = {
-        let engine = state.read().await;
-        engine.cosine_similarity(payload.record_a, payload.record_b)
-            .ok_or_else(|| EngineError::InvalidInput(
-                format!("one or both records ({}, {}) not found or not searchable",
-                    payload.record_a, payload.record_b)
-            ))?
-    };
-
-    let contradicts = similarity >= threshold;
-
-    let (edge_id, state_hash) = if contradicts {
-        // Write phase — commit the Contradicts edge.
-        let mut engine = state.write().await;
-        let ns = engine.resolve_collection(payload.collection.as_deref())?;
-        let node_a = engine.create_node_for_record(Some(payload.record_a), NodeKind::Chunk as u8, ns)?;
-        let node_b = engine.create_node_for_record(Some(payload.record_b), NodeKind::Chunk as u8, ns)?;
-        let eid = engine.create_edge(node_a, node_b, EdgeKind::Contradicts as u8)?;
-        let hash = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
-        (Some(eid), hash)
-    } else {
-        let engine = state.read().await;
-        let hash = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
-        (None, hash)
-    };
-
-    Ok(Json(MemoryContradictResponse {
-        record_a: payload.record_a,
-        record_b: payload.record_b,
-        similarity,
-        contradicts,
-        edge_id,
-        state_hash,
-    }))
+) -> Result<Json<MemoryContradictResponse>, Response> {
+    crate::routes::memory::memory_contradict(&state, &receipts, payload).await
 }
 
 async fn get_event_proof(
@@ -1745,52 +1854,53 @@ async fn get_operation_execution(
 
 // ── Collection (namespace) management endpoints ───────────────────────────────
 
+/// Standalone impl of the shared collection primitives — direct engine locks.
+/// Handler bodies (validation, response shaping) live in `routes::collections`
+/// and are shared with the cluster path.
+#[async_trait::async_trait]
+impl crate::routes::collections::CollectionOps for SharedEngine {
+    async fn resolve(&self, name: &str) -> Option<u16> {
+        self.read().await.namespaces.resolve(Some(name))
+    }
+
+    async fn create(
+        &self,
+        name: &str,
+    ) -> Result<crate::routes::collections::CreatedCollection, Response> {
+        // Single write lock: the existence check and the create are atomic.
+        let mut engine = self.write().await;
+        let already_existed = engine.namespaces.map.contains_key(name);
+        let id = engine.create_collection(name).map_err(|e| e.into_response())?;
+        Ok(crate::routes::collections::CreatedCollection { id, already_existed })
+    }
+
+    async fn drop_collection(&self, name: &str) -> Result<(), Response> {
+        self.write().await.drop_collection(name).map_err(|e| e.into_response())
+    }
+
+    async fn list(&self) -> Vec<(String, u16)> {
+        self.read().await.list_collections()
+    }
+}
+
 async fn create_collection_handler(
     State(state): State<SharedEngine>,
     Json(payload): Json<CreateCollectionRequest>,
-) -> Result<Json<CreateCollectionResponse>, EngineError> {
-    let name = payload.name.trim().to_string();
-    // M-2: Restrict to safe identifier characters to prevent path/injection issues.
-    if name.is_empty() {
-        return Err(EngineError::InvalidInput("collection name cannot be empty".into()));
-    }
-    if name.len() > 64 {
-        return Err(EngineError::InvalidInput("collection name must be 64 characters or fewer".into()));
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        return Err(EngineError::InvalidInput(
-            "collection name may only contain [a-zA-Z0-9_-]".into(),
-        ));
-    }
-    let mut engine = state.write().await;
-    let already_exists = engine.namespaces.map.contains_key(&name) || name == "default";
-    let id = engine.create_collection(&name)?;
-    Ok(Json(CreateCollectionResponse {
-        name,
-        id,
-        created: !already_exists,
-    }))
+) -> Result<Json<CreateCollectionResponse>, Response> {
+    crate::routes::collections::create_collection(&state, payload).await
 }
 
 async fn list_collections_handler(
     State(state): State<SharedEngine>,
 ) -> Json<ListCollectionsResponse> {
-    let engine = state.read().await;
-    let collections = engine
-        .list_collections()
-        .into_iter()
-        .map(|(name, id)| CollectionInfo { name, id })
-        .collect();
-    Json(ListCollectionsResponse { collections })
+    crate::routes::collections::list_collections(&state).await
 }
 
 async fn drop_collection_handler(
     State(state): State<SharedEngine>,
     AxumPath(name): AxumPath<String>,
-) -> Result<axum::http::StatusCode, EngineError> {
-    let mut engine = state.write().await;
-    engine.drop_collection(&name)?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+) -> Result<axum::http::StatusCode, Response> {
+    crate::routes::collections::drop_collection(&state, &name).await
 }
 
 // ── Phase 3.1: object-store handlers ─────────────────────────────────────────

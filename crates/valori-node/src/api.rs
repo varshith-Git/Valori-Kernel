@@ -58,6 +58,9 @@ pub struct DeleteRecordRequest {
 #[derive(Serialize)]
 pub struct DeleteRecordResponse {
     pub success: bool,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -290,6 +293,9 @@ pub struct CreateNodeRequest {
 #[derive(Serialize)]
 pub struct CreateNodeResponse {
     pub node_id: u32,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -304,6 +310,9 @@ pub struct CreateEdgeRequest {
 #[derive(Serialize)]
 pub struct CreateEdgeResponse {
     pub edge_id: u32,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -344,6 +353,8 @@ pub struct MemoryUpsertResponse {
     pub record_id: u32,
     pub document_node_id: u32,
     pub chunk_node_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -380,6 +391,9 @@ pub struct ListNodesResponse {
 #[derive(Serialize)]
 pub struct DeleteNodeResponse {
     pub success: bool,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -542,6 +556,8 @@ pub struct MemoryConsolidateResponse {
     pub supersedes_edge_id: u32,
     /// BLAKE3 state hash after all three events are applied.
     pub state_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 // ── C4.3: Contradiction detection ────────────────────────────────────────────
@@ -570,4 +586,6 @@ pub struct MemoryContradictResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_id: Option<u32>,
     pub state_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }

@@ -52,3 +52,5 @@ pub mod capabilities;
 pub mod receipt_bridge;
 /// Phase A7: TaskRunner drives ExecutionGraph → Task::run in topological order.
 pub mod runner;
+/// Shared HTTP handler bodies served by BOTH server.rs and cluster_server.rs.
+pub mod routes;

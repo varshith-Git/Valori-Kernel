@@ -7,6 +7,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Dual-path unification, all mechanical domains (Phase R2)** — graph
+  (7 endpoints), record deletion, metadata sidecar, and version handlers now
+  share one body in `valori-node/src/routes/` served by both routers. Two new
+  endpoints fell out of the unification: `POST /v1/soft-delete` on standalone
+  (the engine always supported it; the route was missing) and
+  `DELETE /v1/graph/node/:id` on cluster (commits `KernelEvent::DeleteNode`
+  via Raft). The parity test's METHOD_GAPS list is now empty. Also fixed by
+  construction: cluster `GET /v1/graph/nodes` no longer lists every
+  namespace's nodes when `collection` is absent (tenant-isolation leak — now
+  scopes to "default" like standalone); invalid node/edge kinds are 400 on
+  both paths (standalone silently coerced them before); cluster `meta/set`
+  answers `{"success":true}` (was `{"ok":true}`); unknown collections are 404
+  on graph/delete endpoints on both paths. See
+  `docs/phases/phase-R2-dual-path-domains.md`.
+- **Dual-path unification (Phase R1)** — new `valori-node/src/routes/` module:
+  shared HTTP handler bodies served by BOTH the standalone and cluster routers,
+  starting with the collection endpoints (`/v1/namespaces*`). A new
+  `tests/route_parity.rs` guard asserts the two routers expose identical `/v1`
+  route sets (paths and methods) modulo explicit, documented allowlists — an
+  endpoint added to only one router is now a test failure instead of a silent
+  404. See `docs/phases/phase-R1-dual-path-unification.md`.
+
+### Changed
+- **`DELETE /v1/namespaces/:name` on an unknown collection now returns 404 on
+  both paths** (standalone previously returned 400 while cluster returned 404).
+- **Cluster `POST /v1/namespaces` now enforces the same name validation as
+  standalone** (non-empty, ≤64 chars, `[a-zA-Z0-9_-]` only) — previously the
+  cluster path committed unvalidated names straight through Raft.
+
 - **Snapshot autosave + cluster lifecycle hardening (Phase 6.2)** — UI-launched project
   nodes now pass `VALORI_SNAPSHOT_INTERVAL=60` so a periodic snapshot is written even if
   the node is killed without a graceful close (the WAL was always durable; this keeps the

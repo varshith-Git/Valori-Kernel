@@ -82,6 +82,22 @@ impl KernelCapability for EngineKernelCapability {
                     .iter().map(|b| format!("{:02x}", b)).collect::<String>();
                 Ok(serde_json::json!({ "state_hash": hash }))
             }
+            KernelCommandBody::CreateNode { kind, record_id } => {
+                let mut eng = self.engine.write().await;
+                let node_id = eng.create_node_for_record(*record_id, *kind, namespace_id)
+                    .map_err(|e| EffectError::Dispatch(format!("kernel create_node: {e}")))?;
+                let hash = hash_state_blake3(&eng.state)
+                    .iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                Ok(serde_json::json!({ "node_id": node_id, "state_hash": hash }))
+            }
+            KernelCommandBody::CreateEdge { from, to, kind } => {
+                let mut eng = self.engine.write().await;
+                let edge_id = eng.create_edge(*from, *to, *kind)
+                    .map_err(|e| EffectError::Dispatch(format!("kernel create_edge: {e}")))?;
+                let hash = hash_state_blake3(&eng.state)
+                    .iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                Ok(serde_json::json!({ "edge_id": edge_id, "state_hash": hash }))
+            }
         }
     }
 
@@ -207,6 +223,39 @@ impl KernelCapability for RaftKernelCapability {
                 let hash = resp.data.state_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
                 Ok(serde_json::json!({ "state_hash": hash }))
             }
+            KernelCommandBody::CreateNode { kind, record_id } => {
+                let cr = ClientRequest {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id,
+                    event: KernelEvent::AutoCreateNode {
+                        kind: valori_kernel::types::enums::NodeKind::from_u8(*kind).unwrap_or(valori_kernel::types::enums::NodeKind::Document),
+                        record: record_id.map(valori_kernel::types::id::RecordId),
+                    },
+                    request_id: req_id_bytes,
+                };
+                let resp = shard.raft.client_write(cr).await
+                    .map_err(|e| EffectError::Dispatch(format!("raft.client_write: {e}")))?;
+                let node_id = resp.data.allocated_node_id.unwrap_or(0);
+                let hash = resp.data.state_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                Ok(serde_json::json!({ "node_id": node_id, "log_index": resp.data.log_index, "state_hash": hash }))
+            }
+            KernelCommandBody::CreateEdge { from, to, kind } => {
+                let cr = ClientRequest {
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id,
+                    event: KernelEvent::AutoCreateEdge {
+                        from: valori_kernel::types::id::NodeId(*from),
+                        to: valori_kernel::types::id::NodeId(*to),
+                        kind: valori_kernel::types::enums::EdgeKind::from_u8(*kind).unwrap_or(valori_kernel::types::enums::EdgeKind::RefersTo),
+                    },
+                    request_id: req_id_bytes,
+                };
+                let resp = shard.raft.client_write(cr).await
+                    .map_err(|e| EffectError::Dispatch(format!("raft.client_write: {e}")))?;
+                let edge_id = resp.data.allocated_edge_id.unwrap_or(0);
+                let hash = resp.data.state_hash.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+                Ok(serde_json::json!({ "edge_id": edge_id, "log_index": resp.data.log_index, "state_hash": hash }))
+            }
         }
     }
 
@@ -324,6 +373,41 @@ impl CapabilityRegistryBuilder {
 
         let http: Option<Arc<dyn HttpCapability>> = Some(Arc::new(
             PassthroughHttpCapability::new(self.http_client)
+        ));
+
+        CapabilityRegistry {
+            kernel,
+            embed,
+            llm: None,
+            storage: None,
+            http,
+            proof: None,
+            scheduler: None,
+        }
+    }
+
+    pub fn build_cluster(
+        shards: Arc<std::collections::BTreeMap<valori_consensus::types::ShardId, crate::cluster::ShardHandle>>,
+        sm: valori_consensus::ValoriStateMachine,
+        shard_count: u8,
+        embed_config: Option<EmbedConfig>,
+        http_client: reqwest::Client,
+    ) -> valori_effect::capability::CapabilityRegistry {
+        use valori_effect::capability::CapabilityRegistry;
+
+        let kernel: Arc<dyn KernelCapability> = Arc::new(
+            RaftKernelCapability::new(shards, sm, shard_count)
+        );
+
+        let embed = embed_config.map(|cfg| {
+            let cap: Arc<dyn EmbedCapability> = Arc::new(
+                HttpEmbedCapability::new(cfg, http_client.clone())
+            );
+            cap
+        });
+
+        let http: Option<Arc<dyn HttpCapability>> = Some(Arc::new(
+            PassthroughHttpCapability::new(http_client)
         ));
 
         CapabilityRegistry {

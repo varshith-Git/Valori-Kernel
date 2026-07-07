@@ -8,7 +8,7 @@ use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
 use valori_verify::wire::{
     chain_advance, chain_advance_v3, decode_entry, encode_header_v3, hex, parse_header,
-    LogEntry, FORMAT_Q16_16, HEADER_SIZE_V3, VERSION_V2, VERSION_V3,
+    LogEntry, FORMAT_Q16_16, HEADER_SIZE_V3, VERSION_V2, VERSION_V3, VERSION_V4,
 };
 
 fn event(i: u32) -> KernelEvent {
@@ -122,7 +122,7 @@ fn wire_decodes_what_the_node_writes() {
 
     let bytes = std::fs::read(&path).unwrap();
     let header = parse_header(&bytes).expect("node header must parse");
-    assert_eq!(header.version, VERSION_V3, "new node files are v3");
+    assert_eq!(header.version, VERSION_V4, "new node files are v4");
     assert_eq!(header.dim, 4);
     assert_eq!(header.segment_seq, 0);
 
