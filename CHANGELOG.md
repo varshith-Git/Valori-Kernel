@@ -6,33 +6,71 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-- **ExecutionResources (Phase E4)** — `tree_cache` and `community_store` extracted
+### Fixed (valori-core audit — 2026-07-10)
+
+- **`ExecutionId::new_random()` collision bug (release blocker)** — the old time+stack-address scheme produced ~93% duplicate IDs under sequential calls (937,202 dups measured in 1M); planner operation IDs and async-ingest `job_id`s could collide across clients. Now uses OS RNG via `getrandom` (std-gated). Regression tests: 100k sequential, 80k cross-thread, and a `#[ignore]`d 1M stress test.
+- **`ExecutionId: FromStr` added** — parses the 32-hex-digit `Display` form, so `job_<id>` strings round-trip.
+- **valori-core dead API trimmed** — `CoreError` reduced to `InvalidInput`; unused `Version::is_compatible_with` removed (its exact-match policy contradicted the actual V5→V6 snapshot compatibility); `Version::next`/`ClusterEpoch::next` use `checked_add` for consistent overflow behavior; docs corrected from "zero-dependency" to "minimal-dependency".
+
+### Internal (Command removal + ValoriKernel deletion — 2026-07-10)
+
+- **`Command` enum deleted from `valori-kernel`** — no kernel code creates or processes `Command` anymore. `state/command.rs` is gone.
+- **WAL format upgraded to v2** — `WalWriter` now writes `(KernelEvent, namespace_id)` bincode pairs (header version=2). `WalReader` handles both v1 (Command, backward compat) and v2 transparently; callers always receive `(KernelEvent, u16)`.
+- **`LegacyWalCommand`** lives in `valori-storage/src/wal_compat.rs` (private to storage) as the only remaining Command-shaped type — used exclusively for reading pre-K2 WAL files.
+- **`ValoriKernel` struct deleted** — the legacy HNSW prototype (`kernel.rs`) and its CRC64 `state_hash()` / binary-payload `apply_event(&[u8])` are gone. `crc64fast` dependency removed from `valori-kernel/Cargo.toml`.
+- **Bench bins deleted** — `bench_filter`, `bench_ingest`, `bench_recall` all depended on `ValoriKernel`; removed from `valori-cli`. `bench_1m` and `bench_persistence` (which already used the production path) are retained.
+- **`command_for()` deleted from `persistence.rs`** — `Persistence::Wal` arm now calls `w.append_event(event, namespace_id)` directly, no translation layer.
+
+### Internal (coverage audit — 2026-07-10)
+
+- **`cargo-tarpaulin 0.37.0` installed** — baseline coverage established for `valori-kernel`: **36.24%** (963/2657 lines). Zero-coverage modules ranked by risk: `hnsw.rs` (265L, untested), `proof.rs` (24L), `fxp/ops.rs` (21L), `types/mod.rs` (48L), `verify.rs` (4L), `adapters/ivecs.rs` (11L). Full audit in `docs/phases/phase-K3-coverage-audit.md`.
+
+### Internal (replay unification — 2026-07-10)
+
+- **`KernelEvent` → `apply_event_ns` is now the single authoritative mutation path** — eliminated the `Command` intermediate type from the kernel's internal apply loop. `apply_event_ns` directly contains the logic for every mutation; there is no translation layer.
+- **`replay.rs` deleted** — `replay_and_hash` (legacy bincode-Command WAL replay) had zero external callers. `WalHeader` moved to `valori-storage/src/wal_reader.rs` where it belongs.
+- **Version-bump omission fixed** — `UpdateRecordMetadata`, `SetMeta`, `InsertRecordEncrypted`, and `ShredKey` previously did not bump `KernelState::version` when applied via `apply_event_ns` directly (the cluster path). Fixed by a single version bump at the end of `apply_event_ns`.
+- **`apply_raw_for_test` → `apply_event_for_test`** — engine test helper now takes `&KernelEvent` instead of `&Command`.
+- **WAL recovery updated** — `valori-storage::recovery::replay_wal` and `valori-state::bootstrap::replay_wal` both translate legacy `Command` entries to `KernelEvent` before applying, keeping backward-compatible WAL recovery on the canonical path.
+
+### Performance (HNSW wired into namespace search — 2026-07-08)
+
+- **HNSW/IVF/BQ now applies to all named collections** — `Engine::search_l2_ns` previously always called the kernel's brute-force linked-list walk regardless of `VALORI_INDEX`. It now routes through the `VectorIndex` (HNSW, IVF, or BQ) when a non-brute index is active, with namespace post-filtering on the candidates. Measured speedup: 9× at N=1k, 43× at N=10k, 183× at N=50k (in-process, dim=384, k=10).
+- **HNSW sort-order bug fixed** (`hnsw.rs`) — `BinaryHeap::into_sorted_vec()` on a MaxHeap returns descending (worst-first). Without `.reverse()`, `select_neighbors` was connecting every node to its M *farthest* neighbors, producing an inverted graph and O(N) traversal.
+- **over_fetch reduced from k×20 to k** (`engine.rs`) — the previous `(k * 20).max(200)` multiplier forced ef=200 in HNSW, expanding the beam search to O(N) candidates. Using `k` directly lets ef fall to ef_search (default 50), keeping search sub-millisecond.
+- **All records enter the global index** — inserts and `build_index` previously skipped non-default-namespace records. All namespaces now feed `self.index`, enabling the HNSW path above.
+- **`drop_collection` cleans the global index** — records in a dropped namespace are now explicitly removed from `self.index`, preventing stale HNSW entries from polluting future searches.
+- **`search_l2` delegates to `search_l2_ns(DEFAULT_NS)`** — removes code duplication and ensures the default-collection path also benefits from HNSW automatically.
+
+### Performance (kernel SIMD + algorithmic fixes — 2026-07-08)
+
+- **HNSW uses SIMD distance** — `hnsw.rs` was importing `dist::euclidean_distance_squared` (scalar, `saturating_mul`); now calls `math::l2::l2_sq_i32` which dispatches to NEON (aarch64), AVX2 or SSE4.1 (x86_64). All candidate comparisons in insert and search now run at 4–8× lane width.
+- **`fxp_dot` SIMD implementation** — `math/dot.rs` added NEON (`vmull_s32` widening), AVX2, and SSE4.1 paths mirroring `math/l2.rs`. Cosine similarity (contradict, consolidate, memory search) now runs at SIMD speed.
+- **HNSW `determine_level` fix** — was hashing the full 384-dim vector (1536 bytes) for deterministic level assignment; now hashes only the 8-byte record ID (~48× less data per insert).
+- **Brute-force top-K: insertion sort → max-heap** — `BruteForceIndex::search` replaced O(k) insertion sort with `BinaryHeap` O(log k) per candidate. At k=100 this is ~7× fewer comparisons per candidate.
+- **`dist.rs` deleted** — dead scalar-only distance file (`euclidean_distance_squared`, `dot_product`, `euclidean_distance_fxp`) removed. All call sites redirected to `math::l2` / `math::dot`. Prevents future regression to scalar paths.
+- **HNSW startup allocation eliminated** — `Vec::with_capacity(1_000_000 × dim)` replaced with `Vec::new()`. Removes up to 1.5 GB of committed virtual memory at startup for dim=384.
+- **HNSW `id_map`: `HashMap` → `FxHashMap`** — uses identity-like hashing for integer keys; ~5–15% insert throughput improvement.
+- **`dist::dot_product` callers migrated** — `engine.rs` and `cluster_server.rs` cosine-similarity helpers now call `math::dot::dot_i32` (SIMD) instead of the deleted scalar function.
+
+### Internal (engine decomposition — not user-facing)
+
+- **ExecutionResources (E4)** — `tree_cache` and `community_store` extracted
   from `Engine` into `pub resources: ExecutionResources`; application-layer
   boundary is now explicit in the type.
-- **Hide pub state (Phase E3)** — `Engine.state` is now `pub(crate)`; 10 public
-  read accessor methods added (`record_count`, `node_count`, `edge_count`,
-  `kernel_dim`, `get_node`, `outgoing_edges`, `get_record`, `get_edge`,
-  `kernel_state`, `clone_kernel_state`). Stale pre-E1 dual-branch patterns in
-  valori-ffi removed. FFI `create_node` now routes through `create_node_for_record`.
-- **NamespaceRegistry → CollectionRegistry (Phase E2)** — duplicate
-  `NamespaceRegistry` struct deleted from engine.rs; `valori-metadata::CollectionRegistry`
-  is the single implementation. `list()` added to `CollectionRegistry`.
-- **Single persistence funnel (Phase E1)** — `Engine` now owns one
-  `Persistence` enum (`EventLog` / `Wal` / `Ephemeral`) instead of
-  `Option<EventCommitter>` + `Option<WalWriter>`; every mutation flows
-  through one `commit_and_apply_ns` path. Behavior fix that fell out:
-  event-log batch inserts now run the auto-tier index check (previously
-  only per-insert WAL-path inserts did). External code reads the committer
-  via `engine.event_committer()` / `event_committer_mut()`.
-
-### Removed
-- **Dead storage-layer duplicates (Phase E0)** — 10 stale files in
-  `valori-node/src/` (`wal_writer.rs`, `wal_reader.rs`, `recovery.rs`,
-  `events/`, `object_store/`) left behind by the Phase 1.1 restructure and
-  shadowed by the `valori-storage`/`valori-state` re-exports in lib.rs.
-  `tests/architecture.rs` now fails if a source file exists in both
-  valori-node and an extracted crate.
+- **Hide pub state (E3)** — `Engine.state` changed to `pub(crate)`; 10 public
+  read accessor methods added. Stale pre-E1 dual-branch patterns in valori-ffi
+  removed. FFI `create_node` now routes through `create_node_for_record`.
+- **NamespaceRegistry → CollectionRegistry (E2)** — duplicate `NamespaceRegistry`
+  struct deleted from engine.rs; `valori-metadata::CollectionRegistry` is the
+  single implementation. `list()` added to `CollectionRegistry`.
+- **Single persistence funnel (E1)** — `Engine` now owns one `Persistence` enum
+  (`EventLog` / `Wal` / `Ephemeral`); every mutation flows through one
+  `commit_and_apply_ns` path. Behavior fix: event-log batch inserts now run the
+  auto-tier index check (previously WAL-only).
+- **Dead storage-layer duplicates removed (E0)** — 10 stale files in
+  `valori-node/src/` deleted; `tests/architecture.rs` tripwire added to prevent
+  re-introduction.
 
 ### Added
 - **Dual-path unification, all mechanical domains (Phase R2)** — graph
