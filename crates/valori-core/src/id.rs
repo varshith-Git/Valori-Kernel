@@ -122,23 +122,39 @@ impl core::fmt::Display for ExecutionId {
     }
 }
 
+/// Parses the `Display` format: exactly 32 lowercase-or-uppercase hex digits.
+impl core::str::FromStr for ExecutionId {
+    type Err = crate::CoreError;
+
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        if s.len() != 32 || !s.is_ascii() {
+            return Err(crate::CoreError::InvalidInput(
+                "ExecutionId must be 32 hex digits",
+            ));
+        }
+        let hi = u64::from_str_radix(&s[..16], 16);
+        let lo = u64::from_str_radix(&s[16..], 16);
+        match (hi, lo) {
+            (Ok(hi), Ok(lo)) => Ok(ExecutionId { hi, lo }),
+            _ => Err(crate::CoreError::InvalidInput(
+                "ExecutionId must be 32 hex digits",
+            )),
+        }
+    }
+}
+
 // ── std-only: UUID interop ────────────────────────────────────────────────────
 
 #[cfg(feature = "std")]
 impl ExecutionId {
     /// Generate a random ExecutionId using the OS RNG.
+    ///
+    /// Panics if the OS entropy source is unavailable — an ID collision is
+    /// worse than a crash here, since these IDs correlate jobs and receipts.
     pub fn new_random() -> Self {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        // Minimal PRNG using time + address entropy — avoids a uuid dep.
-        let t = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0);
-        let addr = &t as *const u64 as u64;
-        ExecutionId {
-            hi: t ^ addr.rotate_left(17),
-            lo: t.wrapping_add(addr).rotate_right(31) ^ 0xdeadbeef_cafebabe,
-        }
+        let mut b = [0u8; 16];
+        getrandom::getrandom(&mut b).expect("OS RNG unavailable");
+        Self::from_bytes(b)
     }
 }
 

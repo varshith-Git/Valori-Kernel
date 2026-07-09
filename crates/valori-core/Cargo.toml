@@ -12,9 +12,10 @@ description = "Zero-dependency shared types for the Valori platform (IDs, enums,
 [dependencies]
 serde     = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 thiserror = { version = "2.0", default-features = false }
+getrandom = { version = "0.2", optional = true }
 
 [features]
 default = ["std"]
-std = ["thiserror/std"]
+std = ["thiserror/std", "dep:getrandom"]
 
 # No dev-dependencies — core is intentionally dependency-free.
