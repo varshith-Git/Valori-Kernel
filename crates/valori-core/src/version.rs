@@ -16,11 +16,7 @@ impl Version {
     pub const ZERO: Self = Version(0);
 
     pub fn next(self) -> Self {
-        Version(self.0 + 1)
-    }
-
-    pub fn is_compatible_with(self, other: Self) -> bool {
-        self.0 == other.0
+        Version(self.0.checked_add(1).expect("Version overflow"))
     }
 }
 
@@ -41,8 +37,7 @@ mod tests {
     }
 
     #[test]
-    fn version_compatibility() {
-        assert!(Version(5).is_compatible_with(Version(5)));
-        assert!(!Version(5).is_compatible_with(Version(6)));
+    fn version_display() {
+        assert_eq!(Version(5).to_string(), "v5");
     }
 }

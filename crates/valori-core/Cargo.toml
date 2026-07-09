@@ -3,7 +3,7 @@ name = "valori-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Zero-dependency shared types for the Valori platform (IDs, enums, errors, traits)"
+description = "Minimal-dependency shared types for the Valori platform (IDs, enums, errors, traits)"
 
 # ── no_std by default ─────────────────────────────────────────────────────────
 # valori-core must compile for embedded and WASM targets with no OS dependency.

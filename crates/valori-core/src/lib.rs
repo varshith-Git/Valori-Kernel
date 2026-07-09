@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! # valori-core
 //!
-//! Zero-dependency shared foundation for the Valori platform.
+//! Minimal-dependency shared foundation for the Valori platform.
 //!
-//! Every Valori crate depends on `valori-core`. `valori-core` depends on
-//! nothing (only `serde` for serialization and `thiserror` for ergonomic
-//! error derives — both support `no_std`).
+//! Every Valori crate depends on `valori-core`. Its only dependencies are
+//! `serde` (serialization) and `thiserror` (error derives) — both `no_std` —
+//! plus `getrandom` behind the `std` feature for `ExecutionId::new_random`.
 //!
 //! ## Contents
 //! - **IDs** — `RecordId`, `NodeId`, `EdgeId`, `NamespaceId`, `CollectionId`,

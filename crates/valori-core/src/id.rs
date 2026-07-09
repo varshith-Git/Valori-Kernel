@@ -78,7 +78,7 @@ pub struct ClusterEpoch(pub u64);
 
 impl ClusterEpoch {
     pub fn next(self) -> Self {
-        ClusterEpoch(self.0 + 1)
+        ClusterEpoch(self.0.checked_add(1).expect("ClusterEpoch overflow"))
     }
 }
 
