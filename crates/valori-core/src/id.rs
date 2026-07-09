@@ -179,4 +179,53 @@ mod tests {
         let e = ClusterEpoch(5);
         assert_eq!(e.next().0, 6);
     }
+
+    #[test]
+    fn execution_id_string_roundtrip() {
+        let id = ExecutionId { hi: 0x0102030405060708, lo: 0xf90a0b0c0d0e0f10 };
+        let s = format!("{id}");
+        assert_eq!(s.parse::<ExecutionId>().unwrap(), id);
+        assert!("".parse::<ExecutionId>().is_err());
+        assert!("job_0102".parse::<ExecutionId>().is_err());
+        assert!("zz02030405060708f90a0b0c0d0e0f10".parse::<ExecutionId>().is_err());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn new_random_unique_100k() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100_000 {
+            assert!(seen.insert(ExecutionId::new_random()), "duplicate ExecutionId");
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn new_random_unique_across_threads() {
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..10_000).map(|_| ExecutionId::new_random()).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        for h in handles {
+            for id in h.join().unwrap() {
+                assert!(seen.insert(id), "duplicate ExecutionId across threads");
+            }
+        }
+    }
+
+    /// Stress test — run with `cargo test -p valori-core -- --ignored`
+    /// whenever ID generation changes.
+    #[cfg(feature = "std")]
+    #[test]
+    #[ignore]
+    fn new_random_unique_1m_stress() {
+        let mut seen = std::collections::HashSet::with_capacity(1_000_000);
+        for _ in 0..1_000_000 {
+            assert!(seen.insert(ExecutionId::new_random()), "duplicate ExecutionId");
+        }
+    }
 }
