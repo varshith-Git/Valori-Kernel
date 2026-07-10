@@ -23,11 +23,11 @@
 //!
 //! ## Snapshots
 //!
-//! The snapshot payload is the Phase 1.3 V5 kernel snapshot (with its
+//! The snapshot payload is the V6 kernel snapshot (with its
 //! arithmetic-format byte and the hash-domain guarantees) plus the dedup
-//! table, framed with bincode. `install_snapshot` therefore inherits the V5
-//! refusal semantics: a snapshot from a foreign arithmetic format fails to
-//! decode and the node keeps its old state.
+//! table, framed with bincode. `install_snapshot` therefore inherits the
+//! kernel's refusal semantics: a snapshot from a foreign arithmetic format
+//! fails to decode and the node keeps its old state.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Cursor;
@@ -126,7 +126,7 @@ const KEY_SM_SNAPSHOT_DATA: &str = "sm_snapshot_data";
 /// reranking work correctly on a restored follower (M-1 fix).
 #[derive(Serialize, Deserialize)]
 struct SnapshotPayload {
-    /// Phase 1.3 V6 kernel snapshot bytes (format byte included).
+    /// V6 kernel snapshot bytes (format byte included).
     kernel: Vec<u8>,
     /// The dedup table — replicated so a restored follower makes the same
     /// dedup decisions as the leader.
@@ -213,9 +213,11 @@ struct StateMachineInner {
     dedup_order: VecDeque<[u8; 16]>,
     current_snapshot: Option<(SnapshotMeta<NodeId, ValoriNode>, Vec<u8>)>,
     audit: Box<dyn AuditSink>,
-    snapshot_seq: u64,
     /// C4.1b: unix-second creation timestamps for records, keyed by record id.
-    /// Stamped at apply time so all replicas agree. Not hashed into state.
+    /// Each replica stamps its own wall clock at apply time, so values agree
+    /// only approximately (clock skew) — which is why they are NOT part of
+    /// the BLAKE3 state hash. Snapshot install/restore overwrites a follower
+    /// with the leader's values, re-converging the map exactly.
     created_at: HashMap<u32, u64>,
     /// BM25 text corpus — record_id → raw text for cluster-side reranking.
     /// The cluster_server reads this via with_text_corpus() and runs BM25
@@ -343,7 +345,6 @@ impl ValoriStateMachine {
                 dedup_order: VecDeque::new(),
                 current_snapshot: None,
                 audit,
-                snapshot_seq: 0,
                 db: None,
                 replay_until: None,
                 created_at: HashMap::new(),
@@ -464,7 +465,6 @@ impl ValoriStateMachine {
                 dedup_order,
                 current_snapshot,
                 audit,
-                snapshot_seq: 0,
                 db: Some(db),
                 replay_until,
                 created_at,
@@ -489,6 +489,13 @@ impl ValoriStateMachine {
     /// this for serving reads without copying the state out).
     pub async fn with_state<T>(&self, f: impl FnOnce(&KernelState) -> T) -> T {
         f(&self.inner.lock().await.state)
+    }
+
+    /// Clone the current kernel state, releasing the lock immediately.
+    /// Use this when the subsequent work is CPU-heavy (e.g. snapshot encoding)
+    /// and should run outside the async lock on a blocking thread pool.
+    pub async fn clone_state(&self) -> KernelState {
+        self.inner.lock().await.state.clone()
     }
 
     /// Look up a `SetMeta`-committed value by key and parse it as JSON.
@@ -821,8 +828,8 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
             bincode::serde::decode_from_slice(&bytes, bincode::config::standard())
                 .map_err(|e| io_err(format!("snapshot payload decode failed: {e}")))?;
 
-        // V5 semantics apply: a foreign-format snapshot fails here and the
-        // node keeps its old state.
+        // Kernel (V6) refusal semantics apply: a foreign-format snapshot
+        // fails here and the node keeps its old state.
         let state = decode_state(&payload.kernel)
             .map_err(|e| io_err(format!("kernel snapshot decode refused: {e:?}")))?;
 
@@ -887,14 +894,17 @@ impl RaftSnapshotBuilder<TypeConfig> for ValoriStateMachine {
         let bytes = bincode::serde::encode_to_vec(&payload, bincode::config::standard())
             .map_err(|e| io_err(format!("snapshot payload encode failed: {e}")))?;
 
-        inner.snapshot_seq += 1;
+        // Snapshot identity is derived, not counted: (last_applied index,
+        // state-hash prefix). Identical state yields the identical ID (the
+        // snapshots are interchangeable); different state can't collide.
+        // No mutable counter to persist across restarts.
         let meta = SnapshotMeta {
             last_log_id: inner.last_applied,
             last_membership: inner.membership.clone(),
             snapshot_id: format!(
                 "{}-{}",
                 inner.last_applied.map_or(0, |l| l.index),
-                inner.snapshot_seq
+                &hex(&payload.state_hash)[..16],
             ),
         };
         inner.current_snapshot = Some((meta.clone(), bytes.clone()));

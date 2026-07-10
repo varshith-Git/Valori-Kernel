@@ -23,12 +23,12 @@ pub type NodeId = u64;
 
 /// Identifies one independent Raft group ("shard") within a process
 /// (Phase S1 — multi-Raft skeleton). `ShardId(0)` is the sole shard when
-/// `VALORI_SHARD_COUNT=1` (today's single-Raft-group behavior — see
-/// `valori_node::cluster::bootstrap_cluster`). Namespace-to-shard routing
-/// does not exist yet; this type only identifies which Raft group a wire
-/// message or log/state-machine instance belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
-pub struct ShardId(pub u32);
+/// `VALORI_SHARD_COUNT=1`. Namespace-to-shard HTTP routing is live (S3–S9):
+/// `shard_for_namespace(ns, count) = ns % count` in valori-node.
+///
+/// This is the shared `valori-core` type (re-exported through the kernel) —
+/// the same `ShardId` the rest of the platform uses, not a local duplicate.
+pub use valori_kernel::types::id::ShardId;
 
 /// A cluster member as known to Raft membership config.
 ///

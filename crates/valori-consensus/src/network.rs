@@ -364,9 +364,10 @@ pub async fn serve_raft(
     serve_raft_inner(shards, addr, None).await
 }
 
-/// [`serve_raft`] for the common single-shard case — wraps `raft` as the
-/// sole `ShardId(0)` entry. Every deployment with `VALORI_SHARD_COUNT=1`
-/// (today's default) uses this path.
+/// Test helper: [`serve_raft`] for a single shard — wraps `raft` as the
+/// sole `ShardId(0)` entry. Production (valori-node's `cluster.rs`) always
+/// uses [`serve_raft`] with the full shard map, even when
+/// `VALORI_SHARD_COUNT=1`.
 pub async fn serve_raft_single(
     raft: Raft,
     addr: &str,
@@ -385,7 +386,7 @@ pub async fn serve_raft_tls(
     serve_raft_inner(shards, addr, Some(tls)).await
 }
 
-/// [`serve_raft_tls`] for the common single-shard case — see [`serve_raft_single`].
+/// Test helper: [`serve_raft_tls`] for a single shard — see [`serve_raft_single`].
 pub async fn serve_raft_tls_single(
     raft: Raft,
     addr: &str,
