@@ -5,13 +5,12 @@
 //! `--from` and once to `--to` — then reports the state-hash delta and,
 //! optionally, nearest-neighbour rank changes for a query vector.
 
-use crate::engine::ForensicEngine;
+use crate::engine::{floats_to_fxp, ForensicEngine};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use std::collections::{HashMap, HashSet};
 use valori_kernel::index::SearchResult;
 use valori_kernel::types::id::RecordId;
-use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
 pub fn run(
@@ -176,21 +175,6 @@ pub fn run(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Convert f64 values to Q16.16 fixed-point vectors.
-/// Replicates `valori_kernel::fxp::ops::from_f32` without requiring the `std` feature.
-fn floats_to_fxp(floats: &[f64]) -> FxpVector {
-    FxpVector {
-        data: floats
-            .iter()
-            .map(|&f| FxpScalar(
-                (f as f32 * 65536.0)
-                    .round()
-                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
-            ))
-            .collect(),
-    }
-}
 
 fn search(engine: &ForensicEngine, query: &FxpVector, k: usize) -> Vec<SearchResult> {
     let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];

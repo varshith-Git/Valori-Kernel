@@ -161,6 +161,24 @@ impl ForensicEngine {
     }
 }
 
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+/// Convert f64 float values to a Q16.16 fixed-point vector for kernel search.
+pub fn floats_to_fxp(floats: &[f64]) -> valori_kernel::types::vector::FxpVector {
+    use valori_kernel::types::scalar::FxpScalar;
+    use valori_kernel::types::vector::FxpVector;
+    FxpVector {
+        data: floats
+            .iter()
+            .map(|&f| FxpScalar(
+                (f as f32 * 65536.0)
+                    .round()
+                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
+            ))
+            .collect(),
+    }
+}
+
 // ─── Snapshot parsing helpers ─────────────────────────────────────────────────
 
 /// Parse a [`KernelState`] from raw snapshot bytes (VAL1 format).

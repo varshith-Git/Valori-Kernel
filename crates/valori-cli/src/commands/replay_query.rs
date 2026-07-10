@@ -1,14 +1,12 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! `valori replay-query` — time-travel to a specific event count and query.
 
-use crate::engine::ForensicEngine;
+use crate::engine::{floats_to_fxp, ForensicEngine};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use std::time::Instant;
 use valori_kernel::index::SearchResult;
 use valori_kernel::types::id::RecordId;
-use valori_kernel::types::scalar::FxpScalar;
-use valori_kernel::types::vector::FxpVector;
 
 pub fn run(
     snapshot_path: &str,
@@ -103,19 +101,3 @@ pub fn run(
     Ok(())
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/// Convert f64 values to Q16.16 fixed-point vectors.
-/// Replicates `valori_kernel::fxp::ops::from_f32` without requiring the `std` feature.
-fn floats_to_fxp(floats: &[f64]) -> FxpVector {
-    FxpVector {
-        data: floats
-            .iter()
-            .map(|&f| FxpScalar(
-                (f as f32 * 65536.0)
-                    .round()
-                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
-            ))
-            .collect(),
-    }
-}
