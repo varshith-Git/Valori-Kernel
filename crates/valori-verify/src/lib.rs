@@ -14,6 +14,81 @@ use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::state::kernel::KernelState;
 use valori_wire::{chain_advance, decode_entry, format_utc, hex, parse_header, LogEntry, SegmentHeader};
 
+// ── LogSummary — shared anchor / regression-test API ─────────────────────────
+
+/// Summary produced by replaying an event log for anchoring purposes.
+///
+/// Shared between `valori-anchor` and the regression tests so both derive
+/// replay behavior from the same implementation and can never silently diverge.
+pub struct LogSummary {
+    pub chain_head: [u8; 32],
+    pub event_count: u64,
+    pub state_hash: [u8; 32],
+    /// Non-zero if trailing undecodable bytes were found (partial write at tail).
+    pub trailing_bytes: usize,
+}
+
+/// Replay an event log and return chain head, event count, and state hash.
+///
+/// This is the canonical lightweight replay path shared by `valori-anchor`
+/// and the regression tests.  Handles both `Event` and `EventNs` entries so
+/// state hash matches the one produced by `verify_log_file`.
+///
+/// Chain breaks and kernel errors are returned as `Err`. Trailing
+/// undecodable bytes (partial write at the tail) are reported via
+/// `LogSummary::trailing_bytes` rather than as an error.
+pub fn replay_log(path: &Path) -> Result<LogSummary, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("cannot read '{}': {e}", path.display()))?;
+    let header = parse_header(&bytes)
+        .map_err(|e| format!("cannot parse header: {e}"))?;
+
+    let body = &bytes[header.header_len..];
+    let mut chain_head = header.prev_segment_chain_head;
+    let mut event_count = 0u64;
+    let mut offset = 0usize;
+    let mut state = KernelState::new();
+
+    while offset < body.len() {
+        let (chained, n) = match decode_entry(header.version, &body[offset..]) {
+            Ok(pair) => pair,
+            Err(_) => break, // trailing partial write — caller checks trailing_bytes
+        };
+        offset += n;
+
+        if chained.prev_hash != chain_head {
+            return Err(format!(
+                "chain break at entry #{} (byte offset {}) — run valori-verify for details",
+                event_count + 1,
+                header.header_len + offset,
+            ));
+        }
+        chain_head = chain_advance(header.version, &chain_head, &chained)
+            .expect("version already validated by parse_header");
+
+        match &chained.entry {
+            LogEntry::Event(event) => {
+                state.apply_event(event)
+                    .map_err(|e| format!("event #{} rejected by kernel: {e:?}", event_count + 1))?;
+                event_count += 1;
+            }
+            LogEntry::EventNs { namespace_id, event } => {
+                state.apply_event_ns(event, *namespace_id)
+                    .map_err(|e| format!("event #{} [ns {namespace_id}] rejected by kernel: {e:?}", event_count + 1))?;
+                event_count += 1;
+            }
+            LogEntry::Checkpoint { .. } | LogEntry::Admin(_) => {}
+        }
+    }
+
+    Ok(LogSummary {
+        chain_head,
+        event_count,
+        state_hash: hash_state_blake3(&state),
+        trailing_bytes: body.len() - offset,
+    })
+}
+
 // ── Internal replay types ─────────────────────────────────────────────────────
 
 struct ReplayOutcome {

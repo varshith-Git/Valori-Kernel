@@ -44,6 +44,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
 use serde_json::{json, Value};
 use std::path::Path;
+use valori_wire::format_utc;
 
 const DOMAIN_SEP: &[u8] = b"valori-anchor-v1\0";
 
@@ -74,36 +75,6 @@ fn json_u64(v: &Value, field: &str) -> Result<u64> {
     v[field]
         .as_u64()
         .with_context(|| format!("anchor field '{field}' missing or not a u64"))
-}
-
-/// Format unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (no external deps).
-pub fn format_utc(unix_secs: u64) -> String {
-    const DBFM: [u32; 13] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
-    let sod = unix_secs % 86400;
-    let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
-    let mut days = (unix_secs / 86400) as u32;
-    let mut year = 1970u32;
-    loop {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let diy = if leap { 366 } else { 365 };
-        if days < diy {
-            break;
-        }
-        days -= diy;
-        year += 1;
-    }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let mut month = 12u32;
-    for mi in 1..=12u32 {
-        let dbf = DBFM[mi as usize] + if leap && mi > 2 { 1 } else { 0 };
-        if days < dbf {
-            month = mi;
-            break;
-        }
-    }
-    let dbfm = DBFM[(month - 1) as usize] + if leap && month > 2 { 1 } else { 0 };
-    let day = days - dbfm + 1;
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
 // ── anchor payload ────────────────────────────────────────────────────────────

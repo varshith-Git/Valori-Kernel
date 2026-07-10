@@ -38,16 +38,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 
-use valori_wire as wire;
-use valori_wire::{chain_advance, decode_entry, format_utc as wire_fmt_utc, hex, parse_header};
+use valori_wire::{format_utc, hex};
 
 #[allow(dead_code)]
 #[path = "../anchor.rs"]
 mod anchor;
 use anchor::{generate_keypair, load_signing_key, load_verifying_key, AnchorPayload};
 
-use valori_kernel::snapshot::blake3::hash_state_blake3;
-use valori_kernel::state::kernel::KernelState;
+use valori_verify::replay_log;
 
 #[derive(Parser)]
 #[command(
@@ -102,70 +100,6 @@ enum Cmd {
     },
 }
 
-// ── log replay (chain head + state hash only) ─────────────────────────────────
-
-struct LogSummary {
-    chain_head: [u8; 32],
-    event_count: u64,
-    state_hash: [u8; 32],
-}
-
-fn replay_log(path: &Path) -> anyhow::Result<LogSummary> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| anyhow::anyhow!("cannot read '{}': {e}", path.display()))?;
-
-    let header = parse_header(&bytes)?;
-
-    let body = &bytes[header.header_len..];
-    let mut chain_head = header.prev_segment_chain_head;
-    let mut event_count = 0u64;
-    let mut offset = 0usize;
-    let mut state = KernelState::new();
-
-    while offset < body.len() {
-        match decode_entry(header.version, &body[offset..]) {
-            Ok((chained, n)) => {
-                offset += n;
-                // Validate chain — abort if broken.
-                if chained.prev_hash != chain_head {
-                    anyhow::bail!(
-                        "chain break at entry #{} (byte offset {}) — \
-                         log may have been tampered; run valori-verify for details",
-                        event_count + 1,
-                        header.header_len + offset
-                    );
-                }
-                chain_head = chain_advance(header.version, &chain_head, &chained)?;
-                if let wire::LogEntry::Event(ref event) = chained.entry {
-                    // Apply to state (needed for the state hash).
-                    if let Err(e) = state.apply_event(event) {
-                        anyhow::bail!("event #{} rejected by kernel: {e:?}", event_count + 1);
-                    }
-                    event_count += 1;
-                }
-            }
-            Err(_) => {
-                // M-1: warn about trailing bytes — likely a partial write at the tail.
-                // Anchoring only covers events #1..#event_count; warn the operator so
-                // they know the anchor won't match after the node repairs the tail.
-                let remaining = body.len() - offset;
-                if remaining > 0 {
-                    eprintln!(
-                        "warning: {} trailing byte(s) could not be decoded (partial write?).",
-                        remaining
-                    );
-                    eprintln!("         anchor covers events #1..#{event_count} only.");
-                    eprintln!("         A subsequent verify after node repair may show a DIFFERENT hash.");
-                }
-                break;
-            }
-        }
-    }
-
-    let state_hash = hash_state_blake3(&state);
-    Ok(LogSummary { chain_head, event_count, state_hash })
-}
-
 // ── subcommand handlers ───────────────────────────────────────────────────────
 
 fn cmd_keygen(out_dir: &Path) -> ExitCode {
@@ -186,6 +120,12 @@ fn cmd_create(log: &Path, key_path: &Path, note: Option<&str>) -> ExitCode {
         Ok(s) => s,
         Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
     };
+    // M-1: warn about trailing bytes — likely a partial write at the tail.
+    if summary.trailing_bytes > 0 {
+        eprintln!("warning: {} trailing byte(s) could not be decoded (partial write?).", summary.trailing_bytes);
+        eprintln!("         anchor covers events #1..#{} only.", summary.event_count);
+        eprintln!("         A subsequent verify after node repair may show a DIFFERENT hash.");
+    }
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -217,7 +157,7 @@ fn cmd_create(log: &Path, key_path: &Path, note: Option<&str>) -> ExitCode {
     println!("  events:     {}", summary.event_count);
     println!("  chain head: {}", hex(&summary.chain_head));
     println!("  state hash: {}", hex(&summary.state_hash));
-    println!("  signed at:  {} (unix {})", wire_fmt_utc(now), now);
+    println!("  signed at:  {} (unix {})", format_utc(now), now);
     println!("  public key: {}", hex(signing_key.verifying_key().as_bytes()));
     println!();
     println!("Share verify.pub with auditors so they can run:");
@@ -281,7 +221,7 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
 
     println!("anchor signature: ✓ valid");
     println!("  signed by:  {}", hex(verifying_key.as_bytes()));
-    println!("  anchored:   {}", wire_fmt_utc(anchor_payload.anchored_at_unix));
+    println!("  anchored:   {}", format_utc(anchor_payload.anchored_at_unix));
     println!();
 
     // Replay the log and compare.
@@ -323,7 +263,7 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
     println!();
     if ok {
         println!("✅  ANCHOR VERIFIED");
-        println!("    The log is identical to what was anchored at {}.", wire_fmt_utc(anchor_payload.anchored_at_unix));
+        println!("    The log is identical to what was anchored at {}.", format_utc(anchor_payload.anchored_at_unix));
         println!("    Any alteration after that time would be detected here.");
         ExitCode::SUCCESS
     } else {

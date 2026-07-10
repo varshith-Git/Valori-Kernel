@@ -246,7 +246,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_insert_and_get() {
-        use crate::operation::{OperationHash, OperationKind, OperationInputs, ExecutionPolicy, compute_operation_hash};
+        use crate::operation::{OperationKind, OperationInputs, ExecutionPolicy, compute_operation_hash};
         use crate::context::{PlannerFingerprint, PlanningContextHash, PlanningContext, CapabilitySet};
         use crate::graph::ExecutionGraph;
         use crate::graph::ExecutionRetentionPolicy;
