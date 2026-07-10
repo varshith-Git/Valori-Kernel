@@ -47,6 +47,11 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Recall the k nearest memories to a query embedding AND a verifiable \
                             receipt: a BLAKE3 digest binding the exact result set to the committed \
                             state hash at recall time. Lets you prove later what the agent recalled. \
+                            Note: the state hash is captured in a separate round-trip after the \
+                            search; under concurrent writes it may reflect a slightly newer state \
+                            than the one that produced the results. Results are still valid members \
+                            of the bound state (the kernel is append-only), but the proof is \
+                            membership-in-state, not exact-k-nearest-of-state. \
                             Optionally pass decay_half_life_secs for recency-aware recall: older \
                             memories are ranked down (a memory one half-life old has its distance \
                             doubled), so fresh context surfaces over stale.",
@@ -66,9 +71,10 @@ pub fn tool_definitions() -> Vec<Value> {
             "name": GRAPH_RECALL,
             "description": "GraphRAG in one call: recall the k nearest memories AND the connected \
                             knowledge subgraph around them (sources, related entities, citations) up \
-                            to `depth` hops — from a single consistent snapshot. Returns a receipt \
-                            binding BOTH the hits and the subgraph. Replaces the Neo4j+vector-DB \
-                            two-system dance.",
+                            to `depth` hops. Returns a receipt binding BOTH the hits and the \
+                            subgraph. The state hash is captured after the graphrag call; under \
+                            concurrent writes it reflects a slightly newer state (same membership \
+                            guarantee as memory_recall). Replaces the Neo4j+vector-DB two-system dance.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

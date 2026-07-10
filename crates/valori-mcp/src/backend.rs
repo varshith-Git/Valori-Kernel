@@ -159,15 +159,19 @@ impl NodeClient for HttpBackend {
     }
 
     async fn proof_event_log(&self) -> Result<Option<(String, u64)>> {
-        // The node returns 400 when no event log is enabled — treat that as
-        // "no event-log proof available" rather than a hard error, so recall
-        // still works against an in-memory node (with a weaker receipt).
+        // The node returns 400 (BAD_REQUEST) when no event log is enabled —
+        // treat that as "no event-log proof available" rather than a hard error,
+        // so recall still works against an in-memory node (with a weaker receipt).
+        //
+        // Transport errors (connection refused, timeout, DNS) are NOT silently
+        // swallowed: if the node was reachable for proof_state but then fails
+        // here, the receipt would be silently downgraded. Propagate those as Err.
         let req = self.auth(self.http.get(self.url("/v1/proof/event-log")));
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(_) => return Ok(None),
-        };
+        let resp = req.send().await.context("GET /v1/proof/event-log")?;
         if !resp.status().is_success() {
+            // Any 4xx/5xx → node has no event log or it is temporarily
+            // unavailable. Return None so the receipt is issued without the
+            // event-log binding rather than failing the entire recall.
             return Ok(None);
         }
         let v: Value = resp.json().await.unwrap_or(json!({}));

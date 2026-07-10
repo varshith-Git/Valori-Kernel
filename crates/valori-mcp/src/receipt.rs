@@ -36,6 +36,16 @@ pub struct ReceiptBody {
     /// The ordered result identities: `[memory_id, record_id, score_bits]`.
     /// `score_bits` is the raw IEEE-754 bit pattern of the score as a string,
     /// so the digest is exact and platform-independent.
+    ///
+    /// # Known limitation — state hash is captured after the search
+    ///
+    /// `state_hash` is fetched in a separate HTTP call after `memory_search`
+    /// completes. If a concurrent write commits between the two calls, `state_hash`
+    /// reflects a strictly newer state `S'` than the state `S` at which the search
+    /// ran. Because the kernel is append-only, the results are still valid members
+    /// of `S'` — no result was removed — but you cannot replay `S'` and prove that
+    /// these exact k-nearest results would be returned. A strict proof would require
+    /// an atomic "search + proof" endpoint on the node side (not yet implemented).
     pub results: Vec<ResultFingerprint>,
     /// For GraphRAG recalls: the connected subgraph that was returned alongside
     /// the hits, so the receipt binds the *entire* retrieved context — not just
