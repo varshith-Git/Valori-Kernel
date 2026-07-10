@@ -372,6 +372,18 @@ pub struct MemorySearchVectorRequest {
     /// or any other value defaults to linearizable, matching `/v1/search`.
     #[serde(default)]
     pub consistency: Option<String>,
+    /// Phase I7 — restrict results to records whose stored metadata satisfies
+    /// every key/value predicate. Same semantics as `SearchRequest::metadata_filter`.
+    #[serde(default)]
+    pub metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Phase C5 — when `true` (default) and `query_text` is provided, re-ranks
+    /// candidates by hybrid BM25 + vector score before returning the top-k.
+    #[serde(default = "crate::api::default_rerank")]
+    pub rerank: bool,
+    /// Phase C5 — raw query text for BM25 hybrid re-ranking. Required when
+    /// `rerank=true`; ignored otherwise.
+    #[serde(default)]
+    pub query_text: Option<String>,
 }
 
 #[derive(Serialize)]

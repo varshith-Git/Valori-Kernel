@@ -28,6 +28,9 @@ pub trait NodeClient: Send + Sync {
         k: usize,
         collection: Option<String>,
         decay_half_life_secs: Option<u64>,
+        metadata_filter: Option<Value>,
+        rerank: bool,
+        query_text: Option<String>,
     ) -> Result<Value>;
 
     /// `GET /v1/proof/state` → 64-hex state hash.
@@ -139,6 +142,9 @@ impl NodeClient for HttpBackend {
         k: usize,
         collection: Option<String>,
         decay_half_life_secs: Option<u64>,
+        metadata_filter: Option<Value>,
+        rerank: bool,
+        query_text: Option<String>,
     ) -> Result<Value> {
         let mut body = json!({ "query_vector": query_vector, "k": k });
         if let Some(c) = collection {
@@ -146,6 +152,15 @@ impl NodeClient for HttpBackend {
         }
         if let Some(h) = decay_half_life_secs.filter(|&v| v > 0) {
             body["decay_half_life_secs"] = json!(h);
+        }
+        if let Some(f) = metadata_filter {
+            body["metadata_filter"] = f;
+        }
+        if rerank {
+            body["rerank"] = json!(true);
+            if let Some(t) = query_text {
+                body["query_text"] = json!(t);
+            }
         }
         self.post_json("/v1/memory/search_vector", body).await
     }

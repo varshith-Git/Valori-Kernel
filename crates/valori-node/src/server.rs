@@ -611,20 +611,42 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
     ) -> Result<Vec<MemorySearchHit>, Response> {
         let engine = self.read().await;
         let half_life = req.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+        let mf = req.metadata_filter.as_ref();
+        // Over-fetch when a metadata filter is active so post-filtering can fill k.
+        let base_k = if mf.is_some() {
+            req.k.saturating_mul(10).max(100).min(5000)
+        } else {
+            req.k
+        };
 
         let results = if half_life == 0 {
-            let hits = engine.search_l2_ns(&req.query_vector, req.k, ns)
+            let use_rerank = req.rerank && req.query_text.is_some() && !engine.reranker.is_empty();
+            let fetch_k = if use_rerank {
+                (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
+            } else {
+                base_k
+            };
+            let hits = engine.search_l2_ns(&req.query_vector, fetch_k, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
-            hits.into_iter()
+            let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, req.k);
+            let final_ids: Vec<(u32, f32)> = if use_rerank && mf.is_none() {
+                let query_text = req.query_text.as_deref().unwrap_or("");
+                let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
+                engine.reranker.rerank(query_text, candidates)
+                    .into_iter().take(req.k).map(|(id, s)| (id as u32, s)).collect()
+            } else {
+                filtered
+            };
+            final_ids.into_iter()
                 .map(|(record_id, score)| {
-                    let memory_id = format!("rec:{}", record_id);
+                    let memory_id = format!("rec:{record_id}");
                     let metadata = engine.metadata.get(&memory_id);
                     MemorySearchHit { memory_id, record_id, score, metadata,
                         decay_factor: None, age_secs: None }
                 })
                 .collect()
         } else {
-            let pool = req.k.saturating_mul(4).max(50).min(1000);
+            let pool = base_k.saturating_mul(4).max(50).min(1000);
             let raw = engine.search_l2_ns(&req.query_vector, pool, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
             let now = std::time::SystemTime::now()
@@ -635,8 +657,20 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
                     id, distance: score, created_at: engine.record_created_at(id),
                 })
                 .collect();
-            crate::decay::rerank(candidates, now, half_life, req.k)
+            crate::decay::rerank(candidates, now, half_life, base_k)
                 .into_iter()
+                .filter(|h| {
+                    match mf {
+                        None => true,
+                        Some(f) => {
+                            let key = format!("rec:{}", h.id);
+                            engine.metadata.get(&key)
+                                .map(|m| crate::api::matches_metadata_filter(&m, f))
+                                .unwrap_or(false)
+                        }
+                    }
+                })
+                .take(req.k)
                 .map(|h| {
                     let memory_id = format!("rec:{}", h.id);
                     let metadata = engine.metadata.get(&memory_id);

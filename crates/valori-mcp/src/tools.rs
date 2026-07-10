@@ -62,7 +62,15 @@ pub fn tool_definitions() -> Vec<Value> {
                     "k": { "type": "integer", "minimum": 1, "default": 5 },
                     "collection": { "type": "string" },
                     "decay_half_life_secs": { "type": "integer", "minimum": 0,
-                        "description": "Recency half-life in seconds; 0/absent = no decay." }
+                        "description": "Recency half-life in seconds; 0/absent = no decay." },
+                    "metadata_filter": { "type": "object",
+                        "description": "Restrict results to records whose metadata satisfies all key/value predicates. \
+                                        Exact match or range operators: {\"year\": {\"gte\": 2020}}." },
+                    "rerank": { "type": "boolean", "default": true,
+                        "description": "When true (default) and query_text is provided, re-ranks candidates \
+                                        by hybrid BM25 + vector score before returning top-k." },
+                    "query_text": { "type": "string",
+                        "description": "Raw query text for BM25 hybrid re-ranking. Requires rerank=true." }
                 },
                 "required": ["query_vector"]
             }
@@ -203,10 +211,13 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             let collection = opt_str(args, "collection");
             let decay = args.get("decay_half_life_secs").and_then(|v| v.as_u64());
+            let metadata_filter = args.get("metadata_filter").cloned();
+            let rerank = args.get("rerank").and_then(|v| v.as_bool()).unwrap_or(true);
+            let query_text = opt_str(args, "query_text");
             let query_dim = query.len();
 
             let results = client
-                .memory_search(query.clone(), k, collection, decay)
+                .memory_search(query.clone(), k, collection, decay, metadata_filter, rerank, query_text)
                 .await
                 .context("memory search failed")?;
 
@@ -268,7 +279,7 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let receipt = Receipt::build(body, now_unix());
 
             Ok(json!({
-                "hits": hits,
+                "results": hits,
                 "subgraph": subgraph,
                 "seed_nodes": resp.get("seed_nodes").cloned().unwrap_or(json!([])),
                 "receipt": receipt,
@@ -351,7 +362,7 @@ mod tests {
             Ok(json!({ "memory_id": "mem-1", "record_id": 1,
                        "document_node_id": 10, "chunk_node_id": 11 }))
         }
-        async fn memory_search(&self, _q: Vec<f32>, _k: usize, _c: Option<String>, _d: Option<u64>) -> Result<Value> {
+        async fn memory_search(&self, _q: Vec<f32>, _k: usize, _c: Option<String>, _d: Option<u64>, _mf: Option<Value>, _rr: bool, _qt: Option<String>) -> Result<Value> {
             Ok(json!({ "results": [
                 { "memory_id": "mem-1", "record_id": 1, "score": 0.9, "metadata": {"text": "hi"} },
                 { "memory_id": "mem-2", "record_id": 2, "score": 0.5 }
@@ -406,8 +417,8 @@ mod tests {
         let args = json!({ "query_vector": [0.1, 0.2, 0.3, 0.4], "k": 1, "depth": 2 });
         let out = call_tool(&node, GRAPH_RECALL, &args).await.unwrap();
 
-        // The composed call returns hits AND the subgraph.
-        assert_eq!(out["hits"].as_array().unwrap().len(), 1);
+        // The composed call returns results AND the subgraph.
+        assert_eq!(out["results"].as_array().unwrap().len(), 1);
         assert_eq!(out["subgraph"]["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(out["subgraph"]["edges"].as_array().unwrap().len(), 1);
 

@@ -240,8 +240,8 @@ async fn graphrag_returns_hits_and_subgraph_with_verifiable_receipt() {
     assert_eq!(out["isError"], json!(false));
     let payload: Value = serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    // One call returned BOTH the vector hits and the connected subgraph.
-    assert!(!payload["hits"].as_array().unwrap().is_empty(), "no hits");
+    // One call returned BOTH the vector hits (now under "results") and the connected subgraph.
+    assert!(!payload["results"].as_array().unwrap().is_empty(), "no hits");
     let nodes = payload["subgraph"]["nodes"].as_array().unwrap();
     let edges = payload["subgraph"]["edges"].as_array().unwrap();
     assert!(nodes.iter().any(|n| n["id"].as_u64() == Some(chunk_node)), "seed chunk node missing");

@@ -2059,10 +2059,16 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
 
         let half_life = req.decay_half_life_secs.unwrap_or(0);
         let k = req.k;
+        let mf = req.metadata_filter.clone();
+        let base_k = if mf.is_some() {
+            k.saturating_mul(10).max(100).min(5000)
+        } else {
+            k
+        };
 
         let results = if half_life == 0 {
             shard_sm.with_state(|s| {
-                let mut buf = vec![KernelSearchResult::default(); k as usize];
+                let mut buf = vec![KernelSearchResult::default(); base_k];
                 let n = s.search_l2_ns(&query, &mut buf, ns);
                 buf[..n].iter().map(|r| {
                     let memory_id = format!("rec:{}", r.id.0);
@@ -2077,7 +2083,7 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                 }).collect::<Vec<_>>()
             }).await
         } else {
-            let pool = (k as usize).saturating_mul(4).max(50).min(1000);
+            let pool = base_k.saturating_mul(4).max(50).min(1000);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs()).unwrap_or(0);
@@ -2091,7 +2097,7 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                         created_at: created_at.get(&r.id.0).copied(),
                     })
                     .collect();
-                crate::decay::rerank(candidates, now, half_life, k)
+                crate::decay::rerank(candidates, now, half_life, base_k)
                     .into_iter()
                     .map(|h| crate::api::MemorySearchHit {
                         memory_id: format!("rec:{}", h.id),
@@ -2105,9 +2111,18 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             }).await
         };
 
+        // Populate metadata and apply filter post-fetch.
         let mut results = results;
         for hit in &mut results {
             hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
+        }
+        if let Some(ref f) = mf {
+            results.retain(|h| {
+                h.metadata.as_ref()
+                    .map(|m| crate::api::matches_metadata_filter(m, f))
+                    .unwrap_or(false)
+            });
+            results.truncate(k);
         }
 
         Ok(results)
