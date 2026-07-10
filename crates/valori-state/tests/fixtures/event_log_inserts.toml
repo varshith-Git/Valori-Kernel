@@ -1,0 +1,8 @@
+# Generated from commit: see git log
+# Written by: EventLogWriter (valori-storage)
+# Read by: recover_from_event_log (valori-state::bootstrap)
+# Verified by: valori-verify::verify_log_file
+event_count  = 24
+record_count = 24
+chain_head   = "74c436e18c73da587147ae5ccbb44d42308e414519796476d7a6907ec83cba6a"
+state_hash   = "2c4ae8a21e0e01a1278febe82ff9dc6a7d70a9bacd43dbf68e8931221494f906"
