@@ -152,20 +152,9 @@ impl ValoricoreEngine {
         Ok(py_results)
     }
 
-    // L-2: &mut self is unnecessary; the Arc<Mutex<>> provides interior mutability.
-    fn save(&self) -> PyResult<String> {
-        let engine = lock_engine!(self);
-        match engine.save_snapshot(None) {
-            Ok(path) => Ok(path.to_string_lossy().to_string()),
-            Err(e) => Err(PyRuntimeError::new_err(format!("{:?}", e)))
-        }
-    }
-
     #[pyo3(signature = (kind, record_id=None))]
     fn create_node(&self, kind: u8, record_id: Option<u32>) -> PyResult<u32> {
         let mut engine = lock_engine!(self);
-
-        let rid = record_id.map(|r| RecordId(r));
 
         // After E1, create_node_for_record goes through commit_and_apply_ns
         // on both the event-log and WAL paths — no manual committer/state split needed.
@@ -546,7 +535,7 @@ impl ValoricoreEngine {
     }
 
     fn snapshot(&self) -> PyResult<Vec<u8>> {
-        let mut engine = lock_engine!(self);
+        let engine = lock_engine!(self);
         // After E1 engine.state is always current — no sync needed before snapshot.
         match engine.snapshot() {
             Ok(data) => Ok(data),
@@ -598,8 +587,12 @@ impl ValoricoreEngine {
         let mut engine = lock_engine!(self);
         let rid = RecordId(record_id);
 
-        // Verify record exists in live_state (engine.state is stale in committer path).
-        if !engine.get_record(rid).is_some() {
+        let exists = if let Some(c) = engine.event_committer() {
+            c.live_state().get_record(rid).is_some()
+        } else {
+            engine.get_record(rid).is_some()
+        };
+        if !exists {
             return Err(pyo3::exceptions::PyValueError::new_err(format!("record {} not found", record_id)));
         }
 
@@ -737,6 +730,8 @@ impl ValoricoreEngine {
                     format!("Event ID {event_id}: AutoCreateNamespace (Name: {name:?})"),
                 KernelEvent::DropNamespace { name } =>
                     format!("Event ID {event_id}: DropNamespace (Name: {name:?})"),
+                KernelEvent::UpdateRecordMetadata { id, .. } =>
+                    format!("Event ID {event_id}: UpdateRecordMetadata (Record {})", id.0),
             };
             events.push(event_str);
         }
