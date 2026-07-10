@@ -1889,7 +1889,7 @@ async fn get_operation_execution(
         topological_index: 0,
     });
     
-    edges.push(TaskEdge { from: TaskId(0), to: TaskId(1), condition: None });
+    edges.push(TaskEdge { from: TaskId(0), to: TaskId(1) });
     
     // Add an optional cleanup/finalize task
     tasks.push(TaskSpec {
@@ -1899,7 +1899,7 @@ async fn get_operation_execution(
         shard_id: None,
         topological_index: 0,
     });
-    edges.push(TaskEdge { from: TaskId(1), to: TaskId(2), condition: None });
+    edges.push(TaskEdge { from: TaskId(1), to: TaskId(2) });
 
     let graph = ExecutionGraph::build(
         op_hash, fp, ctx_hash,

@@ -98,8 +98,6 @@ pub struct TaskSpec {
 pub struct TaskEdge {
     pub from: TaskId,
     pub to: TaskId,
-    /// Reserved for future speculative execution. Always `None` today.
-    pub condition: Option<String>,
 }
 
 // ── GraphHash ─────────────────────────────────────────────────────────────────
@@ -297,7 +295,7 @@ mod tests {
             TaskSpec { id: TaskId(0), kind: TaskKind::Embed, inputs_json: "{}".into(), shard_id: None, topological_index: 0 },
             TaskSpec { id: TaskId(1), kind: TaskKind::InsertRecord, inputs_json: "{}".into(), shard_id: Some(0), topological_index: 0 },
         ];
-        let edges = vec![TaskEdge { from: TaskId(0), to: TaskId(1), condition: None }];
+        let edges = vec![TaskEdge { from: TaskId(0), to: TaskId(1) }];
         let order = topological_order(&tasks, &edges);
         assert_eq!(order, vec![0, 1]);
     }

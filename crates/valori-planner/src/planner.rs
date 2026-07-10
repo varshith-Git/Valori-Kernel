@@ -174,15 +174,15 @@ impl Planner for IngestPlanner {
             let node   = TaskSpec { id: TaskId(2), kind: TaskKind::InsertNode,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
             let edge   = TaskSpec { id: TaskId(3), kind: TaskKind::InsertEdge,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
             let edges = vec![
-                TaskEdge { from: TaskId(0), to: TaskId(1), condition: None },
-                TaskEdge { from: TaskId(1), to: TaskId(2), condition: None },
-                TaskEdge { from: TaskId(2), to: TaskId(3), condition: None },
+                TaskEdge { from: TaskId(0), to: TaskId(1) },
+                TaskEdge { from: TaskId(1), to: TaskId(2) },
+                TaskEdge { from: TaskId(2), to: TaskId(3) },
             ];
             (vec![embed, insert, node, edge], edges)
         } else {
             let insert = TaskSpec { id: TaskId(0), kind: TaskKind::InsertRecord, inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
             let node   = TaskSpec { id: TaskId(1), kind: TaskKind::InsertNode,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
-            let edges  = vec![TaskEdge { from: TaskId(0), to: TaskId(1), condition: None }];
+            let edges  = vec![TaskEdge { from: TaskId(0), to: TaskId(1) }];
             (vec![insert, node], edges)
         };
 

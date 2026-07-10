@@ -43,17 +43,6 @@ impl PlannerFingerprint {
         PlannerFingerprint { version, routing_config_hash, feature_flags_hash, metadata_schema_version, hash }
     }
 
-    /// A zero fingerprint for use in tests or disabled-planner contexts.
-    pub fn zero() -> Self {
-        PlannerFingerprint {
-            version: "0.0.0".into(),
-            routing_config_hash: [0u8; 32],
-            feature_flags_hash: [0u8; 32],
-            metadata_schema_version: 0,
-            hash: [0u8; 32],
-        }
-    }
-
     pub fn hash_hex(&self) -> String {
         self.hash.iter().map(|b| format!("{:02x}", b)).collect()
     }
