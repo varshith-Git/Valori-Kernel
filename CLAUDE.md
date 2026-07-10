@@ -85,6 +85,8 @@ Do ALL of these before reporting the phase as done. No exceptions.
 
 Read this first. It replaces cold-start greping for structure, invariants, and commands.
 
+**Architecture constitution**: [`docs/architecture/layers.md`](docs/architecture/layers.md) — dependency graph, crate ownership, global invariants, "never do this" list, compatibility fixture policy, and PR checklist. Read it before making any structural change.
+
 ---
 
 ## Crate layout
