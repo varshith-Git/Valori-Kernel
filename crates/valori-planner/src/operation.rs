@@ -51,24 +51,30 @@ impl Default for OperationId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
+    // ── Wired: endpoint → Operation → Planner → ExecutionGraph → Executor ──────
     Ingest,
     Search,
-    GraphRag,
     MemoryUpsert,
-    MemorySearch,
     Consolidate,
     Contradict,
+    HealthCheck,
+    /// Hard or soft deletion of one record.
+    Delete,
+    /// Batch insert of multiple vectors in one HTTP call.
+    BatchInsert,
+
+    // ── Planned: endpoint exists in valori-node but still calls logic directly ──
+    // These will be migrated to the planner pipeline in a future phase.
+    // Do not delete — they are integration points, not dead code.
+    // Migration order: Snapshot → GraphRag → TreeBuild/Query/Hybrid → CommunityDetect/Search → MemorySearch
+    GraphRag,
+    MemorySearch,
     CommunityDetect,
     CommunitySearch,
     TreeBuild,
     TreeQuery,
     TreeHybrid,
     Snapshot,
-    HealthCheck,
-    /// Hard or soft deletion of one record.
-    Delete,
-    /// Batch insert of multiple vectors in one HTTP call.
-    BatchInsert,
 }
 
 // ── OperationInputs ───────────────────────────────────────────────────────────
@@ -83,6 +89,7 @@ pub enum OperationKind {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OperationInputs {
+    // ── Wired ────────────────────────────────────────────────────────────────────
     Ingest {
         strategy: String,
         collection: String,
@@ -98,13 +105,37 @@ pub enum OperationInputs {
         metadata_filter: bool,
         consistency: ConsistencyLevel,
     },
-    GraphRag {
-        k: u32,
-        depth: u32,
+    MemoryUpsert {
         collection: String,
         shard_id: u8,
     },
-    MemoryUpsert {
+    Consolidate {
+        shard_id: u8,
+    },
+    Contradict {
+        shard_id: u8,
+    },
+    HealthCheck,
+    /// Hard or soft deletion of one record by id.
+    Delete {
+        collection: String,
+        shard_id: u8,
+        /// `"hard"` for permanent delete, `"soft"` for tombstone.
+        mode: String,
+    },
+    /// Batch insert of multiple vectors in one HTTP call.
+    BatchInsert {
+        count: u32,
+        collection: String,
+        shard_id: u8,
+    },
+
+    // ── Planned: endpoint exists in valori-node but still calls logic directly ──
+    // To be migrated to the planner pipeline. Migration order:
+    // Snapshot → GraphRag → TreeBuild/Query/Hybrid → CommunityDetect/Search → MemorySearch
+    GraphRag {
+        k: u32,
+        depth: u32,
         collection: String,
         shard_id: u8,
     },
@@ -113,12 +144,6 @@ pub enum OperationInputs {
         collection: String,
         shard_id: u8,
         decay: bool,
-    },
-    Consolidate {
-        shard_id: u8,
-    },
-    Contradict {
-        shard_id: u8,
     },
     CommunityDetect {
         collection: String,
@@ -145,20 +170,6 @@ pub enum OperationInputs {
         embed_enabled: bool,
     },
     Snapshot {
-        shard_id: u8,
-    },
-    HealthCheck,
-    /// Hard or soft deletion of one record by id.
-    Delete {
-        collection: String,
-        shard_id: u8,
-        /// `"hard"` for permanent delete, `"soft"` for tombstone.
-        mode: String,
-    },
-    /// Batch insert of multiple vectors in one HTTP call.
-    BatchInsert {
-        count: u32,
-        collection: String,
         shard_id: u8,
     },
 }
