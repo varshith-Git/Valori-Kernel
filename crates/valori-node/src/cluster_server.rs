@@ -933,7 +933,7 @@ async fn search(
         } else {
             raw
         };
-        if use_rerank && !filtered.is_empty() && mf.is_none() {
+        if use_rerank && !filtered.is_empty() {
             let candidates: Vec<(u64, f32)> = filtered.iter()
                 .map(|h| (h.id as u64, h.score))
                 .collect();
@@ -2106,10 +2106,26 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                 }).collect::<Vec<_>>()
             }).await;
 
+            // Populate metadata before filtering so the filter predicate has data.
+            let mut after_meta = raw;
+            for hit in &mut after_meta {
+                hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
+            }
+            // Apply metadata filter (filter → rerank → top-k, in that order).
+            let filtered: Vec<crate::api::MemorySearchHit> = if let Some(ref f) = mf {
+                after_meta.into_iter()
+                    .filter(|h| h.metadata.as_ref()
+                        .map(|m| crate::api::matches_metadata_filter(m, f))
+                        .unwrap_or(false))
+                    .collect()
+            } else {
+                after_meta
+            };
+
             // BM25 reranking: build an ephemeral reranker from the text corpus
             // stored in the state machine (populated via AutoInsertRecord metadata).
-            if use_rerank && !raw.is_empty() && mf.is_none() {
-                let candidates: Vec<(u64, f32)> = raw.iter()
+            if use_rerank && !filtered.is_empty() {
+                let candidates: Vec<(u64, f32)> = filtered.iter()
                     .map(|h| (h.record_id as u64, h.score))
                     .collect();
                 let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
@@ -2123,61 +2139,63 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                     reranker.rerank(&query_text_owned, candidates)
                         .into_iter().take(k).collect()
                 }).await;
+                // Re-attach metadata from the pre-rerank filtered set.
+                let meta_map: std::collections::HashMap<u64, Option<serde_json::Value>> =
+                    filtered.into_iter().map(|h| (h.record_id as u64, h.metadata)).collect();
                 reranked_ids.into_iter()
                     .map(|(id, score)| crate::api::MemorySearchHit {
                         memory_id: format!("rec:{id}"),
                         record_id: id as u32,
                         score,
-                        metadata: None,
+                        metadata: meta_map.get(&id).cloned().flatten(),
                         decay_factor: None,
                         age_secs: None,
                     })
                     .collect::<Vec<_>>()
             } else {
-                raw.into_iter().take(base_k).collect()
+                filtered.into_iter().take(k).collect()
             }
         } else {
             let pool = base_k.saturating_mul(4).max(50).min(1000);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs()).unwrap_or(0);
-            shard_sm.with_state_and_timestamps(|s, created_at| {
-                let mut buf = vec![KernelSearchResult::default(); pool];
-                let n = s.search_l2_ns(&query, &mut buf, ns);
-                let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()
-                    .map(|r| crate::decay::DecayHit {
-                        id: r.id.0,
-                        distance: r.score as f32,
-                        created_at: created_at.get(&r.id.0).copied(),
-                    })
-                    .collect();
-                crate::decay::rerank(candidates, now, half_life, base_k)
-                    .into_iter()
-                    .map(|h| crate::api::MemorySearchHit {
-                        memory_id: format!("rec:{}", h.id),
-                        record_id: h.id,
-                        score: h.distance,
-                        metadata: None,
-                        decay_factor: Some(h.factor),
-                        age_secs: h.age_secs,
-                    })
-                    .collect::<Vec<_>>()
-            }).await
+            let mut decay_results: Vec<crate::api::MemorySearchHit> =
+                shard_sm.with_state_and_timestamps(|s, created_at| {
+                    let mut buf = vec![KernelSearchResult::default(); pool];
+                    let n = s.search_l2_ns(&query, &mut buf, ns);
+                    let candidates: Vec<crate::decay::DecayHit> = buf[..n].iter()
+                        .map(|r| crate::decay::DecayHit {
+                            id: r.id.0,
+                            distance: r.score as f32,
+                            created_at: created_at.get(&r.id.0).copied(),
+                        })
+                        .collect();
+                    crate::decay::rerank(candidates, now, half_life, base_k)
+                        .into_iter()
+                        .map(|h| crate::api::MemorySearchHit {
+                            memory_id: format!("rec:{}", h.id),
+                            record_id: h.id,
+                            score: h.distance,
+                            metadata: None,
+                            decay_factor: Some(h.factor),
+                            age_secs: h.age_secs,
+                        })
+                        .collect::<Vec<_>>()
+                }).await;
+            for hit in &mut decay_results {
+                hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
+            }
+            if let Some(ref f) = mf {
+                decay_results.retain(|h| {
+                    h.metadata.as_ref()
+                        .map(|m| crate::api::matches_metadata_filter(m, f))
+                        .unwrap_or(false)
+                });
+                decay_results.truncate(k);
+            }
+            decay_results
         };
-
-        // Populate metadata and apply filter post-fetch.
-        let mut results = results;
-        for hit in &mut results {
-            hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
-        }
-        if let Some(ref f) = mf {
-            results.retain(|h| {
-                h.metadata.as_ref()
-                    .map(|m| crate::api::matches_metadata_filter(m, f))
-                    .unwrap_or(false)
-            });
-            results.truncate(k);
-        }
 
         Ok(results)
     }

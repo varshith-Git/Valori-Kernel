@@ -629,7 +629,7 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
             let hits = engine.search_l2_ns(&req.query_vector, fetch_k, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
             let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, req.k);
-            let final_ids: Vec<(u32, f32)> = if use_rerank && mf.is_none() {
+            let final_ids: Vec<(u32, f32)> = if use_rerank {
                 let query_text = req.query_text.as_deref().unwrap_or("");
                 let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
                 engine.reranker.rerank(query_text, candidates)
@@ -977,7 +977,7 @@ async fn search(
             engine.search_l2_ns(&payload.query, fetch_k, ns)?
         };
         let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, payload.k);
-        let final_hits = if use_rerank && mf.is_none() {
+        let final_hits = if use_rerank {
             let query_text = payload.query_text.as_deref().unwrap_or("");
             let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
             let reranked = engine.reranker.rerank(query_text, candidates);

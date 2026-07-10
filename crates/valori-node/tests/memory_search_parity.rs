@@ -264,6 +264,71 @@ async fn cluster_rerank_false_ignores_query_text() {
     let _ = fruit_id;
 }
 
+// ── Test: metadata_filter + rerank are not mutually exclusive ─────────────────
+// Previously both paths had `if use_rerank && mf.is_none()`, which silently
+// skipped reranking whenever a filter was active. This verifies the fix.
+
+async fn seed_filter_and_rerank(router: axum::Router) -> (u64, u64) {
+    // Two Alice records at the same vector: one matches "fruit", one does not.
+    // Both have metadata author=Alice so the filter passes both.
+    // Reranking should still promote the fruit record.
+    let quantum = insert_with_text_and_meta(router.clone(), [1.0, 0.0, 0.0, 0.0],
+        "quantum mechanics theory", json!({"author": "Alice"})).await;
+    let fruit   = insert_with_text_and_meta(router.clone(), [1.0, 0.0, 0.0, 0.0],
+        "apple fruit salad", json!({"author": "Alice"})).await;
+    (fruit, quantum)
+}
+
+/// Insert via upsert_vector with text (for BM25) and metadata (for filter).
+/// Since upsert_vector doesn't populate the reranker directly, we combine
+/// batch-insert (for text corpus) + set_meta (for metadata).
+async fn insert_with_text_and_meta(router: axum::Router, vec: [f32; 4], text: &str, meta: Value) -> u64 {
+    // batch-insert registers the text in the reranker/corpus
+    let record_id = insert_with_text(router.clone(), vec, text).await;
+    // set_meta attaches the metadata so the filter can see it
+    let body = json!({ "target_id": format!("rec:{record_id}"), "metadata": meta });
+    let (status, _) = post(router, "/v1/memory/meta/set", body).await;
+    assert_eq!(status, StatusCode::OK, "meta set failed for rec:{record_id}");
+    record_id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_filter_plus_rerank_both_apply() {
+    let router = standalone_router();
+    // Bob record at same vector — should be excluded by filter
+    insert_with_text_and_meta(router.clone(), [1.0, 0.0, 0.0, 0.0],
+        "apple fruit dessert", json!({"author": "Bob"})).await;
+    let (fruit_id, quantum_id) = seed_filter_and_rerank(router.clone()).await;
+
+    let resp = memory_search(router, [1.0, 0.0, 0.0, 0.0],
+        json!({"metadata_filter": {"author": "Alice"}, "rerank": true, "query_text": "fruit"})).await;
+    let ids = record_ids(&resp);
+
+    // Filter: only Alice records appear (Bob excluded)
+    assert!(ids.iter().all(|id| *id == fruit_id || *id == quantum_id),
+        "Bob should be filtered out, got {ids:?}");
+    // Rerank: fruit ranks above quantum
+    assert_eq!(ids.first(), Some(&fruit_id),
+        "rerank should promote fruit even when filter is active, got {ids:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cluster_filter_plus_rerank_both_apply() {
+    let router = cluster_router().await;
+    insert_with_text_and_meta(router.clone(), [1.0, 0.0, 0.0, 0.0],
+        "apple fruit dessert", json!({"author": "Bob"})).await;
+    let (fruit_id, quantum_id) = seed_filter_and_rerank(router.clone()).await;
+
+    let resp = memory_search(router, [1.0, 0.0, 0.0, 0.0],
+        json!({"metadata_filter": {"author": "Alice"}, "rerank": true, "query_text": "fruit"})).await;
+    let ids = record_ids(&resp);
+
+    assert!(ids.iter().all(|id| *id == fruit_id || *id == quantum_id),
+        "Bob should be filtered out, got {ids:?}");
+    assert_eq!(ids.first(), Some(&fruit_id),
+        "cluster: rerank should promote fruit even when filter is active, got {ids:?}");
+}
+
 // ── Test: k is respected after filtering ─────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
