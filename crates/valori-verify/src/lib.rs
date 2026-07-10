@@ -28,15 +28,21 @@ pub struct LogSummary {
     pub trailing_bytes: usize,
 }
 
-/// Replay an event log and return chain head, event count, and state hash.
+/// Replay an event log into a deterministic `KernelState`.
 ///
-/// This is the canonical lightweight replay path shared by `valori-anchor`
-/// and the regression tests.  Handles both `Event` and `EventNs` entries so
-/// state hash matches the one produced by `verify_log_file`.
+/// This is the canonical replay implementation used by:
+/// - `verify_log_file()` (CLI binary and FFI)
+/// - `valori-anchor` (signed anchor creation and verification)
+/// - integration tests (`tests/anchor_verify_parity.rs`)
+///
+/// All replay semantics must be implemented here. CLI binaries must not
+/// maintain independent replay logic — any divergence produces anchors
+/// and verification reports that disagree on the same log.
 ///
 /// Chain breaks and kernel errors are returned as `Err`. Trailing
 /// undecodable bytes (partial write at the tail) are reported via
-/// `LogSummary::trailing_bytes` rather than as an error.
+/// `LogSummary::trailing_bytes` rather than as an error, since they
+/// represent an incomplete final entry rather than tampering.
 pub fn replay_log(path: &Path) -> Result<LogSummary, String> {
     let bytes = std::fs::read(path)
         .map_err(|e| format!("cannot read '{}': {e}", path.display()))?;
