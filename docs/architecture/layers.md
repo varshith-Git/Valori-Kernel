@@ -14,35 +14,137 @@ Referenced by: `CONTRIBUTING.md`, `CLAUDE.md`.
 
 ## Dependency graph
 
+Compile-time dependencies and runtime composition are separated because they
+differ in several meaningful places (noted below).
+
+---
+
+### Compile-time crate dependencies
+
+These are the `[dependencies]` edges from each `Cargo.toml`. Dev-dependencies
+are excluded — they do not affect what ships.
+
 ```
-valori-core                       (ID types, shared errors, no_std)
-  ├── valori-kernel               (no_std — deterministic vector store + audit chain)
-  │     └── valori-wire          (serde structs + V2/V3/V4 event-log wire format)
-  │           ├── valori-storage (WAL + event log + object store — bytes on disk)
-  │           │     └── valori-state  (recovery orchestration — bootstrap only)
-  │           │           └── ┐
-  │           └── valori-verify (chain replay + audit binary)
-  │                 └── ┐
-  ├── valori-metadata            (control-plane redb store — projects, collections, planner cache)
-  │     └── valori-planner       (operation→task-DAG planning + two-layer cache)
-  │           └── valori-effect  (EffectBus — routes kernel writes, receipts, metrics)
-  │                 └── ┐
-  └── valori-consensus           (openraft Raft state machine, one per ShardId)
-        └── ┐
-            valori-node          (axum HTTP server — standalone + cluster paths)
-              ├── valori-ffi     (PyO3 embedded SDK, wraps Engine)
-              ├── valori-mcp     (MCP stdio server — verifiable agent memory)
-              └── valori-cli     (CLI binary — setup wizard, cluster, timeline)
+valori-core  ──────────────────────────────────────────────── (no valori deps)
+  │
+  ├─▶ valori-kernel ──────────────────────────────────────── (no_std)
+  │       │
+  │       ├─▶ valori-wire ─────────────────────────────────── (V2/V3/V4 wire format)
+  │       │       │
+  │       │       ├─▶ valori-storage ─────────────────────── (WAL + event log + object store)
+  │       │       │       └─▶ valori-state ────────────────── (recovery orchestration)
+  │       │       │
+  │       │       └─▶ valori-metadata ──────────────────────  (redb control-plane store)
+  │       │               └─▶ valori-planner ──────────────── (operation→task DAG)
+  │       │                       └─▶ valori-effect ─────────  (EffectBus + 7 capability traits)
+  │       │
+  │       ├─▶ valori-verify ──────────────────────────────── (chain replay lib + binaries)
+  │       │
+  │       └─▶ valori-consensus ───────────────────────────── (openraft — one Raft per ShardId)
+  │
+  └─▶ (transitive via above crates)
 ```
 
-Lines marked `└── ┐` converge into `valori-node` (which depends on all of the
-crates above it). The full direct dependency list for `valori-node` is:
-`valori-core`, `valori-kernel`, `valori-wire`, `valori-storage`, `valori-state`,
-`valori-consensus`, `valori-metadata`, `valori-planner`, `valori-effect`.
+`valori-node` is the convergence point. Its direct `[dependencies]`:
 
-**Layering rule**: arrows point downward only. No crate may import from a crate
-above it. Adding an upward import is an architecture violation — move the shared
-concept into a lower crate instead.
+```
+valori-node
+  depends on: valori-core, valori-kernel, valori-wire,
+              valori-storage, valori-state, valori-consensus,
+              valori-metadata, valori-planner, valori-effect
+```
+
+Crates that depend on `valori-node`:
+
+```
+valori-ffi   depends on: valori-node, valori-kernel, valori-verify
+valori-cli   depends on: valori-node, valori-kernel, valori-wire, valori-consensus
+valori-mcp   depends on: (no valori compile-time deps — see runtime note below)
+```
+
+**Notable divergences from the conceptual layering**:
+
+- `valori-mcp` has **no compile-time valori dependency**. Its `Cargo.toml`
+  `[dependencies]` contains only `reqwest`, `serde_json`, `blake3`, etc.
+  `valori-node` appears only in `[dev-dependencies]` for integration tests.
+  At compile time, `valori-mcp` is an independent HTTP client crate.
+
+- `valori-state` has **no compile-time dependency on `valori-verify`**.
+  `valori-verify` appears only in `valori-state`'s `[dev-dependencies]`
+  (used in the event-log end-to-end tests). At compile time `valori-state`
+  knows nothing about the verifier.
+
+- `valori-verify` depends only on `valori-kernel` and `valori-wire` — not
+  on `valori-node` or `valori-storage`. It reads raw bytes and does
+  entry-by-entry BLAKE3 replay entirely through the wire-level codec.
+
+**Layering rule**: arrows point downward only. No crate may introduce an
+upward `[dependencies]` edge. Adding one is an architecture violation —
+move the shared concept into a lower crate instead.
+
+---
+
+### Runtime composition
+
+How the system is actually wired when binaries run. This differs from the
+compile-time graph in three ways: mode selection, process boundaries, and
+dynamic capability injection.
+
+```
+┌─────────────────────────────────────────────────────┐
+│  valori-node process                                 │
+│                                                      │
+│  ┌──────────── standalone mode ──────────────────┐  │
+│  │  Engine (KernelState + WAL + EventLogWriter)  │  │
+│  │  Planner → EffectBus → KernelCapability impl  │  │
+│  └───────────────────────────────────────────────┘  │
+│                        OR                            │
+│  ┌──────────── cluster mode ─────────────────────┐  │
+│  │  DataPlaneState                               │  │
+│  │  raft.client_write() → ValoriStateMachine     │  │
+│  │    → KernelState (applied on every peer)      │  │
+│  │  Planner → EffectBus → KernelCapability impl  │  │
+│  └───────────────────────────────────────────────┘  │
+│                                                      │
+│  Both modes expose the same HTTP surface (axum)      │
+└──────────┬──────────────────────────────────────────┘
+           │ HTTP/JSON
+     ┌─────┴────────────────────┐
+     │                          │
+     ▼                          ▼
+valori-mcp process         valori-cli process
+(stdio MCP server;         (short-lived; spawns
+ calls /v1/memory/*        node in-process OR
+ over HTTP/reqwest;        calls remote HTTP;
+ no shared memory)         no shared memory)
+
+
+valori-ffi (.so)                  valori-verify (binary)
+  Loaded into Python process.       Standalone; reads
+  Wraps Engine directly             event log files
+  (in-process, shared memory        directly from disk.
+  via Arc<Mutex<Engine>>).          No live node needed.
+  Also exposes verify_log_file      Callable as a library
+  as a pyfunction (calls            from valori-ffi.
+  valori-verify lib directly).
+```
+
+**Key runtime distinctions**:
+
+| Crate | Compile-time coupling | Runtime coupling |
+|---|---|---|
+| `valori-mcp` | None to valori (HTTP client only) | HTTP to a running `valori-node` |
+| `valori-cli` | Depends on `valori-node` | May spawn node in-process OR call remote HTTP |
+| `valori-ffi` | Directly links `valori-node` + `valori-verify` | In-process; Python holds `Arc<Mutex<Engine>>` |
+| `valori-verify` | Only `valori-kernel` + `valori-wire` | File I/O only; never connects to a live node |
+| `valori-consensus` | Linked into `valori-node` | Only active in cluster mode; idle in standalone |
+| `EffectBus` (valori-effect) | Defined in `valori-effect` | Capability impls registered at node startup by `valori-node`; runtime trait-object dispatch |
+
+**Standalone vs cluster is a runtime decision, not a compile-time branch.**
+Both paths are compiled into the same `valori-node` binary. The binary selects
+the path at startup based on `VALORI_NODE_ID` / `VALORI_CLUSTER_MEMBERS`.
+This is why every HTTP endpoint must be implemented in both `server.rs` and
+`cluster_server.rs`.
 
 ---
 
