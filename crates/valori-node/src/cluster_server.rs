@@ -1239,6 +1239,12 @@ struct BatchInsertRequest {
     /// `AutoInsertRecord` event and therefore included in the BLAKE3 audit chain.
     #[serde(default)]
     metadata: Option<Vec<Option<String>>>,
+    /// Per-vector plain text for BM25 reranking. When present, stored in the
+    /// state machine's text_corpus via AutoInsertRecord metadata bytes (same
+    /// effect as the standalone path's engine.reranker_insert). Ignored when
+    /// the corresponding metadata[i] is already set.
+    #[serde(default)]
+    texts: Option<Vec<Option<String>>>,
     /// Phase S7. Absent/"default" targets the default namespace, shard 0 —
     /// byte-identical to pre-S7 behavior.
     #[serde(default)]
@@ -1274,10 +1280,19 @@ async fn batch_insert(
             }
         };
 
+        // metadata field takes priority; fall back to texts[i] so the state
+        // machine's text_corpus is populated for BM25 reranking (same semantics
+        // as the standalone path that calls engine.reranker_insert from texts).
         let meta_bytes = req.metadata.as_ref()
             .and_then(|m| m.get(ids.len()))
             .and_then(|s| s.as_ref())
-            .map(|s| s.as_bytes().to_vec());
+            .map(|s| s.as_bytes().to_vec())
+            .or_else(|| {
+                req.texts.as_ref()
+                    .and_then(|t| t.get(ids.len()))
+                    .and_then(|s| s.as_ref())
+                    .map(|t| t.as_bytes().to_vec())
+            });
 
         match shard_raft
             .client_write(ClientRequest {
@@ -2066,9 +2081,17 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             k
         };
 
+        let use_rerank = req.rerank && req.query_text.is_some();
+        let fetch_k = if use_rerank {
+            (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
+        } else {
+            base_k
+        };
+        let query_text_owned = req.query_text.clone().unwrap_or_default();
+
         let results = if half_life == 0 {
-            shard_sm.with_state(|s| {
-                let mut buf = vec![KernelSearchResult::default(); base_k];
+            let raw: Vec<crate::api::MemorySearchHit> = shard_sm.with_state(|s| {
+                let mut buf = vec![KernelSearchResult::default(); fetch_k];
                 let n = s.search_l2_ns(&query, &mut buf, ns);
                 buf[..n].iter().map(|r| {
                     let memory_id = format!("rec:{}", r.id.0);
@@ -2081,7 +2104,38 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                         age_secs: None,
                     }
                 }).collect::<Vec<_>>()
-            }).await
+            }).await;
+
+            // BM25 reranking: build an ephemeral reranker from the text corpus
+            // stored in the state machine (populated via AutoInsertRecord metadata).
+            if use_rerank && !raw.is_empty() && mf.is_none() {
+                let candidates: Vec<(u64, f32)> = raw.iter()
+                    .map(|h| (h.record_id as u64, h.score))
+                    .collect();
+                let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
+                let reranked_ids: Vec<(u64, f32)> = shard_sm.with_text_corpus(|corpus| {
+                    let mut reranker = crate::valori_reranker::ValoriReranker::new();
+                    for id in &candidate_ids {
+                        if let Some(text) = corpus.get(id) {
+                            reranker.insert(*id, text);
+                        }
+                    }
+                    reranker.rerank(&query_text_owned, candidates)
+                        .into_iter().take(k).collect()
+                }).await;
+                reranked_ids.into_iter()
+                    .map(|(id, score)| crate::api::MemorySearchHit {
+                        memory_id: format!("rec:{id}"),
+                        record_id: id as u32,
+                        score,
+                        metadata: None,
+                        decay_factor: None,
+                        age_secs: None,
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                raw.into_iter().take(base_k).collect()
+            }
         } else {
             let pool = base_k.saturating_mul(4).max(50).min(1000);
             let now = std::time::SystemTime::now()
