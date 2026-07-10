@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed (valori-storage/state dead API pass — 2026-07-10)
+
+- **`EventProof` struct and `generate_proof()`** deleted from `valori-storage::events::event_proof`. Both were superseded by `valori-verify` which owns the full audit path. `compute_event_log_hash()` (the only production caller, used by `/v1/proof/event-log`) is kept.
+- **`read_event_log()`** deleted from `valori-storage::events::event_replay`. It dropped namespace information silently and was strictly weaker than `read_all_segments()`. Two `cluster_boot.rs` tests migrated to `read_all_segments()`.
+- **`StateManifest`**, **`StateLifecycle`**, **`shutdown_snapshot()`** deleted from `valori-state`. None had any external callers; all were speculative scaffolding from an orchestration layer that was never built.
+- **`bootstrap::{has_wal, has_event_log, load_snapshot, validate_snapshot, replay_wal}`** changed `pub` → `pub(crate)`. Retained as internal helpers for future bootstrap orchestration; removed from the public surface.
+
 ### Added (persistence contract corpus — 2026-07-10)
 
 - **Snapshot compatibility corpus** (`valori-kernel/tests/snapshot_compat.rs`) — committed V7 binary fixtures (`snapshot_v7_empty.bin`, `snapshot_v7_single.bin`, `snapshot_v7_multi.bin`) paired with pinned state hashes. Four forever-decode tests lock the snapshot encoder, decoder, and `hash_state_blake3` contract against accidental format drift. A fifth test (`snapshot_v7_multi_can_continue_after_restore`) verifies that restored state produces the same hash as replay-from-scratch after a subsequent event.
