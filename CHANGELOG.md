@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (valori-wire audit — 2026-07-10)
+
+- **Phantom hardening guards now real** — `METADATA_CAP` enforced at `encode_entry` (write-side; pre-cap logs stay readable), `MAX_ENTRIES_PER_SEGMENT` enforced in the valori-verify replay loop, `MAX_ENTRY_DECODE_BYTES` unified with the applied decode limit. `MAX_SEGMENT_DECOMPRESSED_BYTES` remains reserved for upcoming zstd support and its doc now says so honestly.
+- **V4 evolution fixture added** — `segment_v4.bin` + forever-decode test; the current production write format previously had no CI fixture. `make_demo_log` now emits V4 per policy rule 4.
+- **Wire cleanups** — stale "understands v2 and v3" error message fixed; `parse_header` V3/V4 arms collapsed; bincode limit errors matched by enum variant instead of display-string substring; `thiserror` 1.0→2.0; `encode_header_v3` marked legacy/fixture-only.
+
 ### Fixed (valori-core audit — 2026-07-10)
 
 - **`ExecutionId::new_random()` collision bug (release blocker)** — the old time+stack-address scheme produced ~93% duplicate IDs under sequential calls (937,202 dups measured in 1M); planner operation IDs and async-ingest `job_id`s could collide across clients. Now uses OS RNG via `getrandom` (std-gated). Regression tests: 100k sequential, 80k cross-thread, and a `#[ignore]`d 1M stress test.
@@ -20,6 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`ValoriKernel` struct deleted** — the legacy HNSW prototype (`kernel.rs`) and its CRC64 `state_hash()` / binary-payload `apply_event(&[u8])` are gone. `crc64fast` dependency removed from `valori-kernel/Cargo.toml`.
 - **Bench bins deleted** — `bench_filter`, `bench_ingest`, `bench_recall` all depended on `ValoriKernel`; removed from `valori-cli`. `bench_1m` and `bench_persistence` (which already used the production path) are retained.
 - **`command_for()` deleted from `persistence.rs`** — `Persistence::Wal` arm now calls `w.append_event(event, namespace_id)` directly, no translation layer.
+
+### Internal (coverage tests — 2026-07-10)
+
+- **43 new tests for zero-coverage kernel modules** — `tests/fxp.rs` (22 tests: `fxp_add/sub/mul`, `from_f32`/`to_f32` with saturation, NaN, infinity), `tests/proof.rs` (12 tests: `merkle_root` empty/single/even/odd/order-sensitive, `generate_proof_bytes`, `DeterministicProof` bincode roundtrip), inline tests in `verify.rs` (5: `snapshot_hash`/`wal_hash` against `blake3::hash` directly), inline tests in `adapters/ivecs.rs` (4: single row, multi-row, empty file, zero-dim row). Total kernel tests: **134**.
+- **Dead binary-protocol types deleted** — `InsertPayload`, `DeletePayload`, `CMD_INSERT`, `CMD_DELETE`, `FixedPointVector` removed from `types/mod.rs`; exclusively used by the deleted `ValoriKernel::apply_event(&[u8])`.
 
 ### Internal (coverage audit — 2026-07-10)
 
