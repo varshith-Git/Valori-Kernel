@@ -7,26 +7,20 @@
 //! |---|---|---|
 //! | `PROJECTS` | project name (str) | JSON-encoded `Project` |
 //! | `COLLECTIONS` | `"project/collection"` (str) | JSON-encoded `Collection` |
-//! | `SNAPSHOTS` | `"project/shard_id/ulid"` (str) | JSON-encoded `SnapshotRecord` |
-//! | `EXECUTION_HISTORY` | execution_id (str) | JSON-encoded `ExecutionRecord` |
 //! | `PLANNER_CACHE` | `PlannerCacheKey::to_db_key()` | JSON-encoded `PlannerCacheEntry` |
 
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
 
 use crate::collection::{Collection, CollectionRegistry};
-use crate::error::{MetadataError, MetadataResult};
-use crate::history::ExecutionRecord;
+use crate::error::MetadataResult;
 use crate::planner_cache::{PlannerCacheEntry, PlannerCacheKey};
 use crate::project::Project;
-use crate::snapshot::SnapshotRecord;
 
 // ── Table definitions ─────────────────────────────────────────────────────────
 
 const PROJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("projects");
 const COLLECTIONS: TableDefinition<&str, &[u8]> = TableDefinition::new("collections");
-const SNAPSHOTS: TableDefinition<&str, &[u8]> = TableDefinition::new("snapshots");
-const EXECUTION_HISTORY: TableDefinition<&str, &[u8]> = TableDefinition::new("execution_history");
 const PLANNER_CACHE: TableDefinition<&str, &[u8]> = TableDefinition::new("planner_cache");
 
 // ── MetadataDb ────────────────────────────────────────────────────────────────
@@ -47,8 +41,6 @@ impl MetadataDb {
         let tx = db.begin_write()?;
         tx.open_table(PROJECTS)?;
         tx.open_table(COLLECTIONS)?;
-        tx.open_table(SNAPSHOTS)?;
-        tx.open_table(EXECUTION_HISTORY)?;
         tx.open_table(PLANNER_CACHE)?;
         tx.commit()?;
         Ok(Self { db })
@@ -163,72 +155,6 @@ impl MetadataDb {
             }
         }
         Ok(reg)
-    }
-
-    // ── Snapshots ─────────────────────────────────────────────────────────────
-
-    fn snapshot_key(project: &str, shard_id: u8, id: &str) -> String {
-        format!("{}/{}/{}", project, shard_id, id)
-    }
-
-    pub fn insert_snapshot(&self, rec: &SnapshotRecord) -> MetadataResult<()> {
-        let key = Self::snapshot_key(&rec.project, rec.shard_id, &rec.id);
-        let json = serde_json::to_vec(rec)?;
-        let tx = self.db.begin_write()?;
-        {
-            let mut table = tx.open_table(SNAPSHOTS)?;
-            table.insert(key.as_str(), json.as_slice())?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn list_snapshots(&self, project: &str, shard_id: u8) -> MetadataResult<Vec<SnapshotRecord>> {
-        let prefix = format!("{}/{}/", project, shard_id);
-        let tx = self.db.begin_read()?;
-        let table = tx.open_table(SNAPSHOTS)?;
-        let mut out = Vec::new();
-        for entry in table.iter()? {
-            let (k, v) = entry?;
-            if k.value().starts_with(&prefix) {
-                out.push(serde_json::from_slice(v.value())?);
-            }
-        }
-        Ok(out)
-    }
-
-    pub fn delete_snapshot(&self, project: &str, shard_id: u8, id: &str) -> MetadataResult<bool> {
-        let key = Self::snapshot_key(project, shard_id, id);
-        let tx = self.db.begin_write()?;
-        let removed;
-        {
-            let mut table = tx.open_table(SNAPSHOTS)?;
-            removed = table.remove(key.as_str())?.is_some();
-        }
-        tx.commit()?;
-        Ok(removed)
-    }
-
-    // ── ExecutionHistory ──────────────────────────────────────────────────────
-
-    pub fn insert_execution(&self, rec: &ExecutionRecord) -> MetadataResult<()> {
-        let json = serde_json::to_vec(rec)?;
-        let tx = self.db.begin_write()?;
-        {
-            let mut table = tx.open_table(EXECUTION_HISTORY)?;
-            table.insert(rec.execution_id.as_str(), json.as_slice())?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn get_execution(&self, execution_id: &str) -> MetadataResult<Option<ExecutionRecord>> {
-        let tx = self.db.begin_read()?;
-        let table = tx.open_table(EXECUTION_HISTORY)?;
-        match table.get(execution_id)? {
-            None => Ok(None),
-            Some(v) => Ok(Some(serde_json::from_slice(v.value())?)),
-        }
     }
 
     // ── PlannerCache ──────────────────────────────────────────────────────────
@@ -387,28 +313,4 @@ mod tests {
         assert!(db.cache_get(&key).unwrap().is_none());
     }
 
-    #[test]
-    fn snapshot_catalog_roundtrip() {
-        let (db, _dir) = test_db();
-
-        let rec = SnapshotRecord {
-            id: "01H123".to_string(),
-            project: "proj".to_string(),
-            shard_id: 0,
-            path: PathBuf::from("/tmp/snap.snap"),
-            size_bytes: 4096,
-            format_version: 6,
-            produced_at: 2000,
-            state_hash: [42u8; 32],
-            applied_height: 100,
-        };
-        db.insert_snapshot(&rec).unwrap();
-
-        let list = db.list_snapshots("proj", 0).unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].produced_at, 2000);
-
-        assert!(db.delete_snapshot("proj", 0, "01H123").unwrap());
-        assert!(db.list_snapshots("proj", 0).unwrap().is_empty());
-    }
 }
