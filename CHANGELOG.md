@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Refactored (valori-storage / valori-state cleanup — 2026-07-10)
+
+- **`valori-storage::recovery` deleted** — the module was a dead duplicate of `valori-state::bootstrap` left behind when recovery orchestration was migrated in Phase A3. Zero external callers; `valori-node` and `valori-state` already routed through `valori_state::bootstrap`. `StorageError` preserved in a new `error.rs` module so the public path `valori_storage::StorageError` is unchanged and no callers required updating.
+- **Crate responsibilities clarified** — `valori-storage` = persistence primitives (WAL, event log, object store); `valori-state` = recovery orchestration. Docs in `lib.rs`, `CLAUDE.md`, and `AGENTS.md` updated to match.
+- **Dependency graph confirmed acyclic**: `valori-core → valori-kernel → valori-wire → valori-storage → valori-state → (valori-consensus, valori-node)` with no back edges.
+
 ### Fixed (valori-consensus cleanup — 2026-07-10)
 
 - **`ShardId` deduplicated** — valori-consensus now re-exports the shared valori-core type (via valori-kernel) instead of defining a structurally identical local duplicate; wire encoding unchanged. Stale "namespace routing does not exist yet" doc replaced with shipped S3–S9 behavior.

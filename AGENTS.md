@@ -92,7 +92,7 @@ Read this first. It replaces cold-start greping for structure, invariants, and c
 | Crate | One-liner |
 |---|---|
 | `crates/valori-kernel` | The deterministic core: fixed-point vector store, knowledge graph, BLAKE3 audit chain, snapshot encode/decode. `no_std`. |
-| `crates/valori-core` | Minimal-dependency `no_std` type foundation (shared IDs, error types, traits). Every other crate depends on this; deps are only `serde` + `thiserror` (+ `getrandom` behind `std`). |
+| `crates/valori-core` | Zero-dependency `no_std` type foundation (shared IDs, error types, traits). Every other crate depends on this; it depends on nothing except `serde` + `thiserror`. |
 | `crates/valori-wire` | Shared serialization types (serde structs) + V2/V3/V4 event-log format (encode/decode/chain). Used by node ↔ Python SDK ↔ CLI. |
 | `crates/valori-storage` | Durable storage layer: WAL, append-only event log (V4), object-store backend (S3/file). Persistence primitives only; recovery orchestration lives in `valori-state`. |
 | `crates/valori-state` | State lifecycle orchestration: transitions `KernelState` between durable storage and in-memory operation (snapshot restore, WAL replay). |
@@ -215,7 +215,7 @@ Every feature must be evaluated against **both** execution paths before you writ
 - [ ] If it's stateless — confirmed no `State<>` parameter so it compiles in both routers?
 - [ ] Python SDK updated (`SyncRemoteClient` + `AsyncRemoteClient`)?
 - [ ] Node README API table updated?
-- [ ] CLAUDE.md env var table updated if new env vars added?
+- [ ] AGENTS.md env var table updated if new env vars added?
 
 ### Common mistake to avoid
 
