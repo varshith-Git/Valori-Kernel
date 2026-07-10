@@ -12,8 +12,9 @@
 //! format version and should only ever run again to ADD a new version.
 
 use valori_wire::{
-    chain_advance, decode_entry, encode_entry, encode_header_v2, encode_header_v3, hex,
-    parse_header, LogEntry, FORMAT_Q16_16, VERSION_V2, VERSION_V3,
+    chain_advance, decode_entry, encode_entry, encode_header_v2, encode_header_v3,
+    encode_header_v4, hex, parse_header, LogEntry, FORMAT_Q16_16, VERSION_V2, VERSION_V3,
+    VERSION_V4,
 };
 
 use valori_kernel::event::KernelEvent;
@@ -114,6 +115,25 @@ fn v3_fixture_decodes_forever() {
     );
 }
 
+#[test]
+fn v4_fixture_decodes_forever() {
+    let bytes = std::fs::read(fixture_path("segment_v4.bin"))
+        .expect("committed v4 fixture must exist");
+    let header = parse_header(&bytes).unwrap();
+    assert_eq!(header.version, VERSION_V4);
+    assert_eq!(header.format_id, FORMAT_Q16_16);
+    assert_eq!(header.segment_seq, 4);
+
+    let (events, checkpoints, head) = walk(&bytes);
+    assert_eq!(events, 9);
+    assert_eq!(checkpoints, 1);
+    assert_eq!(
+        hex(&head),
+        "1803f156f48caf02c58b99da10e6ccbc4fdd5036dac0bc554ad1ff5813802872",
+        "v4 fixture chain head changed — the wire format, CRC framing, or chain formula broke compatibility"
+    );
+}
+
 /// One-time fixture generator. Run manually:
 /// `cargo test -p valori-wire --test evolution generate_fixtures -- --ignored --nocapture`
 #[test]
@@ -145,6 +165,20 @@ fn generate_fixtures() {
     }
     std::fs::write(fixture_path("segment_v3.bin"), &bytes).unwrap();
     println!("v3 final chain head: {}", hex(&head));
+
+    // v4 segment (seq 4, spliced, request ids on even entries) — same chain
+    // formula as v3 plus the per-entry CRC32 suffix.
+    let prev = [0x22u8; 32];
+    let mut bytes = encode_header_v4(4, FORMAT_Q16_16, 4, &prev).to_vec();
+    let mut head = prev;
+    for (i, entry) in fixture_entries().iter().enumerate() {
+        let t = BASE_TIME + i as u64;
+        let rid = if i % 2 == 0 { Some([i as u8; 16]) } else { None };
+        bytes.extend(encode_entry(VERSION_V4, &head, t, rid, entry).unwrap());
+        head = valori_wire::chain_advance_v3(&head, t, rid, entry);
+    }
+    std::fs::write(fixture_path("segment_v4.bin"), &bytes).unwrap();
+    println!("v4 final chain head: {}", hex(&head));
 }
 
 /// Phase 2.9: the Admin variant encodes, chains, and round-trips like any

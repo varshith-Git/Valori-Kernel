@@ -192,3 +192,31 @@ fn v4_chain_advance_matches_v3_formula() {
 
     assert_eq!(v3_head, v4_head, "V4 chain hash must be identical to V3");
 }
+
+#[test]
+fn metadata_cap_enforced_on_encode_not_decode() {
+    use valori_wire::{WireError, METADATA_CAP};
+
+    let oversized = LogEntry::Event(KernelEvent::InsertRecord {
+        id: RecordId(1),
+        vector: FxpVector { data: vec![FxpScalar(1)] },
+        metadata: Some(vec![0u8; METADATA_CAP + 1]),
+        tag: 0,
+    });
+    // Writers must refuse to put an oversized blob on disk...
+    let err = encode_entry(VERSION_V4, &[0u8; 32], 1_700_000_000, None, &oversized)
+        .expect_err("oversized metadata must be rejected at encode time");
+    assert!(matches!(err, WireError::MetadataTooLarge(n) if n == METADATA_CAP + 1));
+
+    // ...but at the cap it encodes and decodes fine.
+    let at_cap = LogEntry::Event(KernelEvent::InsertRecord {
+        id: RecordId(1),
+        vector: FxpVector { data: vec![FxpScalar(1)] },
+        metadata: Some(vec![0u8; METADATA_CAP]),
+        tag: 0,
+    });
+    let bytes = encode_entry(VERSION_V4, &[0u8; 32], 1_700_000_000, None, &at_cap).unwrap();
+    let (decoded, n) = decode_entry(VERSION_V4, &bytes).unwrap();
+    assert_eq!(n, bytes.len());
+    assert!(matches!(decoded.entry, LogEntry::Event(KernelEvent::InsertRecord { .. })));
+}
