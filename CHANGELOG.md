@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (persistence contract corpus — 2026-07-10)
+
+- **Snapshot compatibility corpus** (`valori-kernel/tests/snapshot_compat.rs`) — committed V7 binary fixtures (`snapshot_v7_empty.bin`, `snapshot_v7_single.bin`, `snapshot_v7_multi.bin`) paired with pinned state hashes. Four forever-decode tests lock the snapshot encoder, decoder, and `hash_state_blake3` contract against accidental format drift. A fifth test (`snapshot_v7_multi_can_continue_after_restore`) verifies that restored state produces the same hash as replay-from-scratch after a subsequent event.
+- **WAL compatibility corpus** (`valori-storage/tests/wal_compat.rs`) — committed `wal_v1_inserts.wal` and `wal_v1_namespace.wal` fixtures with pinned `.hash` files. Two forever-replay tests lock `WalWriter` → `WalReader` → `apply_event_ns` → `hash_state_blake3` against format regressions.
+- **Event-log end-to-end corpus** (`valori-state/tests/event_log_compat.rs`) — committed event log fixtures with TOML manifests pinning four independent invariants: `event_count`, `record_count`, `chain_head`, `state_hash`. Tests exercise both `recover_from_event_log` (bootstrap path) and `valori_verify::verify_log_file` (audit path). Three malformed-artifact tests (`bad_magic`, `truncated`, `chain_tampered`) assert that corrupted input is detected and handled, not panicked on.
+
 ### Refactored (valori-storage / valori-state cleanup — 2026-07-10)
 
 - **`valori-storage::recovery` deleted** — the module was a dead duplicate of `valori-state::bootstrap` left behind when recovery orchestration was migrated in Phase A3. Zero external callers; `valori-node` and `valori-state` already routed through `valori_state::bootstrap`. `StorageError` preserved in a new `error.rs` module so the public path `valori_storage::StorageError` is unchanged and no callers required updating.
