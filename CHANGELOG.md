@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (valori-consensus cleanup — 2026-07-10)
+
+- **`ShardId` deduplicated** — valori-consensus now re-exports the shared valori-core type (via valori-kernel) instead of defining a structurally identical local duplicate; wire encoding unchanged. Stale "namespace routing does not exist yet" doc replaced with shipped S3–S9 behavior.
+- **Snapshot IDs derived, not counted** — `snapshot_id` is now `(last_applied index, state-hash prefix)`; the old in-memory counter reset on restart and could reissue a previous ID.
+- **Dead `thiserror 1.x` dependency removed**; stale V5→V6 snapshot docs and the `created_at` "replicas agree" claim corrected; `serve_raft_single`/`serve_raft_tls_single` marked as test helpers; obsolete `placeholder.rs` deleted.
+
 ### Fixed (valori-wire audit — 2026-07-10)
 
 - **Phantom hardening guards now real** — `METADATA_CAP` enforced at `encode_entry` (write-side; pre-cap logs stay readable), `MAX_ENTRIES_PER_SEGMENT` enforced in the valori-verify replay loop, `MAX_ENTRY_DECODE_BYTES` unified with the applied decode limit. `MAX_SEGMENT_DECOMPRESSED_BYTES` remains reserved for upcoming zstd support and its doc now says so honestly.
