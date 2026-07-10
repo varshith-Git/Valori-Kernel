@@ -25,6 +25,10 @@ pub trait Capability: Send + Sync + 'static {
 ///
 /// The EffectBus calls `apply_command` on behalf of tasks; tasks never call
 /// this directly (RFC-0004 §5).
+///
+/// Read-path methods (`graph_rag`, `memory_search`, etc.) are provided as
+/// default no-ops so existing capability impls need not be updated until the
+/// corresponding feature is wired. Override them in `EngineKernelCapability`.
 #[async_trait]
 pub trait KernelCapability: Capability {
     fn shard_count(&self) -> u8;
@@ -42,6 +46,100 @@ pub trait KernelCapability: Capability {
     ) -> Result<serde_json::Value, EffectError>;
     /// Return BLAKE3 hex of the current state hash for a shard.
     fn state_hash(&self, shard_id: u8) -> String;
+
+    // ── Read + admin operations (default = unavailable) ───────────────────────
+
+    /// Persist the current kernel state to `path` (standalone only).
+    /// Returns the state_hash hex after the snapshot is written.
+    async fn save_snapshot(&self, _shard_id: u8, _path: Option<&str>) -> Result<String, EffectError> {
+        Err(EffectError::CapabilityUnavailable("save_snapshot"))
+    }
+
+    /// Vector search + subgraph expansion (GraphRAG).
+    /// Returns `{"hits":[…],"seed_nodes":[…],"subgraph":{"nodes":[…],"edges":[…]}}`.
+    async fn graph_rag(
+        &self,
+        _shard_id: u8,
+        _namespace_id: u16,
+        _vector: Vec<f32>,
+        _k: u32,
+        _depth: u32,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("graph_rag"))
+    }
+
+    /// Vector search with optional decay, rerank, and metadata filter.
+    /// Returns `[{"memory_id":…,"record_id":…,"score":…,"metadata":…}]`.
+    async fn memory_search(
+        &self,
+        _shard_id: u8,
+        _namespace_id: u16,
+        _vector: Vec<f32>,
+        _k: u32,
+        _decay_half_life_secs: Option<f64>,
+        _rerank: bool,
+        _query_text: Option<String>,
+        _metadata_filter: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("memory_search"))
+    }
+
+    /// Run label-propagation community detection over a namespace.
+    /// Returns `{"collection":…,"community_count":…,"receipt":…}`.
+    async fn community_detect(
+        &self,
+        _shard_id: u8,
+        _namespace_id: u16,
+        _max_iter: u32,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("community_detect"))
+    }
+
+    /// Search communities by vector proximity.
+    /// Returns `{"hits":[…],"communities":[…]}`.
+    async fn community_search(
+        &self,
+        _shard_id: u8,
+        _namespace_id: u16,
+        _vector: Vec<f32>,
+        _k: u32,
+        _depth: u32,
+        _drill_in: bool,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("community_search"))
+    }
+
+    /// Build a TreeIndex from markdown text.
+    /// Returns `{"cache_key":…,"chunk_count":…,"tree":…}`.
+    async fn tree_build(&self, _text: String, _doc_name: String) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("tree_build"))
+    }
+
+    /// Semantic tree traversal query.
+    /// `tree_json`: either cached tree or full tree value.
+    /// Returns `{"chunks":[…],"receipt":…}`.
+    async fn tree_query(
+        &self,
+        _tree_json: serde_json::Value,
+        _query: String,
+        _k: u32,
+        _prev_hash: Option<String>,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("tree_query"))
+    }
+
+    /// Hybrid vector + tree-RAG search.
+    /// Returns `{"hits":[…],"tree_chunks":[…],"receipt":…}`.
+    async fn tree_hybrid(
+        &self,
+        _shard_id: u8,
+        _namespace_id: u16,
+        _query: String,
+        _k: u32,
+        _params: serde_json::Value,
+    ) -> Result<serde_json::Value, EffectError> {
+        Err(EffectError::CapabilityUnavailable("tree_hybrid"))
+    }
 }
 
 // ── EmbedCapability ───────────────────────────────────────────────────────────

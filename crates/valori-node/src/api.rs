@@ -408,7 +408,7 @@ pub struct DeleteNodeResponse {
     pub log_index: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MemorySearchHit {
     pub memory_id: String,
     pub record_id: u32,
@@ -424,7 +424,7 @@ pub struct MemorySearchHit {
 
 // ... existing content ...
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MemorySearchResponse {
     pub results: Vec<MemorySearchHit>,
 }

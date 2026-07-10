@@ -486,34 +486,58 @@ async fn update_record_metadata(
 
 async fn snapshot_save(
     State(state): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    // Validate the requested path quickly under the async lock, then release.
-    let path: Option<std::path::PathBuf> = {
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
+
+    // Validate path under a short read lock, then release.
+    let (validated_path, shard_count) = {
         let engine = state.read().await;
-        req.path.as_deref().map(|raw| {
+        let sc = engine.shard_count as u8;
+        let p = req.path.as_deref().map(|raw| {
             let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
             safe_path(raw, allowed)
-        }).transpose()?.map(std::path::PathBuf::from)
+        }).transpose()?.map(std::path::PathBuf::from);
+        (p, sc)
     };
 
-    // Encode + write on the blocking thread pool — keeps tokio workers free.
-    let used_path = tokio::task::spawn_blocking(move || {
-        state.blocking_read().save_snapshot(path.as_deref())
-    })
-    .await
-    .map_err(|e| EngineError::InvalidInput(format!("snapshot task panicked: {e}")))?
-    ?;
-
-    // Return only the filename, not the full filesystem path (L-1).
-    let filename = used_path
-        .file_name()
+    let path_str = validated_path.as_deref()
+        .and_then(|p| p.to_str())
+        .map(|s| s.to_string());
+    let filename = validated_path.as_ref()
+        .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "snapshot".into());
-    Ok(Json(SnapshotSaveResponse {
-        success: true,
-        path: filename,
-    }))
+        .unwrap_or_else(|| "snapshot.val".into());
+
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "shard_id": 0u8,
+        "path": path_str,
+    })).unwrap_or_default();
+
+    let op_hash = compute_operation_hash(OperationKind::Snapshot, &OperationInputs::Snapshot { shard_id: 0 }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::SnapshotArtifact, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("snapshot: {e}")))?;
+
+    Ok(Json(SnapshotSaveResponse { success: true, path: filename }))
 }
 
 async fn snapshot_restore(
@@ -1391,37 +1415,55 @@ struct GraphRagRequest {
 /// single read against one consistent kernel snapshot. No second store, no sync.
 async fn graphrag(
     State(state): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<GraphRagRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    let engine = state.read().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let hits = engine.search_l2_ns(&payload.query_vector, payload.k, ns)?;
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
 
-    let mut seeds: Vec<u32> = Vec::new();
-    let mut hits_out: Vec<serde_json::Value> = Vec::new();
-    for (record_id, score) in &hits {
-        let node_id = engine.record_to_node.get(record_id).copied();
-        if let Some(nid) = node_id {
-            seeds.push(nid);
-        }
-        let memory_id = format!("rec:{record_id}");
-        let metadata = engine.metadata.get(&memory_id);
-        hits_out.push(serde_json::json!({
-            "memory_id": memory_id,
-            "record_id": record_id,
-            "score": score,
-            "node_id": node_id,
-            "metadata": metadata,
-        }));
-    }
+    let (ns, shard_count) = {
+        let eng = state.read().await;
+        let ns = eng.resolve_collection(payload.collection.as_deref())?;
+        (ns, eng.shard_count as u8)
+    };
+    let shard_id = (ns as u8).wrapping_rem(shard_count.max(1));
 
-    let (nodes, edges) = crate::graph_rag::expand_subgraph(&engine.state, &seeds, payload.depth);
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "shard_id": shard_id,
+        "namespace_id": ns,
+        "vector": payload.query_vector,
+        "k": payload.k,
+        "depth": payload.depth,
+    })).unwrap_or_default();
 
-    Ok(Json(serde_json::json!({
-        "hits": hits_out,
-        "seed_nodes": seeds,
-        "subgraph": { "nodes": nodes, "edges": edges },
-    })))
+    let op_hash = compute_operation_hash(OperationKind::GraphRag, &OperationInputs::GraphRag {
+        k: payload.k as u32, depth: payload.depth, collection: payload.collection.clone().unwrap_or_else(|| "default".into()), shard_id,
+    }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::GraphRag, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("graphrag: {e}")))?;
+
+    let result = outputs.into_iter().next().flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({ "hits": [], "seed_nodes": [], "subgraph": { "nodes": [], "edges": [] } }));
+
+    Ok(Json(result))
 }
 
 async fn snapshot(
@@ -1450,9 +1492,64 @@ async fn memory_upsert_vector(
 
 async fn memory_search_vector(
     State(state): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<MemorySearchVectorRequest>,
 ) -> Result<Json<MemorySearchResponse>, Response> {
-    crate::routes::memory::memory_search(&state, payload).await
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
+    use axum::http::StatusCode;
+
+    let (ns, shard_count) = {
+        let eng = state.read().await;
+        let ns = eng.resolve_collection(payload.collection.as_deref())
+            .map_err(|e| (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+        (ns, eng.shard_count as u8)
+    };
+    let shard_id = (ns as u8).wrapping_rem(shard_count.max(1));
+
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "shard_id": shard_id,
+        "namespace_id": ns,
+        "vector": payload.query_vector,
+        "k": payload.k,
+        "decay_half_life_secs": payload.decay_half_life_secs.map(|v| v as f64),
+        "rerank": payload.rerank,
+        "query_text": payload.query_text,
+        "metadata_filter": payload.metadata_filter.as_ref().map(|m| serde_json::Value::Object(m.clone())),
+    })).unwrap_or_default();
+
+    let op_hash = compute_operation_hash(OperationKind::MemorySearch, &OperationInputs::MemorySearch {
+        k: payload.k as u32,
+        collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
+        shard_id,
+        decay: payload.decay_half_life_secs.is_some(),
+    }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::MemorySearch, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+
+    let raw = outputs.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Array(vec![]));
+    let results: Vec<MemorySearchHit> = raw.as_array()
+        .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        .unwrap_or_default();
+
+    Ok(Json(MemorySearchResponse { results }))
 }
 
 async fn get_proof(
@@ -2441,11 +2538,49 @@ async fn index_rebuild_handler(
 /// caller doesn't have to re-transmit the full tree on every request.
 async fn tree_build(
     State(engine): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<crate::tree_rag::BuildRequest>,
 ) -> Json<crate::tree_rag::BuildResponse> {
-    let doc_name = payload.doc_name.unwrap_or_else(|| "document".into());
-    let tree = crate::tree_rag::TreeIndex::from_markdown(&payload.text, &doc_name);
-    let cache_key = engine.write().await.cache_tree(&payload.text, tree.clone());
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
+
+    let doc_name = payload.doc_name.clone().unwrap_or_else(|| "document".into());
+    let shard_count = engine.read().await.shard_count as u8;
+
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "text": payload.text,
+        "doc_name": doc_name,
+    })).unwrap_or_default();
+
+    let op_hash = compute_operation_hash(OperationKind::TreeBuild, &OperationInputs::TreeBuild { shard_id: 0 }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeBuild, inputs_json, shard_id: None, topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await.ok()
+        .and_then(|o| o.into_iter().next().flatten())
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({}));
+
+    // Reconstruct the BuildResponse from the task output JSON.
+    let tree: crate::tree_rag::TreeIndex = result.get("tree")
+        .and_then(|t| serde_json::from_value(t.clone()).ok())
+        .unwrap_or_else(|| crate::tree_rag::TreeIndex::from_markdown(&payload.text, &doc_name));
+    let cache_key = result.get("cache_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
     Json(crate::tree_rag::BuildResponse {
         cache_key,
         doc_name: tree.doc_name.clone(),
@@ -2460,28 +2595,63 @@ async fn tree_build(
 /// returned by `/v1/tree/build` — the cache lookup avoids re-transmitting the tree.
 async fn tree_query(
     State(engine): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<crate::tree_rag::QueryRequest>,
 ) -> Result<Json<crate::tree_rag::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
-    let prev = payload.prev_hash.as_deref().unwrap_or(crate::tree_rag::GENESIS);
-    let k = payload.k.max(1);
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
 
-    let tree: crate::tree_rag::TreeIndex = if let Some(t) = payload.tree {
-        t
+    let k = payload.k.max(1);
+    let shard_count = engine.read().await.shard_count as u8;
+
+    // Resolve tree: inline, cache_key, or error.
+    let tree_val: serde_json::Value = if let Some(t) = payload.tree {
+        serde_json::to_value(t).unwrap_or(serde_json::Value::Null)
     } else if let Some(ref key) = payload.cache_key {
         let eng = engine.read().await;
-        eng.get_cached_tree(key).cloned().ok_or_else(|| {
-            let msg = serde_json::json!({
+        eng.get_cached_tree(key)
+            .and_then(|t| serde_json::to_value(t).ok())
+            .ok_or_else(|| (StatusCode::NOT_FOUND, Json(serde_json::json!({
                 "error": "tree not in cache — re-send the full tree or call /v1/tree/build first",
                 "cache_key": key
-            });
-            (StatusCode::NOT_FOUND, Json(msg))
-        })?
+            }))))?
     } else {
-        let msg = serde_json::json!({ "error": "provide either 'tree' or 'cache_key'" });
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(msg)));
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": "provide 'tree' or 'cache_key'" }))));
     };
 
-    Ok(Json(tree.answer(&payload.query, k, prev)))
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "tree": tree_val,
+        "query": payload.query,
+        "k": k,
+        "prev_hash": payload.prev_hash,
+    })).unwrap_or_default();
+
+    let op_hash = compute_operation_hash(OperationKind::TreeQuery, &OperationInputs::TreeQuery { k: k as u32, shard_id: 0 }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeQuery, inputs_json, shard_id: None, topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let out_val = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Null);
+    let answer: crate::tree_rag::AnswerResult = serde_json::from_value(out_val)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    Ok(Json(answer))
 }
 
 /// `POST /v1/tree/hybrid` — fuse tree-RAG navigation with vector search.
@@ -2499,126 +2669,97 @@ async fn tree_query(
 /// If no embed provider is set, only tree hits are returned (with `tree_weight = 1.0`).
 async fn tree_hybrid(
     State(engine): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<crate::tree_rag::HybridRequest>,
 ) -> Result<Json<crate::tree_rag::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use crate::tree_rag::{HybridHit, HybridResponse, TreeIndex, GENESIS};
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
+    use crate::tree_rag::{HybridResponse, TreeIndex, GENESIS};
 
-    let k = payload.k.max(1);
-    let tw = payload.tree_weight.clamp(0.0, 1.0);
-    let vw = 1.0 - tw;
-    let prev = payload.prev_hash.as_deref().unwrap_or(GENESIS);
-
-    // ── Resolve tree ──────────────────────────────────────────────────────────
-    let tree: TreeIndex = if let Some(t) = payload.tree {
-        t
+    // ── Resolve tree and optional query vector before dispatching ─────────────
+    let (tree_json, cache_key_opt) = if let Some(t) = payload.tree {
+        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
     } else if let Some(ref key) = payload.cache_key {
-        match engine.read().await.get_cached_tree(key).cloned() {
-            Some(t) => t,
-            None => return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": "tree not in cache — re-send text or cache_key from /v1/tree/build"
-            })))),
-        }
+        (None, Some(key.clone()))
     } else if let Some(ref text) = payload.text {
         let doc_name = payload.doc_name.as_deref().unwrap_or("document");
         let t = TreeIndex::from_markdown(text, doc_name);
-        // Cache it for subsequent calls.
         let _ = engine.write().await.cache_tree(text, t.clone());
-        t
+        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
     } else {
         return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
             "error": "provide 'text', 'tree', or 'cache_key'"
         }))));
     };
 
-    // ── Tree hits ─────────────────────────────────────────────────────────────
-    let tree_ranked = tree.rank_nodes_normalized(&payload.query, k * 2);
-    let mut hits: Vec<HybridHit> = tree_ranked.iter().map(|(nid, norm_score)| {
-        let n = &tree.nodes[nid];
-        HybridHit {
-            source: "tree".into(),
-            score: tw * norm_score,
-            node_id: Some(nid.clone()),
-            title: Some(n.title.clone()),
-            breadcrumb: Some(tree.breadcrumb(nid)),
-            text: Some(n.own_text.clone()),
-            lines: Some([n.start_line, n.end_line]),
-            record_id: None,
-            distance: None,
-        }
-    }).collect();
-    let tree_hit_count = tree_ranked.len();
-
-    // ── Vector hits (if embed provider configured) ────────────────────────────
-    let mut vector_hit_count = 0usize;
-    let mut reasoning_extra = String::new();
-
-    if vw > 0.0 {
-        // Resolve namespace
-        let ns_name = payload.namespace.as_deref();
-        let (embed_cfg, ns_id) = {
-            let eng = engine.read().await;
-            let ns = eng.resolve_collection(ns_name).unwrap_or(0);
-            (eng.embed_config.clone(), ns)
-        };
-
-        if let Some(embed_cfg) = embed_cfg {
-            let http = reqwest::Client::new();
-            match crate::embedder::embed_batch(&[payload.query.clone()], &embed_cfg, &http).await {
-                Ok(vecs) if !vecs.is_empty() => {
-                    let q_vec = &vecs[0];
-                    let raw_hits = {
-                        let eng = engine.read().await;
-                        eng.search_l2_ns(q_vec, k * 2, ns_id).unwrap_or_default()
-                    };
-
-                    let max_dist = raw_hits.iter().map(|(_, d)| *d).fold(f32::NEG_INFINITY, f32::max).max(1e-6);
-                    for (rid, dist) in &raw_hits {
-                        let norm_sim = 1.0 - (dist / max_dist) as f64;
-                        hits.push(HybridHit {
-                            source: "vector".into(),
-                            score: vw * norm_sim,
-                            node_id: None, title: None, breadcrumb: None, text: None, lines: None,
-                            record_id: Some(*rid),
-                            distance: Some(*dist),
-                        });
-                        vector_hit_count += 1;
-                    }
-                }
-                Ok(_) => { reasoning_extra = " (embed returned empty)".into(); }
-                Err(e) => { reasoning_extra = format!(" (embed error: {e})"); }
-            }
-        } else {
-            reasoning_extra = " (no embed provider — vector path skipped)".into();
-        }
-    }
-
-    // ── Fuse + rank ───────────────────────────────────────────────────────────
-    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    hits.truncate(k);
-    for (i, _h) in hits.iter_mut().enumerate() {
-        let _ = i; // rank is implicit from position
-    }
-
-    // ── Tree answer for receipt ───────────────────────────────────────────────
-    let tree_answer = if tree_hit_count > 0 {
-        Some(tree.answer(&payload.query, k.min(tree_hit_count), prev))
-    } else {
-        None
+    // Resolve namespace and optionally embed the query for vector fusion.
+    let ns_name = payload.namespace.as_deref();
+    let (embed_cfg, ns_id) = {
+        let eng = engine.read().await;
+        let ns = eng.resolve_collection(ns_name).unwrap_or(0);
+        (eng.embed_config.clone(), ns)
     };
 
-    let reasoning = format!(
-        "{} tree hits, {} vector hits{}",
-        tree_hit_count, vector_hit_count, reasoning_extra
-    );
+    let mut query_vec: Option<Vec<f32>> = None;
+    if let Some(ref ecfg) = embed_cfg {
+        let http = reqwest::Client::new();
+        if let Ok(vecs) = crate::embedder::embed_batch(&[payload.query.clone()], ecfg, &http).await {
+            if !vecs.is_empty() { query_vec = Some(vecs.into_iter().next().unwrap()); }
+        }
+    }
 
-    Ok(Json(HybridResponse {
-        query: payload.query,
-        hits,
-        tree_hit_count,
-        vector_hit_count,
-        tree_answer,
-        reasoning,
-    }))
+    // ── Build params for the capability ───────────────────────────────────────
+    let mut params = serde_json::json!({
+        "tree_weight": payload.tree_weight,
+        "prev_hash": payload.prev_hash.as_deref().unwrap_or(GENESIS),
+    });
+    if let Some(tj) = tree_json { params["tree"] = tj; }
+    if let Some(ref ck) = cache_key_opt { params["cache_key"] = serde_json::Value::String(ck.clone()); }
+    if let Some(ref qv) = query_vec { params["vector"] = serde_json::json!(qv); }
+
+    let inputs_json = serde_json::json!({
+        "shard_id": 0u8,
+        "namespace_id": ns_id,
+        "query": payload.query,
+        "k": payload.k,
+        "params": params,
+    }).to_string();
+
+    // ── Dispatch through planner ───────────────────────────────────────────────
+    let op_hash = compute_operation_hash(
+        OperationKind::TreeHybrid,
+        &OperationInputs::TreeHybrid { k: payload.k as u32, shard_id: 0, embed_enabled: embed_cfg.is_some() },
+        &ExecutionPolicy::default(),
+    );
+    let fp = PlannerFingerprint::compute(env!("CARGO_PKG_VERSION"), [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet {
+            embed: embed_cfg.is_some(), llm: false, object_store: false, cluster: false, shard_count: 1,
+        },
+        schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = std::sync::Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeHybrid, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default()).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let output_val = outputs.into_iter().next().flatten()
+        .map(|o| o.json)
+        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "tree_hybrid produced no output"}))))?;
+
+    let response: HybridResponse = serde_json::from_value(output_val)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("tree_hybrid decode: {e}")}))))?;
+
+    Ok(Json(response))
 }
 
 // ── Phase I6: Community handlers (standalone) ─────────────────────────────────
@@ -2632,37 +2773,59 @@ async fn tree_hybrid(
 /// `/v1/community/search` calls.
 async fn community_detect(
     State(engine): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<crate::community::DetectRequest>,
 ) -> Json<crate::community::DetectResponse> {
-    let (community_count, node_count, receipt, communities) = {
-        let mut eng = engine.write().await;
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
 
-        let ns_id = payload.namespace.as_deref()
-            .and_then(|n| eng.namespaces.resolve(Some(n)));
-
-        let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
-
-        let raw = crate::community::label_propagation(&eng.state, ns_id, max_iter);
-        let store = crate::community::build_community_store(&eng.state, raw);
-
-        let communities: Vec<crate::community::CommunitySummary> = store.members.iter()
-            .map(|(&cid, members)| crate::community::CommunitySummary {
-                community_id: cid,
-                member_count: members.len(),
-                centroid_record_id: None,
-            })
-            .collect();
-
-        let out = (store.community_count, store.node_count, store.receipt.clone(), communities);
-        eng.resources.community_store = Some(store);
-        out
+    let (ns_id, shard_count) = {
+        let eng = engine.read().await;
+        let ns = payload.namespace.as_deref().and_then(|n| eng.namespaces.resolve(Some(n))).unwrap_or(0);
+        (ns, eng.shard_count as u8)
     };
+    let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
+
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "shard_id": 0u8,
+        "namespace_id": ns_id,
+        "max_iter": max_iter,
+    })).unwrap_or_default();
+
+    let op_hash = compute_operation_hash(OperationKind::CommunityDetect, &OperationInputs::CommunityDetect {
+        collection: payload.namespace.clone().unwrap_or_else(|| "default".into()),
+        shard_id: 0, max_iter,
+    }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunityDetect, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
+
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .ok()
+        .and_then(|o| o.into_iter().next().flatten())
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({}));
 
     Json(crate::community::DetectResponse {
-        community_count,
-        node_count,
-        communities,
-        receipt,
+        community_count: result["community_count"].as_u64().unwrap_or(0) as usize,
+        node_count: result["node_count"].as_u64().unwrap_or(0) as usize,
+        communities: result["communities"].as_array()
+            .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+            .unwrap_or_default(),
+        receipt: result["receipt"].as_str().unwrap_or("").to_string(),
     })
 }
 
@@ -2673,36 +2836,53 @@ async fn community_detect(
 /// and optional BFS subgraph expansion.
 async fn community_search(
     State(engine): State<SharedEngine>,
+    axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
+    axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<crate::community::SearchRequest>,
 ) -> Result<Json<crate::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let eng = engine.read().await;
+    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
+    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
+    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use crate::runner::run_graph_inline;
 
-    let store = eng.resources.community_store.as_ref().ok_or_else(|| {
-        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
-            "error": "community index not built — call POST /v1/community/detect first"
-        })))
-    })?;
+    let shard_count = engine.read().await.shard_count as u8;
 
-    let ranked = crate::community::rank_communities(store, &payload.vector, payload.k);
-    let total = store.centroids.len();
+    let inputs_json = serde_json::to_string(&serde_json::json!({
+        "shard_id": 0u8,
+        "namespace_id": 0u16,
+        "vector": payload.vector,
+        "k": payload.k,
+        "depth": 1u32,
+        "drill_in": false,
+    })).unwrap_or_default();
 
-    let communities: Vec<crate::community::CommunityHit> = ranked.into_iter()
-        .map(|(cid, score)| {
-            let members = store.members.get(&cid).map(|v| v.as_slice()).unwrap_or(&[]);
-            let sample: Vec<u32> = members.iter().copied().take(20).collect();
-            crate::community::CommunityHit {
-                community_id: cid,
-                score,
-                member_count: members.len(),
-                sample_node_ids: sample,
-            }
-        })
-        .collect();
+    let op_hash = compute_operation_hash(OperationKind::CommunitySearch, &OperationInputs::CommunitySearch {
+        k: payload.k as u32, depth: 1, drill_in: false, collection: "default".into(), shard_id: 0,
+    }, &ExecutionPolicy::default());
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
+    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
+        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
+        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+    });
+    let graph = Arc::new(ExecutionGraph::build(
+        op_hash, fp, ctx_hash,
+        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunitySearch, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        vec![],
+        ExecutionRetentionPolicy::default(),
+    ));
 
-    Ok(Json(crate::community::SearchResponse {
-        communities,
-        total_communities_searched: total,
-    }))
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({"error": e.to_string()}))))?;
+
+    let out = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::json!({}));
+    let communities: Vec<crate::community::CommunityHit> = out["communities"].as_array()
+        .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        .unwrap_or_default();
+    let total = out["total_communities_searched"].as_u64().unwrap_or(0) as usize;
+
+    Ok(Json(crate::community::SearchResponse { communities, total_communities_searched: total }))
 }
 
 /// `GET /v1/community/overview`

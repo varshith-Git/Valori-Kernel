@@ -47,14 +47,14 @@ pub struct CommunityStore {
 }
 
 /// Per-community summary returned by `/v1/community/detect`.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommunitySummary {
     pub community_id: u32,
     pub member_count: usize,
     pub centroid_record_id: Option<u32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct DetectResponse {
     pub community_count: usize,
     pub node_count: usize,
@@ -99,7 +99,7 @@ pub struct SearchRequest {
 fn default_k() -> usize { 5 }
 fn default_depth() -> u32 { 1 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct CommunityHit {
     pub community_id: u32,
     /// Cosine-like similarity score (higher = more relevant).
@@ -109,7 +109,7 @@ pub struct CommunityHit {
     pub sample_node_ids: Vec<u32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SearchResponse {
     pub communities: Vec<CommunityHit>,
     pub total_communities_searched: usize,

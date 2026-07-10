@@ -554,7 +554,7 @@ pub struct VerifyResponse {
 // ── Hybrid types ──────────────────────────────────────────────────────────────
 
 /// One result in a hybrid (tree + vector) response.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HybridHit {
     /// `"tree"` or `"vector"`.
     pub source: String,
@@ -608,7 +608,7 @@ pub struct HybridRequest {
 
 fn default_tree_weight() -> f64 { 0.6 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct HybridResponse {
     pub query: String,
     pub hits: Vec<HybridHit>,

@@ -30,6 +30,11 @@ use valori_effect::tasks::embed::EmbedTask;
 use valori_effect::tasks::insert_record::InsertRecordTask;
 use valori_effect::tasks::insert_graph::{InsertNodeTask, InsertEdgeTask};
 use valori_effect::tasks::search::SearchTask;
+use valori_effect::tasks::snapshot::SnapshotArtifactTask;
+use valori_effect::tasks::graph_rag::GraphRagTask;
+use valori_effect::tasks::memory_search::MemorySearchTask;
+use valori_effect::tasks::community::{CommunityDetectTask, CommunitySearchTask};
+use valori_effect::tasks::tree_rag::{TreeBuildTask, TreeQueryTask, TreeHybridTask};
 use valori_planner::graph::{ExecutionGraph, TaskKind};
 use valori_planner::operation::ExecutionPolicy;
 use valori_planner::registry::{ExecutionHandle, ExecutionStatus};
@@ -48,18 +53,22 @@ impl TaskRegistry {
     /// Build a default registry with all built-in tasks wired up.
     pub fn default_registry() -> Self {
         let mut tasks: HashMap<String, Arc<dyn Task>> = HashMap::new();
-        tasks.insert("embed".into(),         Arc::new(EmbedTask));
-        tasks.insert("insert_record".into(), Arc::new(InsertRecordTask));
-        tasks.insert("insert_node".into(),   Arc::new(InsertNodeTask));
-        tasks.insert("insert_edge".into(),   Arc::new(InsertEdgeTask));
-        tasks.insert("search".into(),        Arc::new(SearchTask));
-        tasks.insert("noop".into(),          Arc::new(NoOpTask));
-        // Additional task kinds use NoOpTask as a passthrough stub until A8.
-        for kind_name in &[
-            "soft_delete_record",
-            "graph_rag", "llm_complete", "http_fetch",
-            "read_index", "snapshot_artifact", "proof_fragment",
-        ] {
+        tasks.insert("embed".into(),              Arc::new(EmbedTask));
+        tasks.insert("insert_record".into(),      Arc::new(InsertRecordTask));
+        tasks.insert("insert_node".into(),        Arc::new(InsertNodeTask));
+        tasks.insert("insert_edge".into(),        Arc::new(InsertEdgeTask));
+        tasks.insert("search".into(),             Arc::new(SearchTask));
+        tasks.insert("snapshot_artifact".into(),  Arc::new(SnapshotArtifactTask));
+        tasks.insert("graph_rag".into(),          Arc::new(GraphRagTask));
+        tasks.insert("memory_search".into(),      Arc::new(MemorySearchTask));
+        tasks.insert("community_detect".into(),   Arc::new(CommunityDetectTask));
+        tasks.insert("community_search".into(),   Arc::new(CommunitySearchTask));
+        tasks.insert("tree_build".into(),         Arc::new(TreeBuildTask));
+        tasks.insert("tree_query".into(),         Arc::new(TreeQueryTask));
+        tasks.insert("tree_hybrid".into(),        Arc::new(TreeHybridTask));
+        tasks.insert("noop".into(),               Arc::new(NoOpTask));
+        // Remaining stubs for not-yet-implemented task kinds.
+        for kind_name in &["soft_delete_record", "llm_complete", "http_fetch", "read_index", "proof_fragment"] {
             tasks.insert(kind_name.to_string(), Arc::new(NoOpTask));
         }
         TaskRegistry { tasks, jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
@@ -90,6 +99,12 @@ fn kind_to_key(kind: &TaskKind) -> &'static str {
         TaskKind::SoftDeleteRecord   => "soft_delete_record",
         TaskKind::Search             => "search",
         TaskKind::GraphRag           => "graph_rag",
+        TaskKind::MemorySearch       => "memory_search",
+        TaskKind::CommunityDetect    => "community_detect",
+        TaskKind::CommunitySearch    => "community_search",
+        TaskKind::TreeBuild          => "tree_build",
+        TaskKind::TreeQuery          => "tree_query",
+        TaskKind::TreeHybrid         => "tree_hybrid",
         TaskKind::LlmComplete        => "llm_complete",
         TaskKind::HttpFetch          => "http_fetch",
         TaskKind::ReadIndex          => "read_index",

@@ -57,6 +57,18 @@ pub enum TaskKind {
     Search,
     /// GraphRAG: k-NN + connected subgraph traversal.
     GraphRag,
+    /// Vector search with optional decay, rerank, and metadata filter.
+    MemorySearch,
+    /// Community detection via label propagation.
+    CommunityDetect,
+    /// Vector search over community centroids.
+    CommunitySearch,
+    /// Build a TreeIndex from markdown text.
+    TreeBuild,
+    /// Semantic tree traversal query.
+    TreeQuery,
+    /// Hybrid vector + tree-RAG search.
+    TreeHybrid,
     /// Call an LLM for completion / entity extraction.
     LlmComplete,
     /// Fetch a URL via HTTP.

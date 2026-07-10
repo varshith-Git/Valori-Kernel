@@ -56,7 +56,16 @@ and respect resource budgets (RFC-0004 §5).
 |---|---|
 | `EmbedTask` | `Counter("embed_calls", n)` — ephemeral |
 | `InsertRecordTask` | `KernelWrite` — durable; `Counter("records_inserted", 1)` — ephemeral |
+| `InsertNodeTask` / `InsertEdgeTask` | `KernelWrite` — durable; `Counter` — ephemeral |
 | `SearchTask` | `Receipt(ReceiptFragment{ mutated: false })` — durable; `Counter("searches", 1)` — ephemeral |
+| `SnapshotArtifactTask` | `Counter("snapshots_saved", 1)` — ephemeral |
+| `GraphRagTask` | `Counter("graphrag_queries", 1)` — ephemeral |
+| `MemorySearchTask` | `Counter("memory_searches", 1)` — ephemeral |
+| `CommunityDetectTask` | `Counter("community_detections", 1)` — ephemeral |
+| `CommunitySearchTask` | `Counter("community_searches", 1)` — ephemeral |
+| `TreeBuildTask` | `Counter("tree_builds", 1)` — ephemeral |
+| `TreeQueryTask` | `Counter("tree_queries", 1)` — ephemeral |
+| `TreeHybridTask` | `Counter("tree_hybrid_queries", 1)` — ephemeral |
 | `NoOpTask` | `Counter("noop_runs", 1)` — ephemeral |
 
 ## Deduplication

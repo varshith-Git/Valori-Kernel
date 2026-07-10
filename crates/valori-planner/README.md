@@ -48,6 +48,24 @@ All three must match for a cached graph to be reused (RFC-0001 §3.4 / invariant
 
 Use `plan_with_cache()` to run either planner with automatic two-layer cache lookup.
 
+## TaskKind variants (Phase A13)
+
+| Variant | Wired in `valori-node` | Notes |
+|---|---|---|
+| `Embed` | ✅ | HTTP embed call |
+| `InsertRecord` | ✅ | Kernel write + WAL |
+| `InsertNode` / `InsertEdge` | ✅ | Graph mutations |
+| `Search` | ✅ | Vector kNN |
+| `SnapshotArtifact` | ✅ standalone | Calls `engine.save_snapshot()` |
+| `GraphRag` | ✅ standalone | kNN + subgraph expansion |
+| `MemorySearch` | ✅ standalone | Decay + rerank + filter |
+| `CommunityDetect` | ✅ standalone | Label propagation |
+| `CommunitySearch` | ✅ standalone | Centroid ranking |
+| `TreeBuild` | ✅ standalone | `TreeIndex::from_markdown` |
+| `TreeQuery` | ✅ standalone | `TreeIndex::answer` |
+| `TreeHybrid` | ✅ standalone | Tree + vector fusion |
+| `SoftDeleteRecord` / `LlmComplete` / `HttpFetch` / `ReadIndex` / `ProofFragment` | stub | `NoOpTask` |
+
 ## Usage
 
 ```rust

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase A13 — planner migration — 2026-07-10)
+
+- **8 new `KernelCapability` default methods** in `valori-effect`: `save_snapshot`, `graph_rag`, `memory_search`, `community_detect`, `community_search`, `tree_build`, `tree_query`, `tree_hybrid` — all default to `CapabilityUnavailable`.
+- **`EngineKernelCapability` overrides** for all 8 methods in `valori-node/src/capabilities.rs`: each delegates to the live engine subsystem (search, community, tree-RAG, snapshot).
+- **5 new Task files** under `valori-effect/src/tasks/`: `snapshot.rs`, `graph_rag.rs`, `memory_search.rs`, `community.rs`, `tree_rag.rs` — 8 concrete `Task` implementations.
+- **6 new `TaskKind` variants**: `MemorySearch`, `CommunityDetect`, `CommunitySearch`, `TreeBuild`, `TreeQuery`, `TreeHybrid` in `valori-planner`.
+- **Standalone path wired**: `snapshot_save`, `graphrag`, `memory_search_vector`, `community_detect`, `community_search`, `tree_build`, `tree_query`, `tree_hybrid` in `server.rs` all dispatch through `run_graph_inline`. No behavior change — same outputs, same HTTP contract.
+- **`Deserialize` added** to `HybridHit`, `HybridResponse` (tree_rag.rs), `CommunitySummary`, `DetectResponse`, `CommunityHit`, `SearchResponse` (community.rs), `MemorySearchHit`, `MemorySearchResponse` (api.rs) — needed for task output round-trip.
+
 ### Removed (valori-storage/state dead API pass — 2026-07-10)
 
 - **`EventProof` struct and `generate_proof()`** deleted from `valori-storage::events::event_proof`. Both were superseded by `valori-verify` which owns the full audit path. `compute_event_log_hash()` (the only production caller, used by `/v1/proof/event-log`) is kept.
