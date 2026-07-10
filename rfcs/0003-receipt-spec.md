@@ -1,6 +1,9 @@
 # RFC-0003: Receipt Specification
 
 **Status:** Draft  
+**Owner:** valori-effect  
+**Stability:** Alpha — receipt hash formula is live (RFC-0003 canonical form) but the assembler is not yet wired into all endpoints  
+**Last reviewed:** 2026-07-08  
 **Depends on:** [`rfcs/0000-glossary.md`](0000-glossary.md), [`rfcs/0001-operation-lifecycle.md`](0001-operation-lifecycle.md), [`rfcs/0002-kernel-contract.md`](0002-kernel-contract.md)  
 **Implements:** Phase A8 (`ReceiptAssembler` + `Receipt` type)
 

@@ -258,7 +258,7 @@ function WhyPanel() {
         {loading ? "Searching…" : "Look up provenance →"}
       </button>
 
-      {error && <p className="text-sm text-red-400 font-mono">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400 font-mono">{error}</p>}
 
       {/* LLM synthesis */}
       {synthesis && (
@@ -273,7 +273,7 @@ function WhyPanel() {
         <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-4 py-3">
           <p className="text-xs text-amber-500 font-medium">LLM synthesis failed</p>
           <p className="text-xs text-amber-700 font-mono mt-1">{synthesisError}</p>
-          <a href="/settings" className="text-xs text-amber-700 hover:text-amber-400 transition-colors">
+          <a href="/settings" className="text-xs text-amber-700 hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
             Check LLM settings →
           </a>
         </div>
@@ -437,7 +437,7 @@ export default function AuditorPage() {
             </div>
           ) : eventsError === "event-log-disabled" ? (
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/12 p-5">
-              <p className="text-sm text-amber-400">Event log not enabled.</p>
+              <p className="text-sm text-amber-600 dark:text-amber-400">Event log not enabled.</p>
               <p className="text-xs text-amber-700 mt-1">
                 Set <code className="font-mono">VALORI_EVENT_LOG_PATH</code> and restart.
               </p>

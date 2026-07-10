@@ -139,3 +139,80 @@ fn v7_meta_roundtrips() {
         Some(r#"{"text":"chunk body"}"#)
     );
 }
+
+// ── Decoder hardening tests ───────────────────────────────────────────────────
+// Each test crafts a minimally-valid snapshot then mutates one field to an
+// illegal value and verifies that decode_state returns Err.
+
+fn valid_one_record_snapshot() -> Vec<u8> {
+    let mut state = KernelState::new();
+    state
+        .apply_event(&KernelEvent::InsertRecord {
+            id: RecordId(0),
+            vector: FxpVector { data: vec![FxpScalar(1), FxpScalar(2)] },
+            metadata: None,
+            tag: 0,
+        })
+        .unwrap();
+    encode(&state)
+}
+
+// Byte offsets in a current (V7) snapshot:
+//   0..4   MAGIC
+//   4..8   schema_ver
+//   8..16  version_val
+//  16..20  cap_records  (total_slots mirror in header)
+//  20..24  dim
+//  24..28  cap_nodes
+//  28..32  cap_edges
+//  32      format_id    (V5+)
+//  33..37  total_slots  (records section header)
+//  37      is_present   (first record slot flag)
+const OFF_DIM:         usize = 20;
+const OFF_TOTAL_SLOTS: usize = 33;
+const OFF_IS_PRESENT:  usize = 37;
+
+#[test]
+fn invalid_is_present_flag_is_rejected() {
+    let mut buf = valid_one_record_snapshot();
+    buf[OFF_IS_PRESENT] = 2; // must be 0 or 1
+    assert!(decode_state(&buf).is_err(), "is_present=2 must be rejected");
+}
+
+#[test]
+fn oversized_dim_is_rejected() {
+    let state = KernelState::new();
+    let mut buf = encode(&state);
+    let bad_dim: u32 = 65537; // MAX_DIM + 1
+    buf[OFF_DIM..OFF_DIM + 4].copy_from_slice(&bad_dim.to_le_bytes());
+    assert!(decode_state(&buf).is_err(), "dim > MAX_DIM must be rejected");
+}
+
+#[test]
+fn oversized_total_slots_is_rejected() {
+    let state = KernelState::new();
+    let mut buf = encode(&state);
+    let bad_slots: u32 = 10_000_001; // > MAX_RECORDS (10_000_000)
+    buf[OFF_TOTAL_SLOTS..OFF_TOTAL_SLOTS + 4].copy_from_slice(&bad_slots.to_le_bytes());
+    assert!(decode_state(&buf).is_err(), "total_slots > MAX_RECORDS must be rejected");
+}
+
+#[test]
+fn record_id_mismatch_is_rejected() {
+    let mut buf = valid_one_record_snapshot();
+    // id_val for slot 0 is the u32 immediately after is_present.
+    let id_offset = OFF_IS_PRESENT + 1;
+    let wrong_id: u32 = 99; // slot 0 must have id 0
+    buf[id_offset..id_offset + 4].copy_from_slice(&wrong_id.to_le_bytes());
+    assert!(decode_state(&buf).is_err(), "record id != slot index must be rejected");
+}
+
+#[test]
+fn unsupported_schema_version_is_rejected() {
+    let state = KernelState::new();
+    let mut buf = encode(&state);
+    // schema_ver is at offset 4 (after MAGIC).
+    let bad_ver: u32 = 99;
+    buf[4..8].copy_from_slice(&bad_ver.to_le_bytes());
+    assert!(decode_state(&buf).is_err(), "schema_ver 99 must be rejected");
+}

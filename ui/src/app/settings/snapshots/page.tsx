@@ -137,7 +137,7 @@ export default function SnapshotsPage() {
         </div>
       ) : data?.disabled ? (
         <div className="rounded-xl border border-amber-500/25 bg-amber-500/12 p-6">
-          <p className="text-sm font-medium text-amber-400">Object store not configured</p>
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">Object store not configured</p>
           <p className="text-xs text-amber-700 mt-2">
             Set <code className="font-mono bg-amber-500/20 px-1 rounded">VALORI_OBJECT_STORE_URL</code> to enable S3 snapshot storage.
           </p>
@@ -164,13 +164,13 @@ VALORI_OBJECT_STORE_ENDPOINT=http://localhost:9000`}
               key={s.key}
               className="grid grid-cols-[1fr_8rem_12rem_8rem] gap-4 items-center px-4 py-3 border-b border-border last:border-0 hover:bg-card/50 transition-colors"
             >
-              <span className="font-mono text-xs text-accent-foreground truncate">{s.key}</span>
+              <span className="font-mono text-xs text-accent-foreground truncate" title={s.key}>{s.key}</span>
               <span className="text-xs text-muted-foreground">{fmt(s.size)}</span>
               <span className="text-xs text-muted-foreground">{fmtDate(s.last_modified)}</span>
               <button
                 onClick={() => restore(s.key)}
                 disabled={restoring === s.key}
-                className="text-xs text-muted-foreground hover:text-amber-400 disabled:opacity-40 transition-colors text-right"
+                className="text-xs text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 disabled:opacity-40 transition-colors text-right"
               >
                 {restoring === s.key ? "restoring…" : "restore →"}
               </button>

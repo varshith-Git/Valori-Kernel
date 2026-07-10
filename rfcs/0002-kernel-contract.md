@@ -1,6 +1,9 @@
 # RFC-0002: Kernel Contract
 
 **Status:** Draft  
+**Owner:** valori-kernel / valori-consensus  
+**Stability:** Beta — kernel event schema is versioned; state machine contract is live but may gain fields  
+**Last reviewed:** 2026-07-08  
 **Depends on:** [`rfcs/0000-glossary.md`](0000-glossary.md)  
 **Implements:** `valori-kernel` API surface, `valori-consensus` state machine contract, Phase A3 (`valori-state`)
 

@@ -35,7 +35,7 @@ export function ProofHash({ hash, isLoading }: Props) {
         State Hash
       </span>
       <div className="flex items-center gap-3">
-        <code className="break-all font-mono text-lg font-medium tracking-tight text-emerald-400">
+        <code className="break-all font-mono text-lg font-medium tracking-tight text-emerald-600 dark:text-emerald-400">
           {hash}
         </code>
         <button

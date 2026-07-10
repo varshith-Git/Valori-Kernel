@@ -12,7 +12,7 @@ use std::time::Duration;
 use valori_consensus::types::ValoriNode;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterConfigError};
 use valori_node::commit::{CommitError, Committer};
-use valori_node::events::event_replay::read_event_log;
+use valori_node::events::event_replay::read_all_segments;
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -128,7 +128,8 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
 
     // THE point of the phase: the audit log on disk is a normal chained
     // v3 segment — replayable and chain-checked by the standalone path.
-    let events = read_event_log(&log_path, Some(4)).unwrap();
+    let events: Vec<_> = read_all_segments(&log_path, Some(4)).unwrap()
+        .into_iter().map(|(_, e)| e).collect();
     assert_eq!(
         events.iter().map(|e| e.event_type()).collect::<Vec<_>>(),
         vec!["InsertRecord", "InsertRecord", "DeleteRecord"],
@@ -181,7 +182,7 @@ async fn single_shard_event_log_path_is_unsuffixed_and_matches_pre_s13_naming() 
         .unwrap();
     let _ = r1;
 
-    let events = read_event_log(&log_path, Some(4)).unwrap();
+    let events = read_all_segments(&log_path, Some(4)).unwrap();
     assert_eq!(events.len(), 2);
 
     // The new flat-field alias must report the exact same path as the

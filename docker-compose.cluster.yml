@@ -27,8 +27,7 @@ x-node-common: &node-common
     VALORI_MAX_RECORDS: "1000000"
     VALORI_MAX_NODES: "100000"
     VALORI_MAX_EDGES: "500000"
-    VALORI_SNAPSHOT_EVERY_EVENTS: "50000"
-    VALORI_SNAPSHOT_KEEP: "3"
+    VALORI_SNAPSHOT_INTERVAL: "120"      # snapshot every 2 min on cluster nodes
     # Raft cluster topology (Phase 2): id=raft_addr/api_addr per member.
     VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
     VALORI_RAFT_BIND: "0.0.0.0:3100"

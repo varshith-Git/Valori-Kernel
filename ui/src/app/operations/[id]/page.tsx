@@ -116,14 +116,14 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
           Back to Operations
         </Button>
         <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-8 text-center">
-          <AlertCircle className="h-8 w-8 text-red-400 mx-auto mb-2" />
+          <AlertCircle className="h-8 w-8 text-red-600 dark:text-red-400 mx-auto mb-2" />
           <h2 className="text-lg font-semibold text-foreground">Operation Unavailable</h2>
-          <p className="mt-1 text-sm text-red-400 max-w-md mx-auto">{error || "Could not retrieve operation trail."}</p>
+          <p className="mt-1 text-sm text-red-600 dark:text-red-400 max-w-md mx-auto">{error || "Could not retrieve operation trail."}</p>
           <Button
             onClick={fetchDetail}
             variant="outline"
             size="sm"
-            className="mt-4 border-red-500/30 text-red-400 hover:bg-red-500/20"
+            className="mt-4 border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/20"
           >
             Retry Fetch
           </Button>
@@ -166,7 +166,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="font-mono text-xl font-bold text-foreground">{op.id}</span>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-400">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                   <CheckCircle2 className="h-3 w-3" />
                   {op.status.toUpperCase()}
                 </span>
@@ -231,7 +231,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
                 <p className="text-xs text-muted-foreground">Core transaction parameters and index coordinates in the WAL.</p>
               </div>
               <Button variant="outline" size="sm" onClick={() => copyJson(op.overview)} className="gap-1.5 text-xs">
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                 Copy JSON
               </Button>
             </div>
@@ -296,13 +296,13 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
                 <p className="text-xs text-muted-foreground">State changes and entities affected by this operation.</p>
               </div>
               <Button variant="outline" size="sm" onClick={() => copyJson(op.results)} className="gap-1.5 text-xs">
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                 Copy JSON
               </Button>
             </div>
 
             <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3">
-              <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0" />
+              <CheckCircle2 className="h-6 w-6 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <div>
                 <h4 className="text-sm font-semibold text-foreground">Status: Committed & Replicated</h4>
                 <p className="text-xs text-emerald-300/80 mt-0.5">
@@ -334,7 +334,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-base font-semibold text-foreground">Cryptographic Verification Proof</h3>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-mono font-bold">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-mono font-bold">
                     VERIFIED
                   </span>
                 </div>
@@ -343,7 +343,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
                 </p>
               </div>
               <Button variant="outline" size="sm" onClick={() => copyJson(op.proof)} className="gap-1.5 text-xs">
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                 Copy Proof
               </Button>
             </div>
@@ -369,7 +369,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
                   </span>
                 </div>
                 <div className="rounded-xl border border-border/60 bg-background/80 p-4 flex flex-col gap-1.5">
-                  <span className="text-muted-foreground font-sans font-semibold text-xs uppercase tracking-wider text-emerald-400">
+                  <span className="text-muted-foreground font-sans font-semibold text-xs uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
                     State Hash (After)
                   </span>
                   <span className="text-foreground break-all bg-card p-2 rounded border border-emerald-500/30 text-[11px] font-semibold">
@@ -389,7 +389,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
                 <p className="text-xs text-muted-foreground">Resource utilization and performance telemetry during execution.</p>
               </div>
               <Button variant="outline" size="sm" onClick={() => copyJson(op.metrics)} className="gap-1.5 text-xs">
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
                 Copy Metrics
               </Button>
             </div>
@@ -420,7 +420,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
               <div className="rounded-xl border border-border/60 bg-gradient-to-br from-background/80 to-emerald-500/5 p-5 flex flex-col justify-between gap-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">CPU Cycles</span>
-                  <Activity className="h-4 w-4 text-emerald-400" />
+                  <Activity className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <div>
                   <span className="font-mono text-3xl font-bold text-foreground">{String(op.metrics.cpu_cycles ?? "14,200")}</span>
@@ -431,7 +431,7 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
 
             <div className="rounded-xl border border-border/60 bg-background/60 p-4 text-xs text-muted-foreground font-mono flex items-center justify-between">
               <span>Performance Grade: OPTIMAL (No saturation or GC pauses detected)</span>
-              <span className="text-emerald-400 font-bold">99.9th percentile fast-path</span>
+              <span className="text-emerald-600 dark:text-emerald-400 font-bold">99.9th percentile fast-path</span>
             </div>
           </div>
         )}

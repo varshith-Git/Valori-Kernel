@@ -7,6 +7,7 @@ import { Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Pause, ArrowRight, L
 import { useProjectManifest, type ManifestProject } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
+import { GettingStarted } from "@/components/home/GettingStarted";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import { useRelativeTime } from "@/lib/hooks/useRelativeTime";
 import type { ActivityEvent } from "@/app/api/activity/route";
@@ -364,7 +365,7 @@ function ProjectCard({
             <Link
               href="/logs"
               onClick={(e) => e.stopPropagation()}
-              className="underline hover:text-red-400 transition-colors"
+              className="underline hover:text-red-600 dark:hover:text-red-400 transition-colors"
             >
               view logs →
             </Link>
@@ -416,15 +417,15 @@ function ProjectCard({
 // ── Recent Activity ────────────────────────────────────────────────────────────
 
 const EVENT_DOT: Record<string, string> = {
-  InsertRecord:    "bg-emerald-400",
-  SoftDeleteRecord:"bg-amber-400",
-  DeleteRecord:    "bg-red-400",
-  CreateNode:      "bg-blue-400",
-  CreateEdge:      "bg-purple-400",
-  DeleteNode:      "bg-red-400",
-  DeleteEdge:      "bg-red-400",
-  CreateNamespace: "bg-sky-400",
-  DropNamespace:   "bg-orange-400",
+  InsertRecord:    "bg-emerald-500 dark:bg-emerald-400",
+  SoftDeleteRecord:"bg-amber-500 dark:bg-amber-400",
+  DeleteRecord:    "bg-red-500 dark:bg-red-400",
+  CreateNode:      "bg-blue-500 dark:bg-blue-400",
+  CreateEdge:      "bg-purple-500 dark:bg-purple-400",
+  DeleteNode:      "bg-red-500 dark:bg-red-400",
+  DeleteEdge:      "bg-red-500 dark:bg-red-400",
+  CreateNamespace: "bg-sky-500 dark:bg-sky-400",
+  DropNamespace:   "bg-orange-500 dark:bg-orange-400",
 };
 
 function timeAgo(iso: string) {
@@ -476,7 +477,7 @@ function RecentActivity() {
             return (
               <div key={e.log_index} className="flex items-center gap-3 px-4 py-2 text-xs hover:bg-accent/30 transition-colors">
                 <span className={`h-2 w-2 rounded-full shrink-0 ${dot}`} />
-                <span className="font-mono font-medium text-foreground shrink-0 w-36 truncate">{e.event_type}</span>
+                <span className="font-mono font-medium text-foreground shrink-0 w-36 truncate" title={e.event_type}>{e.event_type}</span>
                 <span className="font-mono text-muted-foreground flex-1 min-w-0 truncate" title={detail}>{detail}</span>
                 <span className="font-mono text-[10px] text-muted-foreground/60 shrink-0 tabular-nums">{timeAgo(e.timestamp_iso)}</span>
               </div>
@@ -553,6 +554,13 @@ export default function HomePage() {
             </button>
           </div>
         </div>
+
+        {/* ── Getting started checklist ── */}
+        <GettingStarted
+          projects={projects}
+          recordCount={recordCount}
+          onCreateProject={() => setCreateOpen(true)}
+        />
 
         {/* ── Stats card ── */}
         <div

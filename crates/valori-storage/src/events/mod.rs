@@ -24,4 +24,3 @@ pub use event_log::EventLogWriter;
 pub use event_journal::EventJournal;
 pub use event_replay::recover_from_event_log;
 pub use event_commit::{CommitResult, EventCommitter};
-pub use event_proof::EventProof;

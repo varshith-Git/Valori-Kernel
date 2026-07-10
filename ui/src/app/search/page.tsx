@@ -416,7 +416,7 @@ export default function SearchPage() {
               filterError ? "border-red-500/60" : "border-input"
             )}
           />
-          {filterError && <p className="text-[10px] text-red-400">{filterError}</p>}
+          {filterError && <p className="text-[10px] text-red-600 dark:text-red-400">{filterError}</p>}
         </div>
 
         {/* Run */}
@@ -446,7 +446,7 @@ export default function SearchPage() {
       {/* Error */}
       {error && !isLoading && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3">
-          <p className="text-sm text-red-400">{error}</p>
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         </div>
       )}
 

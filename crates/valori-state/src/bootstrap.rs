@@ -56,7 +56,7 @@ pub fn recover_from_events(
 
 /// Returns `true` when the event log at `path` exists and contains at least
 /// the minimum header bytes (16 B) needed to be parseable.
-pub fn has_event_log(event_log_path: &Path) -> bool {
+pub(crate) fn has_event_log(event_log_path: &Path) -> bool {
     event_log_path.exists()
         && std::fs::metadata(event_log_path)
             .map(|m| m.len() >= 16)
@@ -65,12 +65,12 @@ pub fn has_event_log(event_log_path: &Path) -> bool {
 
 // ── WAL ───────────────────────────────────────────────────────────────────────
 
-/// Replay WAL commands from `wal_path` on top of `state`.
+/// Replay WAL entries from `wal_path` on top of `state`.
 ///
 /// Returns `(commands_applied, running_blake3_hasher)`.
 /// The hasher is initialised with the WAL header bytes so callers can verify
 /// chain continuity across WAL segments if needed.
-pub fn replay_wal(
+pub(crate) fn replay_wal(
     state: &mut KernelState,
     wal_path: &Path,
 ) -> StateResult<(usize, blake3::Hasher)> {
@@ -89,14 +89,14 @@ pub fn replay_wal(
     hasher.update(&0u32.to_le_bytes()); // crc_len placeholder
 
     for result in reader {
-        let cmd = result
+        let (evt, ns) = result
             .map_err(|e| StateError::InvalidInput(format!("WAL read error: {}", e)))?;
 
-        state.apply(&cmd).map_err(StateError::Kernel)?;
+        state.apply_event_ns(&evt, ns).map_err(StateError::Kernel)?;
 
-        let cmd_bytes = bincode::serde::encode_to_vec(&cmd, bincode::config::standard())
+        let entry_bytes = bincode::serde::encode_to_vec(&(&evt, ns), bincode::config::standard())
             .map_err(|e| StateError::InvalidInput(format!("Hash serialization failed: {}", e)))?;
-        hasher.update(&cmd_bytes);
+        hasher.update(&entry_bytes);
 
         commands_applied += 1;
     }
@@ -110,7 +110,7 @@ pub fn replay_wal(
 
 /// Returns `true` when the WAL at `path` exists and contains at least the
 /// 16-byte header.
-pub fn has_wal(wal_path: &Path) -> bool {
+pub(crate) fn has_wal(wal_path: &Path) -> bool {
     wal_path.exists()
         && std::fs::metadata(wal_path)
             .map(|m| m.len() >= 16)
@@ -120,7 +120,7 @@ pub fn has_wal(wal_path: &Path) -> bool {
 // ── Snapshot ──────────────────────────────────────────────────────────────────
 
 /// Decode the snapshot at `snapshot_path` into a `KernelState`.
-pub fn load_snapshot(snapshot_path: &Path) -> StateResult<KernelState> {
+pub(crate) fn load_snapshot(snapshot_path: &Path) -> StateResult<KernelState> {
     let data = std::fs::read(snapshot_path)?;
     decode_state(&data)
         .map_err(|e| StateError::InvalidInput(format!("Snapshot decode failed: {:?}", e)))
@@ -129,7 +129,7 @@ pub fn load_snapshot(snapshot_path: &Path) -> StateResult<KernelState> {
 /// Verify that a previously-loaded snapshot is consistent with a replayed state.
 /// Returns `true` when the state hashes agree, `false` on mismatch.
 /// A missing snapshot is treated as consistent (nothing to check).
-pub fn validate_snapshot(
+pub(crate) fn validate_snapshot(
     snapshot_path: &Path,
     replayed_state: &KernelState,
 ) -> StateResult<bool> {
@@ -155,9 +155,9 @@ pub fn validate_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use valori_kernel::event::KernelEvent;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use valori_kernel::state::command::Command;
     use valori_storage::wal_writer::WalWriter;
     use tempfile::tempdir;
 
@@ -169,14 +169,13 @@ mod tests {
         {
             let mut writer = WalWriter::open(&wal_path, 16).unwrap();
             for i in 0..50 {
-                let cmd = Command::InsertRecord {
-                    namespace_id: 0,
+                let evt = KernelEvent::InsertRecord {
                     id: RecordId(i),
                     vector: FxpVector::new_zeros(16),
                     metadata: None,
                     tag: 0,
                 };
-                writer.append_command(&cmd).unwrap();
+                writer.append_event(&evt, 0).unwrap();
             }
         }
 

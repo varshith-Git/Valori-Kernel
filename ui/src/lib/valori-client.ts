@@ -86,8 +86,13 @@ export class ValoriClient implements IValoriClient {
   }
 
   async listCollections(): Promise<Collection[]> {
-    const raw = await this.get<string[]>("/v1/namespaces");
-    return raw.map((name) => ({ name }));
+    const raw = await this.get<
+      { collections: Array<{ name: string; id?: number; record_count?: number }> } | string[]
+    >("/v1/namespaces");
+    if (Array.isArray(raw)) {
+      return raw.map((name) => ({ name }));
+    }
+    return raw.collections ?? [];
   }
 
   async createCollection(name: string): Promise<void> {

@@ -146,7 +146,7 @@ function MetricCard({
 }) {
   const trendIcon = trend === "up" ? "↑" : trend === "down" ? "↓" : "→";
   const trendColor =
-    trend === "up" ? "#4ade80" : trend === "down" ? "#f87171" : "#71717a";
+    trend === "up" ? "var(--status-ok)" : trend === "down" ? "var(--destructive)" : "var(--muted-foreground)";
 
   const vals = series.map((d) => d.value);
   const minV = vals.length ? Math.min(...vals) : 0;
@@ -155,9 +155,9 @@ function MetricCard({
   return (
     <div
       className={`rounded-xl border overflow-hidden flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl ${
-        alert 
-          ? "border-destructive/50 bg-destructive/10 shadow-[0_0_15px_rgba(239,68,68,0.2)]" 
-          : "border-border/50 bg-card/40 backdrop-blur-md shadow-[0_4px_24px_rgba(0,0,0,0.2)] hover:border-border"
+        alert
+          ? "border-destructive/50 bg-destructive/10 shadow-[0_0_15px_color-mix(in_oklch,var(--destructive)_20%,transparent)]"
+          : "border-border/50 bg-card/40 backdrop-blur-md shadow-[0_4px_24px_oklch(0_0_0/20%)] hover:border-border"
       }`}
     >
       {/* Top row */}
@@ -258,7 +258,7 @@ function FillBar({ label, pct, color }: { label: string; pct: number; color: str
           style={{
             width: `${Math.min(pct, 100)}%`,
             background:
-              pct >= 90 ? "#f87171" : pct >= 70 ? "#fbbf24" : color,
+              pct >= 90 ? "var(--destructive)" : pct >= 70 ? "var(--status-warn)" : color,
           }}
         />
       </div>
@@ -356,7 +356,7 @@ export default function MetricsPage() {
   const latAlert = latCurrent > 500;
   const latAmber = latCurrent > 100;
 
-  const latColor = latAlert ? "#f87171" : latAmber ? "#fbbf24" : "#38bdf8";
+  const latColor = latAlert ? "var(--destructive)" : latAmber ? "var(--status-warn)" : "var(--status-info)";
 
   const latTrend = latSeries.length >= 3
     ? latSeries.at(-1)!.value > latSeries.at(-3)!.value ? "up"
@@ -391,12 +391,12 @@ export default function MetricsPage() {
         <div className="ml-auto flex items-center gap-3">
           <span
             className="flex items-center gap-1.5 text-[11px] font-mono"
-            style={{ color: connected ? "#4ade80" : "#f87171" }}
+            style={{ color: connected ? "var(--status-ok)" : "var(--destructive)" }}
           >
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{
-                background: connected ? "#4ade80" : "#f87171",
+                background: connected ? "var(--status-ok)" : "var(--destructive)",
                 animation: connected ? "pulse 2s infinite" : "none",
               }}
             />
@@ -506,13 +506,13 @@ export default function MetricsPage() {
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               {[
                 { k: "Status", v: health.status, color: statusColor },
-                { k: "Version", v: health.version, color: "#71717a" },
-                { k: "Dimension", v: String(health.dim), color: "#71717a" },
-                { k: "Index", v: health.index, color: "#71717a" },
-                { k: "Persistence", v: health.persistence, color: "#71717a" },
-                { k: "Nodes", v: health.nodes?.live?.toLocaleString() ?? "N/A", color: "#38bdf8" },
-                { k: "Edges", v: health.edges?.live?.toLocaleString() ?? "N/A", color: "#4ade80" },
-                { k: "Events", v: health.event_log_height !== undefined && health.event_log_height !== null ? health.event_log_height!.toLocaleString() : "—", color: "#fbbf24" },
+                { k: "Version", v: health.version, color: "var(--muted-foreground)" },
+                { k: "Dimension", v: String(health.dim), color: "var(--muted-foreground)" },
+                { k: "Index", v: health.index, color: "var(--muted-foreground)" },
+                { k: "Persistence", v: health.persistence, color: "var(--muted-foreground)" },
+                { k: "Nodes", v: health.nodes?.live?.toLocaleString() ?? "N/A", color: "var(--status-info)" },
+                { k: "Edges", v: health.edges?.live?.toLocaleString() ?? "N/A", color: "var(--status-ok)" },
+                { k: "Events", v: health.event_log_height !== undefined && health.event_log_height !== null ? health.event_log_height!.toLocaleString() : "—", color: "var(--status-warn)" },
               ].map(({ k, v, color }) => (
                 <div key={k} className="flex flex-col gap-0.5">
                   <span className="text-[10px] text-muted-foreground">{k}</span>

@@ -72,10 +72,14 @@ async fn main() {
                 interval.tick().await;
 
                 tracing::debug!("Auto-snapshotting...");
-                let engine = state_clone.read().await;
-                match engine.save_snapshot(Some(&path)) {
-                    Ok(_) => tracing::info!("Snapshot saved to {:?}", path),
-                    Err(e) => tracing::error!("Snapshot failed: {:?}", e),
+                let state_for_snap = state_clone.clone();
+                let path_for_snap = path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    state_for_snap.blocking_read().save_snapshot(Some(&path_for_snap))
+                }).await {
+                    Ok(Ok(_)) => tracing::info!("Snapshot saved to {:?}", path),
+                    Ok(Err(e)) => tracing::error!("Snapshot failed: {:?}", e),
+                    Err(e) => tracing::error!("Snapshot task panicked: {:?}", e),
                 }
             }
         });
@@ -142,10 +146,12 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
 
     if let Some(path) = snapshot_path {
         tracing::info!("Shutdown signal received — saving final snapshot to {:?}", path);
-        let engine = state.read().await;
-        match engine.save_snapshot(Some(path.as_path())) {
-            Ok(_)  => tracing::info!("Final snapshot saved"),
-            Err(e) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
+        match tokio::task::spawn_blocking(move || {
+            state.blocking_read().save_snapshot(Some(path.as_path()))
+        }).await {
+            Ok(Ok(_))  => tracing::info!("Final snapshot saved"),
+            Ok(Err(e)) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
+            Err(e)     => tracing::error!("Final snapshot task panicked: {:?}", e),
         }
     }
 }

@@ -1,7 +1,8 @@
-use crate::types::FixedPointVector;
-use crate::dist::euclidean_distance_squared;
+type FixedPointVector = Vec<i32>;
+use crate::math::l2::l2_sq_i32;
 use crate::error::{Result, KernelError};
-use std::collections::{HashMap, BinaryHeap};
+use rustc_hash::FxHashMap;
+use std::collections::BinaryHeap;
 use std::cmp::Ordering;
 use rustc_hash::FxHashSet;
 use std::fs::File;
@@ -34,7 +35,7 @@ pub struct ValoriHNSW {
     pub external_ids: Vec<u64>,
 
     /// Mapping from External User ID (u64) -> Internal Arena ID (u32)
-    pub id_map: HashMap<u64, u32>,
+    pub id_map: FxHashMap<u64, u32>,
 
     pub layers: Vec<Vec<Vec<u32>>>,
     pub entry_point: Option<u32>,
@@ -50,12 +51,12 @@ impl Default for ValoriHNSW {
 impl ValoriHNSW {
     pub fn new(initial_dim: usize) -> Self {
         Self {
-            vectors: Vec::with_capacity(1_000_000 * initial_dim), 
+            vectors: Vec::new(),
             dim: initial_dim,
-            metadata: Vec::with_capacity(1_000_000),
-            tags: Vec::with_capacity(1_000_000),
-            external_ids: Vec::with_capacity(1_000_000),
-            id_map: HashMap::new(),
+            metadata: Vec::new(),
+            tags: Vec::new(),
+            external_ids: Vec::new(),
+            id_map: FxHashMap::default(),
             layers: vec![Vec::new()],
             entry_point: None,
             max_level: 0,
@@ -94,7 +95,7 @@ impl ValoriHNSW {
         self.external_ids.push(external_id);
         self.id_map.insert(external_id, internal_id);
 
-        let level = self.determine_level(external_id, &vector);
+        let level = self.determine_level(external_id);
 
         while self.layers.len() <= level {
             self.layers.push(Vec::new());
@@ -124,32 +125,27 @@ impl ValoriHNSW {
         Ok(())
     }
 
-    fn determine_level(&self, id: u64, vector: &[i32]) -> usize {
+    fn determine_level(&self, id: u64) -> usize {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&id.to_le_bytes());
-        for val in vector {
-            hasher.update(&val.to_le_bytes());
-        }
         let hash = hasher.finalize();
-        
         let mut bytes = [0u8; 8];
         bytes.copy_from_slice(&hash.as_bytes()[0..8]);
         let val = u64::from_le_bytes(bytes);
-        let zeros = val.trailing_zeros() as usize;
-        std::cmp::min(zeros, 15)
+        std::cmp::min(val.trailing_zeros() as usize, 15)
     }
     
     fn insert_into_graph(&mut self, q_id: u32, q_level: usize, mut curr_node: u32, q_vec: &[i32]) -> Result<()> {
         
         for l in (q_level + 1 ..= self.max_level).rev() {
              let mut changed = true;
-             let mut curr_dist = euclidean_distance_squared(q_vec, self.get_vec(curr_node));
+             let mut curr_dist = l2_sq_i32(q_vec, self.get_vec(curr_node));
              
              while changed {
                  changed = false;
                  if let Some(neighbors) = self.layers.get(l).and_then(|layer| layer.get(curr_node as usize)) {
                      for &neighbor_id in neighbors {
-                         let d = euclidean_distance_squared(q_vec, self.get_vec(neighbor_id));
+                         let d = l2_sq_i32(q_vec, self.get_vec(neighbor_id));
                          if d < curr_dist {
                              curr_dist = d;
                              curr_node = neighbor_id;
@@ -184,7 +180,7 @@ impl ValoriHNSW {
         
         for &ep in entry_points {
             if visited.insert(ep) {
-                let d = euclidean_distance_squared(query, self.get_vec(ep));
+                let d = l2_sq_i32(query, self.get_vec(ep));
                 let cand = Candidate { id: ep, dist: d };
                 candidates_to_explore.push(std::cmp::Reverse(cand.clone()));
                 found_nearest.push(cand);
@@ -201,7 +197,7 @@ impl ValoriHNSW {
             if let Some(neighbors) = self.layers.get(layer_idx).and_then(|layer| layer.get(curr.id as usize)) {
                 for &n_id in neighbors {
                     if visited.insert(n_id) {
-                         let d = euclidean_distance_squared(query, self.get_vec(n_id));
+                         let d = l2_sq_i32(query, self.get_vec(n_id));
                          let neighbor_cand = Candidate { id: n_id, dist: d };
                          
                          if found_nearest.len() < ef || d < found_nearest.peek().unwrap().dist {
@@ -246,7 +242,7 @@ impl ValoriHNSW {
              for &n_id in &connections {
                  let n_start = n_id as usize * dim;
                  // Slice calculation inside loop
-                 let d = euclidean_distance_squared(
+                 let d = l2_sq_i32(
                      &self.vectors[src_vec_range.clone()], 
                      &self.vectors[n_start .. n_start + dim]
                  );
@@ -272,13 +268,13 @@ impl ValoriHNSW {
         // 1. Greedy Zoom to Layer 0
         for l in (1..=self.max_level).rev() {
              let mut changed = true;
-             let mut curr_dist = euclidean_distance_squared(query, self.get_vec(curr_node));
+             let mut curr_dist = l2_sq_i32(query, self.get_vec(curr_node));
              
              while changed {
                  changed = false;
                  if let Some(neighbors) = self.layers.get(l).and_then(|layer| layer.get(curr_node as usize)) {
                      for &neighbor_id in neighbors {
-                         let d = euclidean_distance_squared(query, self.get_vec(neighbor_id));
+                         let d = l2_sq_i32(query, self.get_vec(neighbor_id));
                          if d < curr_dist {
                              curr_dist = d;
                              curr_node = neighbor_id;
@@ -420,7 +416,7 @@ impl ValoriHNSW {
         let mut external_ids = Vec::with_capacity(count);
         let mut metadata = Vec::with_capacity(count);
         let mut tags = Vec::with_capacity(count);
-        let mut id_map = HashMap::with_capacity(count);
+        let mut id_map = FxHashMap::with_capacity_and_hasher(count, Default::default());
 
         // 3. Read Data
         for i in 0..count {

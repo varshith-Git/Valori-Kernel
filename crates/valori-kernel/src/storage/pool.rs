@@ -53,6 +53,15 @@ impl RecordPool {
         }
     }
 
+    /// Updates the metadata bytes on an existing record in-place.
+    pub fn update_metadata(&mut self, id: RecordId, metadata: Option<alloc::vec::Vec<u8>>) -> Result<()> {
+        let idx = id.0 as usize;
+        match self.records.get_mut(idx).and_then(|s| s.as_mut()) {
+            Some(rec) => { rec.metadata = metadata; Ok(()) }
+            None => Err(KernelError::NotFound),
+        }
+    }
+
     /// Gets a reference to the record.
     pub fn get(&self, id: RecordId) -> Option<&Record> {
         let idx = id.0 as usize;

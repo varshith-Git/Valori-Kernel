@@ -18,6 +18,8 @@ import { CompliancePackTab } from "@/components/collections/CompliancePackTab";
 import { CommunityTab } from "@/components/collections/CommunityTab";
 import { EntityExtractionTab } from "@/components/collections/EntityExtractionTab";
 import { TreeRagTab } from "@/components/collections/TreeRagTab";
+import { BulkInsertTab } from "@/components/collections/BulkInsertTab";
+import { VisualizeTab } from "@/components/collections/VisualizeTab";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { makeNs } from "@/lib/hooks/useCollections";
 import { cn } from "@/lib/utils";
@@ -26,10 +28,12 @@ import { cn } from "@/lib/utils";
 
 /** Primary tabs shown directly in the tab bar */
 const PRIMARY_TABS = [
-  { value: "search",  label: "Search",    tip: "Find records by semantic similarity, ID, or regex" },
-  { value: "upload",  label: "Upload",    tip: "Ingest PDF / DOCX / TXT with auto-chunking and embedding" },
-  { value: "ask",     label: "Ask",       tip: "Natural-language Q&A with LLM synthesis over top-K chunks" },
-  { value: "docs",    label: "Documents", tip: "Browse ingested documents and their chunks" },
+  { value: "search",    label: "Search",     tip: "Find records by semantic similarity, ID, or regex" },
+  { value: "upload",    label: "Upload",     tip: "Ingest PDF / DOCX / TXT with auto-chunking and embedding" },
+  { value: "bulk",      label: "Bulk Insert",tip: "Insert multiple vectors at once from CSV or JSON" },
+  { value: "visualize", label: "Visualize",  tip: "2D PCA scatter plot of all vectors in this collection" },
+  { value: "ask",       label: "Ask",        tip: "Natural-language Q&A with LLM synthesis over top-K chunks" },
+  { value: "docs",      label: "Documents",  tip: "Browse ingested documents and their chunks" },
 ];
 
 /** Analyze tabs — graph, entities, evaluation */
@@ -144,6 +148,7 @@ export default function CollectionPage({
   }, []);
 
   const deleteRecord = async (id: number) => {
+    if (!window.confirm(`Delete record #${id}? This cannot be undone.`)) return;
     await fetch("/api/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -198,6 +203,12 @@ export default function CollectionPage({
         </TabsContent>
         <TabsContent value="upload" className="mt-5">
           <DocumentUploadTab collection={namespace} onAskQuestion={handleAskQuestion} />
+        </TabsContent>
+        <TabsContent value="bulk" className="mt-5">
+          <BulkInsertTab namespace={namespace} dim={dim} />
+        </TabsContent>
+        <TabsContent value="visualize" className="mt-5">
+          <VisualizeTab namespace={namespace} dim={dim} />
         </TabsContent>
         <TabsContent value="ask" className="mt-5">
           <AskTab namespace={namespace} initialQuestion={pendingQuestion} />

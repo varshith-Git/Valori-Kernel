@@ -88,7 +88,7 @@ export function ReceiptCard() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-border/50 text-xs font-mono">
         <div>
           <span className="text-muted-foreground block mb-1">Operation Hash (BLAKE3):</span>
-          <code className="block bg-background p-2 rounded border border-border/40 text-emerald-400 break-all">
+          <code className="block bg-background p-2 rounded border border-border/40 text-emerald-600 dark:text-emerald-400 break-all">
             {receipt.operation_hash || "0000000000000000000000000000000000000000000000000000000000000000"}
           </code>
         </div>

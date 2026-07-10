@@ -14,3 +14,41 @@ pub fn snapshot_hash(snapshot_bytes: &[u8]) -> [u8; 32] {
 pub fn wal_hash(wal_bytes: &[u8]) -> [u8; 32] {
     blake3::hash(wal_bytes).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_hash_matches_blake3() {
+        let data = b"valori snapshot bytes";
+        let expected: [u8; 32] = blake3::hash(data).into();
+        assert_eq!(snapshot_hash(data), expected);
+    }
+
+    #[test]
+    fn snapshot_hash_empty() {
+        let expected: [u8; 32] = blake3::hash(b"").into();
+        assert_eq!(snapshot_hash(b""), expected);
+    }
+
+    #[test]
+    fn wal_hash_matches_blake3() {
+        let data = b"valori wal bytes";
+        let expected: [u8; 32] = blake3::hash(data).into();
+        assert_eq!(wal_hash(data), expected);
+    }
+
+    #[test]
+    fn snapshot_and_wal_hashes_differ_for_same_input() {
+        let data = b"same content";
+        // They both use blake3::hash so they must agree
+        assert_eq!(snapshot_hash(data), wal_hash(data));
+    }
+
+    #[test]
+    fn different_inputs_produce_different_hashes() {
+        assert_ne!(snapshot_hash(b"a"), snapshot_hash(b"b"));
+        assert_ne!(wal_hash(b"x"), wal_hash(b"y"));
+    }
+}

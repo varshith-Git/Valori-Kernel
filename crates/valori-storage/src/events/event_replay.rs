@@ -37,74 +37,6 @@ pub enum ReplayError {
 
 pub type Result<T> = std::result::Result<T, ReplayError>;
 
-/// Replay events from log file (any supported wire version — v2 or v3).
-pub fn read_event_log(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Result<Vec<KernelEvent>> {
-    let file = File::open(path.as_ref())?;
-    let mut reader = BufReader::new(file);
-
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)?;
-
-    let header = valori_wire::parse_header(&buffer).map_err(|_| ReplayError::InvalidHeader)?;
-    if let Some(expected) = expected_dim {
-        if header.dim != expected {
-            return Err(ReplayError::DimensionMismatch {
-                log_dim: header.dim,
-                expected_dim: expected,
-            });
-        }
-    }
-
-    let mut events = Vec::new();
-    let mut offset = header.header_len;
-    // Recovery validates the hash chain as it replays: any in-place edit to
-    // a non-final entry breaks the next entry's prev_hash, so corruption is
-    // detected even when the damaged bytes still decode structurally.
-    let mut chain_head = header.prev_segment_chain_head;
-    while offset < buffer.len() {
-        match valori_wire::decode_entry(header.version, &buffer[offset..]) {
-            Ok((decoded, bytes_read)) => {
-                if decoded.prev_hash != chain_head {
-                    return Err(ReplayError::Corrupted { offset });
-                }
-                chain_head = valori_wire::chain_advance(header.version, &chain_head, &decoded)
-                    .map_err(|e| ReplayError::Deserialization(e.to_string()))?;
-                offset += bytes_read;
-
-                match decoded.entry {
-                    crate::events::event_log::LogEntry::Event(event) => {
-                        events.push(event);
-                    },
-                    // S15: namespace-scoped events — this reader returns the
-                    // bare events (callers that need the namespace use
-                    // read_all_segments, which preserves it).
-                    crate::events::event_log::LogEntry::EventNs { event, .. } => {
-                        events.push(event);
-                    },
-                    crate::events::event_log::LogEntry::Checkpoint { event_count: chk_count, snapshot_hash, timestamp: _ } => {
-                        tracing::info!("Found checkpoint marker: count={}, hash={:?}", chk_count, snapshot_hash);
-                    }
-                    // Admin events (membership history) are chain-verified
-                    // above but never applied to kernel state.
-                    crate::events::event_log::LogEntry::Admin(admin) => {
-                        tracing::info!("Admin event in log: {}", admin.describe());
-                    }
-                }
-            }
-            Err(_e) => {
-                if offset + 100 > buffer.len() {
-                    tracing::warn!("Ignoring incomplete event at end of log (offset {})", offset);
-                    break;
-                } else {
-                    return Err(ReplayError::Corrupted { offset });
-                }
-            }
-        }
-    }
-
-    Ok(events)
-}
-
 /// Replay events into a fresh kernel state, each into its recorded
 /// namespace (S15 — pre-S15 `Event` entries carry namespace 0, so old logs
 /// replay exactly as they always did).
@@ -316,7 +248,7 @@ mod tests {
             let _writer = EventLogWriter::open(&log_path, Some(16)).unwrap();
         }
 
-        let result = read_event_log(&log_path, Some(32));
+        let result = read_all_segments(&log_path, Some(32));
         assert!(result.is_err());
     }
 

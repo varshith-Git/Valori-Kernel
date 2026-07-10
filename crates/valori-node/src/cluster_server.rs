@@ -339,6 +339,8 @@ pub fn build_cluster_router_with_keys(
     // ── Canonical v1 routes ───────────────────────────────────────────────────
     let v1 = Router::new()
         .route("/v1/records",                   post(insert_record))
+        .route("/v1/records/:id",               axum::routing::get(get_record_by_id))
+        .route("/v1/records/:id/metadata",      axum::routing::patch(update_record_metadata))
         .route("/v1/search",                    post(search))
         .route("/v1/delete",                    post(delete_record))
         .route("/v1/soft-delete",               post(soft_delete_record))
@@ -1167,6 +1169,64 @@ async fn soft_delete_record(
     crate::routes::records::delete_record(&state, &receipts, req, true).await
 }
 
+async fn get_record_by_id(
+    State(state): State<DataPlaneState>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let ns = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(ns) => ns,
+        None => return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "collection not found"}))).into_response()),
+    };
+    let rec_id = valori_kernel::types::id::RecordId(id);
+    let result = state.sm.with_state(|s| {
+        s.get_record(rec_id)
+            .filter(|r| r.namespace_id == ns)
+            .map(|rec| {
+                let vector: Vec<f32> = rec.vector.data.iter()
+                    .map(|s| valori_kernel::fxp::ops::to_f32(*s))
+                    .collect();
+                serde_json::json!({
+                    "id": id,
+                    "vector": vector,
+                    "metadata": rec.metadata.as_ref()
+                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()),
+                    "tag": rec.tag,
+                })
+            })
+    }).await;
+    match result {
+        Some(v) => Ok(Json(v)),
+        None => Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response()),
+    }
+}
+
+async fn update_record_metadata(
+    State(state): State<DataPlaneState>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let ns = match state.sm.resolve_namespace(q.collection.as_deref()).await {
+        Some(ns) => ns,
+        None => return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "collection not found"}))).into_response()),
+    };
+    let rec_id = valori_kernel::types::id::RecordId(id);
+    let exists = state.sm.with_state(|s| s.get_record(rec_id).filter(|r| r.namespace_id == ns).is_some()).await;
+    if !exists {
+        return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response());
+    }
+    let metadata_bytes = serde_json::to_vec(&body).ok();
+    let shard = state.shard_for(ns);
+    raft_write_data(&shard.raft, ClientRequest {
+        event: KernelEvent::UpdateRecordMetadata { id: rec_id, metadata: metadata_bytes },
+        request_id: None,
+        schema_version: CURRENT_SCHEMA_VERSION,
+        namespace_id: ns,
+    }).await?;
+    Ok(Json(serde_json::json!({ "ok": true, "id": id })))
+}
+
 // ── Batch insert ──────────────────────────────────────────────────────────────
 // Wire-compatible with the standalone server: request `{ batch: [[f32]] }`,
 // response `{ ids: [u32] }`. Any rejected vector fails the whole batch with a
@@ -1870,7 +1930,7 @@ fn cosine_similarity_from_records(
     rec_a: &valori_kernel::storage::record::Record,
     rec_b: &valori_kernel::storage::record::Record,
 ) -> Option<f32> {
-    use valori_kernel::dist::dot_product;
+    use valori_kernel::math::dot::dot_i32 as dot_product;
     if !rec_a.is_searchable() || !rec_b.is_searchable() { return None; }
     let va: Vec<i32> = rec_a.vector.data.iter().map(|x| x.0).collect();
     let vb: Vec<i32> = rec_b.vector.data.iter().map(|x| x.0).collect();
@@ -3519,6 +3579,7 @@ fn collect_cluster_timeline(
                             KernelEvent::SetMeta { .. }                   => ("SetMeta",                  None,       None,       None),
                             KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",      None,       None,       None),
                             KernelEvent::DropNamespace { .. }             => ("DropNamespace",            None,       None,       None),
+                            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",      Some(id.0), None,       None),
                         };
                         entries.push(crate::api::TimelineEntry {
                             log_index,
@@ -3705,14 +3766,20 @@ fn encode_cluster_snapshot(state: &valori_kernel::state::kernel::KernelState) ->
 async fn cluster_snapshot_save(
     State(state): State<DataPlaneState>,
 ) -> Response {
-    match state.sm.with_state(encode_cluster_snapshot).await {
-        Ok(bytes) => (StatusCode::OK, Json(serde_json::json!({
+    // Clone the kernel state (briefly holds the mutex), then encode on the
+    // blocking thread pool so the async runtime stays free during CPU-heavy work.
+    let kernel_state = state.sm.clone_state().await;
+    match tokio::task::spawn_blocking(move || encode_cluster_snapshot(&kernel_state)).await {
+        Ok(Ok(bytes)) => (StatusCode::OK, Json(serde_json::json!({
             "success": true,
             "bytes": bytes.len(),
             "note": "In-memory snapshot encoded. Cluster snapshots are persisted automatically by Raft."
         }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
             "error": format!("snapshot encode failed: {e}")
+        }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("snapshot encode task panicked: {e}")
         }))).into_response(),
     }
 }

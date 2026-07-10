@@ -231,7 +231,7 @@ function MetricCard({
 }
 
 function ChunkRow({ chunk, rank }: { chunk: ChunkResult; rank: number }) {
-  const cosine = Math.max(0, (1 - chunk.score * 32768) * 100);
+  const cosine = Math.max(0, Math.min(100, (1 - chunk.score / 2) * 100));
   return (
     <div className={`flex items-center gap-3 px-3 py-2 rounded-lg ${
       chunk.relevant
@@ -483,7 +483,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
             <input
               type="range" min={1} max={20} value={k}
               onChange={(e) => setK(parseInt(e.target.value))}
-              className="w-28 accent-white" disabled={running}
+              className="w-28 accent-[var(--v-accent)]" disabled={running}
             />
             <span className="text-sm font-mono text-accent-foreground w-4">{k}</span>
           </div>

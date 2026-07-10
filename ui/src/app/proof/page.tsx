@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
 import { useProof } from "@/lib/hooks/useProof";
 import { useHealth } from "@/lib/hooks/useHealth";
+import { markProofViewed } from "@/lib/onboarding";
 import { ProofHash } from "@/components/proof/ProofHash";
 import { MetricCard } from "@/components/proof/MetricCard";
 import { ProofExport } from "@/components/proof/ProofExport";
@@ -10,6 +12,9 @@ import { ReceiptCard } from "@/components/proof/ReceiptCard";
 export default function DashboardPage() {
   const { hash, isLoading, error } = useProof();
   const { chainHeight, recordCount, dim, online } = useHealth();
+
+  // Onboarding: a real hash on screen counts as "verified your first proof".
+  useEffect(() => { if (hash) markProofViewed(); }, [hash]);
 
   return (
     <div className="flex flex-col gap-8 w-full max-w-[1600px]">
@@ -33,12 +38,12 @@ export default function DashboardPage() {
       {/* State hash — the hero element */}
       <div className="rounded-xl border border-[var(--v-accent)] bg-card p-6 [box-shadow:0_0_24px_var(--v-accent-muted)]">
         {!online && !isLoading ? (
-          <div className="text-sm text-red-400">
+          <div className="text-sm text-destructive">
             Backend unreachable — start Valori on{" "}
             <code className="font-mono">localhost:3000</code>
           </div>
         ) : error && online ? (
-          <div className="text-sm text-amber-400">
+          <div className="text-sm text-amber-500">
             Proof endpoint error — check VALORI_EVENT_LOG_PATH is set
           </div>
         ) : (

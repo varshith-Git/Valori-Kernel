@@ -131,6 +131,12 @@ pub enum KernelEvent {
         tag: u64,
     },
 
+    /// Update the metadata bytes on an existing record in-place.
+    UpdateRecordMetadata {
+        id: RecordId,
+        metadata: Option<alloc::vec::Vec<u8>>,
+    },
+
     /// Store a metadata key-value pair in the kernel (cluster-mode).
     /// Value is a pre-serialized JSON string. Applied on every replica so all
     /// nodes share the same metadata sidecar after ingest.
@@ -179,6 +185,7 @@ impl KernelEvent {
             KernelEvent::AutoCreateNode { .. } => "AutoCreateNode",
             KernelEvent::AutoCreateEdge { .. } => "AutoCreateEdge",
             KernelEvent::AutoInsertRecordEncrypted { .. } => "AutoInsertRecordEncrypted",
+            KernelEvent::UpdateRecordMetadata { .. } => "UpdateRecordMetadata",
             KernelEvent::SetMeta { .. } => "SetMeta",
             KernelEvent::AutoCreateNamespace { .. } => "AutoCreateNamespace",
             KernelEvent::DropNamespace { .. } => "DropNamespace",
@@ -299,6 +306,12 @@ impl Serialize for KernelEvent {
                 state.serialize_field("name", name)?;
                 state.end()
             }
+            KernelEvent::UpdateRecordMetadata { id, metadata } => {
+                let mut state = serializer.serialize_struct_variant("KernelEvent", 16, "UpdateRecordMetadata", 2)?;
+                state.serialize_field("id", id)?;
+                state.serialize_field("metadata", &RawMetadata(metadata.as_ref()))?;
+                state.end()
+            }
         }
     }
 }
@@ -406,6 +419,11 @@ impl<'de> Deserialize<'de> for KernelEvent {
              DropNamespace {
                  name: alloc::string::String,
              },
+             UpdateRecordMetadata {
+                 id: RecordId,
+                 #[serde(with = "raw_metadata_serde")]
+                 metadata: Option<alloc::vec::Vec<u8>>,
+             },
         }
 
         // Delegate to the Helper
@@ -433,6 +451,7 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::SetMeta { key, value } => KernelEvent::SetMeta { key, value },
             KernelEventHelper::AutoCreateNamespace { name } => KernelEvent::AutoCreateNamespace { name },
             KernelEventHelper::DropNamespace { name } => KernelEvent::DropNamespace { name },
+            KernelEventHelper::UpdateRecordMetadata { id, metadata } => KernelEvent::UpdateRecordMetadata { id, metadata },
         })
     }
 }

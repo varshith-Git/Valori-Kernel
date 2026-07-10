@@ -23,6 +23,7 @@ export interface SearchResponse {
 
 export interface Collection {
   name: string;
+  id?: number;
   record_count?: number;
 }
 

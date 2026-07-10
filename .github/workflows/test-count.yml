@@ -47,8 +47,10 @@ jobs:
 
       - name: Run tests and capture output
         id: run_tests
+        shell: bash
         run: |
-          cargo test -p valori-kernel -p valori-node 2>&1 | tee test_output.txt || true
+          set -o pipefail
+          cargo test -p valori-kernel -p valori-node 2>&1 | tee test_output.txt
 
       - name: Count passing tests
         id: count

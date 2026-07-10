@@ -26,7 +26,6 @@ use crate::commit::CommitError;
 use crate::events::event_commit::{CommitError as EventCommitError, EventCommitter};
 use crate::wal_writer::WalWriter;
 use valori_kernel::event::KernelEvent;
-use valori_kernel::state::command::Command;
 
 /// The standalone durability backend. Exactly one is active per engine:
 /// the event log supersedes the WAL entirely when both are configured
@@ -72,11 +71,8 @@ impl Persistence {
                 .map(|_| ())
                 .map_err(translate),
             Persistence::Wal(w) => {
-                if let Some(cmd) = command_for(event, namespace_id) {
-                    w.append_command(&cmd)
-                        .map_err(|e| CommitError::Io(e.to_string()))?;
-                }
-                Ok(())
+                w.append_event(event, namespace_id)
+                    .map_err(|e| CommitError::Io(e.to_string()))
             }
             Persistence::Ephemeral => Ok(()),
         }
@@ -92,58 +88,13 @@ impl Persistence {
                 .map_err(translate),
             Persistence::Wal(w) => {
                 for event in events {
-                    if let Some(cmd) = command_for(event, namespace_id) {
-                        w.append_command(&cmd)
-                            .map_err(|e| CommitError::Io(e.to_string()))?;
-                    }
+                    w.append_event(event, namespace_id)
+                        .map_err(|e| CommitError::Io(e.to_string()))?;
                 }
                 Ok(())
             }
             Persistence::Ephemeral => Ok(()),
         }
-    }
-}
-
-/// Translate a `KernelEvent` into the legacy WAL `Command`, attaching the
-/// namespace. Returns `None` for events the `Command` enum cannot represent
-/// (`SetMeta` and namespace lifecycle events, which pre-E1 code never
-/// WAL-appended either).
-fn command_for(event: &KernelEvent, namespace_id: u16) -> Option<Command> {
-    match event {
-        KernelEvent::InsertRecord { id, vector, metadata, tag } => Some(Command::InsertRecord {
-            namespace_id,
-            id: *id,
-            vector: vector.clone(),
-            metadata: metadata.clone(),
-            tag: *tag,
-        }),
-        KernelEvent::InsertRecordEncrypted { id, key_id, ciphertext, tag, .. } => {
-            Some(Command::InsertRecordEncrypted {
-                namespace_id,
-                id: *id,
-                key_id: *key_id,
-                ciphertext: ciphertext.clone(),
-                tag: *tag,
-            })
-        }
-        KernelEvent::DeleteRecord { id } => Some(Command::DeleteRecord { id: *id }),
-        KernelEvent::SoftDeleteRecord { id } => Some(Command::SoftDeleteRecord { id: *id }),
-        KernelEvent::CreateNode { id, kind, record } => Some(Command::CreateNode {
-            namespace_id,
-            node_id: *id,
-            kind: *kind,
-            record: *record,
-        }),
-        KernelEvent::CreateEdge { id, from, to, kind } => Some(Command::CreateEdge {
-            edge_id: *id,
-            kind: *kind,
-            from: *from,
-            to: *to,
-        }),
-        KernelEvent::DeleteNode { id } => Some(Command::DeleteNode { node_id: *id }),
-        KernelEvent::DeleteEdge { id } => Some(Command::DeleteEdge { edge_id: *id }),
-        KernelEvent::ShredKey { key_id } => Some(Command::ShredKey { key_id: *key_id }),
-        _ => None,
     }
 }
 

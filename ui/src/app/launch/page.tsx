@@ -345,7 +345,7 @@ function ConnectPanel() {
                 {data.source === "env" ? "VALORI_API_URL" : data.source === "history" ? "auto-restored" : "override"}
               </span>
             </div>
-            <code className="text-sm font-mono text-foreground truncate">{data.url}</code>
+            <code className="text-sm font-mono text-foreground truncate" title={data.url}>{data.url}</code>
             {data.reachable && (
               <p className="text-xs text-emerald-500">dim={data.dim ?? "?"} · {(data.records ?? 0).toLocaleString()} records</p>
             )}
@@ -355,7 +355,7 @@ function ConnectPanel() {
               ? <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium"><CheckCircle2 size={14} /> Online</span>
               : <span className="flex items-center gap-1 text-xs text-muted-foreground"><XCircle size={14} /> Offline</span>
             }
-            <button onClick={load} className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Refresh">
+            <button type="button" onClick={load} className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Refresh">
               <RefreshCw size={13} />
             </button>
           </div>
@@ -376,9 +376,9 @@ function ConnectPanel() {
                     : "border-border bg-card hover:border-input"
                 }`}
               >
-                <span className={`w-2 h-2 rounded-full shrink-0 ${h.reachable ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${h.reachable ? "bg-emerald-500 dark:bg-emerald-400" : "bg-muted-foreground/40"}`} />
                 <div className="flex-1 min-w-0">
-                  <code className="text-sm font-mono text-foreground truncate block">{h.url}</code>
+                  <code className="text-sm font-mono text-foreground truncate block" title={h.url}>{h.url}</code>
                   <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
                     <span>{relativeTime(h.lastConnected)}</span>
                     {h.dim     && <span>dim={h.dim}</span>}

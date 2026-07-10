@@ -71,7 +71,7 @@ export function useProjectManifest() {
     "/api/projects",
     fetcher,
     {
-      refreshInterval: 2000,
+      refreshInterval: 10000,
       onSuccess: writeProjectCache,
     }
   );

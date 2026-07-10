@@ -50,6 +50,19 @@
 }
 
 :root {
+  /* Valori accent — dark values used as defaults (FOUC script applies .dark/.light before paint) */
+  --v-accent:         oklch(0.62 0.20 270);
+  --v-accent-muted:   oklch(0.62 0.20 270 / 15%);
+  --v-accent-ring:    oklch(0.62 0.20 270 / 50%);
+  --v-heatmap-empty:  oklch(0.28 0.02 270);
+  /* Canvas tokens */
+  --vis-bg:           oklch(0.145 0 0);
+  --vis-grid:         oklch(1 0 0 / 6%);
+  /* Semantic status colors */
+  --status-ok:        oklch(0.72 0.19 145);
+  --status-warn:      oklch(0.78 0.19 80);
+  --status-info:      oklch(0.73 0.17 220);
+
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -122,6 +135,15 @@
   --v-accent-muted:   oklch(0.62 0.20 270 / 15%);
   --v-accent-ring:    oklch(0.62 0.20 270 / 50%);
   --v-heatmap-empty:  oklch(0.28 0.02 270);
+
+  /* Canvas / visualization tokens */
+  --vis-bg:           oklch(0.145 0 0);
+  --vis-grid:         oklch(1 0 0 / 6%);
+
+  /* Semantic status colors */
+  --status-ok:        oklch(0.72 0.19 145);
+  --status-warn:      oklch(0.78 0.19 80);
+  --status-info:      oklch(0.73 0.17 220);
 }
 
 @layer base {
@@ -194,6 +216,14 @@
   --v-accent-ring:    oklch(0.52 0.20 270 / 40%);
   --v-heatmap-empty:  oklch(0.88 0.01 270);
 
+  /* Canvas / visualization tokens */
+  --vis-bg:           oklch(0.97 0 0);
+  --vis-grid:         oklch(0 0 0 / 8%);
+
+  /* Semantic status colors */
+  --status-ok:        oklch(0.54 0.16 145);
+  --status-warn:      oklch(0.60 0.18 80);
+  --status-info:      oklch(0.56 0.17 220);
 }
 
 /* Light-mode scrollbars */
@@ -285,4 +315,17 @@ html {
   transition:
     background-color 0.25s ease,
     color 0.15s ease;
+}
+
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  html { transition: none; }
+  .animate-fade-up,
+  .animate-stat-pop,
+  .animate-chain-glow,
+  .animate-breathe,
+  .heat-cell {
+    animation: none;
+  }
+  .card-shimmer::after { display: none; }
 }

@@ -322,8 +322,30 @@ impl Engine {
             .or(cfg.snapshot_path.as_ref())
             .map(|p| p.with_extension("namespaces.json"));
 
+        // Set the kernel's own index to BQ when the node is configured for BQ.
+        // For HNSW/IVF (std-only), the kernel falls back to BruteForce for its
+        // internal search_l2 path (replay, proof) while the node's Box<dyn> handles
+        // production search. For BQ, both paths use the same algorithm.
+        let mut kernel_state = KernelState::with_dim(cfg.dim);
+        // HNSW and IVF are not yet kernel-native: log a warning so users don't
+        // believe they're getting HNSW on the replay/proof path when they aren't.
+        match initial_kind {
+            IndexKind::Bq => {
+                use valori_kernel::index::IndexVariant;
+                kernel_state.set_index_kind(IndexVariant::BinaryQuantization);
+            }
+            IndexKind::Hnsw | IndexKind::Ivf => {
+                tracing::warn!(
+                    "VALORI_INDEX={:?}: kernel replay/proof path uses BruteForce \
+                     (HNSW and IVF are not yet kernel-native).",
+                    initial_kind
+                );
+            }
+            _ => {}
+        }
+
         Self {
-            state: KernelState::with_dim(cfg.dim),
+            state: kernel_state,
             metadata: crate::metadata::MetadataStore::new(),
             index,
             quant,
@@ -884,20 +906,7 @@ impl Engine {
     }
 
     pub fn search_l2(&self, query: &[f32], k: usize) -> Result<Vec<(u32, f32)>, EngineError> {
-        if let Some(dim) = self.state.dim {
-            if query.len() != dim {
-                return Err(EngineError::Kernel(KernelError::DimensionMismatch {
-                    expected: dim,
-                    found: query.len(),
-                }));
-            }
-        }
-        for &v in query {
-            if v > 32767.99 || v < -32768.0 {
-                return Err(EngineError::InvalidInput("Query vector values must be between -32768.0 and 32767.99".to_string()));
-            }
-        }
-        Ok(self.index.search(query, k))
+        self.search_l2_ns(query, k, valori_kernel::types::id::DEFAULT_NS.0)
     }
 
     // ── Collection / namespace management ────────────────────────────────────
@@ -920,9 +929,11 @@ impl Engine {
                 "namespace limit reached ({} max)", valori_kernel::types::id::MAX_NAMESPACES
             ))
         })?;
-        // Tell the kernel about the namespace (no-op if already exists).
-        let cmd = valori_kernel::state::command::Command::CreateNamespace { namespace_id: id };
-        self.state.apply(&cmd)?;
+        // Tell the kernel about the namespace (idempotent).
+        self.state.apply_event_ns(
+            &valori_kernel::event::KernelEvent::AutoCreateNamespace { name: String::new() },
+            id,
+        )?;
         // Persist the name→id map: the event log does not carry collection names,
         // so without this the collection vanishes from the UI after a restart.
         self.flush_namespaces()?;
@@ -943,8 +954,13 @@ impl Engine {
         let ns_record_ids: Vec<u64> = self.state.iter_records_in_ns(id)
             .map(|r| r.id.0 as u64)
             .collect();
-        let cmd = valori_kernel::state::command::Command::DropNamespace { namespace_id: id };
-        self.state.apply(&cmd)?;
+        self.state.apply_event_ns(
+            &valori_kernel::event::KernelEvent::DropNamespace { name: String::new() },
+            id,
+        )?;
+        for rid in &ns_record_ids {
+            self.index.delete(*rid as u32);
+        }
         self.reranker.remove_batch(&ns_record_ids);
         self.flush_namespaces()?;
         Ok(())
@@ -1103,6 +1119,13 @@ impl Engine {
         self.reranker.remove(id as u64);
         self.created_at.remove(&id);
         Ok(())
+    }
+
+    /// Update the metadata bytes of an existing record in-place.
+    pub fn update_record_metadata(&mut self, id: u32, metadata: Option<Vec<u8>>, namespace_id: u16) -> Result<(), EngineError> {
+        let rid = RecordId(id);
+        let event = valori_kernel::event::KernelEvent::UpdateRecordMetadata { id: rid, metadata };
+        self.commit_and_apply_ns(&event, namespace_id)
     }
 
     /// Hard-delete a record and its associated graph node (if any).
@@ -1271,15 +1294,11 @@ impl Engine {
 
         match event {
             KernelEvent::InsertRecord { id, vector, .. } => {
-                // Non-default namespaces are searched via the kernel's intrusive
-                // linked list (search_l2_ns); they must NOT enter the global index.
-                if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
-                    let mut vals = Vec::with_capacity(vector.data.len());
-                    for fxp in &vector.data {
-                        vals.push(fxp.0 as f32 / SCALE as f32);
-                    }
-                    self.index.insert(id.0, &vals);
+                let mut vals = Vec::with_capacity(vector.data.len());
+                for fxp in &vector.data {
+                    vals.push(fxp.0 as f32 / SCALE as f32);
                 }
+                self.index.insert(id.0, &vals);
             }
             KernelEvent::DeleteRecord { id } => { self.index.delete(id.0); }
             KernelEvent::SoftDeleteRecord { id } => { self.index.delete(id.0); }
@@ -1315,10 +1334,10 @@ impl Engine {
 
     pub fn record_count(&self) -> usize { self.state.record_count() }
 
-    /// Apply a kernel command directly to state without going through persistence.
+    /// Apply a kernel event directly to state without going through persistence.
     /// Only valid in tests that deliberately corrupt state to simulate divergence.
-    pub fn apply_raw_for_test(&mut self, cmd: &valori_kernel::state::command::Command) -> Result<(), valori_kernel::error::KernelError> {
-        self.state.apply(cmd)
+    pub fn apply_event_for_test(&mut self, evt: &valori_kernel::event::KernelEvent) -> Result<(), valori_kernel::error::KernelError> {
+        self.state.apply_event(evt)
     }
     pub fn clone_kernel_state(&self) -> KernelState { self.state.clone() }
     /// Read-only reference to the kernel state. For operations (e.g. tag-filtered
@@ -1341,11 +1360,14 @@ impl Engine {
         self.state.get_edge(id)
     }
 
-    /// Add a namespace-scoped search method.
+    /// Namespace-scoped vector search. Routes through the VectorIndex (HNSW/IVF/BQ)
+    /// when a non-brute index is active; falls back to the kernel's brute-force
+    /// linked-list walk otherwise.
     pub fn search_l2_ns(&self, query: &[f32], k: usize, namespace_id: u16) -> Result<Vec<(u32, f32)>, EngineError> {
         use valori_kernel::index::SearchResult;
         use valori_kernel::types::scalar::FxpScalar;
         use valori_kernel::types::vector::FxpVector;
+        use valori_kernel::types::id::RecordId;
 
         if let Some(dim) = self.state.dim {
             if query.len() != dim {
@@ -1361,6 +1383,26 @@ impl Engine {
             }
         }
 
+        // Fast path: VectorIndex (HNSW/IVF/BQ) when a non-brute index is active.
+        // Pass k directly; ef_search (default 50) floors the beam width inside HNSW,
+        // giving ~50 candidates to namespace-filter from.  The previous k*20 multiplier
+        // forced ef=200, which caused O(N) scan behavior on high-dimensional data.
+        if self.effective_index_kind() != crate::config::IndexKind::BruteForce {
+            let over_fetch = k;
+            let candidates = self.index.search(query, over_fetch);
+            let hits: Vec<(u32, f32)> = candidates
+                .into_iter()
+                .filter(|(id, _)| {
+                    self.state
+                        .get_record(RecordId(*id))
+                        .map_or(false, |r| r.namespace_id == namespace_id)
+                })
+                .take(k)
+                .collect();
+            return Ok(hits);
+        }
+
+        // Brute-force path: kernel linked-list walk (exact, O(N) in namespace size).
         let fxp_data: Vec<FxpScalar> = query.iter()
             .map(|&v| FxpScalar((v * SCALE as f32) as i32))
             .collect();
@@ -1378,7 +1420,7 @@ impl Engine {
     /// C4.3: cosine similarity between two records in [−1, 1]. Returns None if
     /// either record is missing, deleted, or has a zero-magnitude vector.
     pub fn cosine_similarity(&self, id_a: u32, id_b: u32) -> Option<f32> {
-        use valori_kernel::dist::dot_product;
+        use valori_kernel::math::dot::dot_i32 as dot_product;
         use valori_kernel::types::id::RecordId;
         let rec_a = self.state.get_record(RecordId(id_a))?;
         let rec_b = self.state.get_record(RecordId(id_b))?;
@@ -1409,9 +1451,6 @@ impl Engine {
         for i in 0..total_slots {
             if let Some(record) = self.state.get_record(RecordId(i as u32)) {
                 if !record.is_searchable() { continue; }
-                // Non-default namespace records are found via the kernel's
-                // intrusive linked list (search_l2_ns); skip the global index.
-                if record.namespace_id != valori_kernel::types::id::DEFAULT_NS.0 { continue; }
                 let vals: Vec<f32> = record.vector.data.iter()
                     .map(|fxp| fxp.0 as f32 / SCALE as f32)
                     .collect();

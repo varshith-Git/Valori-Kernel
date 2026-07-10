@@ -1,0 +1,69 @@
+name: Kernel ABI — no_std + WASM build gate
+
+# Enforces two non-negotiable invariants from CLAUDE.md:
+#   1. valori-kernel must compile for wasm32-unknown-unknown (no_std portability moat)
+#   2. valori-core must compile for wasm32-unknown-unknown (same requirement)
+#
+# Runs on every PR that touches either crate. A `use std::` leak in either
+# crate fails this check before the PR can merge.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "crates/valori-kernel/**"
+      - "crates/valori-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/kernel-abi.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "crates/valori-kernel/**"
+      - "crates/valori-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+jobs:
+  wasm-build:
+    name: no_std / WASM ABI gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-wasm-abi-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-wasm-abi-
+
+      - name: Build valori-core for WASM (no_std)
+        run: cargo build -p valori-core --lib --target wasm32-unknown-unknown --release
+
+      - name: Build valori-kernel for WASM (no_std)
+        run: cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release
+
+      - name: Confirm no std leakage (grep check)
+        run: |
+          # Catch any `use std::` in kernel or core source before it reaches the WASM build.
+          # The WASM build above is the real gate; this makes the failure message clearer.
+          if grep -rn "use std::" \
+               crates/valori-kernel/src/ \
+               crates/valori-core/src/ 2>/dev/null; then
+            echo ""
+            echo "ERROR: 'use std::' found in valori-kernel or valori-core."
+            echo "Use 'core::' or 'alloc::' instead, or gate with #[cfg(feature = \"std\")]."
+            exit 1
+          fi
+          echo "No std leakage found."

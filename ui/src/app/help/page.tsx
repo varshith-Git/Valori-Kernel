@@ -11,7 +11,7 @@ const GOALS = [
     icon: "⊙",
     title: "Find information",
     color: "border-blue-900/60 bg-blue-950/20",
-    accent: "text-blue-400",
+    accent: "text-blue-600 dark:text-blue-400",
     items: [
       {
         label: "Search tab → Semantic",
@@ -56,7 +56,7 @@ const GOALS = [
     icon: "↑",
     title: "Add documents",
     color: "border-emerald-900/60 bg-emerald-950/20",
-    accent: "text-emerald-400",
+    accent: "text-emerald-600 dark:text-emerald-400",
     items: [
       {
         label: "Upload tab",
@@ -77,7 +77,7 @@ const GOALS = [
     icon: "◆",
     title: "Prove integrity",
     color: "border-purple-900/60 bg-purple-950/20",
-    accent: "text-purple-400",
+    accent: "text-purple-600 dark:text-purple-400",
     items: [
       {
         label: "Proof-Carrying Answers (Ask tab)",
@@ -128,7 +128,7 @@ const GOALS = [
     icon: "⊛",
     title: "Compliance & erasure",
     color: "border-amber-900/60 bg-amber-950/20",
-    accent: "text-amber-400",
+    accent: "text-amber-600 dark:text-amber-400",
     items: [
       {
         label: "GDPR tab",

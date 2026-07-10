@@ -1,6 +1,9 @@
 # RFC-0004: Capability & Task Model
 
 **Status:** Draft  
+**Owner:** valori-effect  
+**Stability:** Alpha — seven capability traits are defined and live on the standalone `POST /v1/records` path; full wiring across all endpoints is in progress  
+**Last reviewed:** 2026-07-08  
 **Depends on:** [`rfcs/0000-glossary.md`](0000-glossary.md), [`rfcs/0001-operation-lifecycle.md`](0001-operation-lifecycle.md), [`rfcs/0002-kernel-contract.md`](0002-kernel-contract.md), [`rfcs/0003-receipt-spec.md`](0003-receipt-spec.md)  
 **Implements:** Phase A6 (Effect system + EffectBus)
 

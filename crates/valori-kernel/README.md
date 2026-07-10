@@ -103,25 +103,35 @@ Non-default namespace records are **never inserted** into the global
 BruteForce/HNSW index. Isolation is enforced at three sites: the event-commit
 path, the WAL replay path, and `build_index()` (post-snapshot restore).
 
+`KernelEvent` → `KernelState::apply_event_ns` is the **single authoritative
+mutation path**. There is no intermediate type between the event and the state
+machine. WAL recovery translates legacy `Command` entries to `KernelEvent`
+before applying (in `valori-storage` and `valori-state`); the kernel has no
+knowledge of the WAL format.
+
 ---
 
 ## Key API
 
-### `ValoriKernel`
+### `KernelState`
 
 ```rust
-// The only way to mutate state.
-kernel.apply_event(event: KernelEvent) -> Result<(), KernelError>;
+// Mutate state — the only authoritative path.
+state.apply_event(&KernelEvent) -> Result<()>;           // default namespace
+state.apply_event_ns(&KernelEvent, ns: u16) -> Result<()>; // named namespace
 
-// Read-only index query (default namespace).
-kernel.search(query: &FxpVector, k: usize) -> Vec<SearchResult>;
+// Namespace-scoped search.
+state.search_l2_ns(query: &FxpVector, results: &mut [SearchResult], ns: u16) -> usize;
 
-// Serialize entire state to a binary blob (VAL1 frame, V6 format).
-kernel.snapshot() -> Result<Vec<u8>, SnapshotError>;
-
-// Replace state from a binary blob.
-kernel.restore(data: &[u8]) -> Result<(), SnapshotError>;
+// Serialize / restore.
+snapshot::encode::encode_state(&state, buf: &mut Vec<u8>);
+snapshot::decode::decode_state(data: &[u8]) -> Result<KernelState>;
 ```
+
+`Command` and `ValoriKernel` were deleted in Phase K2. There is no intermediate
+type between `KernelEvent` and `KernelState`. Legacy v1 WAL files (pre-K2) are
+still _readable_ via `valori-storage::wal_reader::WalReader` (backward compat
+handled by `LegacyWalCommand` in `valori-storage::wal_compat`, private to that crate).
 
 ### Snapshot format (V6)
 

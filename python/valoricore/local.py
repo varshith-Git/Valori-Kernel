@@ -51,8 +51,7 @@ class LocalClient(ValoriClient):
                            without centroid tuning. Use HNSW instead for large datasets.
 
             max_records: Vector pool capacity. Overrides ``VALORI_MAX_RECORDS``.
-                         Defaults to the env var value (1024 if unset — too small
-                         for production; always pass an explicit value).
+                         Default 0 inherits the kernel default (1 000 000).
             dim:         Vector dimension. Overrides ``VALORI_DIM``.
                          Must match the embedding model output (e.g. 384).
             max_nodes:   Knowledge Graph node capacity. Overrides ``VALORI_MAX_NODES``.

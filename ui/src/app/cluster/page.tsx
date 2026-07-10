@@ -38,7 +38,7 @@ export default function ClusterPage() {
       <div className="w-full max-w-[1600px]">
         <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
         <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 p-5">
-          <p className="text-sm text-red-400">Backend unreachable</p>
+          <p className="text-sm text-red-600 dark:text-red-400">Backend unreachable</p>
           <p className="mt-1 text-xs text-red-700">{String(error)}</p>
         </div>
       </div>
@@ -148,7 +148,7 @@ export default function ClusterPage() {
       {/* Lag warning */}
       {lag != null && lag > 10 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
-          <p className="text-sm text-amber-400 font-medium">
+          <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
             Apply lag: {lag} entries behind committed log
           </p>
           <p className="mt-1 text-xs text-amber-700">
@@ -187,7 +187,7 @@ function StatCard({
       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
       <p
         className={`mt-1.5 font-mono text-xl font-semibold ${
-          highlight ? "text-emerald-400" : warn ? "text-amber-400" : "text-foreground"
+          highlight ? "text-emerald-600 dark:text-emerald-400" : warn ? "text-amber-600 dark:text-amber-400" : "text-foreground"
         }`}
       >
         {value}

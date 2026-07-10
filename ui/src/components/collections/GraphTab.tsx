@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useGraph, useNodeEdges, GraphNode, GraphEdge } from "@/lib/hooks/useGraph";
 
 // -- Types ---------------------------------------------------------------------
@@ -77,10 +77,10 @@ function DocRow({
           ▶
         </span>
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden className="flex-shrink-0">
-          <rect x="1" y="2" width="12" height="10" rx="2" fill="#1e40af" stroke="#3b82f6" strokeWidth="0.75" />
-          <line x1="3.5" y1="5" x2="10.5" y2="5" stroke="#93c5fd" strokeWidth="0.75" />
-          <line x1="3.5" y1="7" x2="10.5" y2="7" stroke="#93c5fd" strokeWidth="0.75" />
-          <line x1="3.5" y1="9" x2="8" y2="9" stroke="#93c5fd" strokeWidth="0.75" />
+          <rect x="1" y="2" width="12" height="10" rx="2" fill="var(--v-accent-muted)" stroke="var(--v-accent)" strokeWidth="0.75" />
+          <line x1="3.5" y1="5" x2="10.5" y2="5" stroke="var(--v-accent)" strokeWidth="0.75" />
+          <line x1="3.5" y1="7" x2="10.5" y2="7" stroke="var(--v-accent)" strokeWidth="0.75" />
+          <line x1="3.5" y1="9" x2="8" y2="9" stroke="var(--v-accent)" strokeWidth="0.75" />
         </svg>
         <span className="flex-1 truncate">
           {docNode.record_id != null ? `Document · rec ${docNode.record_id}` : `Document · node ${docNode.node_id}`}
@@ -122,7 +122,7 @@ function NodeDetail({ node, edges }: { node: GraphNode; edges: GraphEdge[] }) {
     <div className="rounded-xl border border-border bg-card divide-y divide-border text-sm">
       <div className="flex items-center justify-between px-4 py-3">
         <span className="text-muted-foreground">Type</span>
-        <span className={`font-medium ${node.kind === 0 ? "text-blue-400" : "text-violet-400"}`}>
+        <span className={node.kind === 0 ? "font-medium text-sky-500" : "font-medium text-violet-500"}>
           {kindLabel}
         </span>
       </div>
@@ -273,7 +273,7 @@ function GraphCanvas({
       >
         <defs>
           <marker id="cg-arr" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-            <path d="M0,0 L0,7 L7,3.5 z" fill="#52525b" />
+            <path d="M0,0 L0,7 L7,3.5 z" fill="var(--muted-foreground)" />
           </marker>
         </defs>
         <g transform={`translate(${pan.x},${pan.y}) scale(${scale})`}>
@@ -288,7 +288,7 @@ function GraphCanvas({
                 key={`${e.from}-${e.to}`}
                 d={`M${from.x + 22},${from.y} C${mx},${from.y} ${mx},${to.y} ${to.x - 14},${to.y}`}
                 fill="none"
-                stroke="#3f3f46"
+                stroke="var(--border)"
                 strokeWidth="1.5"
                 markerEnd="url(#cg-arr)"
               />
@@ -306,14 +306,14 @@ function GraphCanvas({
                     width="44"
                     height="28"
                     rx="5"
-                    fill={isSelected ? "#1e3a8a" : "#1e293b"}
-                    stroke={isSelected ? "#3b82f6" : "#334155"}
+                    fill={isSelected ? "var(--v-accent-muted)" : "var(--card)"}
+                    stroke={isSelected ? "var(--v-accent)" : "var(--border)"}
                     strokeWidth="1.5"
                   />
-                  <text x={n.x} y={n.y - 2} textAnchor="middle" fontSize="8" fill="#93c5fd" fontFamily="monospace">
+                  <text x={n.x} y={n.y - 2} textAnchor="middle" fontSize="8" fill="var(--foreground)" fontFamily="monospace">
                     doc
                   </text>
-                  <text x={n.x} y={n.y + 8} textAnchor="middle" fontSize="7" fill="#60a5fa" fontFamily="monospace">
+                  <text x={n.x} y={n.y + 8} textAnchor="middle" fontSize="7" fill="var(--muted-foreground)" fontFamily="monospace">
                     #{n.id}
                   </text>
                 </g>
@@ -325,14 +325,14 @@ function GraphCanvas({
                   cx={n.x}
                   cy={n.y}
                   r="14"
-                  fill={isSelected ? "#3b1f6e" : "#1e1b4b"}
-                  stroke={isSelected ? "#a78bfa" : "#4338ca"}
+                  fill={isSelected ? "var(--v-accent-muted)" : "var(--card)"}
+                  stroke={isSelected ? "var(--v-accent)" : "var(--border)"}
                   strokeWidth="1.5"
                 />
-                <text x={n.x} y={n.y - 2} textAnchor="middle" fontSize="7" fill="#c4b5fd" fontFamily="monospace">
+                <text x={n.x} y={n.y - 2} textAnchor="middle" fontSize="7" fill="var(--foreground)" fontFamily="monospace">
                   chunk
                 </text>
-                <text x={n.x} y={n.y + 7} textAnchor="middle" fontSize="7" fill="#a78bfa" fontFamily="monospace">
+                <text x={n.x} y={n.y + 7} textAnchor="middle" fontSize="7" fill="var(--muted-foreground)" fontFamily="monospace">
                   #{n.record_id ?? n.id}
                 </text>
               </g>
@@ -353,11 +353,11 @@ function GraphCanvas({
       </div>
       <div className="absolute top-3 left-3 flex items-center gap-3 text-[10px] text-muted-foreground">
         <span className="flex items-center gap-1">
-          <svg width="10" height="10"><rect x="1" y="2" width="8" height="6" rx="1.5" fill="#1e293b" stroke="#334155" strokeWidth="1"/></svg>
+          <svg width="10" height="10"><rect x="1" y="2" width="8" height="6" rx="1.5" fill="var(--card)" stroke="var(--border)" strokeWidth="1"/></svg>
           Document
         </span>
         <span className="flex items-center gap-1">
-          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="#1e1b4b" stroke="#4338ca" strokeWidth="1"/></svg>
+          <svg width="10" height="10"><circle cx="5" cy="5" r="4" fill="var(--v-accent-muted)" stroke="var(--v-accent)" strokeWidth="1"/></svg>
           Chunk
         </span>
       </div>
@@ -381,22 +381,33 @@ export function GraphTab({ namespace }: { namespace: string }) {
   // For canvas we eagerly load all doc-node edges
   const [edgesMap, setEdgesMap] = useState<Record<number, GraphEdge[]>>({});
 
+  // Stable reference so the effect dep doesn't refire on every SWR revalidation
+  const docNodeIds = useMemo(() => docNodes.map((d) => d.node_id), [docNodes]);
+
   useEffect(() => {
     if (view !== "canvas") return;
     let cancelled = false;
     async function loadEdges() {
       const result: Record<number, GraphEdge[]> = {};
-      for (const d of docNodes) {
-        const r = await fetch(`/api/graph/edges/${d.node_id}`);
-        if (cancelled) return;
-        const data = await r.json().catch(() => ({ edges: [] }));
-        result[d.node_id] = data.edges ?? [];
-      }
+      const queue = [...docNodes];
+      const CONCURRENCY = 10;
+      const workers = Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
+        let d: typeof queue[number] | undefined;
+        while ((d = queue.shift())) {
+          if (cancelled) return;
+          const r = await fetch(`/api/graph/edges/${d.node_id}`);
+          if (cancelled) return;
+          const data = await r.json().catch(() => ({ edges: [] }));
+          result[d.node_id] = data.edges ?? [];
+        }
+      });
+      await Promise.all(workers);
       if (!cancelled) setEdgesMap(result);
     }
     loadEdges();
     return () => { cancelled = true; };
-  }, [view, docNodes.map((d) => d.node_id).join(",")]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, docNodeIds]);
 
   const { edges: selectedEdges } = useNodeEdges(selectedNode?.node_id ?? null);
 
@@ -430,9 +441,9 @@ export function GraphTab({ namespace }: { namespace: string }) {
           <span className="text-sm text-muted-foreground">
             <span className="text-foreground font-medium">{nodes.length}</span> nodes
             <span className="mx-1.5 text-muted-foreground">·</span>
-            <span className="text-blue-400">{docNodes.length}</span> docs
+            <span className="text-sky-500">{docNodes.length}</span> docs
             <span className="mx-1.5 text-muted-foreground">·</span>
-            <span className="text-violet-400">{chunkNodes.length}</span> chunks
+            <span className="text-violet-500">{chunkNodes.length}</span> chunks
           </span>
         </div>
         <div className="flex rounded-lg border border-border overflow-hidden text-[12px]">

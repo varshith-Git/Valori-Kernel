@@ -14,24 +14,12 @@ name = "valori"
 path = "src/main.rs"
 
 [[bin]]
-name = "bench_ingest"
-path = "src/bin/bench_ingest.rs"
-
-[[bin]]
 name = "bench_1m"
 path = "src/bin/bench_1m.rs"
 
 [[bin]]
-name = "bench_filter"
-path = "src/bin/bench_filter.rs"
-
-[[bin]]
 name = "bench_persistence"
 path = "src/bin/bench_persistence.rs"
-
-[[bin]]
-name = "bench_recall"
-path = "src/bin/bench_recall.rs"
 
 [dependencies]
 clap        = { version = "4.5",   features = ["derive"] }

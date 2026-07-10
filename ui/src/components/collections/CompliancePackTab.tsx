@@ -177,7 +177,7 @@ function printPack(pack: CompliancePack) {
       ).join("")
     : '<tr><td colspan="4" style="color:#888">No proof-carrying answers recorded</td></tr>';
 
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+  w.document.write(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
 <title>Valori Compliance Pack — ${pack.namespace}</title>
 <style>
   @page{margin:16mm;size:A4}*{box-sizing:border-box;margin:0;padding:0}

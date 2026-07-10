@@ -123,16 +123,16 @@ function MetricsTab({ project }: { project: string }) {
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Status</p>
             <div className="mt-2 flex items-center gap-2">
               <span
-                className={`h-2 w-2 rounded-full ${online ? "bg-emerald-400" : "bg-red-400 animate-pulse"}`}
+                className={`h-2 w-2 rounded-full ${online ? "bg-emerald-500 dark:bg-emerald-400" : "bg-red-500 dark:bg-red-400 animate-pulse"}`}
               />
-              <span className={`text-sm font-medium ${online ? "text-emerald-400" : "text-red-400"}`}>
+              <span className={`text-sm font-medium ${online ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
                 {online ? "Online" : "Unreachable"}
               </span>
             </div>
           </div>
           <div className="rounded-xl border border-border bg-card p-4">
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground">State Hash</p>
-            <code className="mt-2 block text-xs font-mono text-muted-foreground truncate">
+            <code className="mt-2 block text-xs font-mono text-muted-foreground truncate" title={hash ?? undefined}>
               {hash ? `${hash.slice(0, 32)}…` : "—"}
             </code>
           </div>
@@ -271,9 +271,9 @@ function SettingRow({
         <span
           className={`text-sm truncate max-w-[200px] ${mono ? "font-mono" : ""} ${
             highlight === "green"
-              ? "text-emerald-400"
+              ? "text-emerald-600 dark:text-emerald-400"
               : highlight === "red"
-              ? "text-red-400"
+              ? "text-red-600 dark:text-red-400"
               : "text-muted-foreground"
           }`}
         >
@@ -306,7 +306,7 @@ function MetricCard({
   return (
     <div className="rounded-xl border border-border bg-card px-4 py-4">
       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
-      <p className={`mt-1.5 font-mono text-xl font-semibold ${warn ? "text-amber-400" : "text-foreground"}`}>
+      <p className={`mt-1.5 font-mono text-xl font-semibold ${warn ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}>
         {value}
       </p>
       {sub && (

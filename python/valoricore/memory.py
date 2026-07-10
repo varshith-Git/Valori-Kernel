@@ -36,9 +36,9 @@ class MemoryClient:
             remote:       HTTP URL of a standalone ``valori-node``.
             index_kind:   ``"bruteforce"`` | ``"hnsw"``
             quantization: Reserved for future quantization options.
-            max_records:  Vector pool capacity. **Always set this explicitly.**
-                          The default (1024) is only suitable for unit tests.
-                          Example: ``max_records=1_100_000`` for a 1M-vector store.
+            max_records:  Vector pool capacity. Default 0 inherits the kernel default
+                          (1 000 000). Override only when you need a different limit.
+                          Example: ``max_records=500_000``.
             dim:          Vector dimension. Must match your embedding model output.
                           Example: ``dim=384`` for ``all-MiniLM-L6-v2``.
             max_nodes:    Knowledge Graph node capacity.

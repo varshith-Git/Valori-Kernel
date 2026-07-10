@@ -1,6 +1,9 @@
 # RFC-0000: Canonical Glossary
 
 **Status:** Frozen  
+**Owner:** Core team (all crates)  
+**Stability:** Stable — terms are frozen; additions require a PR touching all affected docs  
+**Last reviewed:** 2026-07-08  
 **Branch:** Node-scaleup  
 
 Every Valori crate and document uses exactly the terms defined here.

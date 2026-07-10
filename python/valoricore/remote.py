@@ -1044,6 +1044,59 @@ class SyncRemoteClient(ValoriClient):
         """Return immediate neighbor node IDs for a given node."""
         return [e["to_node"] for e in self.get_edges(node_id, collection=collection)]
 
+    def delete_node(self, node_id: int, collection: str = "default") -> None:
+        """Delete a graph node and cascade-remove all its incident edges.
+
+        Raises on unknown node_id or collection.
+        """
+        params = {} if collection == "default" else {"collection": collection}
+        url = self.base_url + f"/v1/graph/node/{node_id}"
+        resp = self.session.delete(url, params=params)
+        _raise_for_status(resp, f"/v1/graph/node/{node_id}")
+
+    def ingest_status(self, job_id: str) -> dict:
+        """Poll the status of an async ingest job.
+
+        Call after :meth:`ingest_async` which returns a ``job_id``.
+
+        Returns a dict with ``status`` (``"pending"`` / ``"running"`` /
+        ``"done"`` / ``"error"``) and, when done, the full ingest result
+        fields (``document_node_id``, ``chunk_count``, ``record_ids``, …).
+        """
+        url = self.base_url + f"/v1/ingest/status/{job_id}"
+        resp = self.session.get(url)
+        _raise_for_status(resp, f"/v1/ingest/status/{job_id}")
+        return resp.json()
+
+    def ingest_async(
+        self,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> str:
+        """Start a background ingest job and return the job_id immediately.
+
+        The server chunks, embeds, and inserts without blocking the HTTP
+        response.  Poll :meth:`ingest_status` until ``status == "done"``.
+
+        Requires ``VALORI_EMBED_PROVIDER`` on the node.
+        """
+        data: dict = {
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "async": True,
+        }
+        if source is not None:
+            data["source"] = source
+        result = self._post("/v1/ingest", data)
+        return result["job_id"]
+
     # ── Collection (namespace) management ─────────────────────────────────────
 
     def create_collection(self, name: str) -> Dict[str, Any]:
@@ -2188,6 +2241,43 @@ class AsyncRemoteClient:
     async def neighbors(self, node_id: int, collection: str = "default") -> List[int]:
         edges = await self.get_edges(node_id, collection=collection)
         return [e["to_node"] for e in edges]
+
+    async def delete_node(self, node_id: int, collection: str = "default") -> None:
+        """Async version of :meth:`SyncRemoteClient.delete_node`."""
+        url = self.base_url + f"/v1/graph/node/{node_id}"
+        params = {} if collection == "default" else {"collection": collection}
+        resp = await self.client.delete(url, params=params)
+        _raise_for_status(resp, f"/v1/graph/node/{node_id}")
+
+    async def ingest_status(self, job_id: str) -> dict:
+        """Async version of :meth:`SyncRemoteClient.ingest_status`."""
+        url = self.base_url + f"/v1/ingest/status/{job_id}"
+        resp = await self.client.get(url)
+        _raise_for_status(resp, f"/v1/ingest/status/{job_id}")
+        return resp.json()
+
+    async def ingest_async(
+        self,
+        text: str,
+        source: Optional[str] = None,
+        strategy: str = "auto",
+        collection: str = "default",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ) -> str:
+        """Async version of :meth:`SyncRemoteClient.ingest_async`."""
+        data: dict = {
+            "text": text,
+            "strategy": strategy,
+            "collection": collection,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "async": True,
+        }
+        if source is not None:
+            data["source"] = source
+        result = await self._post("/v1/ingest", data)
+        return result["job_id"]
 
     # ── Phase 3.6: Crypto-shredding ──────────────────────────────────────────
 

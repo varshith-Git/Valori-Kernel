@@ -98,7 +98,7 @@ fn evaluate_bq_value_add() {
     println!("\n📦 MEMORY FOOTPRINT & BUILD TIME:");
     println!("  • Full Q16.16 Vectors Size : {:>8} bytes ({:.2} KB)", raw_vec_bytes, raw_vec_bytes as f64 / 1024.0);
     println!("  • BQ Bitstring Index Size  : {:>8} bytes ({:.2} KB)", bq_index_bytes, bq_index_bytes as f64 / 1024.0);
-    println!("  • Memory Reduction         : {:.1}x smaller ({:.1}% saved!)", 
+    println!("  • Memory Reduction         : {:.1}x smaller ({:.1}% saved!)",
         raw_vec_bytes as f64 / bq_index_bytes as f64,
         (1.0 - (bq_index_bytes as f64 / raw_vec_bytes as f64)) * 100.0
     );

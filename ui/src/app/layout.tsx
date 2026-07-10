@@ -1,20 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { ThemeProvider } from "@/lib/theme";
 import { Toaster } from "@/components/ui/Toaster";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "Valori Audit Dashboard",
@@ -29,7 +18,7 @@ export default function RootLayout({
       lang="en"
       /* Start in dark — the inline script below immediately corrects to the
          stored preference before first paint, preventing flash of wrong theme. */
-      className={`${geistSans.variable} ${geistMono.variable} h-full dark antialiased`}
+      className="h-full dark antialiased"
       suppressHydrationWarning
     >
       <head>

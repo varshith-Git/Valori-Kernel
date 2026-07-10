@@ -237,6 +237,8 @@ pub fn build_router_with_keys(
     let v1 = Router::new()
         .route("/v1/version",                   axum::routing::get(version_handler))
         .route("/v1/records",                   post(insert_record))
+        .route("/v1/records/:id",               axum::routing::get(get_record_by_id))
+        .route("/v1/records/:id/metadata",      axum::routing::patch(update_record_metadata))
         .route("/v1/search",                    post(search))
         .route("/v1/graph/node",                post(create_node))
         .route("/v1/graph/node/:id",            axum::routing::get(get_node).delete(delete_node))
@@ -440,17 +442,69 @@ async fn soft_delete_record(
     crate::routes::records::delete_record(&state, &receipts, payload, true).await
 }
 
+async fn get_record_by_id(
+    State(state): State<SharedEngine>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let engine = state.read().await;
+    let ns = engine.resolve_collection(q.collection.as_deref()).map_err(|e| e.into_response())?;
+    let rec_id = valori_kernel::types::id::RecordId(id);
+    let rec = engine.state.get_record(rec_id)
+        .filter(|r| r.namespace_id == ns)
+        .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response())?;
+    let vector: Vec<f32> = rec.vector.data.iter()
+        .map(|s| valori_kernel::fxp::ops::to_f32(*s))
+        .collect();
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "vector": vector,
+        "metadata": rec.metadata.as_ref()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()),
+        "tag": rec.tag,
+    })))
+}
+
+async fn update_record_metadata(
+    State(state): State<SharedEngine>,
+    axum::extract::Path(id): axum::extract::Path<u32>,
+    Query(q): Query<crate::routes::graph::CollectionQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, Response> {
+    let mut engine = state.write().await;
+    let ns = engine.resolve_collection(q.collection.as_deref()).map_err(|e| e.into_response())?;
+    let rec_id = valori_kernel::types::id::RecordId(id);
+    if engine.state.get_record(rec_id).filter(|r| r.namespace_id == ns).is_none() {
+        return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response());
+    }
+    let metadata_bytes = serde_json::to_vec(&body).ok();
+    engine.update_record_metadata(id, metadata_bytes, ns).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response()
+    })?;
+    Ok(Json(serde_json::json!({ "ok": true, "id": id })))
+}
+
 async fn snapshot_save(
     State(state): State<SharedEngine>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    let engine = state.read().await;
-    // If the request supplies a path, validate it against the configured snapshot dir.
-    let path = req.path.as_deref().map(|raw| {
-        let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
-        safe_path(raw, allowed)
-    }).transpose()?.map(std::path::PathBuf::from);
-    let used_path = engine.save_snapshot(path.as_deref())?;
+    // Validate the requested path quickly under the async lock, then release.
+    let path: Option<std::path::PathBuf> = {
+        let engine = state.read().await;
+        req.path.as_deref().map(|raw| {
+            let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
+            safe_path(raw, allowed)
+        }).transpose()?.map(std::path::PathBuf::from)
+    };
+
+    // Encode + write on the blocking thread pool — keeps tokio workers free.
+    let used_path = tokio::task::spawn_blocking(move || {
+        state.blocking_read().save_snapshot(path.as_deref())
+    })
+    .await
+    .map_err(|e| EngineError::InvalidInput(format!("snapshot task panicked: {e}")))?
+    ?;
+
     // Return only the filename, not the full filesystem path (L-1).
     let filename = used_path
         .file_name()
@@ -767,7 +821,11 @@ async fn insert_record(
         .map_err(|e| match e {
             valori_effect::error::EffectError::Capacity(_) =>
                 EngineError::Kernel(valori_kernel::error::KernelError::CapacityExceeded),
-            _ => EngineError::Internal,
+            valori_effect::error::EffectError::Dispatch(msg)
+            | valori_effect::error::EffectError::TaskFailed(msg) => {
+                EngineError::InvalidInput(msg)
+            }
+            other => EngineError::Unknown(other.to_string()),
         })?;
 
     let record_id = outputs.into_iter().next()
@@ -1581,6 +1639,7 @@ async fn get_timeline(
             KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
             KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
             KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
+            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
         };
 
         entries.push(TimelineEntry {
@@ -1635,6 +1694,7 @@ async fn get_operations(
             KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
             KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
             KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
+            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
         };
 
         let details = serde_json::json!({
@@ -1703,6 +1763,7 @@ async fn get_operation_by_id(
         KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
         KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
         KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
+        KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
     };
 
     let op_id = format!("op-{}", log_index);
@@ -1976,21 +2037,26 @@ async fn list_remote_snapshots(
 async fn upload_snapshot_to_store(
     State(state): State<SharedEngine>,
 ) -> Result<Json<StorageSnapshotUploadResponse>, EngineError> {
-    // Capture snapshot data and object store handle while holding the lock,
-    // then release before any async I/O so we don't hold the mutex across awaits.
-    let (snap_bytes, state_hash, object_store, keep) = {
-        let engine = state.read().await;
-        let snap = engine.snapshot()?;
-        let proof = engine.get_proof();
-        let hash = proof
-            .final_state_hash
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let os = engine.object_store.clone();
-        let keep = engine.object_store_keep as usize;
-        (snap, hash, os, keep)
-    };
+    // Encode snapshot on the blocking thread pool (CPU-heavy), cloning out the
+    // object-store handle and state hash before releasing the lock.
+    let (snap_bytes, state_hash, object_store, keep) = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            let engine = state.blocking_read();
+            let snap = engine.snapshot()?;
+            let proof = engine.get_proof();
+            let hash = proof
+                .final_state_hash
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            let os = engine.object_store.clone();
+            let keep = engine.object_store_keep as usize;
+            Ok::<_, EngineError>((snap, hash, os, keep))
+        }
+    })
+    .await
+    .map_err(|e| EngineError::InvalidInput(format!("snapshot encode panicked: {e}")))??;
 
     let os = object_store.ok_or_else(|| {
         EngineError::InvalidInput(

@@ -389,8 +389,8 @@ export default function SnapshotsPage() {
                       {localFiles.map((f) => (
                         <div key={f.path} className="flex items-center gap-3 px-3 py-2.5">
                           <div className="flex-1 min-w-0">
-                            <p className="font-mono text-[11px] text-accent-foreground truncate">{f.name}</p>
-                            <p className="font-mono text-[10px] text-muted-foreground/50 truncate">{f.path}</p>
+                            <p className="font-mono text-[11px] text-accent-foreground truncate" title={f.name}>{f.name}</p>
+                            <p className="font-mono text-[10px] text-muted-foreground/50 truncate" title={f.path}>{f.path}</p>
                           </div>
                           <CopyBtn text={f.path} />
                           <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">

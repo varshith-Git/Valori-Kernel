@@ -167,22 +167,22 @@ impl Default for NodeConfig {
     fn default() -> Self {
         let max_records = std::env::var("VALORI_MAX_RECORDS")
             .ok().and_then(|v| v.parse().ok())
-            .unwrap_or(1024);
-        
+            .unwrap_or(1_000_000);
+
         let dim = std::env::var("VALORI_DIM")
             .ok().and_then(|v| v.parse().ok())
-            .unwrap_or(16);
-            
+            .unwrap_or(128);
+
         let max_nodes = std::env::var("VALORI_MAX_NODES")
             .ok().and_then(|v| v.parse().ok())
-            .unwrap_or(1024);
+            .unwrap_or(100_000);
 
         let max_edges = std::env::var("VALORI_MAX_EDGES")
             .ok().and_then(|v| v.parse().ok())
-            .unwrap_or(2048);
+            .unwrap_or(500_000);
 
         let bind_addr = std::env::var("VALORI_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:3000".to_string())
+            .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
             .parse()
             .expect("Invalid Bind Address");
 

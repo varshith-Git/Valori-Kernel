@@ -5,11 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CodePanel } from "@/components/codegen/CodePanel";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
+import { markSearched } from "@/lib/onboarding";
 
 export type SearchMode =
   | "semantic"
   | "text"
   | "id"
+  | "similar"
   | "hybrid"
   | "regex"
   | "metadata";
@@ -19,13 +21,11 @@ interface SearchResult {
   score: number;
 }
 
-// `score` is Valori's raw L2² distance — SMALLER is a BETTER match. Convert
-// to a 0-100 "closeness" so the relevance bar's length matches the visual
-// convention (longer bar = better match) instead of the raw number's inverse
-// semantics (a bug: rendering `score` directly made worse matches draw longer
-// bars). Same formula as CodePanel's `cosineFromScore`.
+// `score` is Valori's raw L2² distance (f32) — SMALLER is a BETTER match.
+// For unit-normalised vectors: cosine = 1 - L2²/2  (L2² ∈ [0,4] for unit vecs).
+// Convert to 0-100 "closeness" so longer bar = better match.
 function closenessPct(score: number): number {
-  return Math.max(0, Math.min(100, (1 - score * 32768) * 100));
+  return Math.max(0, Math.min(100, (1 - score / 2) * 100));
 }
 
 /** Extract a readable message from a failed /api/search response — the
@@ -46,6 +46,7 @@ const MODES: { key: SearchMode; label: string; icon: string }[] = [
   { key: "semantic", label: "Semantic", icon: "∿" },
   { key: "text", label: "Text", icon: "T" },
   { key: "id", label: "#id", icon: "#" },
+  { key: "similar", label: "Similar to ID", icon: "≈" },
   { key: "hybrid", label: "Hybrid", icon: "⊕" },
   { key: "regex", label: "Regex", icon: "/" },
   { key: "metadata", label: "Metadata", icon: "⌗" },
@@ -60,6 +61,10 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [findSimilarId, setFindSimilarId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editBuf, setEditBuf] = useState("");
+  const [savingId, setSavingId] = useState<number | null>(null);
 
   // SDK code generator state
   const [queryVec, setQueryVec] = useState<number[] | null>(null);
@@ -77,7 +82,14 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
   const [metaQuery, setMetaQuery] = useState("");
   const [hybridWeight, setHybridWeight] = useState(0.7);
 
+  const runAbortRef = useRef<AbortController | null>(null);
+
   const run = async () => {
+    runAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    runAbortRef.current = ctrl;
+    const { signal } = ctrl;
+
     setError(null);
     setBusy(true);
     try {
@@ -98,6 +110,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
               apiKey: embedCfg.apiKey,
               endpoint: embedCfg.endpoint,
             }),
+            signal,
           });
           if (!embedRes.ok) {
             const err = await embedRes.json().catch(() => ({})) as { error?: string };
@@ -152,6 +165,29 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         );
         setResults(filtered);
         setStateHash(data.state_hash ?? null);
+      } else if (mode === "similar") {
+        const idNum = parseInt(idQuery, 10);
+        if (isNaN(idNum)) throw new Error("Enter a valid integer ID");
+        setBusyLabel("Fetching record…");
+        const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
+        const recRes = await fetch(`/api/records/${idNum}${qs}`);
+        if (!recRes.ok) {
+          const body = await recRes.json().catch(() => ({})) as { error?: string };
+          throw new Error(body.error ?? `Record not found (${recRes.status})`);
+        }
+        const rec = await recRes.json() as { vector: number[] };
+        setBusyLabel("Searching…");
+        const res = await fetch("/api/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: rec.vector, k, collection: namespace }),
+        });
+        if (!res.ok) throw new Error(await searchErrorMessage(res));
+        const data = await res.json();
+        setResults(data.results ?? []);
+        setStateHash(data.state_hash ?? null);
+        setQueryVec(rec.vector);
+        setQueryText(undefined);
       } else if (mode === "regex") {
         // Search all, then apply regex on ID string
         let re: RegExp;
@@ -175,10 +211,77 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         setResults(filtered);
         setStateHash(data.state_hash ?? null);
       }
+      markSearched();
     } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Search failed");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const findSimilar = async (id: number) => {
+    setFindSimilarId(id);
+    setError(null);
+    try {
+      const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
+      const recRes = await fetch(`/api/records/${id}${qs}`);
+      if (!recRes.ok) {
+        const body = await recRes.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `Record not found (${recRes.status})`);
+      }
+      const rec = await recRes.json() as { vector: number[] };
+      const searchRes = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: rec.vector, k, collection: namespace }),
+      });
+      if (!searchRes.ok) throw new Error(await searchErrorMessage(searchRes));
+      const data = await searchRes.json();
+      setResults(data.results ?? []);
+      setStateHash(data.state_hash ?? null);
+      setQueryVec(rec.vector);
+      setQueryText(undefined);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Find similar failed");
+    } finally {
+      setFindSimilarId(null);
+    }
+  };
+
+  const startEdit = async (id: number) => {
+    // Fetch current metadata to pre-fill the editor
+    const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
+    const res = await fetch(`/api/records/${id}${qs}`).catch(() => null);
+    const rec = res?.ok ? await res.json().catch(() => null) as { metadata?: unknown } | null : null;
+    const current = rec?.metadata != null ? JSON.stringify(rec.metadata, null, 2) : "{}";
+    setEditBuf(current);
+    setEditingId(id);
+  };
+
+  const saveMetadata = async (id: number) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(editBuf); } catch {
+      setError("Invalid JSON — fix the payload before saving");
+      return;
+    }
+    setSavingId(id);
+    try {
+      const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
+      const res = await fetch(`/api/records/${id}/metadata${qs}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `Save failed (${res.status})`);
+      }
+      setEditingId(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSavingId(null);
     }
   };
 
@@ -235,12 +338,13 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
           />
         )}
         {mode === "text" && <TextStub />}
-        {mode === "id" && (
+        {(mode === "id" || mode === "similar") && (
           <IdInput
             idQuery={idQuery}
             setIdQuery={setIdQuery}
             onRun={run}
             busy={busy}
+            placeholder={mode === "similar" ? "Record ID to find similar to…" : "Record ID…"}
           />
         )}
         {mode === "hybrid" && (
@@ -284,6 +388,16 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
           onDelete={onDelete ? handleDelete : undefined}
           deletingId={deletingId}
           onCode={queryVec ? (r) => setCodeResult(r) : undefined}
+          busy={busy}
+          findSimilarId={findSimilarId}
+          editingId={editingId}
+          editBuf={editBuf}
+          savingId={savingId}
+          onFindSimilar={findSimilar}
+          onStartEdit={startEdit}
+          onCancelEdit={() => setEditingId(null)}
+          onEditBufChange={setEditBuf}
+          onSave={saveMetadata}
         />
       )}
 
@@ -448,10 +562,10 @@ function HybridInput({
 }
 
 function IdInput({
-  idQuery, setIdQuery, onRun, busy,
+  idQuery, setIdQuery, onRun, busy, placeholder = "42",
 }: {
   idQuery: string; setIdQuery: (v: string) => void;
-  onRun: () => void; busy: boolean;
+  onRun: () => void; busy: boolean; placeholder?: string;
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -460,7 +574,7 @@ function IdInput({
         <Input
           type="number"
           min={0}
-          placeholder="42"
+          placeholder={placeholder}
           value={idQuery}
           onChange={(e) => setIdQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && onRun()}
@@ -591,18 +705,52 @@ function MetadataStub() {
   );
 }
 
+function exportCsv(results: SearchResult[]) {
+  const rows = ["id,score,closeness_pct"];
+  for (const r of results) {
+    rows.push(`${r.id},${r.score},${closenessPct(r.score).toFixed(2)}`);
+  }
+  const blob = new Blob([rows.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `valori-search-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function ResultsTable({
   results,
   stateHash,
   onDelete,
   deletingId,
   onCode,
+  busy,
+  findSimilarId,
+  editingId,
+  editBuf,
+  savingId,
+  onFindSimilar,
+  onStartEdit,
+  onCancelEdit,
+  onEditBufChange,
+  onSave,
 }: {
   results: SearchResult[];
   stateHash: string | null;
   onDelete?: (id: number) => Promise<void>;
   deletingId: number | null;
   onCode?: (r: SearchResult) => void;
+  busy: boolean;
+  findSimilarId: number | null;
+  editingId: number | null;
+  editBuf: string;
+  savingId: number | null;
+  onFindSimilar: (id: number) => void;
+  onStartEdit: (id: number) => void;
+  onCancelEdit: () => void;
+  onEditBufChange: (v: string) => void;
+  onSave: (id: number) => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -610,11 +758,21 @@ function ResultsTable({
         <p className="text-sm text-muted-foreground">
           {results.length} result{results.length !== 1 ? "s" : ""}
         </p>
-        {stateHash && (
-          <code className="text-[10px] font-mono text-muted-foreground truncate max-w-[260px]">
-            hash: {stateHash.slice(0, 24)}…
-          </code>
-        )}
+        <div className="flex items-center gap-3">
+          {results.length > 0 && (
+            <button
+              onClick={() => exportCsv(results)}
+              className="text-[11px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-emerald-600 hover:text-emerald-400 hover:bg-emerald-950/30 transition-all"
+            >
+              ↓ export csv
+            </button>
+          )}
+          {stateHash && (
+            <code className="text-[10px] font-mono text-muted-foreground truncate max-w-[260px]">
+              hash: {stateHash.slice(0, 24)}…
+            </code>
+          )}
+        </div>
       </div>
 
       {results.length === 0 ? (
@@ -633,52 +791,144 @@ function ResultsTable({
             </thead>
             <tbody>
               {results.map((r, i) => (
-                <tr
+                <ResultRowGroup
                   key={r.id}
-                  className={`border-b border-border/50 last:border-0 ${
-                    i % 2 === 0 ? "bg-card" : "bg-card/50"
-                  }`}
-                >
-                  <td className="px-4 py-2.5 font-mono text-accent-foreground">#{r.id}</td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="h-1.5 rounded-full bg-emerald-500/60"
-                        style={{ width: `${Math.max(4, closenessPct(r.score) * 0.8)}px` }}
-                      />
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {r.score.toFixed(4)}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    <div className="flex items-center justify-end gap-3">
-                      {onCode && (
-                        <button
-                          onClick={() => onCode(r)}
-                          title="Get Python / TypeScript / curl code for this query"
-                          className="text-[11px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-sky-600 hover:text-sky-300 hover:bg-sky-950/40 transition-all whitespace-nowrap"
-                        >
-                          {"</>"} get code
-                        </button>
-                      )}
-                      {onDelete && (
-                        <button
-                          onClick={() => onDelete(r.id)}
-                          disabled={deletingId === r.id}
-                          className="text-xs text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-40"
-                        >
-                          {deletingId === r.id ? "…" : "delete"}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
+                  r={r}
+                  i={i}
+                  busy={busy}
+                  findSimilarId={findSimilarId}
+                  editingId={editingId}
+                  editBuf={editBuf}
+                  savingId={savingId}
+                  deletingId={deletingId}
+                  onFindSimilar={onFindSimilar}
+                  onStartEdit={onStartEdit}
+                  onCancelEdit={onCancelEdit}
+                  onEditBufChange={onEditBufChange}
+                  onSave={onSave}
+                  onCode={onCode}
+                  onDelete={onDelete}
+                />
               ))}
             </tbody>
           </table>
         </div>
       )}
     </div>
+  );
+}
+
+interface ResultRowGroupProps {
+  r: SearchResult;
+  i: number;
+  busy: boolean;
+  findSimilarId: number | null;
+  editingId: number | null;
+  editBuf: string;
+  savingId: number | null;
+  deletingId: number | null;
+  onFindSimilar: (id: number) => void;
+  onStartEdit: (id: number) => void;
+  onCancelEdit: () => void;
+  onEditBufChange: (v: string) => void;
+  onSave: (id: number) => void;
+  onCode?: (r: SearchResult) => void;
+  onDelete?: (id: number) => Promise<void>;
+}
+
+function ResultRowGroup({
+  r, i, busy, findSimilarId, editingId, editBuf, savingId, deletingId,
+  onFindSimilar, onStartEdit, onCancelEdit, onEditBufChange, onSave, onCode, onDelete,
+}: ResultRowGroupProps) {
+  const isEditing = editingId === r.id;
+  return (
+    <>
+      <tr className={`border-b border-border/50 ${isEditing ? "" : "last:border-0"} ${i % 2 === 0 ? "bg-card" : "bg-card/50"}`}>
+        <td className="px-4 py-2.5 font-mono text-accent-foreground">#{r.id}</td>
+        <td className="px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <div
+              className="h-1.5 rounded-full bg-emerald-500/60"
+              style={{ width: `${Math.max(4, closenessPct(r.score) * 0.8)}px` }}
+            />
+            <span className="font-mono text-xs text-muted-foreground">
+              {r.score.toFixed(4)}
+            </span>
+          </div>
+        </td>
+        <td className="px-4 py-2.5 text-right">
+          <div className="flex items-center justify-end gap-3">
+            <button
+              onClick={() => onFindSimilar(r.id)}
+              disabled={findSimilarId === r.id || busy}
+              title="Search for records similar to this one"
+              className="text-[11px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-violet-500 hover:text-violet-400 hover:bg-violet-950/30 transition-all whitespace-nowrap disabled:opacity-40"
+            >
+              {findSimilarId === r.id ? "…" : "∿ similar"}
+            </button>
+            {onCode && (
+              <button
+                onClick={() => onCode(r)}
+                title="Get Python / TypeScript / curl code for this query"
+                className="text-[11px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-sky-600 hover:text-sky-300 hover:bg-sky-950/40 transition-all whitespace-nowrap"
+              >
+                {"</>"} get code
+              </button>
+            )}
+            <button
+              onClick={() => isEditing ? onCancelEdit() : onStartEdit(r.id)}
+              title="Edit payload (metadata) for this record"
+              className={`text-[11px] font-mono px-2 py-0.5 rounded border transition-all whitespace-nowrap ${
+                isEditing
+                  ? "border-amber-500 text-amber-400 bg-amber-950/30"
+                  : "border-input text-muted-foreground hover:border-amber-500 hover:text-amber-400 hover:bg-amber-950/20"
+              }`}
+            >
+              ✎ edit
+            </button>
+            {onDelete && (
+              <button
+                onClick={() => onDelete(r.id)}
+                disabled={deletingId === r.id}
+                className="text-xs text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-40"
+              >
+                {deletingId === r.id ? "…" : "delete"}
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {isEditing && (
+        <tr className="bg-amber-950/10 border-b border-amber-800/30">
+          <td colSpan={3} className="px-4 py-3">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs text-amber-400/80 font-mono">Payload JSON for #{r.id}</label>
+              <textarea
+                value={editBuf}
+                onChange={(e) => onEditBufChange(e.target.value)}
+                rows={4}
+                spellCheck={false}
+                className="w-full rounded border border-amber-700/40 bg-background font-mono text-xs text-foreground p-2 resize-y focus:outline-none focus:ring-1 focus:ring-amber-600"
+              />
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  onClick={onCancelEdit}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => onSave(r.id)}
+                  disabled={savingId === r.id}
+                  className="text-xs font-medium px-3 py-1 rounded bg-amber-600 text-white hover:bg-amber-500 transition-colors disabled:opacity-50"
+                >
+                  {savingId === r.id ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

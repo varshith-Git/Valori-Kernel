@@ -214,5 +214,10 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("DropNamespace").fg(Color::Red),
             format!("name={name:?} (cascade-deleted records/nodes)"),
         ),
+
+        KernelEvent::UpdateRecordMetadata { id, .. } => (
+            Cell::new("UpdateRecordMetadata").fg(Color::White),
+            format!("record_id={}", id.0),
+        ),
     }
 }

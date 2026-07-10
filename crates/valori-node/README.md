@@ -169,6 +169,33 @@ The Document graph node is reused — external edges pointing to it remain valid
 
 `POST /v1/ingest` and `POST /v1/ingest/update` work identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
 
+### Async ingest — fire-and-forget large documents
+
+Pass `"async": true` in the request body to `POST /v1/ingest`. The server returns immediately with a `job_id`; poll `GET /v1/ingest/status/:job_id` for progress.
+
+```bash
+# Start an async ingest job
+JOB=$(curl -s -X POST http://localhost:3000/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text": "...", "source": "paper.pdf", "async": true}' | jq -r .job_id)
+
+# Poll for completion
+curl http://localhost:3000/v1/ingest/status/$JOB
+# → {"job_id": "...", "status": "completed", "chunk_count": 31, "record_ids": [...]}
+```
+
+### Graph node management
+
+```bash
+# GET a node by ID (returns node data + adjacency list)
+curl "http://localhost:3000/v1/graph/node/42?collection=default"
+
+# DELETE a node (soft-deletes associated record; edges removed)
+curl -X DELETE "http://localhost:3000/v1/graph/node/42?collection=default"
+```
+
+Both routes are available on standalone (`/v1/graph/node/:id`) and via the legacy path (`/graph/node/:id`). On clusters the DELETE goes through `raft.client_write()`.
+
 ---
 
 ## Tree-RAG — hierarchical retrieval with provable receipts (Phase I5)
@@ -609,8 +636,7 @@ curl -X POST http://localhost:3000/v1/cluster/remove-node \
 | `VALORI_RAFT_BIND` | gRPC consensus listener (default `0.0.0.0:3100`). |
 | `VALORI_CLUSTER_INIT` | Set to `1` on exactly one node of a brand-new cluster. |
 | `VALORI_RAFT_LOG_PATH` | Path to the `redb` file for the persistent Raft log. When set, the state machine shares this database so `last_applied` and snapshots survive restarts without replaying audit events. |
-| `VALORI_SNAPSHOT_EVERY_EVENTS` | Trigger a Raft snapshot every N applied entries (default `5000`). Lower values bound the log-replay window on restart at the cost of more snapshot I/O. |
-| `VALORI_RAFT_SNAPSHOT_KEEP` | Log entries to retain after each snapshot for followers that are only slightly behind (default `1000`). |
+| `VALORI_SNAPSHOT_INTERVAL` | Standalone only. Periodic autosave interval in seconds (`VALORI_SNAPSHOT_PATH` must also be set). Omit = snapshot on graceful shutdown only. |
 | `VALORI_STATE_HASH_CHECK_SECS` | Hash-convergence poll interval in seconds (default `30`, `0` = off). |
 | `VALORI_SHARD_COUNT` | **Phase S1 — multi-Raft skeleton.** Number of independent Raft groups this process runs, sharing one gRPC listener (default `1`, byte-identical to pre-S1 behavior). Every configured member is a voter in every shard (symmetric placement) — namespace→shard routing and asymmetric placement do not exist yet, so shards beyond 0 currently have no HTTP surface. See [`docs/phases/phase-S1-multi-raft-skeleton.md`](../../docs/phases/phase-S1-multi-raft-skeleton.md). |
 

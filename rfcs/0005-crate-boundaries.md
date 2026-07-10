@@ -1,6 +1,9 @@
 # RFC-0005: Crate Boundaries
 
 **Status:** Draft  
+**Owner:** Core team (architecture)  
+**Stability:** Beta — boundary decisions are live and enforced by `tests/architecture.rs`; new crate extractions require an RFC update  
+**Last reviewed:** 2026-07-08  
 **Depends on:** [`rfcs/0000-glossary.md`](0000-glossary.md) through [`rfcs/0004-capability-model.md`](0004-capability-model.md)  
 **Implements:** overall architecture; guides Phases A3–A8
 

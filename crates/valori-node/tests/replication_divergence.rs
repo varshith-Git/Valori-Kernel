@@ -118,13 +118,12 @@ async fn test_replication_divergence() {
     tracing::info!("Corrupting follower: deleting record {}", record_id_val);
     {
         let mut engine = follower_state.write().await;
-        use valori_kernel::state::command::Command;
+        use valori_kernel::event::KernelEvent;
         use valori_kernel::types::id::RecordId;
 
-        let cmd = Command::DeleteRecord {
+        engine.apply_event_for_test(&KernelEvent::SoftDeleteRecord {
             id: RecordId(record_id_val as u32),
-        };
-        engine.apply_raw_for_test(&cmd).unwrap();
+        }).unwrap();
     }
 
     // ── 6. Wait for divergence loop to fire (runs every 5 s) ─────────────────

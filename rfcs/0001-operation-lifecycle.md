@@ -1,6 +1,9 @@
 # RFC-0001: Operation & Execution Lifecycle
 
 **Status:** Draft  
+**Owner:** valori-planner  
+**Stability:** Alpha — lifecycle types are being finalized; breaking changes expected before freeze  
+**Last reviewed:** 2026-07-08  
 **Depends on:** [`rfcs/0000-glossary.md`](0000-glossary.md)  
 **Implements:** Phase A5 (`valori-planner`), Phase A7 (`ExecutionGraph` + `ExecutionRegistry`)
 

@@ -9,22 +9,22 @@ export function ConnectionBadge() {
 
   if (!online) {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-red-400">
-        <span className="h-2 w-2 rounded-full bg-red-400 animate-pulse" />
+      <span className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+        <span className="h-2 w-2 rounded-full bg-red-500 dark:bg-red-400 animate-pulse" />
         unreachable
       </span>
     );
   }
 
   const dotColor =
-    status === "ok" ? "bg-emerald-400"
-    : status === "degraded" ? "bg-amber-400"
-    : "bg-red-400";
+    status === "ok" ? "bg-emerald-500 dark:bg-emerald-400"
+    : status === "degraded" ? "bg-amber-500 dark:bg-amber-400"
+    : "bg-red-500 dark:bg-red-400";
 
   const textColor =
-    status === "ok" ? "text-emerald-400"
-    : status === "degraded" ? "text-amber-400"
-    : "text-red-400";
+    status === "ok" ? "text-emerald-600 dark:text-emerald-400"
+    : status === "degraded" ? "text-amber-600 dark:text-amber-400"
+    : "text-red-600 dark:text-red-400";
 
   if (!isStandalone && members.length > 0) {
     return (

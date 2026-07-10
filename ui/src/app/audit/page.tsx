@@ -98,7 +98,7 @@ export default function AuditPage() {
       <div className="w-full max-w-[1600px]">
         <h1 className="text-xl font-semibold text-foreground">Audit Trail</h1>
         <div className="mt-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-6">
-          <p className="text-sm font-medium text-amber-400">
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
             Event log not enabled on this node
           </p>
           <p className="mt-2 text-xs text-amber-600">
@@ -169,7 +169,7 @@ cargo run -p valori-node`}
           ))}
         </div>
       ) : error ? (
-        <p className="text-sm text-red-400">{error}</p>
+        <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       ) : filtered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border py-12 text-center">
           <p className="text-sm text-muted-foreground">No events yet.</p>

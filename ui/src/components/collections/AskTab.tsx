@@ -66,11 +66,9 @@ function saveHistory(namespace: string, history: AskResult[]) {
   }
 }
 
-// Valori returns L2-squared distance (lower = closer) as score.
-// For unit-normalized vectors (nomic-embed-text, OpenAI, etc.):
-//   cosine_sim = 1 - score * (SCALE / 2)  where SCALE = 65536
-// This gives 1.0 = identical, 0.0 = orthogonal, negative = opposite.
-const l2ToCosine = (score: number) => Math.max(0, 1 - score * 32768);
+// Valori search returns raw f32 L2² distance. For unit-normalized vectors:
+//   cosine_sim = 1 - L2²/2   (ranges 0–1, higher = more similar)
+const l2ToCosine = (score: number) => Math.max(0, Math.min(1, 1 - score / 2));
 
 const SCORE_COLOR = (cosine: number) =>
   cosine >= 0.85 ? "text-emerald-400" : cosine >= 0.7 ? "text-amber-400" : "text-muted-foreground";
@@ -114,7 +112,10 @@ export function AskTab({
   const [status, setStatus] = useState<"idle" | "embedding" | "searching" | "answering" | "done" | "error">("idle");
   const [result, setResult] = useState<AskResult | null>(null);
   const [history, setHistory] = useState<AskResult[]>([]);
+  const [confirmClear, setConfirmClear] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // AbortController for the in-flight ask — aborted when a new ask starts (C-6)
+  const abortRef = useRef<AbortController | null>(null);
 
   // Pre-fill question when navigated from another tab (question suggester)
   useEffect(() => {
@@ -142,6 +143,13 @@ export function AskTab({
 
   const ask = async (q: string) => {
     if (!q.trim()) return;
+
+    // Abort any previous in-flight ask before starting a new one (C-6)
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const { signal } = ctrl;
+
     setResult(null);
 
     // ── Tree-RAG path ────────────────────────────────────────────────────────
@@ -152,6 +160,7 @@ export function AskTab({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ cache_key: treeCache.cache_key, query: q, k, prev_hash: treePrevHash }),
+          signal,
         });
         if (!res.ok) throw new Error(`Tree query failed (${res.status})`);
         const data = await res.json() as {
@@ -163,6 +172,7 @@ export function AskTab({
         };
         // Chain receipts for the next query
         setTreePrevHash(data.receipt.receipt_hash);
+        if (signal.aborted) return;
         // Map into AskResult so the existing history/display works
         const treeResult: AskResult = {
           question: q,
@@ -186,6 +196,7 @@ export function AskTab({
         setHistory(updated);
         setStatus("done");
       } catch (e) {
+        if (signal.aborted) return;
         setResult({ question: q, answer: null, answerError: e instanceof Error ? e.message : "Tree query failed", sources: [], graphContext: [], askedAt: new Date().toISOString() });
         setStatus("error");
       }
@@ -200,6 +211,7 @@ export function AskTab({
       const embedRes = await fetch("/api/embed-query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal,
         body: JSON.stringify({
           text: q,
           provider: embedCfg.provider,
@@ -214,11 +226,13 @@ export function AskTab({
       }
       const { vector } = await embedRes.json() as { vector: number[] };
 
+      if (signal.aborted) return;
       // 2+3+4: Call /api/why which does filtered vector search + graph expansion + LLM synthesis
       setStatus("searching");
       const whyRes = await fetch("/api/why", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal,
         body: JSON.stringify({
           query_vector: vector,
           k,
@@ -285,6 +299,7 @@ export function AskTab({
         } catch { /* receipt is best-effort; answer still stands */ }
       }
 
+      if (signal.aborted) return;
       const r: AskResult = {
         question: q, answer, answerError, sources, graphContext,
         askedAt: new Date().toISOString(), receipt,
@@ -298,6 +313,7 @@ export function AskTab({
       setStatus("done");
       setQuestion("");
     } catch (e) {
+      if (signal.aborted) return; // stale response from a cancelled ask — discard
       const r: AskResult = {
         question: q,
         answer: null,
@@ -464,19 +480,35 @@ export function AskTab({
               <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
                 History · {pastItems.length} earlier question{pastItems.length !== 1 ? "s" : ""}
               </p>
-              <button
-                onClick={() => {
-                  const confirmed = window.confirm("Clear all question history for this collection?");
-                  if (confirmed) {
-                    localStorage.removeItem(historyKey(namespace));
-                    setHistory([]);
-                    setResult(null);
-                  }
-                }}
-                className="text-[10px] text-muted-foreground hover:text-red-500 transition-colors"
-              >
-                clear history
-              </button>
+              {confirmClear ? (
+                <span className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground">Clear all history?</span>
+                  <button
+                    onClick={() => {
+                      localStorage.removeItem(historyKey(namespace));
+                      setHistory([]);
+                      setResult(null);
+                      setConfirmClear(false);
+                    }}
+                    className="text-[10px] text-red-400 hover:text-red-300 transition-colors"
+                  >
+                    yes, clear
+                  </button>
+                  <button
+                    onClick={() => setConfirmClear(false)}
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    cancel
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={() => setConfirmClear(true)}
+                  className="text-[10px] text-muted-foreground hover:text-red-500 transition-colors"
+                >
+                  clear history
+                </button>
+              )}
             </div>
             {pastItems.map((r, i) => (
               <ResultCard key={`${r.askedAt}-${i}`} result={r} collapsed />
@@ -523,7 +555,7 @@ function buildCopyText(result: AskResult): string {
     lines.push("");
     lines.push(`Source Chunks (${result.sources.length}):`);
     result.sources.forEach((s, i) => {
-      const cosine = Math.max(0, 1 - s.score * 32768);
+      const cosine = l2ToCosine(s.score);
       const meta = [
         `rec #${s.record_id}`,
         `${(cosine * 100).toFixed(1)}% cosine`,
@@ -583,15 +615,19 @@ function shortHash(h: string | null | undefined, n = 12): string {
   return core.length > n + 8 ? core.slice(0, n) + "…" + core.slice(-6) : core;
 }
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function printReceipt(receipt: AnswerReceipt) {
   const w = window.open("", "_blank", "width=820,height=900");
   if (!w) { alert("Allow popups to print the receipt."); return; }
   const when = new Intl.DateTimeFormat(undefined, { dateStyle: "long", timeStyle: "medium" })
     .format(new Date(receipt.state.captured_at));
   const chunkRows = receipt.chunks.map((c, i) =>
-    `<tr><td>${i + 1}</td><td>#${c.record_id}</td><td>${c.source ?? "—"}${
-      c.chunk_index !== null ? ` · chunk ${c.chunk_index}` : ""
-    }</td><td class="mono">${c.content_sha256 ?? "(no text)"}</td></tr>`
+    `<tr><td>${i + 1}</td><td>#${escHtml(String(c.record_id))}</td><td>${c.source ? escHtml(c.source) : "—"}${
+      c.chunk_index !== null ? ` · chunk ${escHtml(String(c.chunk_index))}` : ""
+    }</td><td class="mono">${c.content_sha256 ? escHtml(c.content_sha256) : "(no text)"}</td></tr>`
   ).join("");
 
   w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
@@ -616,15 +652,15 @@ function printReceipt(receipt: AnswerReceipt) {
   <div class="title">Answer Provenance Certificate</div>
   <div class="lbl">Question</div><div class="box">${receipt.question.replace(/</g, "&lt;")}</div>
   <div class="lbl">Issued</div><div class="box">${when}</div>
-  <div class="lbl">Collection</div><div class="box">${receipt.collection}</div>
-  <div class="lbl">Models</div><div class="box">embed: ${receipt.models.embed} &nbsp;|&nbsp; llm: ${receipt.models.llm ?? "none (retrieval only)"}</div>
-  <div class="lbl">Answer SHA-256</div><div class="box">${receipt.answer_sha256 ?? "(no LLM answer)"}</div>
-  <div class="lbl">Global BLAKE3 State Hash (at answer time)</div><div class="box">${receipt.state.global_state_hash ?? "(unavailable)"}</div>
+  <div class="lbl">Collection</div><div class="box">${escHtml(receipt.collection)}</div>
+  <div class="lbl">Models</div><div class="box">embed: ${escHtml(receipt.models.embed)} &nbsp;|&nbsp; llm: ${receipt.models.llm ? escHtml(receipt.models.llm) : "none (retrieval only)"}</div>
+  <div class="lbl">Answer SHA-256</div><div class="box">${receipt.answer_sha256 ? escHtml(receipt.answer_sha256) : "(no LLM answer)"}</div>
+  <div class="lbl">Global BLAKE3 State Hash (at answer time)</div><div class="box">${receipt.state.global_state_hash ? escHtml(receipt.state.global_state_hash) : "(unavailable)"}</div>
   <div class="lbl">Source Chunks (${receipt.chunks.length})</div>
   <table><thead><tr><th>#</th><th>Record</th><th>Source</th><th>Content SHA-256</th></tr></thead><tbody>${chunkRows}</tbody></table>
   <div class="lbl">Receipt Fingerprint</div>
-  <div class="fp">${receipt.receipt_sha256 ?? "—"}</div>
-  <div class="note"><strong>Verify independently:</strong> ${receipt.verification}</div>
+  <div class="fp">${receipt.receipt_sha256 ? escHtml(receipt.receipt_sha256) : "—"}</div>
+  <div class="note"><strong>Verify independently:</strong> ${receipt.verification ? escHtml(receipt.verification) : ""}</div>
 </div></body></html>`);
   w.document.close();
   w.focus();

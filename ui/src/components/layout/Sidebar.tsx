@@ -26,6 +26,7 @@ import {
   Search,
   Activity,
   BarChart2,
+  SquareTerminal,
 } from "lucide-react";
 
 /* --- Helpers -------------------------------------------------------- */
@@ -64,15 +65,15 @@ function StatusFooter() {
 
   const dotColor =
     !online               ? "bg-red-400 animate-pulse" :
-    status === "ok"       ? "bg-emerald-400"            :
-    status === "degraded" ? "bg-amber-400"              :
-                            "bg-red-400 animate-pulse";
+    status === "ok"       ? "bg-emerald-500 dark:bg-emerald-400"            :
+    status === "degraded" ? "bg-amber-500 dark:bg-amber-400"              :
+                            "bg-red-500 dark:bg-red-400 animate-pulse";
 
   const textColor =
-    !online               ? "text-red-400"     :
-    status === "ok"       ? "text-emerald-400" :
-    status === "degraded" ? "text-amber-400"   :
-                            "text-red-400";
+    !online               ? "text-red-600 dark:text-red-400"     :
+    status === "ok"       ? "text-emerald-600 dark:text-emerald-400" :
+    status === "degraded" ? "text-amber-600 dark:text-amber-400"   :
+                            "text-red-600 dark:text-red-400";
 
   const mode     = isStandalone ? "Standalone" : "Cluster";
   const ModeIcon = isStandalone ? Server : Radio;
@@ -109,30 +110,34 @@ function StatusFooter() {
         <Link
           href="/settings"
           title="Settings"
+          aria-label="Settings"
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <Settings size={14} />
+          <Settings size={14} aria-hidden />
         </Link>
         <Link
           href="/snapshots"
           title="Snapshots"
+          aria-label="Snapshots"
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <Archive size={14} />
+          <Archive size={14} aria-hidden />
         </Link>
         <Link
           href="/logs"
           title="Logs"
+          aria-label="Logs"
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <ScrollText size={14} />
+          <ScrollText size={14} aria-hidden />
         </Link>
         <Link
           href="/help"
           title="Help"
+          aria-label="Help"
           className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
         >
-          <HelpCircle size={14} />
+          <HelpCircle size={14} aria-hidden />
         </Link>
         <ThemeToggle />
       </div>
@@ -167,7 +172,7 @@ export function Sidebar() {
 
   return (
     <>
-      <aside className="flex h-screen w-56 flex-col border-r border-border/80 bg-card flex-shrink-0">
+      <aside className="flex h-screen w-56 flex-col border-r border-border/80 bg-card flex-shrink-0" aria-label="Application navigation">
 
         {/* Logo */}
         <div className="px-4 py-4 border-b border-border/80">
@@ -196,6 +201,7 @@ export function Sidebar() {
             <NavLink item={{ href: "/proof",      label: "Proof",      Icon: ShieldCheck }} active={isActive("/proof")} />
             <NavLink item={{ href: "/audit",      label: "Audit Trail", Icon: ScrollText }} active={isActive("/audit")} />
             <NavLink item={{ href: "/launch",     label: "Launch",     Icon: Rocket }} active={isActive("/launch")} />
+            <NavLink item={{ href: "/playground", label: "Playground", Icon: SquareTerminal }} active={isActive("/playground")} />
           </nav>
 
           {/* Search hint */}

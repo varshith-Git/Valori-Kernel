@@ -147,9 +147,9 @@ export default function OperationsListPage() {
       {!loading && !error && eventLogEnabled === false && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6">
           <div className="flex items-start gap-3">
-            <Terminal className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+            <Terminal className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-amber-400">Event log not enabled on this node</p>
+              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">Event log not enabled on this node</p>
               <p className="mt-1 text-xs text-amber-300/80">
                 Operations are tracked through the kernel event log. Restart Valori with{" "}
                 <code className="font-mono bg-amber-500/20 px-1 rounded">VALORI_EVENT_LOG_PATH</code> set:

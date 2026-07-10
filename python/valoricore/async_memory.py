@@ -63,12 +63,16 @@ class AsyncMemoryClient:
         remote: Optional[str] = None,
         index_kind: str = "bruteforce",
         quantization: str = "none",
+        dim: int = 0,
+        max_records: int = 0,
     ) -> None:
         self._sync_client = MemoryClient(
             path=path,
             remote=remote,
             index_kind=index_kind,
             quantization=quantization,
+            dim=dim,
+            max_records=max_records,
         )
         # Serialises concurrent access to the synchronous Rust FFI
         self._lock = threading.Lock()

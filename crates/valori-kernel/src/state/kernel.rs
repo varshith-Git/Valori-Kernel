@@ -4,9 +4,8 @@
 use crate::types::id::{Version, DEFAULT_NS, NS_LIST_NIL, MAX_NAMESPACES};
 use crate::storage::pool::RecordPool;
 use crate::graph::pool::{NodePool, EdgePool};
-use crate::index::brute_force::BruteForceIndex;
-use crate::index::{SearchResult, VectorIndex};
-use crate::state::command::Command;
+use crate::event::KernelEvent;
+use crate::index::{ActiveIndex, BruteForceIndex, BinaryQuantizationIndex, IndexVariant, SearchResult, VectorIndex};
 use crate::error::{Result, KernelError};
 use crate::graph::node::GraphNode;
 use crate::graph::adjacency::{add_edge, OutEdgeIterator};
@@ -22,7 +21,7 @@ pub struct KernelState {
     pub(crate) records: RecordPool,
     pub(crate) nodes: NodePool,
     pub(crate) edges: EdgePool,
-    pub(crate) index: BruteForceIndex,
+    pub(crate) index: ActiveIndex,
     /// Head of the intrusive per-namespace record linked list.
     /// `namespace_record_heads[ns] = NS_LIST_NIL` means namespace `ns` has no records.
     pub(crate) namespace_record_heads: alloc::vec::Vec<u32>,
@@ -45,7 +44,7 @@ impl KernelState {
             records: RecordPool::new(),
             nodes: NodePool::new(),
             edges: EdgePool::new(),
-            index: BruteForceIndex::default(),
+            index: ActiveIndex::default(),
             namespace_record_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
             namespace_node_heads: alloc::vec![NS_LIST_NIL; MAX_NAMESPACES],
             #[cfg(feature = "std")]
@@ -65,6 +64,26 @@ impl KernelState {
             s.dim = Some(dim);
         }
         s
+    }
+
+    // ── Index management ─────────────────────────────────────────────────────
+
+    /// Switch the active kernel index variant and rebuild it from the current
+    /// record pool. The rebuild is O(N) over live records.
+    pub fn set_index_kind(&mut self, variant: IndexVariant) {
+        if self.index.variant() == variant {
+            return;
+        }
+        self.index = match variant {
+            IndexVariant::BruteForce => ActiveIndex::BruteForce(BruteForceIndex::default()),
+            IndexVariant::BinaryQuantization => ActiveIndex::BinaryQuantization(BinaryQuantizationIndex::new()),
+        };
+        self.index.rebuild(&self.records);
+    }
+
+    /// Return the currently active index variant.
+    pub fn index_variant(&self) -> IndexVariant {
+        self.index.variant()
     }
 
     // ── Crypto-shredding (Phase 3.6) ─────────────────────────────────────────
@@ -214,244 +233,45 @@ impl KernelState {
 
     pub fn create_node(&mut self, kind: crate::types::enums::NodeKind, record: Option<RecordId>) -> Result<NodeId> {
         let id = NodeId(self.nodes.len() as u32);
-        let cmd = Command::CreateNode {
-            namespace_id: DEFAULT_NS.0,
-            node_id: id,
-            kind,
-            record,
-        };
-        self.apply(&cmd)?;
+        self.apply_event_ns(&KernelEvent::CreateNode { id, kind, record }, DEFAULT_NS.0)?;
         Ok(id)
     }
 
     pub fn create_edge(&mut self, from: NodeId, to: NodeId, kind: crate::types::enums::EdgeKind) -> Result<EdgeId> {
         let id = EdgeId(self.edges.len() as u32);
-        let cmd = Command::CreateEdge {
-            edge_id: id,
-            from,
-            to,
-            kind,
-        };
-        self.apply(&cmd)?;
+        self.apply_event_ns(&KernelEvent::CreateEdge { id, from, to, kind }, DEFAULT_NS.0)?;
         Ok(id)
     }
 
     // --- Event-Sourced Write Logic ---
 
     /// Apply a `KernelEvent` in the default namespace (single-tenant / backward-compat path).
-    pub fn apply_event(&mut self, evt: &crate::event::KernelEvent) -> Result<()> {
+    pub fn apply_event(&mut self, evt: &KernelEvent) -> Result<()> {
         self.apply_event_ns(evt, DEFAULT_NS.0)
     }
 
     /// Apply a `KernelEvent` targeting a specific namespace.
-    pub fn apply_event_ns(&mut self, evt: &crate::event::KernelEvent, namespace_id: u16) -> Result<()> {
-        use crate::event::KernelEvent;
-
+    ///
+    /// This is the single authoritative apply path. Every mutation flows through here;
+    /// there is no intermediate representation between `KernelEvent` and `KernelState`.
+    pub fn apply_event_ns(&mut self, evt: &KernelEvent, namespace_id: u16) -> Result<()> {
         match evt {
             KernelEvent::InsertRecord { id, vector, metadata, tag } => {
-                let cmd = Command::InsertRecord {
-                    namespace_id,
-                    id: *id,
-                    vector: vector.clone(),
-                    metadata: metadata.clone(),
-                    tag: *tag,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::DeleteRecord { id } => {
-                let cmd = Command::DeleteRecord { id: *id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::CreateNode { id, kind, record } => {
-                let cmd = Command::CreateNode {
-                    namespace_id,
-                    node_id: *id,
-                    kind: *kind,
-                    record: *record,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::CreateEdge { id, from, to, kind } => {
-                let cmd = Command::CreateEdge {
-                    edge_id: *id,
-                    from: *from,
-                    to: *to,
-                    kind: *kind,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::DeleteEdge { id } => {
-                let cmd = Command::DeleteEdge { edge_id: *id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::SoftDeleteRecord { id } => {
-                let cmd = Command::SoftDeleteRecord { id: *id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::DeleteNode { id } => {
-                let cmd = Command::DeleteNode { node_id: *id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::AutoInsertRecord { vector, metadata, tag } => {
-                let id = self.next_record_id();
-                let cmd = Command::InsertRecord {
-                    namespace_id,
-                    id,
-                    vector: vector.clone(),
-                    metadata: metadata.clone(),
-                    tag: *tag,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::AutoCreateNode { kind, record } => {
-                let id = self.next_node_id();
-                let cmd = Command::CreateNode {
-                    namespace_id,
-                    node_id: id,
-                    kind: *kind,
-                    record: *record,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::AutoCreateEdge { from, to, kind } => {
-                let id = self.next_edge_id();
-                let cmd = Command::CreateEdge { edge_id: id, from: *from, to: *to, kind: *kind };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::AutoInsertRecordEncrypted { namespace_id: evt_ns, key_id, ciphertext, tag } => {
-                let id = self.next_record_id();
-                let cmd = Command::InsertRecordEncrypted {
-                    namespace_id: *evt_ns,
-                    id,
-                    key_id: *key_id,
-                    ciphertext: ciphertext.clone(),
-                    tag: *tag,
-                };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::SetMeta { key, value } => {
-                self.meta.insert(key.clone(), value.clone());
-            }
-
-            KernelEvent::AutoCreateNamespace { name: _ } => {
-                // The name is not stored in KernelState — namespaces are pure
-                // integer ids here (Phase S2 design: the name -> id registry
-                // lives one layer up, in the consensus-layer state machine).
-                // `namespace_id` is the id already allocated by the caller
-                // (ValoriStateMachine::apply, via apply_event_ns) before this
-                // event reached the kernel.
-                let cmd = Command::CreateNamespace { namespace_id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::DropNamespace { name: _ } => {
-                // Same convention as AutoCreateNamespace: the consensus layer
-                // resolved name -> id from its own registry immediately
-                // before calling apply_event_ns, inside the same Raft-apply
-                // critical section, so there is no TOCTOU here.
-                let cmd = Command::DropNamespace { namespace_id };
-                self.apply(&cmd)?;
-            }
-
-            KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES {
-                    return Err(KernelError::InvalidOperation);
-                }
-                if self.records.next_id() != *id {
-                    return Err(KernelError::InvalidOperation);
-                }
-                // Reject oversized ciphertext (MAX_METADATA_SIZE plaintext + 28 B AEAD overhead).
-                use crate::config::MAX_METADATA_SIZE;
-                if ciphertext.len() > MAX_METADATA_SIZE + 28 {
-                    return Err(KernelError::MetadataTooLarge);
-                }
-                // Dim must be set; use zero vector (not searchable).
-                let dim = self.dim.ok_or(KernelError::InvalidOperation)?;
-                let zero_vec = FxpVector::new_zeros(dim);
-                // Store ciphertext in metadata for audit trail.
-                let allocated_id = self.records.insert(
-                    zero_vec, Some(ciphertext.clone()), *tag, namespace_id,
-                )?;
-                debug_assert_eq!(allocated_id, *id);
-                self.records.mark_encrypted(allocated_id)?;
-                // Track key → records for efficient shredding.
-                #[cfg(feature = "std")]
-                self.encrypted_record_keys
-                    .entry(*key_id)
-                    .or_default()
-                    .push(allocated_id);
-                // Wire into namespace linked list (same pattern as InsertRecord).
-                let old_head = self.namespace_record_heads[ns];
-                {
-                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
-                    r.next_in_ns = old_head;
-                    r.prev_in_ns = NS_LIST_NIL;
-                }
-                if old_head != NS_LIST_NIL {
-                    if let Some(prev_head) = self.records.records[old_head as usize].as_mut() {
-                        prev_head.prev_in_ns = allocated_id.0;
-                    }
-                }
-                self.namespace_record_heads[ns] = allocated_id.0;
-                // Do NOT add to the vector index — zero vectors pollute search.
-            }
-
-            KernelEvent::ShredKey { key_id } => {
-                #[cfg(feature = "std")]
-                self.apply_shred_key(*key_id)?;
-                #[cfg(not(feature = "std"))]
-                { let _ = key_id; return Err(KernelError::InvalidOperation); }
-            }
-        }
-
-        Ok(())
-    }
-
-    // --- Write Logic ---
-
-    pub fn apply(&mut self, cmd: &Command) -> Result<()> {
-        match cmd {
-            Command::InsertRecord { namespace_id, id, vector, metadata, tag } => {
-                let ns = *namespace_id as usize;
-                if ns >= MAX_NAMESPACES {
-                    return Err(KernelError::InvalidOperation);
-                }
-                if self.records.next_id() != *id {
-                    return Err(KernelError::InvalidOperation);
-                }
-
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if self.records.next_id() != *id { return Err(KernelError::InvalidOperation); }
                 let d = vector.len();
                 if let Some(dim) = self.dim {
-                    if d != dim {
-                        return Err(KernelError::DimensionMismatch { expected: dim, found: d });
-                    }
+                    if d != dim { return Err(KernelError::DimensionMismatch { expected: dim, found: d }); }
                 } else {
                     self.dim = Some(d);
                 }
-
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
-                    if m.len() > MAX_METADATA_SIZE {
-                        return Err(KernelError::MetadataTooLarge);
-                    }
+                    if m.len() > MAX_METADATA_SIZE { return Err(KernelError::MetadataTooLarge); }
                 }
-
-                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag, *namespace_id)?;
+                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
                 debug_assert_eq!(allocated_id, *id);
-
-                // Prepend to namespace record list (O(1))
                 let old_head = self.namespace_record_heads[ns];
                 {
                     let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
@@ -464,40 +284,40 @@ impl KernelState {
                     }
                 }
                 self.namespace_record_heads[ns] = allocated_id.0;
-
-                <BruteForceIndex as VectorIndex>::on_insert(&mut self.index, allocated_id, vector);
+                self.index.on_insert(allocated_id, vector);
             }
 
-            Command::DeleteRecord { id } => {
+            KernelEvent::DeleteRecord { id } => {
                 let (ns, prev_in_ns, next_in_ns) = {
                     let r = self.records.get(*id).ok_or(KernelError::NotFound)?;
                     (r.namespace_id as usize, r.prev_in_ns, r.next_in_ns)
                 };
                 self._unlink_record_from_ns(ns, prev_in_ns, next_in_ns);
                 self.records.delete(*id)?;
-                <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, *id);
+                self.index.on_delete(*id);
             }
 
-            Command::CreateNode { namespace_id, node_id, kind, record } => {
-                let ns = *namespace_id as usize;
-                if ns >= MAX_NAMESPACES {
-                    return Err(KernelError::InvalidOperation);
-                }
-                if self.next_node_id() != *node_id {
-                    return Err(KernelError::InvalidOperation);
-                }
+            KernelEvent::SoftDeleteRecord { id } => {
+                let (ns, prev_in_ns, next_in_ns) = {
+                    let r = self.records.get(*id).ok_or(KernelError::NotFound)?;
+                    (r.namespace_id as usize, r.prev_in_ns, r.next_in_ns)
+                };
+                self._unlink_record_from_ns(ns, prev_in_ns, next_in_ns);
+                self.records.soft_delete(*id)?;
+                self.index.on_delete(*id);
+            }
+
+            KernelEvent::CreateNode { id, kind, record } => {
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if self.next_node_id() != *id { return Err(KernelError::InvalidOperation); }
                 if let Some(rid) = record {
                     let rec = self.records.get(*rid).ok_or(KernelError::NotFound)?;
-                    if rec.namespace_id != *namespace_id {
-                        return Err(KernelError::InvalidOperation);
-                    }
+                    if rec.namespace_id != namespace_id { return Err(KernelError::InvalidOperation); }
                 }
-
-                let node = GraphNode::new(*node_id, *kind, *record, *namespace_id);
+                let node = GraphNode::new(*id, *kind, *record, namespace_id);
                 let allocated = self.nodes.insert(node)?;
-                debug_assert_eq!(allocated, *node_id);
-
-                // Prepend to namespace node list (O(1))
+                debug_assert_eq!(allocated, *id);
                 let old_head = self.namespace_node_heads[ns];
                 {
                     let n = self.nodes.nodes[allocated.0 as usize].as_mut().unwrap();
@@ -512,57 +332,121 @@ impl KernelState {
                 self.namespace_node_heads[ns] = allocated.0;
             }
 
-            Command::CreateEdge { edge_id, kind, from, to } => {
-                if self.next_edge_id() != *edge_id {
-                    return Err(KernelError::InvalidOperation);
-                }
-                // Reject cross-namespace edges — isolation guarantee
+            KernelEvent::CreateEdge { id, from, to, kind } => {
+                if self.next_edge_id() != *id { return Err(KernelError::InvalidOperation); }
                 let from_ns = self.nodes.get(*from).ok_or(KernelError::NotFound)?.namespace_id;
                 let to_ns   = self.nodes.get(*to).ok_or(KernelError::NotFound)?.namespace_id;
-                if from_ns != to_ns {
-                    return Err(KernelError::InvalidOperation);
-                }
+                if from_ns != to_ns { return Err(KernelError::InvalidOperation); }
                 let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
-                debug_assert_eq!(allocated, *edge_id);
+                debug_assert_eq!(allocated, *id);
             }
 
-            Command::DeleteNode { node_id } => {
-                self._delete_node(*node_id)?;
+            KernelEvent::DeleteNode { id } => {
+                self._delete_node(*id)?;
             }
 
-            Command::DeleteEdge { edge_id } => {
-                self._delete_edge(*edge_id)?;
+            KernelEvent::DeleteEdge { id } => {
+                self._delete_edge(*id)?;
             }
 
-            Command::SoftDeleteRecord { id } => {
-                let (ns, prev_in_ns, next_in_ns) = {
-                    let r = self.records.get(*id).ok_or(KernelError::NotFound)?;
-                    (r.namespace_id as usize, r.prev_in_ns, r.next_in_ns)
-                };
-                // Unlink from namespace list so soft-deleted records are invisible to ns search
-                self._unlink_record_from_ns(ns, prev_in_ns, next_in_ns);
-                self.records.soft_delete(*id)?;
-                <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, *id);
-            }
-
-            Command::CreateNamespace { namespace_id } => {
-                let ns = *namespace_id as usize;
-                if ns >= MAX_NAMESPACES {
-                    return Err(KernelError::InvalidOperation);
+            KernelEvent::AutoInsertRecord { vector, metadata, tag } => {
+                let id = self.next_record_id();
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                let d = vector.len();
+                if let Some(dim) = self.dim {
+                    if d != dim { return Err(KernelError::DimensionMismatch { expected: dim, found: d }); }
+                } else {
+                    self.dim = Some(d);
                 }
-                // Idempotent: head is already NS_LIST_NIL for a fresh namespace
+                use crate::config::MAX_METADATA_SIZE;
+                if let Some(m) = metadata {
+                    if m.len() > MAX_METADATA_SIZE { return Err(KernelError::MetadataTooLarge); }
+                }
+                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
+                debug_assert_eq!(allocated_id, id);
+                let old_head = self.namespace_record_heads[ns];
+                {
+                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    r.next_in_ns = old_head;
+                    r.prev_in_ns = NS_LIST_NIL;
+                }
+                if old_head != NS_LIST_NIL {
+                    if let Some(prev_head) = self.records.records[old_head as usize].as_mut() {
+                        prev_head.prev_in_ns = allocated_id.0;
+                    }
+                }
+                self.namespace_record_heads[ns] = allocated_id.0;
+                self.index.on_insert(allocated_id, vector);
             }
 
-            Command::DropNamespace { namespace_id } => {
-                let ns = *namespace_id as usize;
-                if ns == 0 {
-                    return Err(KernelError::InvalidOperation); // default namespace is permanent
+            KernelEvent::AutoCreateNode { kind, record } => {
+                let id = self.next_node_id();
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if let Some(rid) = record {
+                    let rec = self.records.get(*rid).ok_or(KernelError::NotFound)?;
+                    if rec.namespace_id != namespace_id { return Err(KernelError::InvalidOperation); }
                 }
-                if ns >= MAX_NAMESPACES {
-                    return Err(KernelError::InvalidOperation);
+                let node = GraphNode::new(id, *kind, *record, namespace_id);
+                let allocated = self.nodes.insert(node)?;
+                debug_assert_eq!(allocated, id);
+                let old_head = self.namespace_node_heads[ns];
+                {
+                    let n = self.nodes.nodes[allocated.0 as usize].as_mut().unwrap();
+                    n.next_in_ns = old_head;
+                    n.prev_in_ns = NS_LIST_NIL;
                 }
+                if old_head != NS_LIST_NIL {
+                    if let Some(prev_head) = self.nodes.nodes[old_head as usize].as_mut() {
+                        prev_head.prev_in_ns = allocated.0;
+                    }
+                }
+                self.namespace_node_heads[ns] = allocated.0;
+            }
 
-                // Hard-delete all records in this namespace via linked list traversal
+            KernelEvent::AutoCreateEdge { from, to, kind } => {
+                let id = self.next_edge_id();
+                let from_ns = self.nodes.get(*from).ok_or(KernelError::NotFound)?.namespace_id;
+                let to_ns   = self.nodes.get(*to).ok_or(KernelError::NotFound)?.namespace_id;
+                if from_ns != to_ns { return Err(KernelError::InvalidOperation); }
+                let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
+                debug_assert_eq!(allocated, id);
+            }
+
+            KernelEvent::AutoInsertRecordEncrypted { namespace_id: evt_ns, key_id, ciphertext, tag } => {
+                let id = self.next_record_id();
+                // Delegate to the concrete InsertRecordEncrypted arm; that arm will bump version.
+                return self.apply_event_ns(&KernelEvent::InsertRecordEncrypted {
+                    id,
+                    key_id: *key_id,
+                    ciphertext: ciphertext.clone(),
+                    metadata_ciphertext: None,
+                    tag: *tag,
+                }, *evt_ns);
+            }
+
+            KernelEvent::UpdateRecordMetadata { id, metadata } => {
+                self.records.update_metadata(*id, metadata.clone())?;
+            }
+
+            KernelEvent::SetMeta { key, value } => {
+                self.meta.insert(key.clone(), value.clone());
+            }
+
+            KernelEvent::AutoCreateNamespace { name: _ } => {
+                // The name is not stored in KernelState — namespaces are pure integer ids here.
+                // `namespace_id` is the id already allocated by the consensus layer.
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                // Idempotent: head is already NS_LIST_NIL for a fresh namespace.
+            }
+
+            KernelEvent::DropNamespace { name: _ } => {
+                // The consensus layer resolved name -> id before calling here.
+                let ns = namespace_id as usize;
+                if ns == 0 { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
                 let mut cursor = self.namespace_record_heads[ns];
                 while cursor != NS_LIST_NIL {
                     let next = self.records.records.get(cursor as usize)
@@ -570,13 +454,10 @@ impl KernelState {
                         .map(|r| r.next_in_ns)
                         .unwrap_or(NS_LIST_NIL);
                     self.records.records[cursor as usize] = None;
-                    <BruteForceIndex as VectorIndex>::on_delete(&mut self.index, RecordId(cursor));
+                    self.index.on_delete(RecordId(cursor));
                     cursor = next;
                 }
                 self.namespace_record_heads[ns] = NS_LIST_NIL;
-
-                // Cascade-delete all nodes (which cascade-deletes their edges)
-                // Collect node IDs first to avoid mutation-during-traversal issues
                 let mut node_ids = alloc::vec::Vec::new();
                 let mut node_cursor = self.namespace_node_heads[ns];
                 while node_cursor != NS_LIST_NIL {
@@ -595,23 +476,37 @@ impl KernelState {
                 self.namespace_node_heads[ns] = NS_LIST_NIL;
             }
 
-            Command::InsertRecordEncrypted { namespace_id, id, key_id, ciphertext, tag } => {
-                let evt = crate::event::KernelEvent::InsertRecordEncrypted {
-                    id: *id,
-                    key_id: *key_id,
-                    ciphertext: ciphertext.clone(),
-                    metadata_ciphertext: None,
-                    tag: *tag,
-                };
-                self.apply_event_ns(&evt, *namespace_id)?;
-                // version bump happens below — skip double-bump
-                self.version = self.version.next();
-                return Ok(());
+            KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {
+                let ns = namespace_id as usize;
+                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if self.records.next_id() != *id { return Err(KernelError::InvalidOperation); }
+                use crate::config::MAX_METADATA_SIZE;
+                if ciphertext.len() > MAX_METADATA_SIZE + 28 { return Err(KernelError::MetadataTooLarge); }
+                let dim = self.dim.ok_or(KernelError::InvalidOperation)?;
+                let zero_vec = FxpVector::new_zeros(dim);
+                let allocated_id = self.records.insert(zero_vec, Some(ciphertext.clone()), *tag, namespace_id)?;
+                debug_assert_eq!(allocated_id, *id);
+                self.records.mark_encrypted(allocated_id)?;
+                #[cfg(feature = "std")]
+                self.encrypted_record_keys.entry(*key_id).or_default().push(allocated_id);
+                let old_head = self.namespace_record_heads[ns];
+                {
+                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    r.next_in_ns = old_head;
+                    r.prev_in_ns = NS_LIST_NIL;
+                }
+                if old_head != NS_LIST_NIL {
+                    if let Some(prev_head) = self.records.records[old_head as usize].as_mut() {
+                        prev_head.prev_in_ns = allocated_id.0;
+                    }
+                }
+                self.namespace_record_heads[ns] = allocated_id.0;
+                // Zero vectors are not added to the search index.
             }
 
-            Command::ShredKey { key_id } => {
+            KernelEvent::ShredKey { key_id } => {
                 #[cfg(feature = "std")]
-                { self.apply_shred_key(*key_id)?; self.version = self.version.next(); return Ok(()); }
+                self.apply_shred_key(*key_id)?;
                 #[cfg(not(feature = "std"))]
                 { let _ = key_id; return Err(KernelError::InvalidOperation); }
             }

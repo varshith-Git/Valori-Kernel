@@ -45,11 +45,14 @@ jobs:
           
       - name: Run determinism test
         run: |
-          cargo test -p valori-node --test multi_arch_determinism --release determinism_x86 -- --nocapture --test-threads=1 > x86_output.txt 2>&1 || true
-          
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_x86 -- --nocapture --test-threads=1 > x86_output.txt 2>&1
+          # Redirect exit code — $? reflects cargo test, not the redirect.
+          RC=$?; [ $RC -eq 0 ] || { cat x86_output.txt; exit $RC; }
+
       - name: Extract hash
         run: |
-          grep "HASH:" x86_output.txt | head -1 | cut -d':' -f2 > x86_hash.txt
+          grep "HASH:" x86_output.txt | head -1 | cut -d':' -f2 | tr -d '[:space:]' > x86_hash.txt
+          [ -s x86_hash.txt ] || { echo "ERROR: no HASH line in test output"; cat x86_output.txt; exit 1; }
           cat x86_hash.txt
           
       - name: Upload hash artifact
@@ -81,11 +84,13 @@ jobs:
           
       - name: Run determinism test
         run: |
-          cargo test -p valori-node --test multi_arch_determinism --release determinism_arm -- --nocapture --test-threads=1 > arm_output.txt 2>&1 || true
-          
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_arm -- --nocapture --test-threads=1 > arm_output.txt 2>&1
+          RC=$?; [ $RC -eq 0 ] || { cat arm_output.txt; exit $RC; }
+
       - name: Extract hash
         run: |
-          grep "HASH:" arm_output.txt | head -1 | cut -d':' -f2 > arm_hash.txt
+          grep "HASH:" arm_output.txt | head -1 | cut -d':' -f2 | tr -d '[:space:]' > arm_hash.txt
+          [ -s arm_hash.txt ] || { echo "ERROR: no HASH line in test output"; cat arm_output.txt; exit 1; }
           cat arm_hash.txt
           
       - name: Upload hash artifact
@@ -117,22 +122,22 @@ jobs:
             target/
           key: ${{ runner.os }}-wasm-cargo-${{ hashFiles('**/Cargo.lock') }}
           
-      - name: Build kernel for WASM
+      - name: Build kernel for WASM (no_std gate)
         run: |
           cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release
-          
-      - name: Install wasmtime
+
+      - name: Run determinism_wasm test (native runner — WASM build above is the no_std gate)
         run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
-          echo "$HOME/.wasmtime/bin" >> $GITHUB_PATH
-          
-      - name: Run WASM determinism test
-        run: |
-          cargo test -p valori-node --test multi_arch_determinism --release determinism_wasm -- --nocapture --test-threads=1 > wasm_output.txt 2>&1 || true
-          
+          # The determinism_wasm test function runs on the native x86 runner.
+          # Cross-arch determinism is guaranteed by Q16.16 fixed-point math, not
+          # by running in a WASM VM. The WASM build step above is the real check.
+          cargo test -p valori-node --test multi_arch_determinism --release determinism_wasm -- --nocapture --test-threads=1 > wasm_output.txt 2>&1
+          RC=$?; [ $RC -eq 0 ] || { cat wasm_output.txt; exit $RC; }
+
       - name: Extract hash
         run: |
-          grep "HASH:" wasm_output.txt | head -1 | cut -d':' -f2 > wasm_hash.txt
+          grep "HASH:" wasm_output.txt | head -1 | cut -d':' -f2 | tr -d '[:space:]' > wasm_hash.txt
+          [ -s wasm_hash.txt ] || { echo "ERROR: no HASH line in test output"; cat wasm_output.txt; exit 1; }
           cat wasm_hash.txt
           
       - name: Upload hash artifact
