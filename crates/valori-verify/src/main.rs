@@ -82,6 +82,9 @@ enum Failure {
         byte_offset: usize,
         detail: String,
     },
+    EntryCapExceeded {
+        entries: u64,
+    },
 }
 
 fn entry_summary(entry: &LogEntry) -> String {
@@ -102,8 +105,16 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
     // (recorded in the header); v2 and genesis segments start from zeros.
     let mut chain_head = header.prev_segment_chain_head;
     let mut last_entry_summary = String::from("<none>");
+    let mut entries_decoded: u64 = 0;
 
     while offset < body.len() {
+        if entries_decoded >= valori_wire::MAX_ENTRIES_PER_SEGMENT {
+            return ReplayOutcome {
+                state, events_applied, checkpoints_seen, chain_head,
+                failure: Some(Failure::EntryCapExceeded { entries: entries_decoded }),
+            };
+        }
+        entries_decoded += 1;
         let chained = match decode_entry(header.version, &body[offset..]) {
             Ok((ce, n)) => { offset += n; ce }
             Err(_) => {
@@ -258,6 +269,11 @@ fn build_report(
             "kernel_error": detail,
             "events_clean_before_rejection": outcome.events_applied,
         }),
+        Some(Failure::EntryCapExceeded { entries }) => serde_json::json!({
+            "type": "structural",
+            "entries_decoded": entries,
+            "detail": "segment exceeds MAX_ENTRIES_PER_SEGMENT — likely crafted or corrupted",
+        }),
     };
 
     serde_json::json!({
@@ -371,6 +387,13 @@ fn main() -> ExitCode {
                 println!("    entry #{event_no} failed to decode at byte offset {byte_offset}");
                 println!("    {bytes_remaining} trailing bytes are unreadable");
                 println!("    events #1..#{} replayed cleanly before the damage", outcome.events_applied);
+            }
+            Failure::EntryCapExceeded { entries } => {
+                verdict = "tampered_structural";
+                println!();
+                println!("❌  TAMPERED (structural)");
+                println!("    segment contains more than {entries} entries — exceeds MAX_ENTRIES_PER_SEGMENT;");
+                println!("    the file is likely crafted or corrupted");
             }
             Failure::Apply { event_no, byte_offset, detail } => {
                 verdict = "tampered_semantic";

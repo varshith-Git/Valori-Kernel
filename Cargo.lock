@@ -4082,7 +4082,7 @@ dependencies = [
  "blake3",
  "crc32fast",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "valori-kernel",
 ]
 
