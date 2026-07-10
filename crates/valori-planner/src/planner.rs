@@ -15,7 +15,7 @@ use crate::error::{PlannerError, PlannerResult};
 use crate::graph::{ExecutionGraph, TaskEdge, TaskSpec, TaskId, TaskKind};
 use crate::operation::Operation;
 use crate::registry::{CacheKey, ExecutionCache};
-use valori_metadata::history::ExecutionRetentionPolicy;
+use crate::graph::ExecutionRetentionPolicy;
 
 // ── Planner trait ─────────────────────────────────────────────────────────────
 

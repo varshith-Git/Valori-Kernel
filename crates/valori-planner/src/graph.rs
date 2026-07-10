@@ -2,10 +2,24 @@
 //! ExecutionGraph — the deterministic DAG of Tasks produced by the Planner.
 use serde::{Deserialize, Serialize};
 use valori_core::id::ExecutionId;
-use valori_metadata::history::ExecutionRetentionPolicy;
 
 use crate::operation::{OperationHash};
 use crate::context::{PlannerFingerprint, PlanningContextHash};
+
+/// How long to retain the logical `ExecutionGraph` after completion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionRetentionPolicy {
+    /// Seconds to retain the logical graph. 0 = retain indefinitely.
+    pub logical_graph_ttl_secs: u64,
+}
+
+impl Default for ExecutionRetentionPolicy {
+    fn default() -> Self {
+        ExecutionRetentionPolicy {
+            logical_graph_ttl_secs: 30 * 24 * 3600, // 30 days
+        }
+    }
+}
 
 // ── TaskId ────────────────────────────────────────────────────────────────────
 
@@ -250,8 +264,6 @@ mod tests {
     use super::*;
     use crate::operation::{OperationHash, compute_operation_hash, OperationKind, OperationInputs, ExecutionPolicy};
     use crate::context::{PlannerFingerprint, PlanningContext, PlanningContextHash, CapabilitySet};
-    use valori_metadata::history::ExecutionRetentionPolicy;
-
     fn fingerprint() -> PlannerFingerprint {
         PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1)
     }

@@ -249,7 +249,7 @@ mod tests {
         use crate::operation::{OperationHash, OperationKind, OperationInputs, ExecutionPolicy, compute_operation_hash};
         use crate::context::{PlannerFingerprint, PlanningContextHash, PlanningContext, CapabilitySet};
         use crate::graph::ExecutionGraph;
-        use valori_metadata::history::ExecutionRetentionPolicy;
+        use crate::graph::ExecutionRetentionPolicy;
 
         let op = compute_operation_hash(OperationKind::HealthCheck, &OperationInputs::HealthCheck, &ExecutionPolicy::default());
         let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);

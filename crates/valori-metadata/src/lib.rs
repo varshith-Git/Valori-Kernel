@@ -10,13 +10,11 @@
 pub mod collection;
 pub mod db;
 pub mod error;
-pub mod history;
 pub mod planner_cache;
 pub mod project;
 
 pub use collection::{Collection, CollectionRegistry, MAX_COLLECTIONS};
 pub use db::MetadataDb;
 pub use error::{MetadataError, MetadataResult};
-pub use history::ExecutionRetentionPolicy;
 pub use planner_cache::{PlannerCacheEntry, PlannerCacheKey};
 pub use project::{ClusterNodeConfig, IndexKind, Project, ProjectMode};

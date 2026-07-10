@@ -392,13 +392,14 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
         "shard {shard_a:?}'s event log must be non-empty"
     );
 
-    // The chain must be well-formed: read_event_log decodes v3 entries AND
+    // The chain must be well-formed: read_all_segments decodes entries AND
     // verifies the BLAKE3 chain-advance as it goes — a broken/tampered
     // chain surfaces as an Err here, not just a byte-count check.
     // cluster_memory_upsert is a compound write (record + document node +
     // chunk node + ParentOf edge, all routed to the same shard) — assert
     // the record insert is among them rather than assuming exactly one event.
-    let events = valori_node::events::event_replay::read_event_log(&shard_a_path, Some(4)).unwrap();
+    let events: Vec<_> = valori_node::events::event_replay::read_all_segments(&shard_a_path, Some(4))
+        .unwrap().into_iter().map(|(_, e)| e).collect();
     assert!(!events.is_empty(), "the upsert must have committed at least one event to this shard");
     assert!(
         events.iter().any(|e| e.event_type() == "AutoInsertRecord"),
@@ -416,7 +417,8 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
         .expect("shard 0 always has a real audit sink when a path is configured");
     let shard0_path = shard0_writer.lock().unwrap().path().to_path_buf();
     assert_ne!(shard0_path, shard_a_path, "shard 0 and tenant-a's shard must have distinct files");
-    let shard0_events = valori_node::events::event_replay::read_event_log(&shard0_path, Some(4)).unwrap();
+    let shard0_events: Vec<_> = valori_node::events::event_replay::read_all_segments(&shard0_path, Some(4))
+        .unwrap().into_iter().map(|(_, e)| e).collect();
     assert!(
         shard0_events.iter().all(|e| e.event_type() != "AutoInsertRecord"),
         "tenant-a's AutoInsertRecord must not appear in shard 0's audit log: {:?}",

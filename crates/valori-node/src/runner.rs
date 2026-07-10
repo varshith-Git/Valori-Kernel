@@ -275,7 +275,7 @@ mod tests {
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
     use valori_planner::graph::ExecutionGraph;
     use valori_planner::operation::{ExecutionPolicy, compute_operation_hash, OperationKind, OperationInputs};
-    use valori_metadata::history::ExecutionRetentionPolicy;
+    use valori_planner::graph::ExecutionRetentionPolicy;
     use valori_planner::registry::ExecutionHandle;
     use valori_planner::operation::OperationId;
 

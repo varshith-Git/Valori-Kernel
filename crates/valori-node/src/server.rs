@@ -772,7 +772,7 @@ async fn insert_record(
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_metadata::history::ExecutionRetentionPolicy;
+    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
 
     // Resolve namespace under a short read lock (no write needed yet — insert
@@ -1830,7 +1830,7 @@ async fn get_operation_execution(
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind, TaskEdge};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_metadata::history::ExecutionRetentionPolicy;
+    use valori_planner::graph::ExecutionRetentionPolicy;
 
     let engine = state.read().await;
     let Some(committer) = engine.event_committer() else {
