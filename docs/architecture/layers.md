@@ -15,16 +15,30 @@ Referenced by: `CONTRIBUTING.md`, `CLAUDE.md`.
 ## Dependency graph
 
 ```
-valori-core
-    └── valori-kernel  (no_std — the deterministic core)
-            └── valori-wire  (shared serde types + event-log wire format)
-                    └── valori-storage  (WAL + event log + object store — bytes on disk)
-                            └── valori-state  (recovery orchestration — bootstrap only)
-                                    ├── valori-consensus  (Raft state machine, wraps kernel)
-                                    └── valori-node  (HTTP server + cluster orchestration)
-                                            ├── valori-ffi  (PyO3 embedded SDK)
-                                            └── valori-verify  (standalone audit binary + library)
+valori-core                       (ID types, shared errors, no_std)
+  ├── valori-kernel               (no_std — deterministic vector store + audit chain)
+  │     └── valori-wire          (serde structs + V2/V3/V4 event-log wire format)
+  │           ├── valori-storage (WAL + event log + object store — bytes on disk)
+  │           │     └── valori-state  (recovery orchestration — bootstrap only)
+  │           │           └── ┐
+  │           └── valori-verify (chain replay + audit binary)
+  │                 └── ┐
+  ├── valori-metadata            (control-plane redb store — projects, collections, planner cache)
+  │     └── valori-planner       (operation→task-DAG planning + two-layer cache)
+  │           └── valori-effect  (EffectBus — routes kernel writes, receipts, metrics)
+  │                 └── ┐
+  └── valori-consensus           (openraft Raft state machine, one per ShardId)
+        └── ┐
+            valori-node          (axum HTTP server — standalone + cluster paths)
+              ├── valori-ffi     (PyO3 embedded SDK, wraps Engine)
+              ├── valori-mcp     (MCP stdio server — verifiable agent memory)
+              └── valori-cli     (CLI binary — setup wizard, cluster, timeline)
 ```
+
+Lines marked `└── ┐` converge into `valori-node` (which depends on all of the
+crates above it). The full direct dependency list for `valori-node` is:
+`valori-core`, `valori-kernel`, `valori-wire`, `valori-storage`, `valori-state`,
+`valori-consensus`, `valori-metadata`, `valori-planner`, `valori-effect`.
 
 **Layering rule**: arrows point downward only. No crate may import from a crate
 above it. Adding an upward import is an architecture violation — move the shared
@@ -125,6 +139,13 @@ shared error types, cross-crate traits.
 **Does not own**: any I/O, any business logic.  
 **Constraint**: `no_std` + minimal deps (`serde`, `thiserror`, `getrandom` behind `std`).
 
+| Item | Visibility | Notes |
+|---|---|---|
+| `RecordId`, `NodeId`, `EdgeId`, `NamespaceId`, `CollectionId`, `ShardId`, `ClusterEpoch`, `ExecutionId` | Public — used externally | Every crate that addresses entities imports from here |
+| `NodeKind`, `EdgeKind` | Public — used externally | Graph node/edge type enums |
+| `CoreError`, `Result` | Public — used externally | Base error type |
+| `Version` | Public — used externally | Semantic version helper |
+
 ---
 
 ### `valori-kernel` — deterministic vector store
@@ -134,6 +155,19 @@ snapshot encode/decode (V7 current), fixed-point arithmetic (`FxpScalar` / `FxpV
 HNSW/BQ/IVF index structures, BLAKE3 audit helpers.  
 **Does not own**: file I/O, network I/O, thread spawning, wall-clock time.  
 **Constraint**: `no_std`. See invariant above.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `KernelState` (`state::kernel`) | Public — used externally | Central mutable state; apply events through `apply_event_ns` only |
+| `KernelEvent` (`event`) | Public — used externally | Every mutation variant; stable contract |
+| `KernelConfig` (`config`) | Public — used externally | Dimension, capacity, index kind |
+| `FxpScalar`, `FxpVector` (`fxp`) | Public — used externally | Q16.16 fixed-point arithmetic |
+| `encode_snapshot`, `decode_snapshot` (`snapshot`) | Public — used externally | V7 snapshot format; format version is a stable contract |
+| `hash_state_blake3` (`crypto`) | Public — used externally | Merkle state hash; domain is a stable contract |
+| `HnswIndex`, `BruteForceIndex`, `IvfIndex`, `BqIndex` (`index`) | Public — used externally | Index impls; swappable via `KernelConfig` |
+| `RecordPool`, `Record` (`storage`) | Public — internal only | Slab allocator; not part of the external contract |
+| `GraphNode`, adjacency helpers (`graph`) | Public — internal only | Knowledge-graph node store |
+| `dot`, `l2_sq` (`math`) | Public — internal only | SIMD-dispatched inner product and L2; used by index impls |
 
 ---
 
@@ -148,6 +182,17 @@ Note: V4 format includes a per-entry CRC. Any byte corruption in an entry body
 is caught as `Failure::Decode` before the BLAKE3 chain check fires. This means
 `valori-verify` may return `tampered_structural` rather than `tampered_chain`
 for arbitrary byte flips — both are valid detections.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `LogEntry`, `AdminEvent` | Public — used externally | Union of event variants written to the log |
+| `EntryV2`, `EntryV3`, `EntryV4` (`EntryV4 = EntryV3`) | Public — used externally | Wire structs; V4 is a stable format contract |
+| `DecodedEntry`, `SegmentHeader` | Public — used externally | Decode output types |
+| `parse_header`, `encode_header_v3`, `encode_header_v4`, `encode_header_v2` | Public — used externally | Header encode/decode |
+| `decode_entry`, `encode_entry` | Public — used externally | Entry-level codec; used by storage and verify |
+| `chain_advance_v2`, `chain_advance_v3`, `chain_advance` | Public — used externally | BLAKE3 chain helpers; used by storage and verify |
+| `hex`, `format_utc` | Public — used externally | Formatting utilities |
+| `WireError` | Public — used externally | Error type |
 
 ---
 
@@ -168,6 +213,18 @@ Key distinction — two different BLAKE3 operations, two different purposes:
 - `compute_event_log_hash` = BLAKE3 of raw file bytes (quick integrity, HTTP layer)
 - `valori_verify::verify_log_file` = entry-by-entry chain replay + BLAKE3 (full audit)
 
+| Item | Visibility | Notes |
+|---|---|---|
+| `WalWriter`, `WalReader`, `WalHeader`, `WalEntryIterator` | Public — used externally | WAL write/read primitives; called by `valori-state` |
+| `EventLogWriter` | Public — used externally | Appends V4 entries; stable contract |
+| `recover_from_event_log` | Public — used externally | Replays a log file into `KernelState`; called by `valori-state::bootstrap` |
+| `read_all_segments` | Public — used externally | Multi-segment log reader returning `(namespace_id, KernelEvent)` tuples |
+| `EventJournal`, `EventCommitter`, `CommitResult` | Public — used externally | Write path helpers used by `valori-node` |
+| `compute_event_log_hash` | Public — used externally | File-level BLAKE3; used by `/v1/proof/event-log` endpoint |
+| `ObjectStoreBackend` | Public — used externally | S3/file snapshot offload + WAL archival |
+| `StorageError` | Public — used externally | Error type |
+| `LegacyWalCommand` | Public — internal only | V1 backward-compat deserializer; not a forward contract |
+
 ---
 
 ### `valori-state` — recovery orchestration
@@ -185,6 +242,69 @@ Key distinction — two different BLAKE3 operations, two different purposes:
 3. WAL — legacy fallback; replayed on top of existing state
 4. Fresh start — no durable state found
 
+| Item | Visibility | Notes |
+|---|---|---|
+| `recover_from_events` | Public — used externally | The one and only recovery entry point; called by `valori-node` startup |
+| `BootstrapMode` | Public — used externally | Enum describing which path was taken (EventLog / Snapshot / Wal / Fresh) |
+| `StateError`, `StateResult` | Public — used externally | Error type |
+| `has_wal`, `has_event_log`, `load_snapshot`, `validate_snapshot`, `replay_wal` | Internal (`pub(crate)`) | Implementation details of `recover_from_events`; not stable API |
+
+---
+
+### `valori-metadata` — control-plane persistence
+
+**Owns**: `MetadataDb` (redb-backed store), `Project`, `Collection`,
+`CollectionRegistry`, `PlannerCacheEntry`/`PlannerCacheKey`.  
+**Does not own**: kernel state, snapshot bytes, Raft log — those are in their
+respective crates.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `MetadataDb` | Public — used externally | Opens/creates `~/.valori/metadata.redb`; the single control-plane store |
+| `Project`, `ProjectMode`, `IndexKind`, `ClusterNodeConfig` | Public — used externally | Project config types persisted by the UI / CLI |
+| `Collection`, `CollectionRegistry`, `MAX_COLLECTIONS` | Public — used externally | Collection↔NamespaceId mapping; registry is rebuilt at startup |
+| `PlannerCacheEntry`, `PlannerCacheKey` | Public — used externally | Planner graph cache persisted across restarts |
+| `MetadataError`, `MetadataResult` | Public — used externally | Error type |
+
+---
+
+### `valori-planner` — operation planning
+
+**Owns**: `Planner` trait, `IngestPlanner`, `NoOpPlanner`, `plan_with_cache`,
+`ExecutionGraph`, `TaskSpec`, `ExecutionRegistry`, `ExecutionCache`.  
+**Does not own**: HTTP routing, kernel mutations — it only produces a `TaskSpec`
+DAG; execution happens in `valori-node`.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `Operation`, `OperationId`, `OperationHash`, `OperationKind`, `OperationInputs` | Public — used externally | Stable input contract; hash identifies operation uniquely |
+| `ExecutionPolicy`, `ConsistencyLevel`, `ResourceBudget` | Public — used externally | Per-operation execution constraints |
+| `PlanningContext`, `CapabilitySet`, `PlannerFingerprint`, `PlanningContextHash` | Public — used externally | Context fed into planner to produce deterministic DAGs |
+| `ExecutionGraph`, `GraphHash`, `TaskId`, `TaskSpec`, `TaskKind`, `TaskEdge` | Public — used externally | Output of planning; consumed by `valori-effect` and `valori-node` |
+| `ExecutionRetentionPolicy` | Public — used externally | Retention config carried on `ExecutionGraph` |
+| `Planner`, `IngestPlanner`, `NoOpPlanner`, `plan_with_cache` | Public — used externally | Planning entry points |
+| `ExecutionRegistry`, `ExecutionCache`, `ExecutionContext`, `ExecutionHandle`, `ExecutionStatus`, `TaskState`, `CacheKey` | Public — used externally | Runtime execution tracking |
+| `PlannerError`, `PlannerResult` | Public — used externally | Error type |
+
+---
+
+### `valori-effect` — effect system
+
+**Owns**: `EffectBus`, the seven capability traits, `Receipt`, `ReceiptAssembler`,
+`ReceiptEnvelope`, `ReceiptStore`, `verify_receipt`.  
+**Does not own**: HTTP routing, kernel — effects are routed through the bus to
+capability implementations registered in `valori-node`.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `EffectBus` | Public — used externally | Routes kernel writes, receipts, audit entries, and metrics from task execution |
+| `KernelCapability`, `EmbedCapability`, `LlmCapability`, `StorageCapability`, `HttpCapability`, `ProofCapability`, `SchedulerCapability` | Public — used externally | The seven capability traits; implementations live in `valori-node` |
+| `CapabilityRegistry`, `NoOpKernelCapability` | Public — used externally | Registry for wiring capabilities; NoOp for tests |
+| `Effect`, `EffectId`, `EffectDurability`, `EffectPayload`, `KernelCommand`, `ReceiptFragment` | Public — used externally | Core effect types |
+| `Receipt`, `ReceiptAssembler`, `ReceiptEnvelope`, `ReceiptHash`, `ReceiptStore`, `StateHash`, `verify_receipt` | Public — used externally | BLAKE3 receipt chain; returned to callers as proof of execution |
+| `Task`, `NoOpTask`, `TaskContext`, `TaskOutput` | Public — used externally | Task trait + context passed during execution |
+| `EffectError`, `EffectResult` | Public — used externally | Error type |
+
 ---
 
 ### `valori-consensus` — Raft state machine
@@ -198,6 +318,17 @@ Partitioning: one `ValoriStateMachine` per `ShardId`. Today's routing is
 `namespace_id % shard_count`. Future routing strategies must remain
 deterministic — consensus owns partitioning, and any change to the routing
 function is a breaking change to the audit chain.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `ValoriStateMachine` | Public — used externally | openraft state machine; one per `ShardId` |
+| `ClientRequest`, `ClientResponse` | Public — used externally | Stable cluster write contract |
+| `ValoriNode` | Public — used externally | openraft `Node` impl (gRPC address) |
+| `ValoriLogStore` (trait), `RedbLogStore` | Public — used externally | Log store trait + redb-backed impl |
+| `RaftNetworkFactory`, `RaftNetwork`, `RaftNetworkConnection` | Public — used externally | gRPC peer transport |
+| `AuditSink`, `MemoryAuditSink`, `NullAuditSink` | Public — used externally | Pluggable audit-entry sink; production uses `EventLogWriter` |
+| `ShardId`, `NodeId`, `LogId`, `Vote`, `Entry`, `Raft` | Public — used externally | openraft type aliases; `ShardId` re-exported from `valori-core` |
+| `partition_harness` | Public — internal only | Test-only chaos harness for replication divergence tests |
 
 ---
 
@@ -219,6 +350,20 @@ trait pattern. `tests/route_parity.rs` mechanically enforces that every `/v1`
 route exists in both routers (or is listed in `STANDALONE_ONLY` / `CLUSTER_ONLY`
 with a documented reason).
 
+| Item | Visibility | Notes |
+|---|---|---|
+| `Engine`, `SharedEngine` | Public — used externally | Standalone engine wrapper; used by `valori-ffi`, `valori-mcp`, `valori-cli` |
+| `NodeConfig` | Public — used externally | All `VALORI_*` env-var config; used by callers that start a node programmatically |
+| `build_router` (standalone), `build_cluster_router` | Public — used externally | axum router constructors; used in integration tests |
+| `ClusterHandle` | Public — used externally | Cluster startup handle; holds shard handles + watcher tasks |
+| `events::event_replay::read_all_segments` | Public — used externally | Re-exported from `valori-storage`; used by cluster integration tests |
+| `events::event_proof::compute_event_log_hash` | Public — used externally | File-level BLAKE3; `/v1/proof/event-log` endpoint |
+| `decay` (`rerank`, `decay_factor`) | Public — internal only | Read-time decay re-rank; pure, never mutates state |
+| `community` (`CommunityStore`, `label_propagation`, etc.) | Public — internal only | Phase I6 community layer; std-only |
+| `tree_rag` (`TreeIndex`, `tree_verify`, etc.) | Public — internal only | Phase I5 Tree-RAG; std-only |
+| `valori_reranker` (`ValoriReranker`) | Public — internal only | Phase C5 hybrid vector+term reranker; std-only |
+| `graph_rag` (`expand_subgraph`, `resolve_seed_nodes`) | Public — internal only | GraphRAG traversal; shared by standalone and cluster routers |
+
 ---
 
 ### `valori-verify` — standalone audit binary + library
@@ -229,6 +374,12 @@ the `valori-verify` binary.
 `tampered_semantic`, `tampered_content`.  
 **Constraint**: std-only. Never import into `valori-kernel`.
 
+| Item | Visibility | Notes |
+|---|---|---|
+| `verify_log_file(path) -> Value` | Public — used externally | Full audit: replays every entry, checks CRC + BLAKE3 chain; returns JSON report with `verdict` and `replay.chain_head` |
+| `valori_wire` (re-exported) | Public — used externally | Re-exports `valori-wire` for callers that need wire types alongside verification |
+| `valori-anchor` binary | Binary | Alias for the `valori-verify` binary under an alternate name |
+
 ---
 
 ### `valori-ffi` — PyO3 embedded SDK
@@ -238,6 +389,48 @@ the `valori-verify` binary.
 **Constraint**: std-only. Lock engine with `lock_engine!` macro; never bypass
 the lock. Use `save_snapshot()` (flushes WAL pending writes) — `save()` was
 deleted because it skipped the flush.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `ValoricoreEngine` (`#[pyclass]`) | Public — Python API | Wraps `Engine` for in-process Python; exposes insert, search, graph, snapshot methods |
+| All `#[pyfunction]` bindings | Public — Python API | The embedded SDK surface: `insert_record`, `search_records`, `create_namespace`, etc. |
+| `lock_engine!` macro | Internal | Safety macro; ensures every method holds the mutex for its full duration |
+
+---
+
+### `valori-mcp` — Model Context Protocol server
+
+**Owns**: MCP stdio server, `memory_recall` tool (returns BLAKE3 receipt),
+`McpServer`, `tool_definitions`.  
+**Constraint**: std-only. Depends on `valori-node` for all state access.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `McpServer<C>` | Public — binary entrypoint | Generic over `NodeClient`; serves MCP protocol over stdio |
+| `tool_definitions()` | Public — used externally | Returns the MCP tool manifest (tool names + JSON schemas) |
+| `backend` module | Public — internal only | `NodeClient` trait + HTTP client impl for talking to a running `valori-node` |
+| `protocol`, `stdio`, `receipt` modules | Public — internal only | MCP wire protocol + receipt serialization |
+
+---
+
+### `valori-cli` — CLI binary
+
+**Owns**: `valori` binary — `setup` wizard, `cluster` subcommand, `timeline`
+subcommand, `verify`, `diff`, `inspect`, `import`, `replay-query`.  
+**Constraint**: std-only. Talks to a running `valori-node` over HTTP or starts
+one in-process.
+
+| Item | Visibility | Notes |
+|---|---|---|
+| `commands::wizard` | Internal | Interactive `setup` wizard for new projects |
+| `commands::cluster` | Internal | Cluster management subcommands (add-node, remove-node, status) |
+| `commands::timeline` | Internal | Replays the audit log and renders a timeline view |
+| `commands::verify` | Internal | Calls `valori-verify` on a local log file |
+| `commands::diff` | Internal | Diffs two snapshot or log files |
+| `commands::inspect` | Internal | Inspects snapshot or log file contents |
+| `commands::import` | Internal | Bulk-imports records from CSV/JSON |
+| `commands::replay_query` | Internal | Replays a query against a historical snapshot |
+| `engine` module | Internal | In-process engine startup helper used by CLI subcommands |
 
 ---
 
