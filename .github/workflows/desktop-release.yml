@@ -93,6 +93,11 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      # ── Desktop npm dependencies (provides @tauri-apps/cli) ─────────────────
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: desktop
+
       # ── Build + sign + publish via tauri-action ───────────────────────────────
       # tauri-action handles:
       #   1. `tauri build` (which runs beforeBuildCommand: prepare-sidecars + prepare-ui-server)
