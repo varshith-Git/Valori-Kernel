@@ -6,14 +6,15 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use std::path::PathBuf;
 use valori_node::events::event_log::LogEntry;
+use valori_wire::{decode_entry, parse_header};
 
 const DEFAULT_SNAPSHOT: &str = "snapshot.val";
-const DEFAULT_LOG:      &str = "events.log";
+const DEFAULT_LOG: &str = "events.log";
 
 pub fn run(
-    dir:          Option<PathBuf>,
+    dir: Option<PathBuf>,
     snapshot_arg: Option<String>,
-    log_arg:      Option<String>,
+    log_arg: Option<String>,
 ) -> anyhow::Result<()> {
     let (s_path, w_path) = match &dir {
         Some(d) => (d.join(DEFAULT_SNAPSHOT), d.join(DEFAULT_LOG)),
@@ -88,7 +89,9 @@ pub fn run(
                     };
                     table.add_row(vec![
                         Cell::new("snapshot.val"),
-                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new("OK")
+                            .fg(Color::Green)
+                            .add_attribute(Attribute::Bold),
                         Cell::new(detail),
                     ]);
                 }
@@ -123,21 +126,30 @@ pub fn run(
                 ]);
             }
             Ok(bytes) => {
-                let log_version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-                let dim         = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                let header = match parse_header(&bytes) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        table.add_row(vec![
+                            Cell::new("events.log"),
+                            Cell::new("CORRUPT").fg(Color::Red),
+                            Cell::new(format!("Invalid header: {e}")),
+                        ]);
+                        println!("{table}\n");
+                        return Ok(());
+                    }
+                };
+                let log_version = header.version;
+                let dim = header.dim;
                 let mut event_count: u64 = 0;
-                let mut offset = 16usize;
+                let mut offset = header.header_len;
                 let mut corrupt_msg: Option<String> = None;
 
                 'parse: while offset < bytes.len() {
-                    match bincode::serde::decode_from_slice::<LogEntry, _>(
-                        &bytes[offset..],
-                        bincode::config::standard(),
-                    ) {
-                        Ok((entry, n)) => {
+                    match decode_entry(header.version, &bytes[offset..]) {
+                        Ok((chained, n)) => {
                             offset += n;
-                            match entry {
-                                LogEntry::Event(_) => event_count += 1,
+                            match chained.entry {
+                                LogEntry::Event(_) | LogEntry::EventNs { .. } => event_count += 1,
                                 LogEntry::Checkpoint { event_count: c, .. } => {
                                     event_count = c;
                                 }
@@ -162,7 +174,9 @@ pub fn run(
                 } else {
                     table.add_row(vec![
                         Cell::new("events.log"),
-                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new("OK")
+                            .fg(Color::Green)
+                            .add_attribute(Attribute::Bold),
                         Cell::new(format!(
                             "{:.2} KB  │  {} event(s)  │  dim {}  │  log-version {}",
                             bytes.len() as f64 / 1024.0,

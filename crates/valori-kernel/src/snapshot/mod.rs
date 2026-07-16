@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-pub mod encode;
-pub mod decode;
-pub mod hash;
 pub mod blake3;
+pub mod decode;
+pub mod encode;
+pub mod hash;

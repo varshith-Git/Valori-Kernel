@@ -7,7 +7,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig};
 use valori_node::cluster_server::build_cluster_router;
 
@@ -20,14 +19,21 @@ async fn serve_node() -> (String, tokio::task::JoinHandle<()>) {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -59,7 +65,11 @@ async fn cli_status_and_health_against_a_live_node() {
     .await
     .unwrap();
     let stdout = String::from_utf8_lossy(&status_out.stdout);
-    assert!(status_out.status.success(), "stderr: {}", String::from_utf8_lossy(&status_out.stderr));
+    assert!(
+        status_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&status_out.stderr)
+    );
     assert!(stdout.contains("leader"), "{stdout}");
     assert!(stdout.contains("term"), "{stdout}");
 

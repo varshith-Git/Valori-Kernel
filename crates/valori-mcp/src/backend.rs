@@ -22,12 +22,16 @@ pub trait NodeClient: Send + Sync {
     ) -> Result<Value>;
 
     /// `POST /v1/memory/search_vector`
+    #[allow(clippy::too_many_arguments)]
     async fn memory_search(
         &self,
         query_vector: Vec<f32>,
         k: usize,
         collection: Option<String>,
         decay_half_life_secs: Option<u64>,
+        metadata_filter: Option<Value>,
+        rerank: bool,
+        query_text: Option<String>,
     ) -> Result<Value>;
 
     /// `GET /v1/proof/state` → 64-hex state hash.
@@ -70,7 +74,11 @@ impl HttpBackend {
     pub fn new(base_url: impl Into<String>, auth_token: Option<String>) -> Self {
         let base_url = base_url.into();
         let base_url = base_url.trim_end_matches('/').to_string();
-        Self { base_url, auth_token, http: reqwest::Client::new() }
+        Self {
+            base_url,
+            auth_token,
+            http: reqwest::Client::new(),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -133,12 +141,16 @@ impl NodeClient for HttpBackend {
         self.post_json("/v1/memory/upsert_vector", body).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn memory_search(
         &self,
         query_vector: Vec<f32>,
         k: usize,
         collection: Option<String>,
         decay_half_life_secs: Option<u64>,
+        metadata_filter: Option<Value>,
+        rerank: bool,
+        query_text: Option<String>,
     ) -> Result<Value> {
         let mut body = json!({ "query_vector": query_vector, "k": k });
         if let Some(c) = collection {
@@ -146,6 +158,15 @@ impl NodeClient for HttpBackend {
         }
         if let Some(h) = decay_half_life_secs.filter(|&v| v > 0) {
             body["decay_half_life_secs"] = json!(h);
+        }
+        if let Some(f) = metadata_filter {
+            body["metadata_filter"] = f;
+        }
+        if rerank {
+            body["rerank"] = json!(true);
+            if let Some(t) = query_text {
+                body["query_text"] = json!(t);
+            }
         }
         self.post_json("/v1/memory/search_vector", body).await
     }
@@ -159,19 +180,26 @@ impl NodeClient for HttpBackend {
     }
 
     async fn proof_event_log(&self) -> Result<Option<(String, u64)>> {
-        // The node returns 400 when no event log is enabled — treat that as
-        // "no event-log proof available" rather than a hard error, so recall
-        // still works against an in-memory node (with a weaker receipt).
+        // The node returns 400 (BAD_REQUEST) when no event log is enabled —
+        // treat that as "no event-log proof available" rather than a hard error,
+        // so recall still works against an in-memory node (with a weaker receipt).
+        //
+        // Transport errors (connection refused, timeout, DNS) are NOT silently
+        // swallowed: if the node was reachable for proof_state but then fails
+        // here, the receipt would be silently downgraded. Propagate those as Err.
         let req = self.auth(self.http.get(self.url("/v1/proof/event-log")));
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(_) => return Ok(None),
-        };
+        let resp = req.send().await.context("GET /v1/proof/event-log")?;
         if !resp.status().is_success() {
+            // Any 4xx/5xx → node has no event log or it is temporarily
+            // unavailable. Return None so the receipt is issued without the
+            // event-log binding rather than failing the entire recall.
             return Ok(None);
         }
         let v: Value = resp.json().await.unwrap_or(json!({}));
-        let hash = v.get("event_log_hash").and_then(|h| h.as_str()).map(|s| s.to_string());
+        let hash = v
+            .get("event_log_hash")
+            .and_then(|h| h.as_str())
+            .map(|s| s.to_string());
         let height = v.get("committed_height").and_then(|h| h.as_u64());
         match (hash, height) {
             (Some(h), Some(n)) => Ok(Some((h, n))),
@@ -213,7 +241,8 @@ impl NodeClient for HttpBackend {
     }
 
     async fn crypto_shred(&self, key_id: String) -> Result<Value> {
-        self.delete_json(&format!("/v1/crypto/shred/{key_id}")).await
+        self.delete_json(&format!("/v1/crypto/shred/{key_id}"))
+            .await
     }
 
     async fn snapshot_save(&self) -> Result<Value> {

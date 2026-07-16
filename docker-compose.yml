@@ -49,10 +49,9 @@ services:
       VALORI_BIND: "0.0.0.0:3000"
 
       # ── Persistence ───────────────────────────────────────────────────────
-      VALORI_EVENT_LOG_PATH: /data/events.log
-      VALORI_SNAPSHOT_PATH:  /data/state.snap
-      VALORI_SNAPSHOT_EVERY_EVENTS: "10000"   # snapshot cadence
-      VALORI_SNAPSHOT_KEEP: "3"               # keep last N snapshots
+      VALORI_EVENT_LOG_PATH:      /data/events.log
+      VALORI_SNAPSHOT_PATH:       /data/state.snap
+      VALORI_SNAPSHOT_INTERVAL:   "60"     # write a snapshot every 60 s (survives kill -9)
 
       # ── Auth (optional) ───────────────────────────────────────────────────
       # VALORI_AUTH_TOKEN: "change-me"        # uncomment to require Bearer token

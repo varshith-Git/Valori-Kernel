@@ -9,9 +9,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::backend::NodeClient;
-use crate::receipt::{
-    fingerprints_from_results, subgraph_fingerprint, Receipt, ReceiptBody,
-};
+use crate::receipt::{fingerprints_from_results, subgraph_fingerprint, Receipt, ReceiptBody};
 
 /// Tool names — underscore form (some MCP clients reject dots in tool names).
 pub const WRITE: &str = "memory_write";
@@ -47,6 +45,11 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Recall the k nearest memories to a query embedding AND a verifiable \
                             receipt: a BLAKE3 digest binding the exact result set to the committed \
                             state hash at recall time. Lets you prove later what the agent recalled. \
+                            Note: the state hash is captured in a separate round-trip after the \
+                            search; under concurrent writes it may reflect a slightly newer state \
+                            than the one that produced the results. Results are still valid members \
+                            of the bound state (the kernel is append-only), but the proof is \
+                            membership-in-state, not exact-k-nearest-of-state. \
                             Optionally pass decay_half_life_secs for recency-aware recall: older \
                             memories are ranked down (a memory one half-life old has its distance \
                             doubled), so fresh context surfaces over stale.",
@@ -57,7 +60,15 @@ pub fn tool_definitions() -> Vec<Value> {
                     "k": { "type": "integer", "minimum": 1, "default": 5 },
                     "collection": { "type": "string" },
                     "decay_half_life_secs": { "type": "integer", "minimum": 0,
-                        "description": "Recency half-life in seconds; 0/absent = no decay." }
+                        "description": "Recency half-life in seconds; 0/absent = no decay." },
+                    "metadata_filter": { "type": "object",
+                        "description": "Restrict results to records whose metadata satisfies all key/value predicates. \
+                                        Exact match or range operators: {\"year\": {\"gte\": 2020}}." },
+                    "rerank": { "type": "boolean", "default": true,
+                        "description": "When true (default) and query_text is provided, re-ranks candidates \
+                                        by hybrid BM25 + vector score before returning top-k." },
+                    "query_text": { "type": "string",
+                        "description": "Raw query text for BM25 hybrid re-ranking. Requires rerank=true." }
                 },
                 "required": ["query_vector"]
             }
@@ -66,9 +77,10 @@ pub fn tool_definitions() -> Vec<Value> {
             "name": GRAPH_RECALL,
             "description": "GraphRAG in one call: recall the k nearest memories AND the connected \
                             knowledge subgraph around them (sources, related entities, citations) up \
-                            to `depth` hops — from a single consistent snapshot. Returns a receipt \
-                            binding BOTH the hits and the subgraph. Replaces the Neo4j+vector-DB \
-                            two-system dance.",
+                            to `depth` hops. Returns a receipt binding BOTH the hits and the \
+                            subgraph. The state hash is captured after the graphrag call; under \
+                            concurrent writes it reflects a slightly newer state (same membership \
+                            guarantee as memory_recall). Replaces the Neo4j+vector-DB two-system dance.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -136,7 +148,10 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 fn now_unix() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 // H-2: rate-limit memory_fork to once per minute to prevent disk-exhaustion DoS.
@@ -166,12 +181,18 @@ fn parse_vector(args: &Value, field: &str) -> Result<Vec<f32>> {
         .and_then(|v| v.as_array())
         .ok_or_else(|| anyhow!("`{field}` is required and must be an array of numbers"))?;
     arr.iter()
-        .map(|n| n.as_f64().map(|f| f as f32).ok_or_else(|| anyhow!("`{field}` must contain only numbers")))
+        .map(|n| {
+            n.as_f64()
+                .map(|f| f as f32)
+                .ok_or_else(|| anyhow!("`{field}` must contain only numbers"))
+        })
         .collect()
 }
 
 fn opt_str(args: &Value, field: &str) -> Option<String> {
-    args.get(field).and_then(|v| v.as_str()).map(|s| s.to_string())
+    args.get(field)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Dispatch a `tools/call`. Returns the tool's JSON payload (the caller wraps it
@@ -197,10 +218,21 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let k = args.get("k").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
             let collection = opt_str(args, "collection");
             let decay = args.get("decay_half_life_secs").and_then(|v| v.as_u64());
+            let metadata_filter = args.get("metadata_filter").cloned();
+            let rerank = args.get("rerank").and_then(|v| v.as_bool()).unwrap_or(true);
+            let query_text = opt_str(args, "query_text");
             let query_dim = query.len();
 
             let results = client
-                .memory_search(query.clone(), k, collection, decay)
+                .memory_search(
+                    query.clone(),
+                    k,
+                    collection,
+                    decay,
+                    metadata_filter,
+                    rerank,
+                    query_text,
+                )
                 .await
                 .context("memory search failed")?;
 
@@ -241,13 +273,17 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
                 .context("graphrag failed")?;
 
             let state_hash = client.proof_state().await.context("fetching state proof")?;
-            let (event_log_hash, committed_height) = match client.proof_event_log().await.unwrap_or(None) {
-                Some((h, n)) => (Some(h), Some(n)),
-                None => (None, None),
-            };
+            let (event_log_hash, committed_height) =
+                match client.proof_event_log().await.unwrap_or(None) {
+                    Some((h, n)) => (Some(h), Some(n)),
+                    None => (None, None),
+                };
 
             let hits = resp.get("hits").cloned().unwrap_or(json!([]));
-            let subgraph = resp.get("subgraph").cloned().unwrap_or(json!({ "nodes": [], "edges": [] }));
+            let subgraph = resp
+                .get("subgraph")
+                .cloned()
+                .unwrap_or(json!({ "nodes": [], "edges": [] }));
 
             let body = ReceiptBody {
                 state_hash,
@@ -262,7 +298,7 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let receipt = Receipt::build(body, now_unix());
 
             Ok(json!({
-                "hits": hits,
+                "results": hits,
                 "subgraph": subgraph,
                 "seed_nodes": resp.get("seed_nodes").cloned().unwrap_or(json!([])),
                 "receipt": receipt,
@@ -273,7 +309,8 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             let root = args
                 .get("root")
                 .and_then(|v| v.as_u64())
-                .ok_or_else(|| anyhow!("`root` (graph node id) is required"))? as u32;
+                .ok_or_else(|| anyhow!("`root` (graph node id) is required"))?
+                as u32;
             let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(2) as u32;
             client.subgraph(root, depth).await
         }
@@ -288,7 +325,10 @@ pub async fn call_tool(client: &dyn NodeClient, name: &str, args: &Value) -> Res
             // H-1: guard irreversible crypto-shred behind an explicit confirmation flag.
             // This prevents prompt-injected agents from accidentally or maliciously
             // destroying data without the caller explicitly acknowledging it.
-            let confirmed = args.get("confirmation").and_then(|v| v.as_bool()).unwrap_or(false);
+            let confirmed = args
+                .get("confirmation")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !confirmed {
                 return Err(anyhow!(
                     "memory_forget requires `\"confirmation\": true`. \
@@ -345,7 +385,16 @@ mod tests {
             Ok(json!({ "memory_id": "mem-1", "record_id": 1,
                        "document_node_id": 10, "chunk_node_id": 11 }))
         }
-        async fn memory_search(&self, _q: Vec<f32>, _k: usize, _c: Option<String>, _d: Option<u64>) -> Result<Value> {
+        async fn memory_search(
+            &self,
+            _q: Vec<f32>,
+            _k: usize,
+            _c: Option<String>,
+            _d: Option<u64>,
+            _mf: Option<Value>,
+            _rr: bool,
+            _qt: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({ "results": [
                 { "memory_id": "mem-1", "record_id": 1, "score": 0.9, "metadata": {"text": "hi"} },
                 { "memory_id": "mem-2", "record_id": 2, "score": 0.5 }
@@ -360,7 +409,13 @@ mod tests {
         async fn subgraph(&self, root: u32, depth: u32) -> Result<Value> {
             Ok(json!({ "root": root, "depth": depth, "nodes": [], "edges": [] }))
         }
-        async fn graphrag(&self, _q: Vec<f32>, _k: usize, _d: u32, _c: Option<String>) -> Result<Value> {
+        async fn graphrag(
+            &self,
+            _q: Vec<f32>,
+            _k: usize,
+            _d: u32,
+            _c: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({
                 "hits": [
                     { "memory_id": "mem-1", "record_id": 1, "score": 0.9, "node_id": 11 }
@@ -400,8 +455,8 @@ mod tests {
         let args = json!({ "query_vector": [0.1, 0.2, 0.3, 0.4], "k": 1, "depth": 2 });
         let out = call_tool(&node, GRAPH_RECALL, &args).await.unwrap();
 
-        // The composed call returns hits AND the subgraph.
-        assert_eq!(out["hits"].as_array().unwrap().len(), 1);
+        // The composed call returns results AND the subgraph.
+        assert_eq!(out["results"].as_array().unwrap().len(), 1);
         assert_eq!(out["subgraph"]["nodes"].as_array().unwrap().len(), 2);
         assert_eq!(out["subgraph"]["edges"].as_array().unwrap().len(), 1);
 
@@ -468,14 +523,18 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_errors() {
         let node = FakeNode::default();
-        let err = call_tool(&node, "memory_nope", &json!({})).await.unwrap_err();
+        let err = call_tool(&node, "memory_nope", &json!({}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("unknown tool"));
     }
 
     #[tokio::test]
     async fn recall_without_query_vector_errors() {
         let node = FakeNode::default();
-        let err = call_tool(&node, RECALL, &json!({ "k": 3 })).await.unwrap_err();
+        let err = call_tool(&node, RECALL, &json!({ "k": 3 }))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("query_vector"));
     }
 }

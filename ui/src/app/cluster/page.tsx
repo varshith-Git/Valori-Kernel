@@ -22,9 +22,9 @@ export default function ClusterPage() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col gap-6 max-w-4xl">
+      <div className="flex flex-col gap-6 w-full max-w-[1600px]">
         <div className="h-7 w-40 animate-pulse rounded bg-accent" />
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {[1, 2, 3].map((i) => (
             <div key={i} className="h-36 animate-pulse rounded-xl bg-accent" />
           ))}
@@ -35,10 +35,10 @@ export default function ClusterPage() {
 
   if (error) {
     return (
-      <div className="max-w-2xl">
+      <div className="w-full max-w-[1600px]">
         <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
         <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/10 p-5">
-          <p className="text-sm text-red-400">Backend unreachable</p>
+          <p className="text-sm text-red-600 dark:text-red-400">Backend unreachable</p>
           <p className="mt-1 text-xs text-red-700">{String(error)}</p>
         </div>
       </div>
@@ -47,7 +47,7 @@ export default function ClusterPage() {
 
   if (isStandalone) {
     return (
-      <div className="max-w-2xl">
+      <div className="w-full max-w-[1600px]">
         <h1 className="text-xl font-semibold text-foreground">Cluster Health</h1>
         <div className="mt-6 rounded-xl border border-border bg-card p-8 text-center">
           <p className="text-sm text-muted-foreground font-medium">Running in standalone mode</p>
@@ -71,7 +71,7 @@ export default function ClusterPage() {
       : null;
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -108,7 +108,7 @@ export default function ClusterPage() {
       </div>
 
       {/* Raft stats row */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="This Node" value={nodeId != null ? `node-${nodeId}` : "—"} />
         <StatCard
           label="Role"
@@ -133,7 +133,7 @@ export default function ClusterPage() {
         <h2 className="text-sm font-medium text-muted-foreground mb-3">
           Members ({members.length})
         </h2>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
           {members.map((m) => (
             <NodeCard
               key={m.id}
@@ -148,7 +148,7 @@ export default function ClusterPage() {
       {/* Lag warning */}
       {lag != null && lag > 10 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
-          <p className="text-sm text-amber-400 font-medium">
+          <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">
             Apply lag: {lag} entries behind committed log
           </p>
           <p className="mt-1 text-xs text-amber-700">
@@ -187,7 +187,7 @@ function StatCard({
       <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</p>
       <p
         className={`mt-1.5 font-mono text-xl font-semibold ${
-          highlight ? "text-emerald-400" : warn ? "text-amber-400" : "text-foreground"
+          highlight ? "text-emerald-600 dark:text-emerald-400" : warn ? "text-amber-600 dark:text-amber-400" : "text-foreground"
         }`}
       >
         {value}

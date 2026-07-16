@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::structure::deterministic::kmeans::deterministic_kmeans;
+use valori_index::deterministic_kmeans;
 
 /// Q16.16 scale factor — same value used in the kernel.
 const SCALE: f32 = 65536.0;

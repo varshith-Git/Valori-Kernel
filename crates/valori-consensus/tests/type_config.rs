@@ -21,8 +21,7 @@ fn sample_event() -> KernelEvent {
 }
 
 const REQ_ID: [u8; 16] = [
-    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-    0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
 ];
 
 // ── ClientRequest: the replicated command ─────────────────────────────────────
@@ -33,6 +32,7 @@ fn client_request_roundtrips_through_serde_json() {
         event: sample_event(),
         request_id: Some(REQ_ID),
         schema_version: 0,
+        namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: ClientRequest = serde_json::from_str(&json).unwrap();
@@ -48,6 +48,7 @@ fn client_request_without_request_id_decodes_with_default() {
         event: KernelEvent::DeleteRecord { id: RecordId(3) },
         request_id: None,
         schema_version: 0,
+        namespace_id: 0,
     })
     .unwrap();
     let stripped = json.replace(",\"request_id\":null", "");
@@ -65,6 +66,7 @@ fn client_response_roundtrips_and_dedup_flag_defaults_false() {
         allocated_record_id: None,
         allocated_node_id: None,
         allocated_edge_id: None,
+        allocated_namespace_id: None,
     };
     let json = serde_json::to_string(&resp).unwrap();
     // Strip the flag — old responses without it must still decode.
@@ -88,8 +90,14 @@ fn valori_node_roundtrips_and_displays_both_addrs() {
     assert_eq!(back, node);
 
     let shown = format!("{node}");
-    assert!(shown.contains("10.0.0.1:3000"), "display must show api addr: {shown}");
-    assert!(shown.contains("10.0.0.1:3100"), "display must show raft addr: {shown}");
+    assert!(
+        shown.contains("10.0.0.1:3000"),
+        "display must show api addr: {shown}"
+    );
+    assert!(
+        shown.contains("10.0.0.1:3100"),
+        "display must show raft addr: {shown}"
+    );
 }
 
 // ── openraft entry/vote types instantiate against the config ─────────────────
@@ -102,6 +110,7 @@ fn raft_log_entry_for_a_kernel_event_roundtrips() {
             event: sample_event(),
             request_id: Some(REQ_ID),
             schema_version: 0,
+            namespace_id: 0,
         }),
     };
     let json = serde_json::to_string(&entry).unwrap();
@@ -133,6 +142,7 @@ fn schema_version_field_roundtrips() {
         event: sample_event(),
         request_id: None,
         schema_version: CURRENT_SCHEMA_VERSION,
+        namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     let back: ClientRequest = serde_json::from_str(&json).unwrap();
@@ -147,6 +157,7 @@ fn schema_version_defaults_to_zero_when_field_absent() {
         event: KernelEvent::DeleteRecord { id: RecordId(99) },
         request_id: None,
         schema_version: 0,
+        namespace_id: 0,
     };
     let json = serde_json::to_string(&req).unwrap();
     // Strip the schema_version field entirely to simulate an old peer.
@@ -154,7 +165,10 @@ fn schema_version_defaults_to_zero_when_field_absent() {
         .replace(",\"schema_version\":0", "")
         .replace("\"schema_version\":0,", "");
     let back: ClientRequest = serde_json::from_str(&stripped).unwrap();
-    assert_eq!(back.schema_version, 0, "missing schema_version must default to 0");
+    assert_eq!(
+        back.schema_version, 0,
+        "missing schema_version must default to 0"
+    );
 }
 
 #[test]

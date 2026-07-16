@@ -82,12 +82,21 @@ enum Failure {
         byte_offset: usize,
         detail: String,
     },
+    EntryCapExceeded {
+        entries: u64,
+    },
 }
 
 fn entry_summary(entry: &LogEntry) -> String {
     match entry {
         LogEntry::Event(e) => format!("{e:?}"),
-        LogEntry::Checkpoint { event_count, .. } => format!("Checkpoint {{ event_count: {event_count} }}"),
+        LogEntry::EventNs {
+            namespace_id,
+            event,
+        } => format!("[ns {namespace_id}] {event:?}"),
+        LogEntry::Checkpoint { event_count, .. } => {
+            format!("Checkpoint {{ event_count: {event_count} }}")
+        }
         LogEntry::Admin(a) => a.describe(),
     }
 }
@@ -101,13 +110,32 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
     // (recorded in the header); v2 and genesis segments start from zeros.
     let mut chain_head = header.prev_segment_chain_head;
     let mut last_entry_summary = String::from("<none>");
+    let mut entries_decoded: u64 = 0;
 
     while offset < body.len() {
+        if entries_decoded >= valori_wire::MAX_ENTRIES_PER_SEGMENT {
+            return ReplayOutcome {
+                state,
+                events_applied,
+                checkpoints_seen,
+                chain_head,
+                failure: Some(Failure::EntryCapExceeded {
+                    entries: entries_decoded,
+                }),
+            };
+        }
+        entries_decoded += 1;
         let chained = match decode_entry(header.version, &body[offset..]) {
-            Ok((ce, n)) => { offset += n; ce }
+            Ok((ce, n)) => {
+                offset += n;
+                ce
+            }
             Err(_) => {
                 return ReplayOutcome {
-                    state, events_applied, checkpoints_seen, chain_head,
+                    state,
+                    events_applied,
+                    checkpoints_seen,
+                    chain_head,
                     failure: Some(Failure::Decode {
                         event_no: events_applied + 1,
                         byte_offset: header.header_len + offset,
@@ -119,7 +147,10 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
 
         if chained.prev_hash != chain_head {
             return ReplayOutcome {
-                state, events_applied, checkpoints_seen, chain_head,
+                state,
+                events_applied,
+                checkpoints_seen,
+                chain_head,
                 failure: Some(Failure::ChainBroken {
                     breach_at: events_applied + 1,
                     byte_offset: header.header_len + offset,
@@ -137,11 +168,19 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
         match &chained.entry {
             LogEntry::Event(event) => {
                 if trace {
-                    eprintln!("  event #{:<6} [{}] {:?}", events_applied + 1, format_utc(chained.wall_time_secs), event);
+                    eprintln!(
+                        "  event #{:<6} [{}] {:?}",
+                        events_applied + 1,
+                        format_utc(chained.wall_time_secs),
+                        event
+                    );
                 }
                 if let Err(e) = state.apply_event(event) {
                     return ReplayOutcome {
-                        state, events_applied, checkpoints_seen, chain_head,
+                        state,
+                        events_applied,
+                        checkpoints_seen,
+                        chain_head,
                         failure: Some(Failure::Apply {
                             event_no: events_applied + 1,
                             byte_offset: header.header_len + offset,
@@ -151,15 +190,48 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
                 }
                 events_applied += 1;
             }
+            // S15: replay namespace-scoped events into their own collection so
+            // the recomputed state hash matches the node's.
+            LogEntry::EventNs {
+                namespace_id,
+                event,
+            } => {
+                if trace {
+                    eprintln!(
+                        "  event #{:<6} [{}] [ns {namespace_id}] {:?}",
+                        events_applied + 1,
+                        format_utc(chained.wall_time_secs),
+                        event
+                    );
+                }
+                if let Err(e) = state.apply_event_ns(event, *namespace_id) {
+                    return ReplayOutcome {
+                        state,
+                        events_applied,
+                        checkpoints_seen,
+                        chain_head,
+                        failure: Some(Failure::Apply {
+                            event_no: events_applied + 1,
+                            byte_offset: header.header_len + offset,
+                            detail: format!("{e:?} while applying [ns {namespace_id}] {event:?}"),
+                        }),
+                    };
+                }
+                events_applied += 1;
+            }
             LogEntry::Checkpoint { event_count, .. } => {
-                if trace { eprintln!("  checkpoint (event_count = {event_count})"); }
+                if trace {
+                    eprintln!("  checkpoint (event_count = {event_count})");
+                }
                 checkpoints_seen += 1;
             }
             LogEntry::Admin(admin) => {
                 // Admin events are chain-verified like everything else but
                 // never touch kernel state — membership history rides in
                 // the same chain as the data it interleaves with.
-                if trace { eprintln!("  admin: {}", admin.describe()); }
+                if trace {
+                    eprintln!("  admin: {}", admin.describe());
+                }
             }
         }
 
@@ -167,7 +239,13 @@ fn replay(body: &[u8], header: &SegmentHeader, trace: bool) -> ReplayOutcome {
         chain_head = new_chain_head;
     }
 
-    ReplayOutcome { state, events_applied, checkpoints_seen, chain_head, failure: None }
+    ReplayOutcome {
+        state,
+        events_applied,
+        checkpoints_seen,
+        chain_head,
+        failure: None,
+    }
 }
 
 fn build_report(
@@ -200,8 +278,12 @@ fn build_report(
         }
         None => serde_json::Value::Null,
         Some(Failure::ChainBroken {
-            breach_at, byte_offset, wall_time_secs,
-            prior_entry_summary, computed_chain_head, stored_prev_hash,
+            breach_at,
+            byte_offset,
+            wall_time_secs,
+            prior_entry_summary,
+            computed_chain_head,
+            stored_prev_hash,
         }) => {
             let mut finding = serde_json::json!({
                 "type": "chain_breach",
@@ -225,19 +307,32 @@ fn build_report(
             }
             finding
         }
-        Some(Failure::Decode { event_no, byte_offset, bytes_remaining }) => serde_json::json!({
+        Some(Failure::Decode {
+            event_no,
+            byte_offset,
+            bytes_remaining,
+        }) => serde_json::json!({
             "type": "structural",
             "failed_entry_no": event_no,
             "failed_byte_offset": byte_offset,
             "trailing_unreadable_bytes": bytes_remaining,
             "events_clean_before_failure": outcome.events_applied,
         }),
-        Some(Failure::Apply { event_no, byte_offset, detail }) => serde_json::json!({
+        Some(Failure::Apply {
+            event_no,
+            byte_offset,
+            detail,
+        }) => serde_json::json!({
             "type": "semantic",
             "rejected_entry_no": event_no,
             "rejected_byte_offset": byte_offset,
             "kernel_error": detail,
             "events_clean_before_rejection": outcome.events_applied,
+        }),
+        Some(Failure::EntryCapExceeded { entries }) => serde_json::json!({
+            "type": "structural",
+            "entries_decoded": entries,
+            "detail": "segment exceeds MAX_ENTRIES_PER_SEGMENT — likely crafted or corrupted",
         }),
     };
 
@@ -268,12 +363,18 @@ fn main() -> ExitCode {
 
     let bytes = match std::fs::read(&args.log) {
         Ok(b) => b,
-        Err(e) => { eprintln!("error: cannot read '{}': {e}", args.log.display()); return ExitCode::from(2); }
+        Err(e) => {
+            eprintln!("error: cannot read '{}': {e}", args.log.display());
+            return ExitCode::from(2);
+        }
     };
 
     let header = match parse_header(&bytes) {
         Ok(h) => h,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(2); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
     };
 
     let expected = match &args.expected_hash {
@@ -289,14 +390,21 @@ fn main() -> ExitCode {
     };
 
     println!("valori-verify");
-    println!("  log:        {}  ({:.2} KB)", args.log.display(), bytes.len() as f64 / 1024.0);
+    println!(
+        "  log:        {}  ({:.2} KB)",
+        args.log.display(),
+        bytes.len() as f64 / 1024.0
+    );
     println!("  format:     v{}, dim {}", header.version, header.dim);
     if header.version >= valori_wire::VERSION_V3 {
         println!(
             "  segment:    #{}{}",
             header.segment_seq,
             if header.segment_seq > 0 {
-                format!("  (splices to prev head {}…)", &hex(&header.prev_segment_chain_head)[..16])
+                format!(
+                    "  (splices to prev head {}…)",
+                    &hex(&header.prev_segment_chain_head)[..16]
+                )
             } else {
                 String::new()
             }
@@ -305,39 +413,70 @@ fn main() -> ExitCode {
 
     let outcome = replay(&bytes[header.header_len..], &header, args.trace);
 
-    println!("  replayed:   {} events, {} checkpoints", outcome.events_applied, outcome.checkpoints_seen);
+    println!(
+        "  replayed:   {} events, {} checkpoints",
+        outcome.events_applied, outcome.checkpoints_seen
+    );
 
     let verdict;
 
     // ── Chain breach ──────────────────────────────────────────────────────────
     if let Some(Failure::ChainBroken {
-        breach_at, byte_offset, wall_time_secs,
-        prior_entry_summary, computed_chain_head, stored_prev_hash,
-    }) = &outcome.failure {
+        breach_at,
+        byte_offset,
+        wall_time_secs,
+        prior_entry_summary,
+        computed_chain_head,
+        stored_prev_hash,
+    }) = &outcome.failure
+    {
         verdict = "tampered_chain";
         println!();
         println!("❌  TAMPERED (chain breach at entry #{breach_at})");
         if *breach_at == 1 {
             println!("    entry #1's prev_hash doesn't match the segment's starting chain head —");
-            println!("    its prev_hash field was altered, or the original head of the log was removed.");
+            println!(
+                "    its prev_hash field was altered, or the original head of the log was removed."
+            );
         } else {
-            println!("    entry #{breach_at}'s prev_hash doesn't match — entry #{} was altered.", breach_at - 1);
+            println!(
+                "    entry #{breach_at}'s prev_hash doesn't match — entry #{} was altered.",
+                breach_at - 1
+            );
             println!();
-            println!("    altered entry (#{}): {prior_entry_summary}", breach_at - 1);
+            println!(
+                "    altered entry (#{}): {prior_entry_summary}",
+                breach_at - 1
+            );
         }
         println!();
         println!("    breach detected at byte offset {byte_offset}");
-        println!("    entry #{breach_at} was committed: {}", format_utc(*wall_time_secs));
+        println!(
+            "    entry #{breach_at} was committed: {}",
+            format_utc(*wall_time_secs)
+        );
         println!();
         println!("    computed chain head: {}", hex(computed_chain_head));
         println!("    stored  prev_hash:   {}", hex(stored_prev_hash));
         println!();
-        println!("    {} events replayed cleanly before the breach", breach_at - 1);
+        println!(
+            "    {} events replayed cleanly before the breach",
+            breach_at - 1
+        );
 
         if let Some(path) = &args.report {
-            let report = build_report(&args.log, bytes.len(), header.version, header.dim,
-                expected.as_deref(), &outcome, verdict);
-            if let Err(e) = write_report(path, &report) { eprintln!("warning: report write failed: {e}"); }
+            let report = build_report(
+                &args.log,
+                bytes.len(),
+                header.version,
+                header.dim,
+                expected.as_deref(),
+                &outcome,
+                verdict,
+            );
+            if let Err(e) = write_report(path, &report) {
+                eprintln!("warning: report write failed: {e}");
+            }
         }
         return ExitCode::from(1);
     }
@@ -345,27 +484,56 @@ fn main() -> ExitCode {
     // ── Structural / semantic ─────────────────────────────────────────────────
     if let Some(failure) = &outcome.failure {
         match failure {
-            Failure::Decode { event_no, byte_offset, bytes_remaining } => {
+            Failure::Decode {
+                event_no,
+                byte_offset,
+                bytes_remaining,
+            } => {
                 verdict = "tampered_structural";
                 println!();
                 println!("❌  TAMPERED (structural)");
                 println!("    entry #{event_no} failed to decode at byte offset {byte_offset}");
                 println!("    {bytes_remaining} trailing bytes are unreadable");
-                println!("    events #1..#{} replayed cleanly before the damage", outcome.events_applied);
+                println!(
+                    "    events #1..#{} replayed cleanly before the damage",
+                    outcome.events_applied
+                );
             }
-            Failure::Apply { event_no, byte_offset, detail } => {
+            Failure::EntryCapExceeded { entries } => {
+                verdict = "tampered_structural";
+                println!();
+                println!("❌  TAMPERED (structural)");
+                println!("    segment contains more than {entries} entries — exceeds MAX_ENTRIES_PER_SEGMENT;");
+                println!("    the file is likely crafted or corrupted");
+            }
+            Failure::Apply {
+                event_no,
+                byte_offset,
+                detail,
+            } => {
                 verdict = "tampered_semantic";
                 println!();
                 println!("❌  TAMPERED (semantic)");
-                println!("    event #{event_no} (byte offset {byte_offset}) was rejected by the kernel:");
+                println!(
+                    "    event #{event_no} (byte offset {byte_offset}) was rejected by the kernel:"
+                );
                 println!("    {detail}");
             }
             Failure::ChainBroken { .. } => unreachable!(),
         }
         if let Some(path) = &args.report {
-            let report = build_report(&args.log, bytes.len(), header.version, header.dim,
-                expected.as_deref(), &outcome, verdict);
-            if let Err(e) = write_report(path, &report) { eprintln!("warning: report write failed: {e}"); }
+            let report = build_report(
+                &args.log,
+                bytes.len(),
+                header.version,
+                header.dim,
+                expected.as_deref(),
+                &outcome,
+                verdict,
+            );
+            if let Err(e) = write_report(path, &report) {
+                eprintln!("warning: report write failed: {e}");
+            }
         }
         return ExitCode::from(1);
     }
@@ -380,8 +548,14 @@ fn main() -> ExitCode {
             verdict = "verified";
             println!();
             println!("✅  VERIFIED");
-            println!("    {} events replayed deterministically; state hash matches.", outcome.events_applied);
-            println!("    hash chain intact across all {} entries.", outcome.events_applied);
+            println!(
+                "    {} events replayed deterministically; state hash matches.",
+                outcome.events_applied
+            );
+            println!(
+                "    hash chain intact across all {} entries.",
+                outcome.events_applied
+            );
             ExitCode::SUCCESS
         }
         Some(exp) => {
@@ -403,9 +577,18 @@ fn main() -> ExitCode {
     };
 
     if let Some(path) = &args.report {
-        let report = build_report(&args.log, bytes.len(), header.version, header.dim,
-            expected.as_deref(), &outcome, verdict);
-        if let Err(e) = write_report(path, &report) { eprintln!("warning: report write failed: {e}"); }
+        let report = build_report(
+            &args.log,
+            bytes.len(),
+            header.version,
+            header.dim,
+            expected.as_deref(),
+            &outcome,
+            verdict,
+        );
+        if let Err(e) = write_report(path, &report) {
+            eprintln!("warning: report write failed: {e}");
+        }
     }
 
     exit

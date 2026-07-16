@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Valori",
+  "version": "0.1.0",
+  "identifier": "com.valori.desktop",
+  "build": {
+    "beforeDevCommand": "node scripts/dev.mjs",
+    "devUrl": "http://localhost:3001",
+    "beforeBuildCommand": "node scripts/prepare-sidecars.mjs --release && node scripts/prepare-ui-server.mjs",
+    "frontendDist": "loading"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Valori",
+        "width": 1280,
+        "height": 832,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Overlay"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/valori-daemon", "binaries/valori-node"],
+    "resources": {
+      "resources/ui-server/": "ui-server/",
+      "resources/ValoriUIServer.app/": "ValoriUIServer.app/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "infoPlist": "Info.plist"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [],
+      "desktop": [
+        { "schemes": ["valori"] }
+      ]
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUyQzcxMzUxRUQ3NjhENTgKUldSWWpYYnRVUlBINGw3dXkrTU81RXk5VEo5cnB2Nk82clUxbGFSaDRoUm8yRjAvRjU2N3ZZdHcK",
+      "endpoints": [
+        "https://github.com/varshith-git/valori-kernel/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
+  }
+}

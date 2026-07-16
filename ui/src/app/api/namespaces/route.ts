@@ -14,6 +14,7 @@ export async function GET() {
     const res = await fetch(`${getApiUrl()}/v1/namespaces`, {
       headers: authHeaders(),
       cache: "no-store",
+      signal: AbortSignal.timeout(3000),
     });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });

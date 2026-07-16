@@ -18,9 +18,12 @@ fn entry(term: u64, node: NodeId, index: u64) -> Entry {
     Entry {
         log_id: log_id(term, node, index),
         payload: openraft::EntryPayload::Normal(ClientRequest {
-            event: KernelEvent::DeleteRecord { id: RecordId(index as u32) },
+            event: KernelEvent::DeleteRecord {
+                id: RecordId(index as u32),
+            },
             request_id: None,
             schema_version: 0,
+            namespace_id: 0,
         }),
     }
 }
@@ -48,7 +51,11 @@ async fn fresh_store_is_empty() {
 #[tokio::test]
 async fn append_then_read_roundtrips() {
     let mut store = ValoriLogStore::new();
-    append(&mut store, vec![entry(1, 1, 1), entry(1, 1, 2), entry(1, 1, 3)]).await;
+    append(
+        &mut store,
+        vec![entry(1, 1, 1), entry(1, 1, 2), entry(1, 1, 3)],
+    )
+    .await;
 
     let got = store.try_get_log_entries(1..=3).await.unwrap();
     assert_eq!(got.len(), 3);
@@ -97,7 +104,11 @@ async fn truncate_removes_at_and_after() {
     // The truncated range can be rewritten by the new leader.
     append(&mut store, vec![entry(2, 2, 3)]).await;
     let got = store.try_get_log_entries(3..4).await.unwrap();
-    assert_eq!(got[0].log_id, log_id(2, 2, 3), "rewritten under the new term");
+    assert_eq!(
+        got[0].log_id,
+        log_id(2, 2, 3),
+        "rewritten under the new term"
+    );
 }
 
 // ── Purge (compaction) ────────────────────────────────────────────────────────
@@ -111,7 +122,11 @@ async fn purge_removes_up_to_inclusive_and_records_floor() {
 
     let state = store.get_log_state().await.unwrap();
     assert_eq!(state.last_purged_log_id, Some(log_id(1, 1, 3)));
-    assert_eq!(state.last_log_id, Some(log_id(1, 1, 5)), "entries after the floor survive");
+    assert_eq!(
+        state.last_log_id,
+        Some(log_id(1, 1, 5)),
+        "entries after the floor survive"
+    );
     assert_eq!(store.entry_count().await, 2);
 }
 
@@ -123,8 +138,11 @@ async fn purge_of_entire_log_reports_floor_as_last() {
     store.purge(log_id(1, 1, 3)).await.unwrap();
 
     let state = store.get_log_state().await.unwrap();
-    assert_eq!(state.last_log_id, Some(log_id(1, 1, 3)),
-        "empty log: last_log_id falls back to the purge floor");
+    assert_eq!(
+        state.last_log_id,
+        Some(log_id(1, 1, 3)),
+        "empty log: last_log_id falls back to the purge floor"
+    );
     assert_eq!(store.entry_count().await, 0);
 }
 
@@ -153,7 +171,11 @@ async fn vote_roundtrips_and_overwrites() {
 
     let v2 = Vote::new_committed(2, 3);
     store.save_vote(&v2).await.unwrap();
-    assert_eq!(store.read_vote().await.unwrap(), Some(v2), "newer vote overwrites");
+    assert_eq!(
+        store.read_vote().await.unwrap(),
+        Some(v2),
+        "newer vote overwrites"
+    );
 }
 
 #[tokio::test]
@@ -177,5 +199,9 @@ async fn reader_clone_sees_writes_made_after_cloning() {
     append(&mut store, vec![entry(1, 1, 1), entry(1, 1, 2)]).await;
 
     let got = reader.try_get_log_entries(1..=2).await.unwrap();
-    assert_eq!(got.len(), 2, "reader shares state with the store, not a snapshot");
+    assert_eq!(
+        got.len(),
+        2,
+        "reader shares state with the store, not a snapshot"
+    );
 }

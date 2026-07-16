@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { sha256hex } from "@/lib/receipts";
+import { fetchGlobalHash } from "@/lib/proof";
+import { CopyBtn } from "@/components/ui/CopyBtn";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -26,20 +30,6 @@ interface ErasureRecord {
 
 // --- Helpers ------------------------------------------------------------------
 
-async function sha256hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return "sha256:" + Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function fetchCurrentBlake3(): Promise<string | null> {
-  try {
-    const r = await fetch("/api/proof", { cache: "no-store" });
-    if (!r.ok) return null;
-    const d = await r.json() as { final_state_hash?: string };
-    return d.final_state_hash ?? null;
-  } catch { return null; }
-}
 
 // --- Sub-components -----------------------------------------------------------
 
@@ -296,7 +286,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
       // Build record list (limit meta fetches to first 50 to avoid flooding)
       const ids = audit.ns_record_ids;
       const metaFetches = ids.slice(0, 50).map((id) =>
-        fetch(`/api/meta?target_id=${id}`, { cache: "no-store" })
+        fetch(`/api/meta?target_id=record:${id}`, { cache: "no-store" })
           .then((r) => r.ok ? r.json() : null)
           .then((d) => {
             const val = d?.metadata ?? d?.value ?? d?.text ?? null;
@@ -354,7 +344,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
     setErasedCert(null);
     const ids = [...selected];
 
-    const preHash = await fetchCurrentBlake3();
+    const preHash = await fetchGlobalHash();
     let successIds: number[] = [];
 
     setErasingProgress({ done: 0, total: ids.length });
@@ -372,7 +362,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
       setErasingProgress({ done: i + 1, total: ids.length });
     }
 
-    const postHash = await fetchCurrentBlake3();
+    const postHash = await fetchGlobalHash();
 
     // Build erasure certificate
     const payload: ErasureRecord = {
@@ -420,7 +410,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
   }) ?? [];
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl">
+    <TabShell>
 
       {/* Info banner */}
       <div className="rounded-xl border border-amber-900/50 bg-amber-950/20 px-4 py-3 flex gap-3">
@@ -633,6 +623,6 @@ export function GdprTab({ namespace }: { namespace: string }) {
           </p>
         </div>
       )}
-    </div>
+    </TabShell>
   );
 }

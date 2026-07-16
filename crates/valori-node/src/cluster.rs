@@ -17,19 +17,21 @@
 //! state machine over the chained audit log, gRPC server, Raft handle —
 //! returning a [`RaftCommitter`] that plugs into the `Committer` seam.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex};
 
 use openraft::storage::RaftLogStorage;
 use openraft::{Config, SnapshotPolicy};
 
 use valori_consensus::types::Raft;
 use valori_consensus::{
-    serve_raft, AuditSink, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+    serve_raft, serve_raft_tls, AuditSink, NullAuditSink, ValoriLogStore, ValoriNetworkFactory,
+    ValoriStateMachine,
 };
 
-use crate::commit::RaftCommitter;
-use valori_consensus::types::{NodeId, ValoriNode};
+use crate::commit::{EventLogAuditSink, RaftCommitter};
+use crate::events::event_log::EventLogWriter;
+use valori_consensus::types::{NodeId, ShardId, ValoriNode};
 
 /// Parsed cluster topology.
 #[derive(Debug, Clone)]
@@ -50,6 +52,17 @@ pub struct ClusterConfig {
     /// Partially set → boot error: a half-configured TLS setup silently
     /// running plaintext would defeat the point.
     pub tls: Option<valori_consensus::RaftTlsConfig>,
+    /// Env: VALORI_SHARD_COUNT (default 1). Number of independent Raft
+    /// groups this process runs, all sharing the one gRPC listener at
+    /// `raft_bind`. Every configured member is a voter in every shard
+    /// (symmetric placement — every node runs every shard; there is no
+    /// per-shard node subset yet). Namespace→shard HTTP routing (which
+    /// shard a given collection's data lands on) is implemented in
+    /// `cluster_server.rs`'s `shard_for_namespace()`, wired into every
+    /// collection-aware handler as of Phases S3-S9. `shard_count == 1` is
+    /// byte-for-byte the pre-S1 single-Raft-group behavior (see
+    /// `bootstrap_cluster`).
+    pub shard_count: u32,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -66,6 +79,8 @@ pub enum ClusterConfigError {
     PartialTls(String),
     #[error("TLS file unreadable: {0}")]
     TlsFile(String),
+    #[error("VALORI_SHARD_COUNT '{0}' is not a positive integer")]
+    BadShardCount(String),
 }
 
 impl ClusterConfig {
@@ -83,14 +98,26 @@ impl ClusterConfig {
             .ok_or(ClusterConfigError::MissingNodeId)?;
         let raft_bind =
             std::env::var("VALORI_RAFT_BIND").unwrap_or_else(|_| "0.0.0.0:3100".to_string());
-        let init = std::env::var("VALORI_CLUSTER_INIT").map(|v| v == "1").unwrap_or(false);
+        let init = std::env::var("VALORI_CLUSTER_INIT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let raft_log_path = std::env::var("VALORI_RAFT_LOG_PATH")
             .ok()
             .map(std::path::PathBuf::from);
+        let shard_count = match std::env::var("VALORI_SHARD_COUNT") {
+            Ok(v) if !v.trim().is_empty() => v
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n > 0)
+                .ok_or_else(|| ClusterConfigError::BadShardCount(v.clone()))?,
+            _ => 1,
+        };
 
         let mut cfg = Self::parse(node_id, &raft_bind, &members, init)?;
         cfg.raft_log_path = raft_log_path;
         cfg.tls = Self::tls_from_env()?;
+        cfg.shard_count = shard_count;
         Ok(Some(cfg))
     }
 
@@ -102,8 +129,7 @@ impl ClusterConfig {
             (None, None, None) => Ok(None),
             (Some(ca), Some(cert), Some(key)) => {
                 let read = |p: &str| {
-                    std::fs::read(p)
-                        .map_err(|e| ClusterConfigError::TlsFile(format!("{p}: {e}")))
+                    std::fs::read(p).map_err(|e| ClusterConfigError::TlsFile(format!("{p}: {e}")))
                 };
                 Ok(Some(valori_consensus::RaftTlsConfig {
                     ca_pem: read(&ca)?,
@@ -115,10 +141,19 @@ impl ClusterConfig {
             }
             (ca, cert, key) => {
                 let mut set = Vec::new();
-                if ca.is_some() { set.push("CA"); }
-                if cert.is_some() { set.push("CERT"); }
-                if key.is_some() { set.push("KEY"); }
-                Err(ClusterConfigError::PartialTls(format!("only {} set", set.join("+"))))
+                if ca.is_some() {
+                    set.push("CA");
+                }
+                if cert.is_some() {
+                    set.push("CERT");
+                }
+                if key.is_some() {
+                    set.push("KEY");
+                }
+                Err(ClusterConfigError::PartialTls(format!(
+                    "only {} set",
+                    set.join("+")
+                )))
             }
         }
     }
@@ -152,7 +187,13 @@ impl ClusterConfig {
             if raft_addr.is_empty() || raft_addr.contains('=') || !raft_addr.contains(':') {
                 return Err(ClusterConfigError::BadMemberEntry(entry.to_string()));
             }
-            parsed.insert(id, ValoriNode { api_addr, raft_addr });
+            parsed.insert(
+                id,
+                ValoriNode {
+                    api_addr,
+                    raft_addr,
+                },
+            );
         }
         if !parsed.contains_key(&node_id) {
             return Err(ClusterConfigError::SelfNotInMembers(node_id));
@@ -164,11 +205,39 @@ impl ClusterConfig {
             init,
             raft_log_path: None,
             tls: None,
+            shard_count: 1,
         })
     }
 }
 
+/// Everything one shard's Raft group runs on (Phase S1 — multi-Raft
+/// skeleton).
+pub struct ShardHandle {
+    pub raft: Raft,
+    pub state_machine: ValoriStateMachine,
+    /// The committed log index this shard knew at boot — see
+    /// [`ClusterHandle::startup_committed_index`].
+    pub startup_committed_index: u64,
+    /// This shard's audit-log writer handle (Phase S13), when a real
+    /// [`EventLogAuditSink`] backs it — i.e. `event_log_path` was `Some` at
+    /// bootstrap and `EventLogWriter::open` succeeded for this shard's
+    /// derived path. `None` when no path was configured at all, or when
+    /// this specific shard's log failed to open and fell back to
+    /// [`NullAuditSink`] (shards >= 1 only — shard 0's open failure is
+    /// fatal, see `bootstrap_cluster`).
+    pub event_log_writer: Option<Arc<Mutex<EventLogWriter>>>,
+}
+
 /// Everything a cluster node runs on.
+///
+/// `raft`/`state_machine`/`startup_committed_index` are shard 0's — kept as
+/// flat fields (rather than routed through `shards`) so every existing
+/// caller (`main.rs`, `cluster_server.rs`, `cluster_api.rs`) keeps
+/// compiling unchanged; those files only ever know about shard 0's HTTP
+/// surface in this slice. `shards` holds every shard, including shard 0
+/// (the same `Raft`/`ValoriStateMachine` clones as the flat fields above),
+/// for the bootstrap loop's own use and for a later phase's routing layer
+/// to build on.
 pub struct ClusterHandle {
     pub raft: Raft,
     pub state_machine: ValoriStateMachine,
@@ -182,6 +251,15 @@ pub struct ClusterHandle {
     /// readiness gate refuses reads until apply reaches this index, so a
     /// restarting node does not serve partial state while replaying its log.
     pub startup_committed_index: u64,
+    /// Every shard this node runs, keyed by `ShardId`. Always contains at
+    /// least `ShardId(0)`.
+    pub shards: BTreeMap<ShardId, ShardHandle>,
+    /// Shard 0's audit-log writer handle (Phase S13) — see
+    /// [`ShardHandle::event_log_writer`]. Flat field aliasing shard 0, same
+    /// convention as `raft`/`state_machine` above, so callers that only
+    /// ever cared about shard 0's audit surface (`main.rs`) don't need to
+    /// reach into `shards[&ShardId(0)]`.
+    pub event_log_writer: Option<Arc<Mutex<EventLogWriter>>>,
 }
 
 impl ClusterHandle {
@@ -195,13 +273,50 @@ impl ClusterHandle {
     }
 }
 
-/// Assemble and start the Phase 2 stack for one node.
+/// Derives a per-shard path from `base`: unchanged when `shard_count == 1`
+/// (byte-for-byte the pre-S1 single-file layout), otherwise
+/// `{stem}-shard{N}{ext}`.
+fn shard_path(base: &std::path::Path, shard: ShardId, shard_count: u32) -> std::path::PathBuf {
+    if shard_count == 1 {
+        return base.to_path_buf();
+    }
+    let stem = base
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let ext = base
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    base.with_file_name(format!("{stem}-shard{}{ext}", shard.0))
+}
+
+/// Assemble and start the Phase 2 stack for one node — one or more
+/// independent Raft groups ("shards"), all sharing the one gRPC listener at
+/// `cfg.raft_bind`.
 ///
-/// `audit` is where quorum-committed events are recorded — in production,
-/// [`crate::commit::EventLogAuditSink`] over the chained `events.log`.
+/// `event_log_path` is the base path each shard's quorum-committed events
+/// are chained into — in production, [`crate::commit::EventLogAuditSink`]
+/// over the chained `events.log`. Every shard gets its own real audit sink
+/// (Phase S13): `shard_path(event_log_path, shard_id, cfg.shard_count)`
+/// derives each shard's own file (unchanged filename at `shard_count == 1`,
+/// `{stem}-shard{N}{ext}` otherwise), since every shard can genuinely
+/// receive writes as of Phases S3-S9's namespace→shard HTTP routing.
+/// `event_log_path: None` means no audit log configured at all — every
+/// shard gets [`NullAuditSink`], matching pre-S13 behavior for that case.
+///
+/// A failure to open shard 0's audit log is fatal (returns `Err`, matching
+/// the pre-S13 guarantee that a node refuses to boot rather than silently
+/// run its primary shard unaudited). A failure to open a non-zero shard's
+/// audit log is not fatal — that shard falls back to [`NullAuditSink`] and
+/// boots anyway, logged loudly via `tracing::error!`; those shards are new
+/// capability this phase adds, so there is no pre-existing "fatal" guarantee
+/// to preserve for them, and aborting the whole node over one non-primary
+/// shard's disk issue would be a new availability regression.
 pub async fn bootstrap_cluster(
     cfg: &ClusterConfig,
-    audit: Box<dyn AuditSink>,
+    event_log_path: Option<&std::path::Path>,
+    event_log_rotation_bytes: Option<u64>,
     dim: usize,
 ) -> Result<ClusterHandle, std::io::Error> {
     // Snapshot cadence is an explicit, operator-tunable policy — not openraft's
@@ -221,6 +336,8 @@ pub async fn bootstrap_cluster(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(1000);
 
+    // One validated Config reused across every shard — heartbeat/election/
+    // snapshot policy are process-wide operational knobs, not per-shard.
     let raft_config = Arc::new(
         Config {
             heartbeat_interval: 200,
@@ -234,91 +351,180 @@ pub async fn bootstrap_cluster(
         .map_err(|e| std::io::Error::other(format!("raft config invalid: {e}")))?,
     );
 
-    // Persistent Raft log when a path is configured (survives restarts);
-    // in-memory otherwise. Both pass the same openraft compliance suite.
-    //
-    // When a redb path is given, the state machine shares the same database
-    // handle so last_applied, membership, and the latest snapshot are
-    // persisted in the sm_meta table. On restart the state machine reads them
-    // back and openraft resumes from where it left off, preventing already-
-    // applied entries from being replayed through the AuditSink a second time.
-    let network = match &cfg.tls {
-        Some(tls) => ValoriNetworkFactory::with_tls(tls.clone()),
-        None => ValoriNetworkFactory::default(),
-    };
+    let mut shards: BTreeMap<ShardId, ShardHandle> = BTreeMap::new();
+    let mut raft_instances: HashMap<ShardId, Raft> = HashMap::new();
 
-    let (state_machine, raft, startup_committed_index) = match &cfg.raft_log_path {
-        Some(path) => {
-            let mut store = valori_consensus::RedbLogStore::open(path)
-                .map_err(|e| std::io::Error::other(format!("raft log open failed: {e}")))?;
-            let db = store.db();
-            let sm = ValoriStateMachine::with_db(audit, db, dim)
-                .map_err(|e| std::io::Error::other(format!("state machine restore failed: {e}")))?;
-            // The committed index this node durably knew before (re)start. The
-            // data plane refuses reads until apply catches back up to it, so a
-            // freshly-restarted node never serves partial state during replay.
-            let startup_committed_index = store
-                .read_committed()
-                .await
-                .ok()
-                .flatten()
-                .map_or(0, |l| l.index);
-            let raft = Raft::new(cfg.node_id, raft_config, network, store, sm.clone())
-                .await
-                .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
-            (sm, raft, startup_committed_index)
-        }
-        None => {
-            // C-1 (consensus audit): the in-memory log store does NOT persist votes.
-            // A crash-restart allows a node to vote twice in the same Raft term,
-            // potentially electing two leaders (split-brain). This path is safe only
-            // in tests and throwaway demo environments. Set VALORI_RAFT_LOG_PATH for
-            // any deployment that must survive restarts.
-            tracing::error!(
-                "VALORI_RAFT_LOG_PATH is not set — cluster is running with an IN-MEMORY \
-                 Raft log store. Votes are NOT persisted. A crash can cause split-brain \
-                 (two leaders in the same term). Set VALORI_RAFT_LOG_PATH to a redb file path."
-            );
-            let sm = ValoriStateMachine::new(audit, dim);
-            let raft = Raft::new(
-                cfg.node_id,
-                raft_config,
-                network,
-                ValoriLogStore::new(),
-                sm.clone(),
-            )
-            .await
-            .map_err(|e| std::io::Error::other(format!("raft start failed: {e}")))?;
-            (sm, raft, 0)
-        }
-    };
+    for i in 0..cfg.shard_count {
+        let shard_id = ShardId(i);
 
+        // Persistent Raft log when a path is configured (survives restarts);
+        // in-memory otherwise. Both pass the same openraft compliance suite.
+        //
+        // When a redb path is given, the state machine shares the same database
+        // handle so last_applied, membership, and the latest snapshot are
+        // persisted in the sm_meta table. On restart the state machine reads them
+        // back and openraft resumes from where it left off, preventing already-
+        // applied entries from being replayed through the AuditSink a second time.
+        let network = match &cfg.tls {
+            Some(tls) => ValoriNetworkFactory::with_tls(shard_id, tls.clone()),
+            None => ValoriNetworkFactory::new(shard_id),
+        };
+
+        // Every shard gets a real audit sink of its own (Phase S13) — see
+        // the doc comment above bootstrap_cluster for the shard-0-fatal vs
+        // shards-1+-graceful-fallback rationale.
+        let (audit_i, event_log_writer_i): (
+            Box<dyn AuditSink>,
+            Option<Arc<Mutex<EventLogWriter>>>,
+        ) = match event_log_path {
+            Some(base) => {
+                let path = shard_path(base, shard_id, cfg.shard_count);
+                match EventLogWriter::open(&path, Some(dim as u32)) {
+                    Ok(writer) => {
+                        let mut sink = EventLogAuditSink::new(writer);
+                        if let Some(limit) = event_log_rotation_bytes {
+                            sink = sink.with_rotation_bytes(Some(limit));
+                        }
+                        let writer_handle = sink.writer();
+                        (Box::new(sink), Some(writer_handle))
+                    }
+                    Err(e) if i == 0 => {
+                        return Err(std::io::Error::other(format!(
+                            "shard 0 audit log open failed at {}: {e}",
+                            path.display()
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            shard = i,
+                            path = %path.display(),
+                            error = %e,
+                            "failed to open shard's audit log — this shard's writes will NOT \
+                             be chained to disk (falling back to NullAuditSink for this shard \
+                             only; Raft replication and kernel state are unaffected)"
+                        );
+                        (Box::new(NullAuditSink), None)
+                    }
+                }
+            }
+            None => (Box::new(NullAuditSink), None),
+        };
+
+        let (state_machine, raft, startup_committed_index) = match &cfg.raft_log_path {
+            Some(base_path) => {
+                let path = shard_path(base_path, shard_id, cfg.shard_count);
+                let mut store = valori_consensus::RedbLogStore::open(&path).map_err(|e| {
+                    std::io::Error::other(format!("shard {i} raft log open failed: {e}"))
+                })?;
+                let db = store.db();
+                let sm = ValoriStateMachine::with_db(audit_i, db, dim).map_err(|e| {
+                    std::io::Error::other(format!("shard {i} state machine restore failed: {e}"))
+                })?;
+                // The committed index this node durably knew before (re)start. The
+                // data plane refuses reads until apply catches back up to it, so a
+                // freshly-restarted node never serves partial state during replay.
+                let startup_committed_index = store
+                    .read_committed()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map_or(0, |l| l.index);
+                let raft = Raft::new(cfg.node_id, raft_config.clone(), network, store, sm.clone())
+                    .await
+                    .map_err(|e| {
+                        std::io::Error::other(format!("shard {i} raft start failed: {e}"))
+                    })?;
+                (sm, raft, startup_committed_index)
+            }
+            None => {
+                // C-1 (consensus audit): the in-memory log store does NOT persist votes.
+                // A crash-restart allows a node to vote twice in the same Raft term,
+                // potentially electing two leaders (split-brain). This path is safe only
+                // in tests and throwaway demo environments. Set VALORI_RAFT_LOG_PATH for
+                // any deployment that must survive restarts.
+                tracing::error!(
+                    shard = i,
+                    "VALORI_RAFT_LOG_PATH is not set — shard is running with an IN-MEMORY \
+                     Raft log store. Votes are NOT persisted. A crash can cause split-brain \
+                     (two leaders in the same term). Set VALORI_RAFT_LOG_PATH to a redb file path."
+                );
+                let sm = ValoriStateMachine::new(audit_i, dim);
+                let raft = Raft::new(
+                    cfg.node_id,
+                    raft_config.clone(),
+                    network,
+                    ValoriLogStore::new(),
+                    sm.clone(),
+                )
+                .await
+                .map_err(|e| std::io::Error::other(format!("shard {i} raft start failed: {e}")))?;
+                (sm, raft, 0)
+            }
+        };
+
+        raft_instances.insert(shard_id, raft.clone());
+        shards.insert(
+            shard_id,
+            ShardHandle {
+                raft,
+                state_machine,
+                startup_committed_index,
+                event_log_writer: event_log_writer_i,
+            },
+        );
+    }
+
+    // ONE shared gRPC listener multiplexing every shard.
     let (raft_addr, server_task) = match &cfg.tls {
-        Some(tls) => {
-            valori_consensus::serve_raft_tls(raft.clone(), &cfg.raft_bind, tls.clone()).await?
-        }
-        None => serve_raft(raft.clone(), &cfg.raft_bind).await?,
+        Some(tls) => serve_raft_tls(raft_instances, &cfg.raft_bind, tls.clone()).await?,
+        None => serve_raft(raft_instances, &cfg.raft_bind).await?,
     };
 
     if cfg.init {
-        // Idempotent on an already-initialized cluster: openraft refuses a
-        // second initialize with NotAllowed, which we treat as "fine".
-        match raft.initialize(cfg.members.clone()).await {
-            Ok(()) => tracing::info!("cluster initialized by this node"),
-            Err(e) => tracing::warn!("initialize skipped: {e}"),
+        // Every shard bootstraps from the same member list (symmetric
+        // placement). Idempotent on an already-initialized shard: openraft
+        // refuses a second initialize with NotAllowed, treated as "fine".
+        for (shard_id, handle) in &shards {
+            match handle.raft.initialize(cfg.members.clone()).await {
+                Ok(()) => tracing::info!(shard = shard_id.0, "shard initialized by this node"),
+                Err(e) => tracing::warn!(shard = shard_id.0, "initialize skipped: {e}"),
+            }
         }
     }
 
-    spawn_raft_metrics_watcher(raft.clone());
-    let state_hash_watcher = spawn_state_hash_watcher(raft.clone(), state_machine.clone());
+    // Only stamp a "shard" Prometheus label when more than one shard
+    // exists — at shard_count=1 (today's default) the metrics surface
+    // stays byte-for-byte what it was before Phase S1.
+    let label_shards = cfg.shard_count > 1;
+    let mut watcher_tasks = Vec::new();
+    for (shard_id, handle) in &shards {
+        spawn_raft_metrics_watcher(*shard_id, label_shards, handle.raft.clone());
+        watcher_tasks.push(spawn_state_hash_watcher(
+            *shard_id,
+            label_shards,
+            handle.raft.clone(),
+            handle.state_machine.clone(),
+        ));
+    }
+
+    let shard0 = shards
+        .get(&ShardId(0))
+        .expect("shard_count >= 1 guarantees ShardId(0) exists")
+        .raft
+        .clone();
+    let shard0_sm = shards.get(&ShardId(0)).unwrap().state_machine.clone();
+    let shard0_index = shards.get(&ShardId(0)).unwrap().startup_committed_index;
+    let shard0_event_log_writer = shards.get(&ShardId(0)).unwrap().event_log_writer.clone();
 
     Ok(ClusterHandle {
-        raft,
-        state_machine,
+        raft: shard0,
+        state_machine: shard0_sm,
         raft_addr,
         server_task,
-        watcher_tasks: vec![state_hash_watcher],
-        startup_committed_index,
+        watcher_tasks,
+        startup_committed_index: shard0_index,
+        shards,
+        event_log_writer: shard0_event_log_writer,
     })
 }
 
@@ -332,37 +538,79 @@ pub async fn bootstrap_cluster(
 /// - valori_raft_last_log_index, valori_raft_last_applied_index
 ///   (the gap between them is replication/apply lag)
 /// - valori_raft_snapshot_index, valori_raft_purged_index
-fn spawn_raft_metrics_watcher(raft: Raft) {
+fn spawn_raft_metrics_watcher(shard: ShardId, label_shards: bool, raft: Raft) {
     tokio::spawn(async move {
         let mut rx = raft.metrics();
+        let shard_label = label_shards.then(|| shard.0.to_string());
         loop {
             {
                 let m = rx.borrow().clone();
-                metrics::gauge!("valori_raft_term", m.current_term as f64);
-                metrics::gauge!(
-                    "valori_raft_current_leader",
-                    m.current_leader.unwrap_or(0) as f64
-                );
-                metrics::gauge!(
-                    "valori_raft_is_leader",
-                    if m.current_leader == Some(m.id) { 1.0 } else { 0.0 }
-                );
-                metrics::gauge!(
-                    "valori_raft_last_log_index",
-                    m.last_log_index.unwrap_or(0) as f64
-                );
-                metrics::gauge!(
-                    "valori_raft_last_applied_index",
-                    m.last_applied.map_or(0, |l| l.index) as f64
-                );
-                metrics::gauge!(
-                    "valori_raft_snapshot_index",
-                    m.snapshot.map_or(0, |s| s.index) as f64
-                );
-                metrics::gauge!(
-                    "valori_raft_purged_index",
-                    m.purged.map_or(0, |p| p.index) as f64
-                );
+                match &shard_label {
+                    Some(s) => {
+                        metrics::gauge!("valori_raft_term", m.current_term as f64, "shard" => s.clone());
+                        metrics::gauge!(
+                            "valori_raft_current_leader",
+                            m.current_leader.unwrap_or(0) as f64,
+                            "shard" => s.clone()
+                        );
+                        metrics::gauge!(
+                            "valori_raft_is_leader",
+                            if m.current_leader == Some(m.id) { 1.0 } else { 0.0 },
+                            "shard" => s.clone()
+                        );
+                        metrics::gauge!(
+                            "valori_raft_last_log_index",
+                            m.last_log_index.unwrap_or(0) as f64,
+                            "shard" => s.clone()
+                        );
+                        metrics::gauge!(
+                            "valori_raft_last_applied_index",
+                            m.last_applied.map_or(0, |l| l.index) as f64,
+                            "shard" => s.clone()
+                        );
+                        metrics::gauge!(
+                            "valori_raft_snapshot_index",
+                            m.snapshot.map_or(0, |s| s.index) as f64,
+                            "shard" => s.clone()
+                        );
+                        metrics::gauge!(
+                            "valori_raft_purged_index",
+                            m.purged.map_or(0, |p| p.index) as f64,
+                            "shard" => s.clone()
+                        );
+                    }
+                    None => {
+                        metrics::gauge!("valori_raft_term", m.current_term as f64);
+                        metrics::gauge!(
+                            "valori_raft_current_leader",
+                            m.current_leader.unwrap_or(0) as f64
+                        );
+                        metrics::gauge!(
+                            "valori_raft_is_leader",
+                            if m.current_leader == Some(m.id) {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        );
+                        metrics::gauge!(
+                            "valori_raft_last_log_index",
+                            m.last_log_index.unwrap_or(0) as f64
+                        );
+                        metrics::gauge!(
+                            "valori_raft_last_applied_index",
+                            m.last_applied.map_or(0, |l| l.index) as f64
+                        );
+                        metrics::gauge!(
+                            "valori_raft_snapshot_index",
+                            m.snapshot.map_or(0, |s| s.index) as f64
+                        );
+                        metrics::gauge!(
+                            "valori_raft_purged_index",
+                            m.purged.map_or(0, |p| p.index) as f64
+                        );
+                    }
+                }
             }
             if rx.changed().await.is_err() {
                 // Raft core shut down — the watch stream is closed.
@@ -378,7 +626,26 @@ fn spawn_raft_metrics_watcher(raft: Raft) {
 ///
 /// The interval defaults to 30 s and is configurable via the env var
 /// `VALORI_STATE_HASH_CHECK_SECS` (set to `0` to disable the watcher).
-fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) -> tokio::task::JoinHandle<()> {
+///
+/// Phase S1: only shard 0 has an HTTP `/v1/proof/state` surface to probe —
+/// no namespace routing wires shards >= 1 into the data plane yet. Shards
+/// >= 1 get a one-time warning and a no-op watcher rather than inventing a
+/// new (out-of-scope) cross-shard probing mechanism this slice doesn't need.
+fn spawn_state_hash_watcher(
+    shard: ShardId,
+    label_shards: bool,
+    raft: Raft,
+    sm: ValoriStateMachine,
+) -> tokio::task::JoinHandle<()> {
+    if shard != ShardId(0) {
+        tracing::warn!(
+            shard = shard.0,
+            "state-hash cross-check watcher disabled for this shard — no HTTP surface \
+             exists for shards >= 1 in Phase S1"
+        );
+        return tokio::spawn(async {});
+    }
+
     let interval_secs: u64 = std::env::var("VALORI_STATE_HASH_CHECK_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -392,18 +659,24 @@ fn spawn_state_hash_watcher(raft: Raft, sm: ValoriStateMachine) -> tokio::task::
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("http client");
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             interval.tick().await;
-            check_state_hash_agreement(&raft, &sm, &http).await;
+            check_state_hash_agreement(shard, label_shards, &raft, &sm, &http).await;
         }
     })
 }
 
-async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: &reqwest::Client) {
+async fn check_state_hash_agreement(
+    shard: ShardId,
+    label_shards: bool,
+    raft: &Raft,
+    sm: &ValoriStateMachine,
+    http: &reqwest::Client,
+) {
+    let shard_label = label_shards.then(|| shard.0.to_string());
     let local_hash: String = {
         let h = sm.state_hash().await;
         h.iter().map(|b| format!("{b:02x}")).collect()
@@ -421,7 +694,10 @@ async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: 
 
     if peers.is_empty() {
         // Single-node cluster — trivially agrees with itself.
-        metrics::gauge!("valori_raft_state_hash_match", 1.0);
+        match &shard_label {
+            Some(s) => metrics::gauge!("valori_raft_state_hash_match", 1.0, "shard" => s.clone()),
+            None => metrics::gauge!("valori_raft_state_hash_match", 1.0),
+        }
         return;
     }
 
@@ -429,30 +705,33 @@ async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: 
     for peer_addr in &peers {
         let url = format!("http://{peer_addr}/v1/proof/state");
         match http.get(&url).send().await {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<serde_json::Value>().await {
-                    Ok(body) => {
-                        let peer_hash = body
-                            .get("final_state_hash")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if peer_hash != local_hash {
-                            tracing::error!(
-                                peer = peer_addr,
-                                local = %local_hash,
-                                remote = peer_hash,
-                                "STATE HASH MISMATCH — replica divergence detected"
-                            );
-                            all_match = false;
-                            metrics::counter!("valori_raft_divergence_detections_total", 1);
+            Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                Ok(body) => {
+                    let peer_hash = body
+                        .get("final_state_hash")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if peer_hash != local_hash {
+                        tracing::error!(
+                            peer = peer_addr,
+                            local = %local_hash,
+                            remote = peer_hash,
+                            "STATE HASH MISMATCH — replica divergence detected"
+                        );
+                        all_match = false;
+                        match &shard_label {
+                            Some(s) => {
+                                metrics::counter!("valori_raft_divergence_detections_total", 1, "shard" => s.clone())
+                            }
+                            None => metrics::counter!("valori_raft_divergence_detections_total", 1),
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(peer = peer_addr, err = %e, "state hash parse error");
-                        all_match = false;
-                    }
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(peer = peer_addr, err = %e, "state hash parse error");
+                    all_match = false;
+                }
+            },
             Ok(r) => {
                 tracing::warn!(peer = peer_addr, status = %r.status(), "state hash probe non-2xx");
                 all_match = false;
@@ -464,5 +743,13 @@ async fn check_state_hash_agreement(raft: &Raft, sm: &ValoriStateMachine, http: 
             }
         }
     }
-    metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 });
+    match shard_label {
+        Some(s) => {
+            metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 }, "shard" => s)
+        }
+        None => metrics::gauge!(
+            "valori_raft_state_hash_match",
+            if all_match { 1.0 } else { 0.0 }
+        ),
+    }
 }

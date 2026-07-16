@@ -36,7 +36,7 @@ pub fn run(snapshot_path: &str) -> anyhow::Result<()> {
     let expected_total = 4                       // "VAL1"
         + 4 + info.kernel_len                    // kernel section
         + 4 + info.metadata_len                  // metadata section
-        + 4 + info.index_len;                    // index section
+        + 4 + info.index_len; // index section
 
     let structure_ok = expected_total == bytes.len();
 
@@ -55,7 +55,9 @@ pub fn run(snapshot_path: &str) -> anyhow::Result<()> {
     // L-1: CRC64 is an error-detection code, NOT a cryptographic hash.
     // It cannot detect intentional tampering — use the BLAKE3 hash below for that.
     let crc = compute_crc64(&bytes);
-    println!("    File CRC64:  {crc:016x}  (error-detection checksum — use BLAKE3 for tamper detection)");
+    println!(
+        "    File CRC64:  {crc:016x}  (error-detection checksum — use BLAKE3 for tamper detection)"
+    );
 
     // ── 3. BLAKE3 state hash ─────────────────────────────────────────────────
     match parse_kernel_from_snapshot_bytes(&bytes) {

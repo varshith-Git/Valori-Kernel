@@ -96,7 +96,10 @@ struct ValoriClient {
 
 impl ValoriClient {
     fn new(url: &str, token: Option<String>) -> Self {
-        ValoriClient { url: url.trim_end_matches('/').to_string(), token }
+        ValoriClient {
+            url: url.trim_end_matches('/').to_string(),
+            token,
+        }
     }
 
     fn agent(&self) -> ureq::Agent {
@@ -145,8 +148,11 @@ impl ValoriClient {
 
     /// Insert one record; returns the assigned id.
     fn insert_one(&self, record: &ImportRecord, collection: &str) -> Result<u64> {
-        let key_bytes: Vec<serde_json::Value> =
-            record.key.iter().map(|b| serde_json::Value::Number((*b).into())).collect();
+        let key_bytes: Vec<serde_json::Value> = record
+            .key
+            .iter()
+            .map(|b| serde_json::Value::Number((*b).into()))
+            .collect();
 
         let mut body = serde_json::json!({
             "values": record.vector,
@@ -272,8 +278,11 @@ fn qdrant_vector(point: &QdrantPoint) -> Option<Vec<f32>> {
     if let Some(map) = point.vector.as_object() {
         for (_name, val) in map {
             if let Some(arr) = val.as_array() {
-                let v: Option<Vec<f32>> = arr.iter().map(|x| x.as_f64().map(|f| f as f32)).collect();
-                if v.is_some() { return v; }
+                let v: Option<Vec<f32>> =
+                    arr.iter().map(|x| x.as_f64().map(|f| f as f32)).collect();
+                if v.is_some() {
+                    return v;
+                }
             }
         }
     }
@@ -281,9 +290,7 @@ fn qdrant_vector(point: &QdrantPoint) -> Option<Vec<f32>> {
 }
 
 fn qdrant_metadata(point: &QdrantPoint) -> Option<String> {
-    if point.payload.is_null()
-        || point.payload == serde_json::Value::Object(Default::default())
-    {
+    if point.payload.is_null() || point.payload == serde_json::Value::Object(Default::default()) {
         return None;
     }
     serde_json::to_string(&point.payload).ok()
@@ -332,7 +339,9 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
         "Source: qdrant://{}/{} (dim={qdrant_dim_val}{})",
         qdrant_base,
         args.source_collection,
-        total_hint.map(|n| format!(", ~{n} vectors")).unwrap_or_default()
+        total_hint
+            .map(|n| format!(", ~{n} vectors"))
+            .unwrap_or_default()
     );
     println!("Target: {}/{}", args.target_url, args.target_collection);
 
@@ -373,15 +382,14 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
             }
         }
 
-        let scroll_resp: QdrantScrollResponse =
-            ureq::post(&format!(
-                "{qdrant_base}/collections/{}/points/scroll",
-                args.source_collection
-            ))
-            .send_json(scroll_body)
-            .context("Qdrant scroll failed")?
-            .into_json()
-            .context("Failed to parse Qdrant scroll response")?;
+        let scroll_resp: QdrantScrollResponse = ureq::post(&format!(
+            "{qdrant_base}/collections/{}/points/scroll",
+            args.source_collection
+        ))
+        .send_json(scroll_body)
+        .context("Qdrant scroll failed")?
+        .into_json()
+        .context("Failed to parse Qdrant scroll response")?;
 
         let points = &scroll_resp.result.points;
         if points.is_empty() {
@@ -389,11 +397,14 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
         }
 
         for point in points {
-            let Some(vector) = qdrant_vector(point) else { continue };
+            let Some(vector) = qdrant_vector(point) else {
+                continue;
+            };
             if vector.len() != valori_dim {
                 eprintln!(
                     "Warning: point has dim={} (expected {}), skipping",
-                    vector.len(), valori_dim
+                    vector.len(),
+                    valori_dim
                 );
                 continue;
             }
@@ -447,11 +458,18 @@ fn fresh_qdrant_state(qdrant_base: &str, args: &QdrantImportArgs, dim: usize) ->
 
 fn valori_get_hash(valori: &ValoriClient) -> Result<String> {
     let resp = valori
-        .auth_header(valori.agent().get(&format!("{}/v1/proof/state", valori.url)))
+        .auth_header(
+            valori
+                .agent()
+                .get(&format!("{}/v1/proof/state", valori.url)),
+        )
         .call()
         .context("GET /v1/proof/state failed")?;
     let body: serde_json::Value = resp.into_json()?;
-    Ok(body["final_state_hash"].as_str().unwrap_or("<unknown>").to_string())
+    Ok(body["final_state_hash"]
+        .as_str()
+        .unwrap_or("<unknown>")
+        .to_string())
 }
 
 // ── JSONL source ──────────────────────────────────────────────────────────────
@@ -478,12 +496,15 @@ pub fn run_jsonl(args: JsonlImportArgs) -> Result<()> {
     let valori = ValoriClient::new(&args.target_url, args.token.clone());
     let valori_dim = valori.get_dim()?;
 
-    let file = std::fs::File::open(&args.file)
-        .with_context(|| format!("Cannot open {:?}", args.file))?;
+    let file =
+        std::fs::File::open(&args.file).with_context(|| format!("Cannot open {:?}", args.file))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let reader = BufReader::new(file);
 
-    println!("Source: {:?} (JSONL, dim expected={})", args.file, valori_dim);
+    println!(
+        "Source: {:?} (JSONL, dim expected={})",
+        args.file, valori_dim
+    );
     println!("Target: {}/{}", args.target_url, args.target_collection);
 
     valori.ensure_collection(&args.target_collection)?;
@@ -516,7 +537,9 @@ pub fn run_jsonl(args: JsonlImportArgs) -> Result<()> {
         if rec.vector.len() != valori_dim {
             eprintln!(
                 "Warning: line {} has dim={} (expected {}), skipping",
-                line_no + 1, rec.vector.len(), valori_dim
+                line_no + 1,
+                rec.vector.len(),
+                valori_dim
             );
             skipped += 1;
             continue;

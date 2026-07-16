@@ -3,23 +3,21 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Square, Loader2 } from "lucide-react";
-import { useProjectGroups } from "@/lib/hooks/useCollections";
+import {
+  Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Pause,
+  ArrowRight, Loader2, Star, Upload, BookOpen, Lightbulb, SquareTerminal,
+} from "lucide-react";
+import { forgetProject, getFavoriteProjects, toggleFavoriteProject, touchRecentProject } from "@/lib/native";
 import { useProjectManifest, type ManifestProject } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
+import { GettingStarted } from "@/components/home/GettingStarted";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
-
-function relativeTime(iso?: string): string {
-  if (!iso) return "never opened";
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+import { useRelativeTime } from "@/lib/hooks/useRelativeTime";
+import { timeAgo } from "@/lib/time";
+import { EVENT_DOT } from "@/lib/event-types";
+import { cn } from "@/lib/utils";
+import type { ActivityEvent } from "@/app/api/activity/route";
 
 // ── Count-up hook ─────────────────────────────────────────────────────────────
 
@@ -34,14 +32,12 @@ function useCountUp(target: number | null, duration = 800): string {
     const from = fromRef.current;
     const delta = target - from;
     if (Math.abs(delta) < 1) { setDisplay(target); return; }
-
     if (raf.current) cancelAnimationFrame(raf.current);
     startRef.current = null;
-
     const step = (ts: number) => {
       if (!startRef.current) startRef.current = ts;
       const p = Math.min((ts - startRef.current) / duration, 1);
-      const ease = 1 - Math.pow(1 - p, 3); // cubic ease-out
+      const ease = 1 - Math.pow(1 - p, 3);
       const val = Math.round(from + delta * ease);
       setDisplay(val);
       if (p < 1) {
@@ -60,17 +56,14 @@ function useCountUp(target: number | null, duration = 800): string {
 
 // ── Activity heatmap helpers ──────────────────────────────────────────────────
 
-const WEEKS = 18;
+const WEEKS = 48;
 const TOTAL_DAYS = WEEKS * 7;
 
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
+function isoDate(d: Date) { return d.toISOString().slice(0, 10); }
 
 function buildDayGrid(activity: Record<string, number>) {
   const today = new Date();
   const cells: { date: string; delta: number }[] = [];
-
   let prevVal = 0;
   for (let i = TOTAL_DAYS - 1; i >= 0; i--) {
     const d = new Date(today);
@@ -83,78 +76,45 @@ function buildDayGrid(activity: Record<string, number>) {
   return cells;
 }
 
-function funFact(
-  records: number | null,
-  dim: number | null,
-  chainHeight: number | null,
-  collections: number,
-): string {
-  if (records && dim && records > 0) {
-    const totalValues = records * dim;
-    const mb = (totalValues * 4) / (1024 * 1024);
-    if (mb >= 1) {
-      return `${records.toLocaleString()} vectors × dim ${dim} = ${mb.toFixed(1)} MB of deterministic fixed-point math — zero floats in the hot path.`;
-    }
-    return `${totalValues.toLocaleString()} Q16.16 fixed-point values stored across ${collections} collection${collections !== 1 ? "s" : ""}.`;
-  }
-  if (chainHeight && chainHeight > 0) {
-    return `${chainHeight.toLocaleString()} audit events — each one BLAKE3-chained. Tamper with one and the entire chain shatters.`;
-  }
-  return "Insert your first vectors to start building a tamper-evident audit chain.";
-}
+// ── Status pill ───────────────────────────────────────────────────────────────
 
-// ── Stat tile ─────────────────────────────────────────────────────────────────
-
-function StatTile({
-  label,
-  value,
-  accent,
-  glow,
-  delay = 0,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-  glow?: boolean;
-  delay?: number;
+function StatusPill({ status, nodesRunning, nodesTotal }: {
+  status: ManifestProject["status"];
+  nodesRunning?: number;
+  nodesTotal?: number;
 }) {
+  const map: Record<string, { cls: string; dot: string; label: string }> = {
+    running:  { cls: "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-400", label: "Running" },
+    starting: { cls: "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-400", dot: "bg-amber-400 animate-pulse", label: "Starting" },
+    error:    { cls: "border-red-500/30 bg-red-500/12 text-red-700 dark:text-red-400", dot: "bg-red-400", label: "Error" },
+    stopped:  { cls: "border-border bg-accent text-muted-foreground", dot: "bg-muted-foreground/50", label: "Stopped" },
+    archived: { cls: "border-border bg-accent text-muted-foreground", dot: "bg-muted-foreground/30", label: "Archived" },
+  };
+  const s = map[status] ?? map.stopped;
+  const label = (nodesTotal && nodesTotal > 1 && status !== "stopped")
+    ? `${nodesRunning}/${nodesTotal} nodes`
+    : s.label;
   return (
-    <div
-      className={`animate-stat-pop rounded-xl bg-background border border-border/70 px-4 py-3 flex flex-col gap-1 transition-shadow duration-700 ${
-        glow ? "animate-chain-glow" : ""
-      }`}
-      style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
-    >
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p
-        className={`text-xl font-bold tracking-tight leading-none tabular-nums ${
-          accent ? "text-[var(--v-accent)]" : "text-foreground"
-        }`}
-      >
-        {value}
-      </p>
-    </div>
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full border ${s.cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
+      {label}
+    </span>
   );
 }
 
-// ── Usage stats card ──────────────────────────────────────────────────────────
+// ── Overview card ─────────────────────────────────────────────────────────────
 
-function UsageStats() {
+function OverviewCard({ projects }: { projects: ManifestProject[] }) {
   const { online, recordCount, chainHeight, dim, fillPct, index, version, status } = useHealth();
-  const { groups } = useProjectGroups();
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [prevChain, setPrevChain] = useState<number | null>(null);
   const [chainGlowing, setChainGlowing] = useState(false);
 
-  // Count-up animated values
   const recordDisplay  = useCountUp(recordCount);
   const chainDisplay   = useCountUp(chainHeight);
-  const collectDisplay = useCountUp(
-    groups.reduce((s, g) => s + g.collections.length, 0),
-  );
-  const projectDisplay = useCountUp(groups.length);
+  const collectDisplay = useCountUp(projects.reduce((s, p) => s + (p.collections?.length ?? 0), 0));
+  const projectDisplay = useCountUp(projects.length);
 
-  // Load persisted daily activity from localStorage
   useEffect(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("valori:activity") ?? "{}") as Record<string, number>;
@@ -162,7 +122,6 @@ function UsageStats() {
     } catch {}
   }, []);
 
-  // Update today's chain height whenever it changes + trigger glow on increment
   useEffect(() => {
     if (!online || !chainHeight) return;
     const today = isoDate(new Date());
@@ -172,13 +131,9 @@ function UsageStats() {
       try { localStorage.setItem("valori:activity", JSON.stringify(next)); } catch {}
       return next;
     });
-
-    // Glow pulse when chain height increments
     if (prevChain !== null && chainHeight > prevChain) {
       setChainGlowing(false);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => setChainGlowing(true));
-      });
+      requestAnimationFrame(() => requestAnimationFrame(() => setChainGlowing(true)));
       const t = setTimeout(() => setChainGlowing(false), 1200);
       return () => clearTimeout(t);
     }
@@ -186,74 +141,71 @@ function UsageStats() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, chainHeight]);
 
-  const collectionCount = groups.reduce((s, g) => s + g.collections.length, 0);
-
   const cells    = buildDayGrid(activity);
   const maxDelta = Math.max(...cells.map(c => c.delta), 1);
+  const fmtIndex = index ? (index === "BruteForce" ? "Brute-force" : index) : "—";
 
-  const fmtIndex = index
-    ? index === "BruteForce" ? "Brute-force" : index
-    : "—";
-
-  const row1 = [
-    { label: "Records",       value: recordDisplay },
-    { label: "Chain events",  value: chainDisplay,  glow: chainGlowing },
-    { label: "Collections",   value: collectDisplay },
-    { label: "Projects",      value: projectDisplay },
+  const stats = [
+    { label: "Records",      value: recordDisplay },
+    { label: "Chain events", value: chainDisplay,   glow: chainGlowing },
+    { label: "Collections",  value: collectDisplay },
+    { label: "Projects",     value: projectDisplay },
   ];
-  const row2 = [
-    { label: "Dimension",   value: dim ? String(dim) : "—" },
-    { label: "Index type",  value: fmtIndex },
-    { label: "Capacity",    value: fillPct != null ? `${fillPct.toFixed(1)}%` : "—" },
-    { label: "Status",      value: online ? (status ?? "ok") : "offline", accent: online && status === "ok" },
+
+  const metaStats = [
+    { label: "dim",      value: dim ? String(dim) : "—" },
+    { label: "index",    value: fmtIndex },
+    { label: "capacity", value: fillPct != null ? `${fillPct.toFixed(1)}%` : "—" },
+    { label: "status",   value: online ? (status ?? "ok") : "offline", accent: online && status === "ok" },
   ];
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 flex flex-col gap-4">
-      {/* Header row */}
+    <div className="rounded-2xl border border-border bg-card px-5 py-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {/* Breathing dot — green when online, amber when offline */}
-          <span
-            className={`inline-block h-2 w-2 rounded-full animate-breathe ${
-              online ? "bg-emerald-500" : "bg-amber-500"
-            }`}
-          />
+          <span className={`h-2 w-2 rounded-full animate-breathe ${online ? "bg-emerald-500" : "bg-amber-500"}`} />
           <p className="text-sm font-semibold text-foreground">Overview</p>
         </div>
-        {version && (
-          <span className="text-[10px] font-mono text-muted-foreground px-2 py-0.5 rounded bg-accent border border-border/60">
-            v{version}
-          </span>
-        )}
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {metaStats.map(s => (
+            <span key={s.label} className="text-[10px] text-muted-foreground font-mono">
+              {s.label}{" "}
+              <span className={s.accent ? "text-emerald-500" : "text-foreground"}>{s.value}</span>
+            </span>
+          ))}
+          {version && (
+            <span className="text-[10px] font-mono text-muted-foreground px-2 py-0.5 rounded bg-accent border border-border/60">
+              v{version}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Stat tiles — 2 rows of 4, staggered pop-in */}
-      <div className="grid grid-cols-4 gap-2.5">
-        {([...row1, ...row2] as { label: string; value: string; accent?: boolean; glow?: boolean }[]).map(
-          (s, i) => (
-            <StatTile
-              key={s.label}
-              label={s.label}
-              value={s.value}
-              accent={s.accent}
-              glow={s.glow}
-              delay={i * 40}
-            />
-          )
-        )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {(stats as { label: string; value: string; accent?: boolean; glow?: boolean }[]).map((s, i) => (
+          <div
+            key={s.label}
+            className={cn(
+              "animate-stat-pop rounded-xl bg-background border border-border/70 px-4 py-3 flex flex-col gap-1",
+              s.glow && "animate-chain-glow",
+            )}
+            style={{ animationDelay: `${i * 40}ms`, animationFillMode: "both" }}
+          >
+            <p className="text-[11px] text-muted-foreground">{s.label}</p>
+            <p className="text-xl font-bold tracking-tight leading-none tabular-nums text-foreground">{s.value}</p>
+          </div>
+        ))}
       </div>
 
-      {/* Activity heatmap with staggered cell entrance */}
-      <div className="flex flex-col gap-1.5">
-        <p className="text-[10px] text-muted-foreground/60 font-mono">audit activity · {WEEKS} weeks</p>
+      <div className="flex items-center gap-4 overflow-x-auto py-1">
+        <p className="text-[10px] text-muted-foreground/60 font-mono shrink-0">Activity · {WEEKS}w</p>
         <div
           style={{
             display: "grid",
-            gridTemplateRows: "repeat(7, 11px)",
+            gridTemplateRows: "repeat(7, 9px)",
             gridAutoFlow: "column",
-            gridAutoColumns: "11px",
-            gap: "3px",
+            gridAutoColumns: "9px",
+            gap: "2px",
           }}
         >
           {cells.map((c, i) => {
@@ -268,123 +220,369 @@ function UsageStats() {
                 key={i}
                 className="heat-cell"
                 title={`${c.date}${c.delta > 0 ? ` · +${c.delta} events` : ""}`}
-                style={{
-                  borderRadius: "3px",
-                  backgroundColor: bg,
-                  "--ci": col,
-                } as React.CSSProperties}
+                style={{ borderRadius: "2px", backgroundColor: bg, "--ci": col } as React.CSSProperties}
               />
             );
           })}
         </div>
+        <div className="ml-auto shrink-0 flex items-center gap-1 text-[9px] text-muted-foreground/50 font-mono">
+          <span>48h ago</span>
+          <span className="mx-8">24h ago</span>
+          <span>Now</span>
+        </div>
       </div>
-
-      {/* Fun fact */}
-      <p className="text-[11px] text-muted-foreground leading-relaxed border-t border-border/50 pt-3">
-        {funFact(recordCount, dim, chainHeight, collectionCount)}
-      </p>
     </div>
   );
 }
 
-// ── Project card ──────────────────────────────────────────────────────────────
+// ── Recent Activity panel ─────────────────────────────────────────────────────
 
-function StatusPill({ status }: { status: ManifestProject["status"] }) {
-  const map: Record<string, { cls: string; dot: string; label: string }> = {
-    running:  { cls: "border-emerald-500/30 bg-emerald-500/12 text-emerald-700", dot: "bg-emerald-400",            label: "running" },
-    starting: { cls: "border-amber-500/30 bg-amber-500/12 text-amber-700",       dot: "bg-amber-400 animate-pulse", label: "starting" },
-    error:    { cls: "border-red-500/30 bg-red-500/12 text-red-700",             dot: "bg-red-400",                label: "error" },
-    stopped:  { cls: "border-border bg-accent text-muted-foreground",            dot: "bg-muted-foreground/50",    label: "at rest" },
+type TabFilter = "all" | "running" | "stopped";
+
+function RecentActivityPanel() {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [disabled, setDisabled] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/activity?limit=20")
+      .then(r => r.json())
+      .then((d: { events?: ActivityEvent[]; disabled?: boolean }) => {
+        setDisabled(d.disabled === true);
+        setEvents(d.events ?? []);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const getStatus = (eventType: string) => {
+    if (/delete/i.test(eventType))
+      return { label: "Deleted", cls: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20" };
+    return { label: "Success", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20" };
   };
-  const s = map[status] ?? map.stopped;
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-full border ${s.cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
-      {s.label}
-    </span>
-  );
-}
 
-function ProjectCard({
-  project, busy, onOpen, onClose, onDelete, delay = 0,
-}: {
-  project: ManifestProject;
-  busy: boolean;
-  onOpen: () => void;
-  onClose: () => void;
-  onDelete: () => void;
-  delay?: number;
-}) {
-  const isRunning  = project.status === "running" || project.status === "starting";
+  const shown = showAll ? events : events.slice(0, 8);
 
   return (
-    <div
-      onClick={onOpen}
-      className="card-shimmer animate-fade-up group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 cursor-pointer hover:border-input hover:shadow-sm hover:scale-[1.01] transition-all duration-200"
-      style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="h-8 w-8 rounded-lg bg-[var(--v-accent-muted)] border border-[var(--v-accent)]/20 flex items-center justify-center transition-transform duration-200 group-hover:scale-110 shrink-0">
-          <Layers size={14} className="text-[var(--v-accent)] transition-transform duration-200 group-hover:rotate-12" />
-        </div>
-        <div className="flex items-center gap-1.5">
-          <StatusPill status={project.status} />
-          <button
-            onClick={e => { e.stopPropagation(); onDelete(); }}
-            className="opacity-0 group-hover:opacity-100 rounded-md p-1 text-muted-foreground hover:text-red-700 hover:bg-red-500/15 transition-all"
-            title="Delete project (clears lock + removes data)"
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
+    <div className="rounded-xl border border-border bg-card overflow-hidden flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <p className="text-sm font-semibold text-foreground">Recent activity</p>
+        <Link href="/audit" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+          View timeline <ArrowRight size={11} />
+        </Link>
       </div>
 
-      <div>
-        <p className="font-semibold text-foreground truncate">{project.name}</p>
-        <p className="text-[11px] text-muted-foreground mt-0.5">
-          opened {relativeTime(project.lastOpenedAt)}
-          {project.records != null && project.records > 0 && <> · {project.records.toLocaleString()} records</>}
-        </p>
-        {project.status === "error" && (
-          <p className="text-[11px] text-red-500 mt-1">
-            Node failed to start —{" "}
-            <Link
-              href="/logs"
-              onClick={e => e.stopPropagation()}
-              className="underline hover:text-red-400 transition-colors"
-            >
-              view logs →
-            </Link>
-          </p>
+      <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="h-4 w-4 rounded-full border-2 border-[var(--v-accent)] border-t-transparent animate-spin" />
+          </div>
+        ) : disabled || events.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <p className="text-xs text-muted-foreground">No activity yet</p>
+            <p className="text-[11px] text-muted-foreground/60">Events will appear once you start inserting records.</p>
+          </div>
+        ) : (
+          shown.map(e => {
+            const dot = EVENT_DOT[e.event_type] ?? "bg-muted-foreground/40";
+            const status = getStatus(e.event_type);
+            const label = e.event_type.replace(/([A-Z])/g, " $1").trim();
+            const detail = Object.entries(e.detail)
+              .slice(0, 2)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+              .join("  ");
+            return (
+              <div key={e.log_index} className="flex items-center gap-3 px-4 py-2.5 hover:bg-accent/30 transition-colors">
+                <span className={`h-2 w-2 rounded-full shrink-0 ${dot}`} />
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-foreground truncate">{label}</p>
+                  <p className="text-[11px] font-mono text-muted-foreground truncate">{detail}</p>
+                </div>
+                <span className="text-[10px] text-muted-foreground/60 font-mono shrink-0 tabular-nums">
+                  {timeAgo(e.timestamp_iso)}
+                </span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium shrink-0 ${status.cls}`}>
+                  {status.label}
+                </span>
+              </div>
+            );
+          })
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-2 mt-1">
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-accent border border-border/60 text-muted-foreground">
-          :{project.port} · dim {project.dim}
-        </span>
-        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-          {isRunning ? (
+      {!loading && events.length > 8 && (
+        <div className="border-t border-border px-4 py-2.5 shrink-0">
+          <button
+            onClick={() => setShowAll(v => !v)}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+          >
+            {showAll ? "Show less ↑" : `Load more ↓`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Projects panel ────────────────────────────────────────────────────────────
+
+function ProjectsPanel({
+  projects,
+  onOpen,
+  onClose,
+  onDelete,
+  onToggleFavorite,
+  favorites,
+  busyName,
+  onCreateProject,
+}: {
+  projects: ManifestProject[];
+  onOpen: (name: string) => void;
+  onClose: (name: string) => void;
+  onDelete: (name: string) => void;
+  onToggleFavorite: (name: string) => void;
+  favorites: string[];
+  busyName: string | null;
+  onCreateProject: () => void;
+}) {
+  const [tab, setTab] = useState<TabFilter>("all");
+
+  const counts = {
+    all:     projects.length,
+    running: projects.filter(p => p.status === "running" || p.status === "starting").length,
+    stopped: projects.filter(p => p.status === "stopped" || p.status === "error").length,
+  };
+
+  const filtered = tab === "all"
+    ? projects
+    : tab === "running"
+    ? projects.filter(p => p.status === "running" || p.status === "starting")
+    : projects.filter(p => p.status === "stopped" || p.status === "error");
+
+  const [showAll, setShowAll] = useState(false);
+  const SHOW_LIMIT = 6;
+  const shown = showAll ? filtered : filtered.slice(0, SHOW_LIMIT);
+  const more  = filtered.length - shown.length;
+
+  const tabs: { key: TabFilter; label: string }[] = [
+    { key: "all",     label: "All" },
+    { key: "running", label: "Running" },
+    { key: "stopped", label: "Stopped" },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border bg-card overflow-hidden flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <p className="text-sm font-semibold text-foreground">Projects</p>
+        <button
+          onClick={onCreateProject}
+          className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--v-accent)] hover:opacity-80 transition-opacity"
+        >
+          <Plus size={11} /> New
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-border/60 shrink-0">
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onClick={() => { setTab(t.key); setShowAll(false); }}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+              tab === t.key
+                ? "bg-[var(--v-accent-muted)] text-[var(--v-accent)]"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent/60",
+            )}
+          >
+            {t.label}
+            <span className={cn("font-mono text-[10px]", tab === t.key ? "text-[var(--v-accent)]" : "text-muted-foreground/60")}>
+              {counts[t.key]}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* Project rows */}
+      <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+        {projects.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
+            <div className="h-10 w-10 rounded-xl border border-dashed border-border flex items-center justify-center">
+              <FolderOpen size={18} className="text-muted-foreground" />
+            </div>
+            <div className="text-center">
+              <p className="text-xs font-medium text-foreground">No projects yet</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Create your first project to get started.</p>
+            </div>
             <button
-              onClick={onClose}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-md border border-border bg-accent hover:bg-muted px-2.5 py-1 text-[11px] text-foreground disabled:opacity-50 transition-colors"
-              title="Snapshot & close session"
+              onClick={onCreateProject}
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--v-accent)] px-4 py-2 text-xs font-medium text-white hover:opacity-90"
             >
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <Square size={11} />}
-              Close
+              <Plus size={12} /> Create project
             </button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex items-center justify-center py-8">
+            <p className="text-xs text-muted-foreground">No {tab} projects</p>
+          </div>
+        ) : (
+          shown.map(p => {
+            const isRunning = p.status === "running" || p.status === "starting";
+            return (
+              <div
+                key={p.name}
+                onClick={() => !busyName && onOpen(p.name)}
+                className="group flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors cursor-pointer"
+              >
+                {/* Icon */}
+                <div className="h-7 w-7 rounded-lg bg-[var(--v-accent-muted)] border border-[var(--v-accent)]/20 flex items-center justify-center shrink-0">
+                  <Layers size={12} className="text-[var(--v-accent)]" />
+                </div>
+
+                {/* Name + meta */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate group-hover:text-[var(--v-accent)] transition-colors">
+                    {p.name}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {(p.records ?? 0).toLocaleString()} records
+                    {p.collections && p.collections.length > 0 && ` · ${p.collections.length} collection${p.collections.length !== 1 ? "s" : ""}`}
+                    {p.dim && ` · dim ${p.dim}`}
+                  </p>
+                </div>
+
+                {/* Controls */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <StatusPill status={p.status} nodesRunning={p.nodesRunning} nodesTotal={p.nodesTotal} />
+
+                  {/* Favorite */}
+                  <button
+                    onClick={e => { e.stopPropagation(); onToggleFavorite(p.name); }}
+                    className={cn(
+                      "rounded p-1 transition-all",
+                      favorites.includes(p.name)
+                        ? "text-amber-500"
+                        : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-500",
+                    )}
+                    title={favorites.includes(p.name) ? "Remove favorite" : "Favorite"}
+                  >
+                    <Star size={12} className={favorites.includes(p.name) ? "fill-current" : ""} />
+                  </button>
+
+                  {/* Pause / Play */}
+                  {isRunning ? (
+                    <button
+                      onClick={e => { e.stopPropagation(); onClose(p.name); }}
+                      disabled={!!busyName}
+                      className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center rounded-md border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 disabled:opacity-40 transition-all"
+                      title="Pause"
+                    >
+                      {busyName === p.name ? <Loader2 size={10} className="animate-spin" /> : <Pause size={10} className="fill-current" />}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={e => { e.stopPropagation(); onOpen(p.name); }}
+                      disabled={!!busyName}
+                      className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-40 transition-all"
+                      title="Resume"
+                    >
+                      {busyName === p.name ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} className="fill-current ml-0.5" />}
+                    </button>
+                  )}
+
+                  {/* Delete */}
+                  <button
+                    onClick={e => { e.stopPropagation(); onDelete(p.name); }}
+                    className="opacity-0 group-hover:opacity-100 rounded p-1 text-muted-foreground hover:text-red-600 hover:bg-red-500/10 transition-all"
+                    title="Delete"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+
+                  <ArrowRight size={13} className="text-muted-foreground/40 ml-1" />
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Load more / tip */}
+      <div className="border-t border-border/60 px-4 py-2.5 flex items-center justify-between shrink-0">
+        {more > 0 ? (
+          <button
+            onClick={() => setShowAll(v => !v)}
+            className="text-xs text-[var(--v-accent)] hover:opacity-80 transition-opacity flex items-center gap-1"
+          >
+            <Plus size={11} /> {more} more project{more !== 1 ? "s" : ""}
+          </button>
+        ) : (
+          <span />
+        )}
+        <Link href="/proof" className="text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+          View proof →
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ── Quick actions ─────────────────────────────────────────────────────────────
+
+function QuickActions({ onCreateProject }: { onCreateProject: () => void }) {
+  const tip = "Create collections and upload documents to start indexing your data.";
+
+  const actions = [
+    { Icon: Plus,          label: "New Project",       desc: "Create a new project",    onClick: onCreateProject },
+    { Icon: Upload,        label: "Import Snapshot",   desc: "Upload snapshot file",    href: "/snapshots" },
+    { Icon: SquareTerminal,label: "Launch Playground", desc: "Test your data",          href: "/playground" },
+    { Icon: BookOpen,      label: "Open Docs",         desc: "Read the documentation",  href: "/help" },
+  ];
+
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-4 flex flex-col sm:flex-row gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1">
+        {actions.map(a => {
+          const inner = (
+            <>
+              <div className="h-8 w-8 rounded-lg bg-accent border border-border/60 flex items-center justify-center shrink-0">
+                <a.Icon size={14} className="text-muted-foreground" />
+              </div>
+              <div className="text-left">
+                <p className="text-xs font-medium text-foreground">{a.label}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">{a.desc}</p>
+              </div>
+            </>
+          );
+          return a.href ? (
+            <Link
+              key={a.label}
+              href={a.href}
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 hover:bg-accent/60 transition-colors"
+            >
+              {inner}
+            </Link>
           ) : (
             <button
-              onClick={onOpen}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 px-2.5 py-1 text-[11px] text-emerald-700 disabled:opacity-50 transition-colors"
-              title="Open session"
+              key={a.label}
+              onClick={a.onClick}
+              className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 hover:bg-accent/60 transition-colors text-left"
             >
-              {busy ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
-              Open
+              {inner}
             </button>
-          )}
+          );
+        })}
+      </div>
+      <div className="hidden sm:flex items-start gap-2.5 border-l border-border pl-4 min-w-[180px] max-w-[220px]">
+        <Lightbulb size={14} className="text-[var(--v-accent)] shrink-0 mt-0.5" />
+        <div>
+          <p className="text-xs font-medium text-foreground">Tip</p>
+          <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{tip}</p>
+          <Link href="/help" className="text-[11px] text-[var(--v-accent)] hover:underline mt-1.5 inline-block">
+            Learn more →
+          </Link>
         </div>
       </div>
     </div>
@@ -400,39 +598,63 @@ export default function HomePage() {
   const [createOpen,   setCreateOpen]   = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [busyName,     setBusyName]     = useState<string | null>(null);
+  const [favorites,    setFavorites]    = useState<string[]>([]);
+
+  useEffect(() => {
+    getFavoriteProjects().then(setFavorites).catch(() => {});
+  }, []);
+
+  const toggleFavorite = async (name: string) => {
+    setFavorites(await toggleFavoriteProject(name));
+  };
+
+  const orderedProjects = [...projects].sort((a, b) => {
+    const af = favorites.includes(a.name) ? 0 : 1;
+    const bf = favorites.includes(b.name) ? 0 : 1;
+    return af - bf;
+  });
 
   const handleOpen = async (name: string) => {
+    if (busyName) return;
     setBusyName(name);
-    const ok = await open(name);
+    touchRecentProject(name).catch(() => {});
+    router.push(`/projects/${encodeURIComponent(name)}`);
+    await open(name);
     setBusyName(null);
-    if (ok) router.push(`/projects/${encodeURIComponent(name)}`);
   };
 
   const handleClose = async (name: string) => {
+    if (busyName) return;
     setBusyName(name);
     await close(name);
     setBusyName(null);
   };
 
+  const activeProject = projects.find(p => p.status === "running");
+
   return (
     <>
-      <div className="flex flex-col gap-6 max-w-5xl">
+      <div className="flex flex-col gap-5 w-full max-w-[1920px] mx-auto">
 
         {/* ── Header ── */}
-        <div
-          className="animate-fade-up flex items-start justify-between gap-4"
-          style={{ animationDelay: "0ms" }}
-        >
+        <div className="animate-fade-up flex items-start justify-between gap-4" style={{ animationDelay: "0ms" }}>
           <div>
-            <h1 className="text-2xl font-semibold text-foreground tracking-tight">Projects</h1>
+            <h1 className="text-2xl font-semibold text-foreground tracking-tight">Workspace</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {online
-                ? <>Active session · <span className="font-mono">{(recordCount ?? 0).toLocaleString()}</span> records · dim <span className="font-mono">{dim ?? "—"}</span></>
-                : <>Open a project to start its session — your data stays put between restarts.</>
-              }
+              {online ? (
+                <>
+                  {activeProject && (
+                    <span className="font-medium text-foreground mr-1.5">{activeProject.name}</span>
+                  )}
+                  <span className="font-mono">{(recordCount ?? 0).toLocaleString()}</span> records
+                  {" · "}<span className="text-emerald-600 dark:text-emerald-400">● Running</span>
+                </>
+              ) : (
+                "Open a project to start its session — your data stays put between restarts."
+              )}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => refresh()}
               className="rounded-lg border border-border p-2 text-muted-foreground hover:text-foreground hover:bg-accent hover:rotate-180 transition-all duration-500"
@@ -450,98 +672,57 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* ── Stats card ── */}
-        <div
-          className="animate-fade-up"
-          style={{ animationDelay: "80ms" }}
-        >
-          <UsageStats />
+        {/* ── Getting started ── */}
+        <GettingStarted
+          projects={projects}
+          recordCount={recordCount}
+          onCreateProject={() => setCreateOpen(true)}
+        />
+
+        {/* ── Overview ── */}
+        <div className="animate-fade-up" style={{ animationDelay: "60ms" }}>
+          <OverviewCard projects={projects} />
         </div>
 
-        {/* ── Projects section header ── */}
-        <div
-          className="animate-fade-up flex items-center justify-between mt-2"
-          style={{ animationDelay: "160ms" }}
-        >
-          <h2 className="text-base font-semibold text-foreground">
-            All projects {projects.length > 0 && <span className="text-muted-foreground font-normal">· {projects.length}</span>}
-          </h2>
-          <Link href="/proof" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-            View proof →
-          </Link>
-        </div>
-
-        {/* ── Project grid ── */}
+        {/* ── Two-column: Recent Activity + Projects ── */}
         {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map((_, i) => (
-              <div
-                key={i}
-                className="h-32 animate-pulse rounded-xl bg-accent/60"
-                style={{ animationDelay: `${i * 80}ms` }}
-              />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {[0, 1].map(i => (
+              <div key={i} className="h-64 animate-pulse rounded-xl bg-accent/60" style={{ animationDelay: `${i * 80}ms` }} />
             ))}
-          </div>
-        ) : projects.length === 0 ? (
-          <div
-            className="animate-fade-up rounded-xl border border-dashed border-border py-20 flex flex-col items-center gap-5"
-            style={{ animationDelay: "200ms" }}
-          >
-            <div className="h-14 w-14 rounded-2xl bg-card border border-border flex items-center justify-center"
-              style={{ animation: "breathe 3s ease-in-out infinite" }}
-            >
-              <FolderOpen size={22} className="text-muted-foreground" />
-            </div>
-            <div className="text-center">
-              <p className="text-sm font-medium text-foreground">No projects yet</p>
-              <p className="mt-1 text-xs text-muted-foreground max-w-xs">
-                Each project is its own isolated, persistent store under <code className="font-mono">~/.valori/projects</code>.
-                Create one to start ingesting documents.
-              </p>
-            </div>
-            <button
-              onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-border hover:border-[var(--v-accent)] hover:scale-[1.03] active:scale-[0.97] px-5 py-2.5 text-sm text-muted-foreground hover:text-foreground transition-all duration-150"
-            >
-              <Plus size={14} />
-              Create first project
-            </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {projects.map((p, i) => (
-              <ProjectCard
-                key={p.name}
-                project={p}
-                busy={busyName === p.name}
-                onOpen={() => handleOpen(p.name)}
-                onClose={() => handleClose(p.name)}
-                onDelete={() => setDeleteTarget(p.name)}
-                delay={200 + i * 60}
-              />
-            ))}
-
-            <button
-              onClick={() => setCreateOpen(true)}
-              className="animate-fade-up group flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border hover:border-[var(--v-accent)]/60 hover:bg-[var(--v-accent-muted)] py-10 text-sm text-muted-foreground transition-all duration-200 hover:scale-[1.01]"
-              style={{ animationDelay: `${200 + projects.length * 60}ms`, animationFillMode: "both" }}
-            >
-              <div className="h-9 w-9 rounded-xl border border-dashed border-border group-hover:border-[var(--v-accent)]/60 flex items-center justify-center transition-all duration-200 group-hover:scale-110">
-                <Plus size={16} className="group-hover:text-[var(--v-accent)] transition-colors" />
-              </div>
-              <span className="group-hover:text-foreground transition-colors">New Project</span>
-            </button>
+          <div
+            className="animate-fade-up grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-4"
+            style={{ animationDelay: "120ms" }}
+          >
+            <RecentActivityPanel />
+            <ProjectsPanel
+              projects={orderedProjects}
+              onOpen={handleOpen}
+              onClose={handleClose}
+              onDelete={setDeleteTarget}
+              onToggleFavorite={toggleFavorite}
+              favorites={favorites}
+              busyName={busyName}
+              onCreateProject={() => setCreateOpen(true)}
+            />
           </div>
         )}
+
+        {/* ── Quick actions ── */}
+        <div className="animate-fade-up" style={{ animationDelay: "180ms" }}>
+          <QuickActions onCreateProject={() => setCreateOpen(true)} />
+        </div>
+
       </div>
 
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index) => {
-          const entry = await create({ name, dim, index });
+        onCreate={async (name, dim, index, replication, shardCount, embed) => {
+          const entry = await create({ name, dim, index, replication, shardCount, embed });
           if (!entry) return;
-          // Boot the new project's node and route into it.
           setBusyName(name);
           const ok = await open(name);
           setBusyName(null);
@@ -556,6 +737,8 @@ export default function HomePage() {
           onClose={() => setDeleteTarget(null)}
           onDelete={async () => {
             await remove(deleteTarget);
+            forgetProject(deleteTarget).catch(() => {});
+            setFavorites(prev => prev.filter(n => n !== deleteTarget));
             setDeleteTarget(null);
           }}
         />

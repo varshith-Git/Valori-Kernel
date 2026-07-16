@@ -8,14 +8,14 @@ interface Props {
 }
 
 export function ProofHash({ hash, isLoading }: Props) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   const copy = () => {
     if (!hash) return;
-    navigator.clipboard.writeText(hash).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard.writeText(hash)
+      .then(() => setCopyState("copied"))
+      .catch(() => setCopyState("failed"))
+      .finally(() => setTimeout(() => setCopyState("idle"), 1500));
   };
 
   if (isLoading || !hash) {
@@ -35,7 +35,7 @@ export function ProofHash({ hash, isLoading }: Props) {
         State Hash
       </span>
       <div className="flex items-center gap-3">
-        <code className="break-all font-mono text-lg font-medium tracking-tight text-emerald-400">
+        <code className="break-all font-mono text-lg font-medium tracking-tight text-emerald-600 dark:text-emerald-400">
           {hash}
         </code>
         <button
@@ -43,7 +43,7 @@ export function ProofHash({ hash, isLoading }: Props) {
           className="shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
           title="Copy hash"
         >
-          {copied ? "✓ copied" : "copy"}
+          {copyState === "copied" ? "✓ copied" : copyState === "failed" ? "✗ copy failed" : "copy"}
         </button>
       </div>
     </div>

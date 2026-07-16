@@ -11,7 +11,7 @@ const GOALS = [
     icon: "⊙",
     title: "Find information",
     color: "border-blue-900/60 bg-blue-950/20",
-    accent: "text-blue-400",
+    accent: "text-blue-600 dark:text-blue-400",
     items: [
       {
         label: "Search tab → Semantic",
@@ -56,7 +56,7 @@ const GOALS = [
     icon: "↑",
     title: "Add documents",
     color: "border-emerald-900/60 bg-emerald-950/20",
-    accent: "text-emerald-400",
+    accent: "text-emerald-600 dark:text-emerald-400",
     items: [
       {
         label: "Upload tab",
@@ -77,7 +77,7 @@ const GOALS = [
     icon: "◆",
     title: "Prove integrity",
     color: "border-purple-900/60 bg-purple-950/20",
-    accent: "text-purple-400",
+    accent: "text-purple-600 dark:text-purple-400",
     items: [
       {
         label: "Proof-Carrying Answers (Ask tab)",
@@ -116,10 +116,10 @@ const GOALS = [
         where: "Sidebar → Proof",
       },
       {
-        label: "Auditor Portal (/auditor)",
+        label: "Audit → Third-Party tab",
         when: "A third party (auditor, regulator) needs to independently verify the audit trail.",
-        why: "Self-service portal — paste an event log, get a verification report. Requires no access to internal tooling.",
-        where: "Sidebar → Auditor Portal",
+        why: "Read-only view — state proof, event lookup, and provenance search. Requires no access to internal tooling.",
+        where: "Sidebar → Audit Trail → Third-Party",
       },
     ],
   },
@@ -128,7 +128,7 @@ const GOALS = [
     icon: "⊛",
     title: "Compliance & erasure",
     color: "border-amber-900/60 bg-amber-950/20",
-    accent: "text-amber-400",
+    accent: "text-amber-600 dark:text-amber-400",
     items: [
       {
         label: "GDPR tab",
@@ -326,7 +326,7 @@ function TabCheatSheet() {
   return (
     <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
       <p className="text-sm font-semibold text-card-foreground">Collection page tabs — at a glance</p>
-      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {tabs.map((t) => (
           <div
             key={t.name}
@@ -348,7 +348,7 @@ function TabCheatSheet() {
 
 export default function HelpPage() {
   return (
-    <div className="flex flex-col gap-6 max-w-4xl py-2">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px] py-2">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

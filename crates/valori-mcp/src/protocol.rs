@@ -64,7 +64,12 @@ pub struct Response {
 
 impl Response {
     pub fn success(id: Value, result: Value) -> Self {
-        Self { jsonrpc: "2.0", id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0",
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     pub fn error(id: Value, code: i64, message: impl Into<String>) -> Self {
@@ -72,7 +77,11 @@ impl Response {
             jsonrpc: "2.0",
             id,
             result: None,
-            error: Some(ErrorObject { code, message: message.into(), data: None }),
+            error: Some(ErrorObject {
+                code,
+                message: message.into(),
+                data: None,
+            }),
         }
     }
 }

@@ -12,8 +12,10 @@ use std::time::Duration;
 
 use openraft::{Config, Raft};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
-use valori_consensus::{serve_raft, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
+use valori_consensus::{
+    serve_raft_single, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -39,11 +41,19 @@ async fn spawn_node(id: NodeId) -> TestNode {
     let log_store = ValoriLogStore::new();
     let sm = ValoriStateMachine::default();
 
-    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), log_store, sm.clone())
+    let raft = Raft::new(
+        id,
+        config,
+        ValoriNetworkFactory::new(ShardId(0)),
+        log_store,
+        sm.clone(),
+    )
+    .await
+    .unwrap();
+
+    let (addr, _handle) = serve_raft_single(raft.clone(), "127.0.0.1:0")
         .await
         .unwrap();
-
-    let (addr, _handle) = serve_raft(raft.clone(), "127.0.0.1:0").await.unwrap();
 
     TestNode {
         raft,
@@ -65,12 +75,17 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+        namespace_id: 0,
     }
 }
 
 /// Spin up a 3-node cluster, elect a leader, return the nodes.
 async fn three_node_cluster() -> Vec<TestNode> {
-    let nodes = vec![spawn_node(1).await, spawn_node(2).await, spawn_node(3).await];
+    let nodes = vec![
+        spawn_node(1).await,
+        spawn_node(2).await,
+        spawn_node(3).await,
+    ];
 
     let members: BTreeMap<NodeId, ValoriNode> = nodes
         .iter()
@@ -152,7 +167,10 @@ async fn duplicate_request_id_is_deduplicated_across_the_cluster() {
     let mut retry = insert(1);
     retry.request_id = Some(rid);
     let second = leader.raft.client_write(retry).await.unwrap();
-    assert!(second.data.deduplicated, "retry must be recognised by request_id");
+    assert!(
+        second.data.deduplicated,
+        "retry must be recognised by request_id"
+    );
 
     assert_eq!(
         leader.sm.with_state(|s| s.record_count()).await,
@@ -185,8 +203,14 @@ async fn write_to_a_follower_is_redirected_to_the_leader() {
         .unwrap();
 
     let err = follower.raft.client_write(insert(0)).await.unwrap_err();
-    let forward = err.forward_to_leader().expect("ForwardToLeader error expected");
-    assert_eq!(forward.leader_id, Some(leader_id), "error names the real leader");
+    let forward = err
+        .forward_to_leader()
+        .expect("ForwardToLeader error expected");
+    assert_eq!(
+        forward.leader_id,
+        Some(leader_id),
+        "error names the real leader"
+    );
     assert!(
         forward.leader_node.is_some(),
         "error carries the leader's addresses for the client to retry against"
@@ -210,7 +234,12 @@ async fn graph_events_replicate_and_cascade_across_the_cluster() {
     let leader_id = nodes[0].raft.metrics().borrow().current_leader.unwrap();
     let leader = &nodes[(leader_id - 1) as usize];
 
-    let req = |event: KernelEvent| ClientRequest { event, request_id: None, schema_version: 0 };
+    let req = |event: KernelEvent| ClientRequest {
+        event,
+        request_id: None,
+        schema_version: 0,
+        namespace_id: 0,
+    };
 
     // Two vectors, then a small knowledge graph over them:
     //   doc node 0 (→ record 0), chunk node 1 (→ record 1), concept node 2
@@ -219,19 +248,50 @@ async fn graph_events_replicate_and_cascade_across_the_cluster() {
     let events: Vec<KernelEvent> = vec![
         insert(0).event,
         insert(1).event,
-        KernelEvent::CreateNode { id: GNodeId(0), kind: NodeKind::Document, record: Some(RecordId(0)) },
-        KernelEvent::CreateNode { id: GNodeId(1), kind: NodeKind::Chunk, record: Some(RecordId(1)) },
-        KernelEvent::CreateNode { id: GNodeId(2), kind: NodeKind::Concept, record: None },
-        KernelEvent::CreateEdge { id: EdgeId(0), from: GNodeId(0), to: GNodeId(1), kind: EdgeKind::ParentOf },
-        KernelEvent::CreateEdge { id: EdgeId(1), from: GNodeId(1), to: GNodeId(2), kind: EdgeKind::Mentions },
-        KernelEvent::CreateEdge { id: EdgeId(2), from: GNodeId(2), to: GNodeId(0), kind: EdgeKind::RefersTo },
+        KernelEvent::CreateNode {
+            id: GNodeId(0),
+            kind: NodeKind::Document,
+            record: Some(RecordId(0)),
+        },
+        KernelEvent::CreateNode {
+            id: GNodeId(1),
+            kind: NodeKind::Chunk,
+            record: Some(RecordId(1)),
+        },
+        KernelEvent::CreateNode {
+            id: GNodeId(2),
+            kind: NodeKind::Concept,
+            record: None,
+        },
+        KernelEvent::CreateEdge {
+            id: EdgeId(0),
+            from: GNodeId(0),
+            to: GNodeId(1),
+            kind: EdgeKind::ParentOf,
+        },
+        KernelEvent::CreateEdge {
+            id: EdgeId(1),
+            from: GNodeId(1),
+            to: GNodeId(2),
+            kind: EdgeKind::Mentions,
+        },
+        KernelEvent::CreateEdge {
+            id: EdgeId(2),
+            from: GNodeId(2),
+            to: GNodeId(0),
+            kind: EdgeKind::RefersTo,
+        },
         // Cascade: deleting node 1 must also remove its incident edges
         // (0→1 and 1→2) — on EVERY node, identically.
         KernelEvent::DeleteNode { id: GNodeId(1) },
     ];
     for event in events {
         let resp = leader.raft.client_write(req(event)).await.unwrap();
-        assert!(resp.data.rejected.is_none(), "graph event rejected: {:?}", resp.data.rejected);
+        assert!(
+            resp.data.rejected.is_none(),
+            "graph event rejected: {:?}",
+            resp.data.rejected
+        );
         last_index = resp.data.log_index;
     }
 
@@ -257,6 +317,9 @@ async fn graph_events_replicate_and_cascade_across_the_cluster() {
 
     let h1 = nodes[0].sm.state_hash().await;
     assert_eq!(h1, nodes[1].sm.state_hash().await);
-    assert_eq!(h1, nodes[2].sm.state_hash().await,
-        "vectors + graph + cascade: one hash, three nodes");
+    assert_eq!(
+        h1,
+        nodes[2].sm.state_hash().await,
+        "vectors + graph + cascade: one hash, three nodes"
+    );
 }

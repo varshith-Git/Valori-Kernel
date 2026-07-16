@@ -1,10 +1,10 @@
 use memmap2::Mmap;
 
 /// A Zero-Copy, Batch-Optimized SIFT1M Loader.
-/// 
+///
 /// Efficiently loads SIFT/FVECS format vectors from a memory-mapped file.
 /// Format: `[int32 dim] [float32 data...] [int32 dim] [float32 data...]`
-/// 
+///
 /// # Lifetimes
 /// - `'a`: The lifetime of the underlying `Mmap`. The returned batches leverage zero-copy
 ///   slicing and thus are tied to this lifetime.
@@ -24,7 +24,7 @@ impl<'a> SiftBatchLoader<'a> {
     }
 
     /// Initialize a loader starting from a specific byte offset.
-    /// 
+    ///
     /// Useful for skipping headers or processing file shards.
     /// Returns `None` if the offset is out of bounds or the file is too small to contain even a header.
     pub fn with_offset(mmap: &'a Mmap, base_offset: usize) -> Option<Self> {
@@ -86,7 +86,7 @@ impl<'a> SiftBatchLoader<'a> {
     }
 
     /// Returns the next batch of raw bytes containing vectors.
-    /// 
+    ///
     /// Returns `Option<(slice, count)>`.
     /// - `slice`: The raw byte slice containing the batch.
     /// - `count`: The number of vectors in this batch.
@@ -105,7 +105,7 @@ impl<'a> SiftBatchLoader<'a> {
         let byte_len = count * self.vector_stride;
         let byte_end = byte_start + byte_len;
 
-        // SAFETY: 
+        // SAFETY:
         // 1. `base_offset` is validated in `new`.
         // 2. `total_vectors` is calculated based on `mmap.len()` and `vector_stride`.
         // 3. `cursor` is bounded by `total_vectors`.
@@ -116,7 +116,7 @@ impl<'a> SiftBatchLoader<'a> {
 
         Some((slice, count))
     }
-    
+
     /// Parse a raw SIFT vector from a slice (skip the 4-byte dimension header).
     /// Returns one `f32` per component, decoded from little-endian bytes.
     /// Safe on all architectures — avoids the unaligned pointer cast (H-4).
@@ -135,7 +135,11 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    fn create_mock_fvecs(dim: usize, count: usize, offset_bytes: usize) -> (NamedTempFile, Vec<f32>) {
+    fn create_mock_fvecs(
+        dim: usize,
+        count: usize,
+        offset_bytes: usize,
+    ) -> (NamedTempFile, Vec<f32>) {
         let mut file = NamedTempFile::new().unwrap();
         let mut all_floats = Vec::new();
 
@@ -163,10 +167,10 @@ mod tests {
         let dim = 4;
         let count = 10;
         let (file, _expected_data) = create_mock_fvecs(dim, count, 0);
-        
+
         // Mmap
         let mmap = unsafe { Mmap::map(file.as_file()).unwrap() };
-        
+
         let mut loader = SiftBatchLoader::new(&mmap).expect("Failed to create loader");
         assert_eq!(loader.dim(), dim);
         assert_eq!(loader.len(), count);
@@ -196,7 +200,7 @@ mod tests {
         let (file, _) = create_mock_fvecs(dim, count, offset);
 
         let mmap = unsafe { Mmap::map(file.as_file()).unwrap() };
-        
+
         let mut loader = SiftBatchLoader::with_offset(&mmap, offset).expect("Failed with offset");
         assert_eq!(loader.dim(), dim);
         assert_eq!(loader.len(), count);

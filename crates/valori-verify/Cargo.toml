@@ -36,3 +36,6 @@ path = "src/bin/make_demo_log.rs"
 [[bin]]
 name = "valori-anchor"
 path = "src/bin/valori_anchor.rs"
+
+[lints]
+workspace = true

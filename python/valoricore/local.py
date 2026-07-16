@@ -51,8 +51,7 @@ class LocalClient(ValoriClient):
                            without centroid tuning. Use HNSW instead for large datasets.
 
             max_records: Vector pool capacity. Overrides ``VALORI_MAX_RECORDS``.
-                         Defaults to the env var value (1024 if unset — too small
-                         for production; always pass an explicit value).
+                         Default 0 inherits the kernel default (1 000 000).
             dim:         Vector dimension. Overrides ``VALORI_DIM``.
                          Must match the embedding model output (e.g. 384).
             max_nodes:   Knowledge Graph node capacity. Overrides ``VALORI_MAX_NODES``.
@@ -257,40 +256,19 @@ class LocalClient(ValoriClient):
         """
         Breadth-first search traversal of the knowledge graph.
         Returns a list of visited node IDs up to max_depth (capped at 10).
+        (O(1) FFI call executed at bare-metal memory speeds inside the Rust kernel).
         """
         max_depth = min(max_depth, self._MAX_WALK_DEPTH)
-        visited = set([start_node])
-        queue = deque([(start_node, 0)])
-        result = []
-
-        while queue:
-            current, depth = queue.popleft()
-            result.append(current)
-            if depth >= max_depth:
-                continue
-                
-            for edge in self.get_edges(current):
-                nxt = edge["to_node"]
-                if nxt not in visited:
-                    visited.add(nxt)
-                    queue.append((nxt, depth + 1))
-                    
-        return result
+        return self.kernel.walk(start_node, max_depth)
 
     def expand(self, start_node: int, max_depth: int = 2) -> List[int]:
         """
         Uses walk() to traverse the graph and returns all unique Record IDs
         found attached to any node in the traversal path.
+        (O(1) FFI call executed at bare-metal memory speeds inside the Rust kernel).
         """
-        visited_nodes = self.walk(start_node, max_depth)
-        record_ids = set()
-        
-        for node_id in visited_nodes:
-            n = self.get_node(node_id)
-            if n and n["record_id"] is not None:
-                record_ids.add(n["record_id"])
-                
-        return list(record_ids)
+        max_depth = min(max_depth, self._MAX_WALK_DEPTH)
+        return self.kernel.expand(start_node, max_depth)
 
     def snapshot(self, auto_interval: Optional[int] = None) -> bytes:
         """

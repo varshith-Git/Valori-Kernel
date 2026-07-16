@@ -6,7 +6,7 @@
 use crate::types::scalar::FxpScalar;
 use core::ops::{Index, IndexMut};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// A dynamic-dimension vector definition.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -44,11 +44,11 @@ impl FxpVector {
     pub fn as_mut_slice(&mut self) -> &mut [FxpScalar] {
         &mut self.data
     }
-    
+
     pub fn len(&self) -> usize {
         self.data.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }

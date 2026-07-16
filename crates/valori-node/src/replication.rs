@@ -1,8 +1,8 @@
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, BufReader};
+use crate::errors::EngineError;
 use crate::events::event_log::LogEntry;
 use std::path::PathBuf;
-use crate::errors::EngineError;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, BufReader};
 
 pub async fn spawn_replication_stream(
     file_path: PathBuf,
@@ -48,9 +48,14 @@ pub async fn spawn_replication_stream(
                             }
                             recent_hashes.push_back(hash);
 
-                            if let LogEntry::Event(_) = &chained.entry {
+                            // S15: stream both plain and namespace-scoped data
+                            // events (checkpoints/admin are not replayed here).
+                            if matches!(
+                                &chained.entry,
+                                LogEntry::Event(_) | LogEntry::EventNs { .. }
+                            ) {
                                 if current_idx >= start_offset {
-                                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                    use base64::{engine::general_purpose::STANDARD, Engine as _};
                                     let b64 = STANDARD.encode(&entry_bytes);
                                     let json = format!(r#"{{"b64":"{}"}}"#, b64);
                                     if tx.send(Ok(json + "\n")).await.is_err() {
@@ -67,9 +72,11 @@ pub async fn spawn_replication_stream(
         }
 
         loop {
-             match live_rx.recv().await {
+            match live_rx.recv().await {
                 Ok(entry) => {
-                    let entry_bytes = bincode::serde::encode_to_vec(&entry, bincode::config::standard()).unwrap_or_default();
+                    let entry_bytes =
+                        bincode::serde::encode_to_vec(&entry, bincode::config::standard())
+                            .unwrap_or_default();
                     let hash = blake3::hash(&entry_bytes);
 
                     if recent_hashes.contains(&hash) {
@@ -77,11 +84,11 @@ pub async fn spawn_replication_stream(
                     }
 
                     if recent_hashes.len() >= max_history {
-                         recent_hashes.pop_front();
+                        recent_hashes.pop_front();
                     }
                     recent_hashes.push_back(hash);
 
-                    use base64::{Engine as _, engine::general_purpose::STANDARD};
+                    use base64::{engine::general_purpose::STANDARD, Engine as _};
                     let b64 = STANDARD.encode(&entry_bytes);
                     let json = format!(r#"{{"b64":"{}"}}"#, b64);
                     if tx.send(Ok(json + "\n")).await.is_err() {
@@ -89,7 +96,7 @@ pub async fn spawn_replication_stream(
                     }
                 }
                 Err(_) => break,
-             }
+            }
         }
     });
 
@@ -117,8 +124,7 @@ pub type ReplicationStateWatch = tokio::sync::watch::Receiver<ReplicationState>;
 /// Written only by the hash-checker task; read only by the HTTP handler.
 /// An AtomicU8 is fine here because this is a *display* value, not a
 /// coordination signal — the watch channel handles coordination.
-static DISPLAY_STATUS: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(0);
+static DISPLAY_STATUS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 pub fn replication_display_state() -> &'static str {
     match DISPLAY_STATUS.load(std::sync::atomic::Ordering::Relaxed) {
@@ -129,10 +135,7 @@ pub fn replication_display_state() -> &'static str {
     }
 }
 
-pub async fn run_follower_loop(
-    state: SharedEngine,
-    leader_url: String,
-) {
+pub async fn run_follower_loop(state: SharedEngine, leader_url: String) {
     let client = LeaderClient::new(leader_url);
 
     // Single writer; stream loop only reads.
@@ -151,14 +154,16 @@ pub async fn run_follower_loop(
                 let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
                 (
                     hex,
-                    engine.event_committer
-                        .as_ref()
+                    engine
+                        .event_committer()
                         .map(|c| c.journal().committed_height())
                         .unwrap_or(0),
                 )
             };
 
-            if local_height == 0 { continue; }
+            if local_height == 0 {
+                continue;
+            }
 
             match client_checker.get_proof().await {
                 Ok(proof) => {
@@ -188,7 +193,7 @@ pub async fn run_follower_loop(
 
         let (_local_height, is_empty) = {
             let engine = state.read().await;
-            if let Some(ref committer) = engine.event_committer {
+            if let Some(committer) = engine.event_committer() {
                 let h = committer.journal().committed_height();
                 (h, h == 0)
             } else {
@@ -202,7 +207,11 @@ pub async fn run_follower_loop(
 
         let start_offset = {
             let engine = state.read().await;
-            engine.event_committer.as_ref().unwrap().journal().committed_height() as u64
+            engine
+                .event_committer()
+                .unwrap()
+                .journal()
+                .committed_height() as u64
         };
 
         // Mark the watch as seen before entering the stream loop so we only
@@ -224,10 +233,8 @@ pub async fn run_follower_loop(
                     }
                 }
 
-                match tokio::time::timeout(
-                    tokio::time::Duration::from_secs(1),
-                    stream.next(),
-                ).await {
+                match tokio::time::timeout(tokio::time::Duration::from_secs(1), stream.next()).await
+                {
                     Ok(Some(Ok(chunk))) => {
                         let s = String::from_utf8_lossy(&chunk);
                         tracing::debug!("Follower received chunk from stream: {}", s);
@@ -236,30 +243,62 @@ pub async fn run_follower_loop(
                         while let Some(idx) = buffer.find('\n') {
                             let line = buffer.drain(..=idx).collect::<String>();
                             let line = line.trim();
-                            if line.is_empty() { continue; }
-                            
+                            if line.is_empty() {
+                                continue;
+                            }
+
                             #[derive(serde::Deserialize)]
                             struct B64Message {
                                 b64: String,
                             }
-                            
+
                             if let Ok(msg) = serde_json::from_str::<B64Message>(line) {
-                                use base64::{Engine as _, engine::general_purpose::STANDARD};
+                                use base64::{engine::general_purpose::STANDARD, Engine as _};
                                 if let Ok(bytes) = STANDARD.decode(&msg.b64) {
-                                    if let Ok((LogEntry::Event(event), _)) = bincode::serde::decode_from_slice::<LogEntry, _>(&bytes, bincode::config::standard()) {
+                                    // S15: preserve the namespace across the wire so a
+                                    // replicated collection write lands in the same
+                                    // collection on the follower.
+                                    let decoded = bincode::serde::decode_from_slice::<LogEntry, _>(
+                                        &bytes,
+                                        bincode::config::standard(),
+                                    )
+                                    .ok()
+                                    .map(|(e, _)| e);
+                                    let ns_event = match decoded {
+                                        Some(LogEntry::Event(event)) => {
+                                            Some((valori_kernel::types::id::DEFAULT_NS.0, event))
+                                        }
+                                        Some(LogEntry::EventNs {
+                                            namespace_id,
+                                            event,
+                                        }) => Some((namespace_id, event)),
+                                        _ => None,
+                                    };
+                                    if let Some((namespace_id, event)) = ns_event {
                                         let mut engine = state.write().await;
-                                        if let Some(ref mut committer) = engine.event_committer {
-                                            match committer.commit_event(event.clone()) {
+                                        if let Some(committer) = engine.event_committer_mut() {
+                                            match committer
+                                                .commit_event_ns(event.clone(), namespace_id)
+                                            {
                                                 Ok(_) => {
-                                                    if let Err(e) = engine.apply_committed_event(&event) {
-                                                        tracing::error!("Failed to apply committed event: {:?}", e);
+                                                    if let Err(e) = engine.apply_committed_event_ns(
+                                                        &event,
+                                                        namespace_id,
+                                                    ) {
+                                                        tracing::error!(
+                                                            "Failed to apply committed event: {:?}",
+                                                            e
+                                                        );
                                                         apply_failed = true;
                                                         break 'stream;
                                                     }
                                                     tracing::debug!("Successfully applied event to follower index");
                                                 }
                                                 Err(e) => {
-                                                    tracing::error!("Follower failed to commit event: {:?}", e);
+                                                    tracing::error!(
+                                                        "Follower failed to commit event: {:?}",
+                                                        e
+                                                    );
                                                 }
                                             }
                                         }
@@ -304,25 +343,25 @@ async fn bootstrap_from_leader(
     let mut engine = state.write().await;
     engine.restore(&snapshot_bytes)?;
 
-    let log_path = engine.event_committer.as_ref()
+    let log_path = engine
+        .event_committer()
         .map(|c| c.event_log().path().to_path_buf())
         .ok_or(EngineError::InvalidInput("No event log path".to_string()))?;
 
-    let dim = engine.event_committer.as_ref().map(|c| c.event_log().dim());
-    engine.event_committer = None;
+    let dim = engine.event_committer().map(|c| c.event_log().dim());
+    engine.persistence = crate::commit::Persistence::Ephemeral;
 
     let _ = tokio::fs::remove_file(&log_path).await;
 
-    let new_height = engine.state.record_count() as u64;
+    let new_height = engine.record_count() as u64;
     let state_hash = engine.get_proof().final_state_hash;
 
     let log_writer = crate::events::event_log::EventLogWriter::open(&log_path, dim)
         .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
 
     let journal = crate::events::event_journal::EventJournal::new_at_height(new_height);
-    let mut committer = crate::events::event_commit::EventCommitter::new(
-        log_writer, journal, engine.state.clone(),
-    );
+    let mut committer =
+        crate::events::event_commit::EventCommitter::new(log_writer, journal, engine.state.clone());
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -335,10 +374,14 @@ async fn bootstrap_from_leader(
         timestamp: now,
     };
 
-    committer.write_checkpoint(checkpoint)
+    committer
+        .write_checkpoint(checkpoint)
         .map_err(|e| EngineError::InvalidInput(format!("{:?}", e)))?;
-    engine.event_committer = Some(committer);
+    engine.persistence = crate::commit::Persistence::EventLog(committer);
 
-    tracing::info!("Bootstrap complete — follower synced at height {}", new_height);
+    tracing::info!(
+        "Bootstrap complete — follower synced at height {}",
+        new_height
+    );
     Ok(())
 }

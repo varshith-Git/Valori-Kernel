@@ -63,6 +63,7 @@ impl RaftCommitter {
             event,
             request_id: None,
             schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: 0,
         };
 
         let result = self.block_on(self.raft.client_write(request));

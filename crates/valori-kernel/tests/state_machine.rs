@@ -115,3 +115,63 @@ fn failed_event_leaves_state_unchanged() {
     let after = valori_kernel::snapshot::blake3::hash_state_blake3(&state);
     assert_eq!(before, after, "rejected events must not mutate state");
 }
+
+// ── Phase S2: AutoCreateNamespace / DropNamespace (apply_event_ns) ──────────
+//
+// Both variants delegate to KernelState's existing Command::CreateNamespace/
+// DropNamespace logic — the kernel never sees the name, only the
+// already-resolved namespace_id passed as apply_event_ns's second argument
+// (the consensus layer resolves/allocates the id one layer up; see
+// docs/phases/phase-S2-*.md).
+
+#[test]
+fn auto_create_namespace_registers_valid_id() {
+    let mut state = KernelState::new();
+    let evt = KernelEvent::AutoCreateNamespace {
+        name: "tenant-acme".into(),
+    };
+    assert!(state.apply_event_ns(&evt, 5).is_ok());
+}
+
+#[test]
+fn auto_create_namespace_rejects_id_beyond_max() {
+    let mut state = KernelState::new();
+    let evt = KernelEvent::AutoCreateNamespace {
+        name: "overflow".into(),
+    };
+    assert!(state
+        .apply_event_ns(&evt, valori_kernel::types::id::MAX_NAMESPACES as u16)
+        .is_err());
+}
+
+#[test]
+fn drop_namespace_cascades_records_in_that_namespace() {
+    let mut state = KernelState::new();
+    state.apply_event_ns(&insert(0), 5).unwrap();
+    state.apply_event_ns(&insert(1), 5).unwrap();
+    state.apply_event_ns(&insert(2), 0).unwrap(); // different namespace — must survive
+    assert_eq!(state.record_count(), 3);
+
+    let drop_evt = KernelEvent::DropNamespace {
+        name: "tenant-acme".into(),
+    };
+    state.apply_event_ns(&drop_evt, 5).unwrap();
+
+    assert_eq!(
+        state.record_count(),
+        1,
+        "only namespace 0's record should survive the cascade"
+    );
+}
+
+#[test]
+fn drop_namespace_zero_is_rejected() {
+    let mut state = KernelState::new();
+    let evt = KernelEvent::DropNamespace {
+        name: "default".into(),
+    };
+    assert!(
+        state.apply_event_ns(&evt, 0).is_err(),
+        "the default namespace must never be dropped"
+    );
+}

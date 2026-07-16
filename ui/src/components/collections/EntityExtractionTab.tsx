@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { useLLMConfig } from "@/lib/hooks/useLLMConfig";
 
 interface ExtractedEntity {
   name: string;
@@ -43,6 +44,7 @@ interface Props {
 }
 
 export function EntityExtractionTab({ namespace }: Props) {
+  const { config: llmCfg } = useLLMConfig();
   const [text, setText] = useState("");
   const [model, setModel] = useState("");
   const [running, setRunning] = useState(false);
@@ -58,8 +60,14 @@ export function EntityExtractionTab({ namespace }: Props) {
     setError(null);
     setResult(null);
     try {
-      const body: Record<string, unknown> = { text, namespace };
-      if (model.trim()) body.model = model.trim();
+      const body: Record<string, unknown> = {
+        text,
+        namespace,
+        provider: llmCfg.provider,
+        model: model.trim() || llmCfg.model,
+        url: llmCfg.endpoint,
+        api_key: llmCfg.apiKey,
+      };
       const res = await fetch("/api/extract-entities", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

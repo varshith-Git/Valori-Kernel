@@ -104,7 +104,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2.5 py-10 text-xs text-muted-foreground">
-        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-zinc-300" />
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted border-t-foreground/60" />
         Computing namespace audit…
       </div>
     );
@@ -267,7 +267,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
               className="font-mono text-[12px] bg-card border border-input rounded px-3 py-1 pl-6 w-44 text-card-foreground placeholder:text-muted-foreground outline-none focus:border-ring transition-colors"
             />
             {filter && (
-              <button onClick={() => setFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs">×</button>
+              <button type="button" onClick={() => setFilter("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground text-xs" aria-label="Clear filter">×</button>
             )}
           </div>
           {allKinds.map((k) => (
@@ -285,7 +285,7 @@ export function VerifyTab({ namespace }: { namespace: string }) {
             </button>
           ))}
           {activeKinds.size > 0 && (
-            <button onClick={() => setActiveKinds(new Set())} className="text-[10px] text-muted-foreground hover:text-muted-foreground">
+            <button type="button" onClick={() => setActiveKinds(new Set())} className="text-[10px] text-muted-foreground hover:text-muted-foreground">
               clear
             </button>
           )}

@@ -20,7 +20,7 @@ interface ClusterStatus {
 }
 
 async function findLeaderUrl(anyPort: number): Promise<string> {
-  const base = `http://localhost:${anyPort}`;
+  const base = `http://127.0.0.1:${anyPort}`;
   const r = await fetch(`${base}/v1/cluster/status`, { signal: AbortSignal.timeout(5000) });
   if (!r.ok) throw new Error(`Cluster status ${r.status} from :${anyPort}`);
   const s = await r.json() as ClusterStatus;
@@ -35,7 +35,7 @@ async function waitForNode(httpPort: number, maxMs = 30_000): Promise<void> {
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
     try {
-      const r = await fetch(`http://localhost:${httpPort}/health`, {
+      const r = await fetch(`http://127.0.0.1:${httpPort}/health`, {
         signal: AbortSignal.timeout(1000),
       });
       if (r.ok) return;

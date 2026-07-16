@@ -1,0 +1,28 @@
+[package]
+name = "valori-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Durable storage layer for Valori: WAL, event log, object store, crash recovery"
+
+[dependencies]
+valori-core   = { workspace = true, features = ["std"] }
+valori-kernel = { workspace = true, features = ["std"] }
+valori-wire   = { workspace = true }
+
+blake3     = "1.5"
+bincode    = { version = "2.0.1", features = ["serde"] }
+serde      = { version = "1.0", features = ["derive"] }
+thiserror  = "2.0"
+tracing    = "0.1"
+metrics    = "0.21"
+tokio      = { version = "1.0", features = ["sync"] }
+opendal    = { version = "0.58", features = ["services-s3", "services-fs"] }
+bytes      = "1.0"
+crc32fast  = "1.5.0"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

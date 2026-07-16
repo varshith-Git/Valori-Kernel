@@ -1,0 +1,43 @@
+"$schema" = "../gen/schemas/desktop-schema.json"
+
+[[permission]]
+identifier = "allow-start-daemon"
+description = "Allow the start_daemon command from any webview (including the remote ui-server)."
+
+[permission.commands]
+allow = ["start_daemon"]
+
+[[permission]]
+identifier = "allow-stop-daemon"
+description = "Allow the stop_daemon command."
+
+[permission.commands]
+allow = ["stop_daemon"]
+
+[[permission]]
+identifier = "allow-daemon-status"
+description = "Allow the daemon_status command."
+
+[permission.commands]
+allow = ["daemon_status"]
+
+[[permission]]
+identifier = "allow-node-health"
+description = "Allow the node_health command."
+
+[permission.commands]
+allow = ["node_health"]
+
+[[permission]]
+identifier = "allow-add-recent-document"
+description = "Allow the add_recent_document command."
+
+[permission.commands]
+allow = ["add_recent_document"]
+
+[[permission]]
+identifier = "allow-install-update"
+description = "Allow the install_update command — downloads and applies a pending app update."
+
+[permission.commands]
+allow = ["install_update"]

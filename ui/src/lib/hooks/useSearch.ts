@@ -15,6 +15,8 @@ export interface SearchState {
   results: SearchResult[];
   stateHash: string | null;
   queriedAt: string | null;
+  /** Round-trip latency for the last search in milliseconds, or null before first search. */
+  latencyMs: number | null;
 }
 
 export function useSearch() {
@@ -22,6 +24,7 @@ export function useSearch() {
     results: [],
     stateHash: null,
     queriedAt: null,
+    latencyMs: null,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +32,7 @@ export function useSearch() {
   const search = async (q: SearchQuery) => {
     setIsLoading(true);
     setError(null);
+    const t0 = Date.now();
     try {
       const body: Record<string, unknown> = {
         query: q.vector,
@@ -51,6 +55,7 @@ export function useSearch() {
         results: data.results ?? [],
         stateHash: data.state_hash ?? null,
         queriedAt: data.queried_at ?? new Date().toISOString(),
+        latencyMs: Date.now() - t0,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Search failed";

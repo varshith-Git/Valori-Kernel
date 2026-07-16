@@ -12,8 +12,9 @@
 //! format version and should only ever run again to ADD a new version.
 
 use valori_wire::{
-    chain_advance, decode_entry, encode_entry, encode_header_v2, encode_header_v3, hex,
-    parse_header, LogEntry, FORMAT_Q16_16, VERSION_V2, VERSION_V3,
+    chain_advance, decode_entry, encode_entry, encode_header_v2, encode_header_v3,
+    encode_header_v4, hex, parse_header, LogEntry, FORMAT_Q16_16, VERSION_V2, VERSION_V3,
+    VERSION_V4,
 };
 
 use valori_kernel::event::KernelEvent;
@@ -28,11 +29,17 @@ const BASE_TIME: u64 = 1_750_000_000;
 fn fixture_entries() -> Vec<LogEntry> {
     let mut entries = Vec::new();
     for i in 0..8u32 {
-        let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+            .collect();
         entries.push(LogEntry::Event(KernelEvent::InsertRecord {
             id: RecordId(i),
             vector: FxpVector { data },
-            metadata: if i % 2 == 0 { Some(vec![i as u8; 4]) } else { None },
+            metadata: if i % 2 == 0 {
+                Some(vec![i as u8; 4])
+            } else {
+                None
+            },
             tag: i as u64,
         }));
     }
@@ -72,6 +79,9 @@ fn walk(bytes: &[u8]) -> (u64, u64, [u8; 32]) {
             // Variant added in Phase 2.9 — absent from the v2/v3-era
             // fixtures, which must keep decoding forever regardless.
             LogEntry::Admin(_) => {}
+            // Variant added in Phase S15 — likewise absent from the
+            // pre-S15 fixtures; counted as a data event when present.
+            LogEntry::EventNs { .. } => events += 1,
         }
         offset += n;
     }
@@ -80,8 +90,8 @@ fn walk(bytes: &[u8]) -> (u64, u64, [u8; 32]) {
 
 #[test]
 fn v2_fixture_decodes_forever() {
-    let bytes = std::fs::read(fixture_path("segment_v2.bin"))
-        .expect("committed v2 fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("segment_v2.bin")).expect("committed v2 fixture must exist");
     let (events, checkpoints, head) = walk(&bytes);
     assert_eq!(events, 9);
     assert_eq!(checkpoints, 1);
@@ -94,8 +104,8 @@ fn v2_fixture_decodes_forever() {
 
 #[test]
 fn v3_fixture_decodes_forever() {
-    let bytes = std::fs::read(fixture_path("segment_v3.bin"))
-        .expect("committed v3 fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("segment_v3.bin")).expect("committed v3 fixture must exist");
     let header = parse_header(&bytes).unwrap();
     assert_eq!(header.version, VERSION_V3);
     assert_eq!(header.format_id, FORMAT_Q16_16);
@@ -108,6 +118,25 @@ fn v3_fixture_decodes_forever() {
         hex(&head),
         "221c42b81e15578399e036035739314f5889a1bf5007449280a8b8465b56e0b9",
         "v3 fixture chain head changed — the wire format or chain formula broke compatibility"
+    );
+}
+
+#[test]
+fn v4_fixture_decodes_forever() {
+    let bytes =
+        std::fs::read(fixture_path("segment_v4.bin")).expect("committed v4 fixture must exist");
+    let header = parse_header(&bytes).unwrap();
+    assert_eq!(header.version, VERSION_V4);
+    assert_eq!(header.format_id, FORMAT_Q16_16);
+    assert_eq!(header.segment_seq, 4);
+
+    let (events, checkpoints, head) = walk(&bytes);
+    assert_eq!(events, 9);
+    assert_eq!(checkpoints, 1);
+    assert_eq!(
+        hex(&head),
+        "1803f156f48caf02c58b99da10e6ccbc4fdd5036dac0bc554ad1ff5813802872",
+        "v4 fixture chain head changed — the wire format, CRC framing, or chain formula broke compatibility"
     );
 }
 
@@ -136,12 +165,34 @@ fn generate_fixtures() {
     let mut head = prev;
     for (i, entry) in fixture_entries().iter().enumerate() {
         let t = BASE_TIME + i as u64;
-        let rid = if i % 2 == 0 { Some([i as u8; 16]) } else { None };
+        let rid = if i % 2 == 0 {
+            Some([i as u8; 16])
+        } else {
+            None
+        };
         bytes.extend(encode_entry(VERSION_V3, &head, t, rid, entry).unwrap());
         head = valori_wire::chain_advance_v3(&head, t, rid, entry);
     }
     std::fs::write(fixture_path("segment_v3.bin"), &bytes).unwrap();
     println!("v3 final chain head: {}", hex(&head));
+
+    // v4 segment (seq 4, spliced, request ids on even entries) — same chain
+    // formula as v3 plus the per-entry CRC32 suffix.
+    let prev = [0x22u8; 32];
+    let mut bytes = encode_header_v4(4, FORMAT_Q16_16, 4, &prev).to_vec();
+    let mut head = prev;
+    for (i, entry) in fixture_entries().iter().enumerate() {
+        let t = BASE_TIME + i as u64;
+        let rid = if i % 2 == 0 {
+            Some([i as u8; 16])
+        } else {
+            None
+        };
+        bytes.extend(encode_entry(VERSION_V4, &head, t, rid, entry).unwrap());
+        head = valori_wire::chain_advance_v3(&head, t, rid, entry);
+    }
+    std::fs::write(fixture_path("segment_v4.bin"), &bytes).unwrap();
+    println!("v4 final chain head: {}", hex(&head));
 }
 
 /// Phase 2.9: the Admin variant encodes, chains, and round-trips like any

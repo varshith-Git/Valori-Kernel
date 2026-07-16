@@ -63,13 +63,30 @@ curl http://localhost:3000/v1/namespaces
 curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
 # → 204 No Content
 # Dropping "default" → 400 Bad Request
+# Dropping an unknown collection → 404 Not Found
 ```
+
+Collection names must be non-empty, at most 64 characters, and contain only
+`[a-zA-Z0-9_-]`. These rules — and the status codes above — are identical on
+the standalone and cluster paths: since Phase R1 the handler bodies are
+shared (`src/routes/collections.rs`), and `tests/route_parity.rs` asserts the
+two routers expose the same `/v1` surface.
+
+### Cluster mode (Phase S2)
+
+Collection create/drop go through Raft, exactly like every other write — the
+name → id mapping is replicated and identical on every node, durable across
+snapshots and leader failover. A follower correctly answers `307 Temporary
+Redirect` to these two endpoints (same as `/records`), pointing at the
+leader. `GET /v1/namespaces` is a local, eventually-consistent read (matches
+every other list-style cluster endpoint) — a node still catching up on
+replication may briefly lag behind the leader's list.
 
 ---
 
-## Built-in Ingest Pipeline (Phase I1/I2/I3)
+## Built-in Ingest Pipeline (Phase I1/I2/I3/I8)
 
-Two endpoints that handle chunking and optionally embedding entirely on the node.
+Three endpoints that handle chunking, embedding, and document lifecycle entirely on the node.
 
 ### Chunking only — `POST /v1/ingest/document`
 
@@ -122,9 +139,62 @@ curl -X POST http://localhost:3000/v1/ingest \
 
 `/health` now includes `"embed_enabled": true` and `"embed_provider": "ollama"` when embedding is configured. The UI uses this to auto-detect which pipeline to use.
 
+### Document update — `POST /v1/ingest/update` (Phase I8)
+
+Updates a previously ingested document without re-embedding unchanged chunks.
+Uses BLAKE3 content hashing to diff old vs new chunks at the text level.
+
+```bash
+curl -X POST http://localhost:3000/v1/ingest/update \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_node_id": 42,
+    "text": "1 Introduction\nUpdated content...\n2 Methods\n...",
+    "source": "paper-v2.pdf",
+    "collection": "default"
+  }'
+# → {"ok":true,"document_node_id":42,"strategy_used":"tree",
+#    "new_chunk_count":35,"kept_count":28,"removed_count":3,
+#    "added_count":7,"record_ids":[1,2,...35],"collection":"default"}
+```
+
+**Diff algorithm:**
+- Unchanged chunks (same BLAKE3 hash) → kept as-is, not re-embedded
+- Removed chunks (old hash not in new set) → soft-deleted + graph node removed
+- New/changed chunks → embedded, inserted, new Chunk node + ParentOf edge
+
+The Document graph node is reused — external edges pointing to it remain valid.
+
 ### Cluster mode (Phase I4)
 
-`POST /v1/ingest` works identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
+`POST /v1/ingest` and `POST /v1/ingest/update` work identically in standalone and 3/5-node cluster mode. In cluster mode every vector insert and graph mutation goes through `raft.client_write()` and is replicated to all peers — same BLAKE3 state hash on every node after ingest. As of Phase I4.1 the metadata sidecar (chunk text, source, …) is **also** replicated, via `KernelEvent::SetMeta`, so any node can serve `/v1/memory/meta/get`.
+
+### Async ingest — fire-and-forget large documents
+
+Pass `"async": true` in the request body to `POST /v1/ingest`. The server returns immediately with a `job_id`; poll `GET /v1/ingest/status/:job_id` for progress.
+
+```bash
+# Start an async ingest job
+JOB=$(curl -s -X POST http://localhost:3000/v1/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"text": "...", "source": "paper.pdf", "async": true}' | jq -r .job_id)
+
+# Poll for completion
+curl http://localhost:3000/v1/ingest/status/$JOB
+# → {"job_id": "...", "status": "completed", "chunk_count": 31, "record_ids": [...]}
+```
+
+### Graph node management
+
+```bash
+# GET a node by ID (returns node data + adjacency list)
+curl "http://localhost:3000/v1/graph/node/42?collection=default"
+
+# DELETE a node (soft-deletes associated record; edges removed)
+curl -X DELETE "http://localhost:3000/v1/graph/node/42?collection=default"
+```
+
+Both routes are available on standalone (`/v1/graph/node/:id`) and via the legacy path (`/graph/node/:id`). On clusters the DELETE goes through `raft.client_write()`.
 
 ---
 
@@ -176,14 +246,16 @@ curl -s localhost:3000/v1/tree/hybrid \
 ## Vector Operations
 
 All endpoints accept an optional `"collection"` field. If the named collection
-does not exist the request is rejected with `400 Bad Request`.
+does not exist, delete and graph endpoints answer `404 Not Found` (Phase R2,
+both paths); insert and search answer `400 Bad Request`.
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/records` | `POST` | Insert a single vector. Optional `text` field indexes the record for hybrid retrieval (Phase C5). |
 | `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors. Optional `texts` array indexes each record for hybrid retrieval (Phase C5). |
 | `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Supports `as_of` / `as_of_log_index` for point-in-time reads, `decay_half_life_secs` for recency-aware ranking (Phase C4.1), and `metadata_filter` for JSON predicate post-filtering (Phase I7). |
-| `/v1/delete` | `POST` | Soft-delete a record by ID. |
+| `/v1/delete` | `POST` | Permanently remove a record by ID (accepts an optional `"collection"` field, S7). |
+| `/v1/soft-delete` | `POST` | Mark a record inactive without removing it — searchable-off but still present for audit (accepts an optional `"collection"` field, S7). |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 
 ### Insert into a collection
@@ -432,6 +504,13 @@ handler: on `SIGTERM` or `Ctrl-C` it writes a final snapshot to `VALORI_SNAPSHOT
 (when set) before exiting, so the next start is instant. The event log already guarantees
 durability — this only avoids a full replay. No configuration required.
 
+**Periodic autosave (Phase 6.2).** Set `VALORI_SNAPSHOT_INTERVAL=<secs>` (with
+`VALORI_SNAPSHOT_PATH`) to also write the snapshot on a fixed cadence, so an
+ungraceful kill (`SIGKILL`, power loss) still leaves a recent snapshot behind.
+UI-launched project nodes set 60. Standalone only — cluster durability rides on
+the persisted Raft log instead. Cluster mode has its own graceful-shutdown
+handler (drains HTTP, lets redb close cleanly); it does not write snapshot files.
+
 ---
 
 ## Proofs & Audit
@@ -440,6 +519,8 @@ durability — this only avoids a full replay. No configuration required.
 |---|---|---|
 | `/v1/proof/state` | `GET` | BLAKE3 hash of the current engine state (hex). |
 | `/v1/proof/event-log` | `GET` | BLAKE3 hash of the immutable event log (hex). |
+| `/v1/proof/receipt` | `GET` | Most recently assembled `Receipt` (RFC-0003); `404` if none. |
+| `/v1/proof/receipt/:id` | `GET` | Receipt by `receipt_id`; `404` if not found. |
 
 ```bash
 curl http://localhost:3000/v1/proof/state
@@ -507,6 +588,17 @@ unrecoverable — GDPR Article 17 compliance without truncating the audit log.
 
 **Grouping:** Multiple records can share one `key_id` and be shredded atomically with a single `DELETE`.
 
+**Multi-shard clusters (Phase S5):** `DELETE /v1/crypto/shred/:key_id` fans out to
+every shard this node runs, since ciphertext for one `key_id` can legitimately
+land on different shards (one per collection it was used to encrypt into).
+The response is `{"key_id", "shredded": bool, "shards": {"shard_0": {"status": "shredded"|"not-leader"|"error", ...}, ...}}`
+— `shredded` is `true` only when every shard reports `"shredded"`. A shard
+reporting `"not-leader"` means retry the call (it's a leader-redirect
+condition, not a failure); the per-node DEK is destroyed unconditionally on
+the very first call regardless of per-shard status, so retrying is always
+safe — it can only re-confirm already-shredded records, never re-encrypt
+them.
+
 ---
 
 ## Cluster Management
@@ -544,9 +636,9 @@ curl -X POST http://localhost:3000/v1/cluster/remove-node \
 | `VALORI_RAFT_BIND` | gRPC consensus listener (default `0.0.0.0:3100`). |
 | `VALORI_CLUSTER_INIT` | Set to `1` on exactly one node of a brand-new cluster. |
 | `VALORI_RAFT_LOG_PATH` | Path to the `redb` file for the persistent Raft log. When set, the state machine shares this database so `last_applied` and snapshots survive restarts without replaying audit events. |
-| `VALORI_SNAPSHOT_EVERY_EVENTS` | Trigger a Raft snapshot every N applied entries (default `5000`). Lower values bound the log-replay window on restart at the cost of more snapshot I/O. |
-| `VALORI_RAFT_SNAPSHOT_KEEP` | Log entries to retain after each snapshot for followers that are only slightly behind (default `1000`). |
+| `VALORI_SNAPSHOT_INTERVAL` | Standalone only. Periodic autosave interval in seconds (`VALORI_SNAPSHOT_PATH` must also be set). Omit = snapshot on graceful shutdown only. |
 | `VALORI_STATE_HASH_CHECK_SECS` | Hash-convergence poll interval in seconds (default `30`, `0` = off). |
+| `VALORI_SHARD_COUNT` | **Phase S1 — multi-Raft skeleton.** Number of independent Raft groups this process runs, sharing one gRPC listener (default `1`, byte-identical to pre-S1 behavior). Every configured member is a voter in every shard (symmetric placement) — namespace→shard routing and asymmetric placement do not exist yet, so shards beyond 0 currently have no HTTP surface. See [`docs/phases/phase-S1-multi-raft-skeleton.md`](../../docs/phases/phase-S1-multi-raft-skeleton.md). |
 
 ---
 
@@ -675,6 +767,34 @@ The engine state is wrapped in `Arc<RwLock<Engine>>`. Read-only handlers
 shared read lock and execute concurrently. Write handlers (insert, delete,
 restore, shred) acquire an exclusive write lock.
 
+## Persistence funnel (Phase E1)
+
+Every standalone mutation flows through ONE path:
+`Engine::commit_and_apply_ns(event, ns)` → `Persistence::log_event_ns`
+(durable log) → `apply_committed_event_ns` (state + index + derived maps).
+`Persistence` is an enum — `EventLog(EventCommitter)` (canonical),
+`Wal(WalWriter)` (legacy), or `Ephemeral` (in-memory). Do not add a write
+method that logs or applies outside this funnel. Observability code reads
+the committer via `engine.event_committer()` / `event_committer_mut()`.
+
+`tests/architecture.rs` additionally fails the build if a source file with
+the same crate-relative path exists in both `valori-node/src` and any of the
+extracted crates (`valori-storage`, `valori-state`, `valori-metadata`) —
+dead copies left behind by an extraction are a test failure, not a code
+review hope.
+
+**Extracted crates (Phase N-series):**
+
+| Logic | Crate | Phase |
+|-------|-------|-------|
+| Decay re-rank, BM25 reranker, metadata filter | `valori-search` | N1 |
+| BruteForce, HNSW, IVF, BQ, quantizers, deterministic k-means | `valori-index` | N2 |
+| GraphRAG, Tree-RAG, Community Layer, LLM entity extraction | `valori-rag` | N3 |
+| Embedding client (Ollama/OpenAI/custom), chunker (4 strategies), `POST /v1/ingest/document` handler | `valori-ingest` | N4 |
+| `Engine` struct, `EngineConfig`, `EngineHealth`, `Persistence`, `MetadataStore`, `EngineError`, `CommitError` | `valori-engine` | N5 |
+
+`valori-node` retains ownership of all HTTP routes, `NodeConfig`, `AesGcmVault` construction, and the `EngineFromNodeConfig` bridge trait. Extracted crates contain pure computation logic.
+
 ## Testing
 
 ```bash
@@ -691,3 +811,30 @@ Key test suites:
 | `tests/api.rs` | All HTTP endpoints, status codes, and response shapes. |
 | `tests/api_batch_idempotency.rs` | 4 tests: per-item dedup, mixed batches, backward compat, fully-deduped batch. |
 | `tests/api_index_config.rs` | 5 tests: brute-force config, HNSW defaults, custom M derivation, ef_search, all params. |
+
+## Effect system integration (Phases A7–A9)
+
+`valori-node` wires the `valori-effect` capability model into the live node subsystems:
+
+| Module | Role |
+|---|---|
+| `src/capabilities.rs` | Concrete capability implementations: `EngineKernelCapability` (standalone — `SharedEngine`), `RaftKernelCapability` (cluster — `raft.client_write()` + `state_hash()`), `HttpEmbedCapability`, `PassthroughHttpCapability`, `CapabilityRegistryBuilder` |
+| `src/runner.rs` | `TaskRegistry` (maps 12 `TaskKind`s to `Arc<dyn Task>`), `TaskRunner` (topological execution, predecessor threading, retry), `run_graph()` |
+
+`ReceiptStore` is available as `axum::Extension<Arc<ReceiptStore>>` in every handler.
+Receipts are assembled by `ReceiptAssembler` (in `valori-effect`) and stored in the node-local
+in-process store (last 256 receipts).
+
+**Handlers that emit receipts (Phase A10/A11) — standalone + cluster:**
+
+| Handler | Kind | State captured |
+|---|---|---|
+| `insert_record` | `OperationKind::Ingest` | `state_before` + `state_after` via `hash_state_blake3` (standalone) or SM hash (cluster) |
+| `batch_insert` | `OperationKind::BatchInsert` | Same pattern; `count` captured in `OperationInputs` |
+| `delete_record` | `OperationKind::Delete { mode: "hard" }` | Cluster path uses `raft_write_data` for `log_index` |
+| `soft_delete_record` | `OperationKind::Delete { mode: "soft" }` | Cluster path uses `raft_write_data` for `log_index` |
+| `search` | `OperationKind::Search` | Read-only; state captured at handler entry |
+
+The `op_hash` in every receipt is `BLAKE3(kind_discriminant ‖ bincode(inputs) ‖ bincode(policy))` —
+reproducible from the planning parameters alone, with no timestamps or data.
+Remaining write handlers (`memory_upsert`, `consolidate`, `contradict`, `ingest`) are deferred to A12.

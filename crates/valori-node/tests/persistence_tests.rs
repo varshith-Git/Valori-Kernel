@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use tempfile::tempdir;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
-use tempfile::tempdir;
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -23,13 +24,17 @@ async fn test_index_persistence() {
     // ── 1. Insert and save ────────────────────────────────────────────────────
     {
         let mut engine = Engine::new(&cfg);
-        let id = engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+        let id = engine
+            .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+            .unwrap();
         assert_eq!(id, 0);
 
         let results = engine.search_l2(&[0.1, 0.2, 0.3, 0.4], 1).unwrap();
         assert_eq!(results[0].0, 0);
 
-        engine.save_snapshot(Some(&snap_path)).expect("Snapshot failed");
+        engine
+            .save_snapshot(Some(&snap_path))
+            .expect("Snapshot failed");
         assert!(snap_path.exists());
     }
 

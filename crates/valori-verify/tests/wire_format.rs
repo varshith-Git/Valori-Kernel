@@ -7,8 +7,8 @@ use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
 use valori_verify::wire::{
-    chain_advance, chain_advance_v3, decode_entry, encode_header_v3, hex, parse_header,
-    LogEntry, FORMAT_Q16_16, HEADER_SIZE_V3, VERSION_V2, VERSION_V3,
+    chain_advance, chain_advance_v3, decode_entry, encode_header_v3, hex, parse_header, LogEntry,
+    FORMAT_Q16_16, HEADER_SIZE_V3, VERSION_V2, VERSION_V3, VERSION_V4,
 };
 
 fn event(i: u32) -> KernelEvent {
@@ -42,7 +42,10 @@ fn header_rejects_unknown_version() {
 #[test]
 fn header_rejects_unknown_format_id() {
     let bytes = encode_header_v3(4, 200, 0, &[0u8; 32]);
-    assert!(parse_header(&bytes).is_err(), "unknown arithmetic format must be refused");
+    assert!(
+        parse_header(&bytes).is_err(),
+        "unknown arithmetic format must be refused"
+    );
 }
 
 #[test]
@@ -72,7 +75,12 @@ fn chain_advance_is_deterministic_and_request_id_sensitive() {
     assert_ne!(a, [0u8; 32]);
 
     // request_id participates in the chain.
-    let with_rid = chain_advance_v3(&[0u8; 32], 1_000, Some([1u8; 16]), &LogEntry::Event(event(0)));
+    let with_rid = chain_advance_v3(
+        &[0u8; 32],
+        1_000,
+        Some([1u8; 16]),
+        &LogEntry::Event(event(0)),
+    );
     let without = chain_advance_v3(&[0u8; 32], 1_000, None, &LogEntry::Event(event(0)));
     assert_ne!(with_rid, without);
 }
@@ -96,9 +104,15 @@ fn chain_detects_entry_substitution() {
         let e = if i == 5 { event(99) } else { event(i) };
         head = chain_advance_v3(&head, 1_000, None, &LogEntry::Event(e));
         if i < 5 {
-            assert_eq!(head, honest[i as usize], "heads before the tamper must match");
+            assert_eq!(
+                head, honest[i as usize],
+                "heads before the tamper must match"
+            );
         } else {
-            assert_ne!(head, honest[i as usize], "heads from the tamper on must differ");
+            assert_ne!(
+                head, honest[i as usize],
+                "heads from the tamper on must differ"
+            );
         }
     }
 }
@@ -122,7 +136,7 @@ fn wire_decodes_what_the_node_writes() {
 
     let bytes = std::fs::read(&path).unwrap();
     let header = parse_header(&bytes).expect("node header must parse");
-    assert_eq!(header.version, VERSION_V3, "new node files are v3");
+    assert_eq!(header.version, VERSION_V4, "new node files are v4");
     assert_eq!(header.dim, 4);
     assert_eq!(header.segment_seq, 0);
 

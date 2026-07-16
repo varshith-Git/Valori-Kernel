@@ -41,7 +41,9 @@ pub enum CryptoError {
 impl core::fmt::Display for CryptoError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            CryptoError::KeyNotFound(k) => write!(f, "key not found: {}", crate::crypto::hex_key(k)),
+            CryptoError::KeyNotFound(k) => {
+                write!(f, "key not found: {}", crate::crypto::hex_key(k))
+            }
             CryptoError::EncryptionFailed(s) => write!(f, "encryption failed: {s}"),
             CryptoError::DecryptionFailed(s) => write!(f, "decryption failed: {s}"),
             CryptoError::BackendError(s) => write!(f, "vault backend error: {s}"),
@@ -70,7 +72,8 @@ pub trait KeyVault: Send + Sync {
 
     /// Decrypt and authenticate `ciphertext` (nonce prepended) under `key_id`.
     /// Returns `Err(KeyNotFound)` if the key has been shredded.
-    fn decrypt(&self, key_id: KeyId, ciphertext: &[u8]) -> Result<alloc::vec::Vec<u8>, CryptoError>;
+    fn decrypt(&self, key_id: KeyId, ciphertext: &[u8])
+        -> Result<alloc::vec::Vec<u8>, CryptoError>;
 
     /// Permanently destroy `key_id`. All records encrypted under it become
     /// unrecoverable. This operation must be durable: a process crash after
@@ -92,21 +95,21 @@ pub struct NullVault;
 
 impl KeyVault for NullVault {
     fn encrypt(&self, _: KeyId, _: &[u8]) -> Result<alloc::vec::Vec<u8>, CryptoError> {
-        Err(CryptoError::BackendError(
-            alloc::string::String::from("no vault configured — wire a real KeyVault before using encrypted records"),
-        ))
+        Err(CryptoError::BackendError(alloc::string::String::from(
+            "no vault configured — wire a real KeyVault before using encrypted records",
+        )))
     }
 
     fn decrypt(&self, _: KeyId, _: &[u8]) -> Result<alloc::vec::Vec<u8>, CryptoError> {
-        Err(CryptoError::BackendError(
-            alloc::string::String::from("no vault configured"),
-        ))
+        Err(CryptoError::BackendError(alloc::string::String::from(
+            "no vault configured",
+        )))
     }
 
     fn shred(&self, _: KeyId) -> Result<(), CryptoError> {
-        Err(CryptoError::BackendError(
-            alloc::string::String::from("no vault configured"),
-        ))
+        Err(CryptoError::BackendError(alloc::string::String::from(
+            "no vault configured",
+        )))
     }
 
     fn key_exists(&self, _: &KeyId) -> bool {

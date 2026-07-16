@@ -23,7 +23,7 @@ async def test_concurrency_stress_local():
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
         
-    client = AsyncMemoryClient() # Local mode
+    client = AsyncMemoryClient(dim=384)  # dim must match dummy_embedder
     
     tasks = []
     for i in range(100):
@@ -50,10 +50,10 @@ async def test_concurrency_stress_local():
 @pytest.mark.asyncio
 async def test_exception_handling():
     """Verifies custom exceptions like ValidationError are raised."""
-    client = AsyncMemoryClient()
-    
+    client = AsyncMemoryClient(dim=384)
+
     # Test invalid dimension
-    invalid_vec = [0.1] * 10 # Wrong dim (384 expected)
+    invalid_vec = [0.1] * 10  # Wrong dim (384 expected)
     
     with pytest.raises(ValidationError) as excinfo:
         await client.upsert_vector(vector=invalid_vec)

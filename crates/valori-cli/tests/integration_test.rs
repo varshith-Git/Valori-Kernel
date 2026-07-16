@@ -14,13 +14,13 @@ use valori_cli::engine::ForensicEngine;
 
 struct TestPaths {
     pub snapshot: PathBuf,
-    pub log:      PathBuf,
+    pub log: PathBuf,
 }
 
 /// Create a minimal database: 3 records + snapshot, then 3 more events in log.
 fn build_test_db(dir: &Path) -> anyhow::Result<TestPaths> {
     use valori_kernel::event::KernelEvent;
-    use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
+    use valori_kernel::snapshot::encode::{encode_capacity_hint, encode_state};
     use valori_kernel::state::kernel::KernelState;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
@@ -33,10 +33,10 @@ fn build_test_db(dir: &Path) -> anyhow::Result<TestPaths> {
 
     for i in 0u32..3 {
         let evt = KernelEvent::InsertRecord {
-            id:       RecordId(i),
-            vector:   FxpVector::new_zeros(DIM),
+            id: RecordId(i),
+            vector: FxpVector::new_zeros(DIM),
             metadata: None,
-            tag:      0,
+            tag: 0,
         };
         state.apply_event(&evt).expect("apply insert");
     }
@@ -62,56 +62,61 @@ fn build_test_db(dir: &Path) -> anyhow::Result<TestPaths> {
 
     for i in 3u32..6 {
         let evt = KernelEvent::InsertRecord {
-            id:       RecordId(i),
-            vector:   FxpVector::new_zeros(DIM),
+            id: RecordId(i),
+            vector: FxpVector::new_zeros(DIM),
             metadata: None,
-            tag:      i as u64,
+            tag: i as u64,
         };
         writer.append(&LogEntry::Event(evt))?;
     }
     // Flush by dropping.
     drop(writer);
 
-    Ok(TestPaths { snapshot: snap_path, log: log_path })
+    Ok(TestPaths {
+        snapshot: snap_path,
+        log: log_path,
+    })
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_inspect_finds_both_files() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
     let _ = paths; // keep alive
 
-    let result = inspect::run(
-        Some(dir.path().to_path_buf()),
-        None,
-        None,
-    );
+    let result = inspect::run(Some(dir.path().to_path_buf()), None, None);
     assert!(result.is_ok(), "inspect should succeed: {result:?}");
 }
 
 #[test]
 fn test_verify_passes_on_valid_snapshot() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     let result = verify::run(paths.snapshot.to_str().unwrap());
-    assert!(result.is_ok(), "verify should pass on a valid snapshot: {result:?}");
+    assert!(
+        result.is_ok(),
+        "verify should pass on a valid snapshot: {result:?}"
+    );
 }
 
 #[test]
 fn test_timeline_reads_all_events() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     let result = timeline::run(paths.log.to_str().unwrap(), 0 /* no limit */);
-    assert!(result.is_ok(), "timeline should parse the event log: {result:?}");
+    assert!(
+        result.is_ok(),
+        "timeline should parse the event log: {result:?}"
+    );
 }
 
 #[test]
 fn test_verify_rejects_corrupt_snapshot() {
-    let dir      = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let bad_path = dir.path().join("bad.val");
     std::fs::write(&bad_path, b"JUNK0000this is not a valid snapshot").unwrap();
 
@@ -121,14 +126,14 @@ fn test_verify_rejects_corrupt_snapshot() {
 
 #[test]
 fn test_replay_to_advances_state() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     // Snapshot has 3 records; log has 3 more events (IDs 3, 4, 5).
     let result = replay_query::run(
         paths.snapshot.to_str().unwrap(),
         paths.log.to_str().unwrap(),
-        2,    // replay 2 events
+        2, // replay 2 events
         None,
         5,
     );
@@ -137,7 +142,7 @@ fn test_replay_to_advances_state() {
 
 #[test]
 fn test_replay_beyond_log_end_is_graceful() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     // Request event #99 but only 3 exist in the log.
@@ -148,12 +153,15 @@ fn test_replay_beyond_log_end_is_graceful() {
         None,
         5,
     );
-    assert!(result.is_ok(), "replay-query beyond log end should warn, not error");
+    assert!(
+        result.is_ok(),
+        "replay-query beyond log end should warn, not error"
+    );
 }
 
 #[test]
 fn test_diff_identical_positions_shows_no_drift() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     let result = diff::run(
@@ -169,7 +177,7 @@ fn test_diff_identical_positions_shows_no_drift() {
 
 #[test]
 fn test_diff_forward_detects_new_events() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     let result = diff::run(
@@ -185,20 +193,23 @@ fn test_diff_forward_detects_new_events() {
 
 #[test]
 fn test_forensic_engine_state_changes_after_replay() {
-    let dir   = tempdir().unwrap();
+    let dir = tempdir().unwrap();
     let paths = build_test_db(dir.path()).unwrap();
 
     let mut engine = ForensicEngine::from_snapshot(paths.snapshot.to_str().unwrap()).unwrap();
-    assert_eq!(engine.state.record_count(), 3, "snapshot should contain 3 records");
+    assert_eq!(
+        engine.state.record_count(),
+        3,
+        "snapshot should contain 3 records"
+    );
 
     let hash_before = engine.blake3_hex();
 
-    engine
-        .replay_to(paths.log.to_str().unwrap(), 3)
-        .unwrap();
+    engine.replay_to(paths.log.to_str().unwrap(), 3).unwrap();
 
     assert_eq!(
-        engine.state.record_count(), 6,
+        engine.state.record_count(),
+        6,
         "after replaying 3 events, should have 6 records total"
     );
     assert_ne!(

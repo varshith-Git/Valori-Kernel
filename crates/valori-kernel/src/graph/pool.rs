@@ -2,9 +2,9 @@
 
 use crate::graph::node::GraphNode;
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::error::{KernelError, Result};
 use crate::graph::edge::GraphEdge;
-use crate::types::id::{NodeId, EdgeId};
-use crate::error::{Result, KernelError};
+use crate::types::id::{EdgeId, NodeId};
 
 #[derive(Clone)]
 pub struct NodePool {
@@ -36,9 +36,9 @@ impl NodePool {
     pub fn get_mut(&mut self, id: NodeId) -> Option<&mut GraphNode> {
         self.nodes.get_mut(id.0 as usize)?.as_mut()
     }
-    
+
     pub fn delete(&mut self, id: NodeId) -> Result<()> {
-         let idx = id.0 as usize;
+        let idx = id.0 as usize;
         if idx >= self.nodes.len() || self.nodes[idx].is_none() {
             return Err(KernelError::NotFound);
         }
@@ -97,9 +97,9 @@ impl EdgePool {
     pub fn get_mut(&mut self, id: EdgeId) -> Option<&mut GraphEdge> {
         self.edges.get_mut(id.0 as usize)?.as_mut()
     }
-    
+
     pub fn delete(&mut self, id: EdgeId) -> Result<()> {
-          let idx = id.0 as usize;
+        let idx = id.0 as usize;
         if idx >= self.edges.len() || self.edges[idx].is_none() {
             return Err(KernelError::NotFound);
         }

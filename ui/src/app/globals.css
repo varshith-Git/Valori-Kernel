@@ -8,9 +8,12 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
-  --font-heading: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  /* --font-geist-sans/--font-geist-mono are injected by next/font/google in
+     layout.tsx via the `variable` option — these theme tokens (used by
+     Tailwind's font-sans/font-mono utilities) just need to point at them. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -47,9 +50,36 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* Elevation — subtle, desktop-app shadows, not web-card drop-shadows.
+     Use `shadow-e-sm/md/lg` (not Tailwind's default `shadow-sm/md/lg`, which
+     these deliberately don't override, to keep this an opt-in scale). */
+  --shadow-e-sm: 0 1px 2px color-mix(in oklch, var(--foreground) 6%, transparent);
+  --shadow-e-md: 0 4px 12px color-mix(in oklch, var(--foreground) 8%, transparent);
+  --shadow-e-lg: 0 12px 32px color-mix(in oklch, var(--foreground) 12%, transparent);
+
+  /* Motion — one durations scale, used instead of ad-hoc `duration-150` /
+     `duration-300` scattered per component. Keep it subtle (Docker Desktop,
+     not a marketing site): nothing above ~250ms for anything interactive. */
+  --motion-fast: 100ms;
+  --motion-normal: 160ms;
+  --motion-slow: 240ms;
 }
 
 :root {
+  /* Valori accent — dark values used as defaults (FOUC script applies .dark/.light before paint) */
+  --v-accent:         oklch(0.62 0.20 270);
+  --v-accent-muted:   oklch(0.62 0.20 270 / 15%);
+  --v-accent-ring:    oklch(0.62 0.20 270 / 50%);
+  --v-heatmap-empty:  oklch(0.28 0.02 270);
+  /* Canvas tokens */
+  --vis-bg:           oklch(0.145 0 0);
+  --vis-grid:         oklch(1 0 0 / 6%);
+  /* Semantic status colors */
+  --status-ok:        oklch(0.72 0.19 145);
+  --status-warn:      oklch(0.78 0.19 80);
+  --status-info:      oklch(0.73 0.17 220);
+
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -122,6 +152,15 @@
   --v-accent-muted:   oklch(0.62 0.20 270 / 15%);
   --v-accent-ring:    oklch(0.62 0.20 270 / 50%);
   --v-heatmap-empty:  oklch(0.28 0.02 270);
+
+  /* Canvas / visualization tokens */
+  --vis-bg:           oklch(0.145 0 0);
+  --vis-grid:         oklch(1 0 0 / 6%);
+
+  /* Semantic status colors */
+  --status-ok:        oklch(0.72 0.19 145);
+  --status-warn:      oklch(0.78 0.19 80);
+  --status-info:      oklch(0.73 0.17 220);
 }
 
 @layer base {
@@ -130,10 +169,23 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01", "tnum";
+    text-rendering: optimizeLegibility;
   }
   html {
     font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   }
+
+  /* Type scale — the default any heading gets if a component doesn't
+     override it with explicit Tailwind classes. Existing per-component
+     classes still win (Tailwind utilities sit in a higher-priority cascade
+     layer than these element selectors), but this is the professional floor
+     instead of every unstyled heading falling back to browser defaults. */
+  h1 { @apply text-xl font-semibold tracking-tight text-foreground; }
+  h2 { @apply text-base font-semibold text-foreground; }
+  h3 { @apply text-sm font-semibold text-foreground; }
+  h4, h5, h6 { @apply text-xs font-semibold uppercase tracking-wide text-muted-foreground; }
+  code, kbd, samp { font-family: var(--font-geist-mono), ui-monospace, monospace; }
 
   /* Subtle scrollbars */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -194,6 +246,14 @@
   --v-accent-ring:    oklch(0.52 0.20 270 / 40%);
   --v-heatmap-empty:  oklch(0.88 0.01 270);
 
+  /* Canvas / visualization tokens */
+  --vis-bg:           oklch(0.97 0 0);
+  --vis-grid:         oklch(0 0 0 / 8%);
+
+  /* Semantic status colors */
+  --status-ok:        oklch(0.54 0.16 145);
+  --status-warn:      oklch(0.60 0.18 80);
+  --status-info:      oklch(0.56 0.17 220);
 }
 
 /* Light-mode scrollbars */
@@ -285,4 +345,17 @@ html {
   transition:
     background-color 0.25s ease,
     color 0.15s ease;
+}
+
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  html { transition: none; }
+  .animate-fade-up,
+  .animate-stat-pop,
+  .animate-chain-glow,
+  .animate-breathe,
+  .heat-cell {
+    animation: none;
+  }
+  .card-shimmer::after { display: none; }
 }

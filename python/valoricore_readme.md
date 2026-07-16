@@ -1090,7 +1090,43 @@ All data methods accept `collection: str = "default"`:
 |---|---|
 | `insert(vector, tag, collection)` | ✅ |
 | `insert_batch(batch, collection)` | ✅ |
+| `insert_encrypted(payload, tag, collection, key_id)` | ✅ |
 | `search(query, k, filter_tag, consistency, collection)` | ✅ (also accepts `consistency="linearizable"\|"local"`) |
+| `delete(record_id, collection)` | ✅ |
+| `soft_delete(record_id, collection)` | ✅ |
+
+`delete`/`soft_delete` need `collection` because a record id is only
+unique within its own collection (each collection's data may live on its
+own Raft shard in cluster mode) — pass the same `collection` the record
+was inserted into, or the lookup misses it.
+
+#### Knowledge Graph (collection-aware)
+
+`create_node`/`get_node`/`create_edge`/`get_edges`/`subgraph`/`neighbors`/
+`walk`/`expand` all accept `collection: str = "default"` too — node/edge
+ids have the same per-collection uniqueness constraint as record ids
+above.
+
+| Method | Returns | Description |
+|---|---|---|
+| `create_node(kind, record_id=None, collection="default")` | `int` | Create a graph node. |
+| `create_edge(from_id, to_id, kind, collection="default")` | `int` | Create a directed edge. |
+| `get_node(node_id, collection="default")` | `dict \| None` | `{"kind", "record_id", "namespace_id"}`. |
+| `get_edges(node_id, collection="default")` | `List[dict]` | Outgoing edges: `[{"edge_id", "to_node", "kind"}, …]`. |
+| `neighbors(node_id, collection="default")` | `List[int]` | The `to_node` ids from `get_edges()`. |
+| `subgraph(root_node, depth=2, collection="default")` | `dict` | One server-side bounded BFS call — `{"nodes": [...], "edges": [...]}`. Prefer this over `walk()` for RAG-style graph expansion. |
+| `walk(start_node, max_depth=2, collection="default")` | `List[int]` | Client-side BFS (one HTTP round trip per node). |
+| `expand(start_node, max_depth=2, collection="default")` | `List[int]` | `walk()` + collects reachable record ids. |
+
+```python
+client.create_collection("tenant-acme")
+doc = client.create_node(kind=NODE_DOCUMENT, collection="tenant-acme")
+chunk = client.create_node(kind=NODE_CHUNK, collection="tenant-acme")
+client.create_edge(doc, chunk, kind=EDGE_PARENT_OF, collection="tenant-acme")
+
+# One round trip, server-side BFS — the recommended way to expand a subgraph.
+client.subgraph(doc, depth=2, collection="tenant-acme")
+```
 
 #### Built-in Ingest Pipeline (Phase I1/I2)
 

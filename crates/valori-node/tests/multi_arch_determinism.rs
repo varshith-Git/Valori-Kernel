@@ -8,8 +8,9 @@
 
 #[cfg(test)]
 mod determinism_tests {
-    use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+    use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
     use valori_node::engine::Engine;
+    use valori_node::EngineFromNodeConfig;
 
     const DIM: usize = 16;
     const MAX_RECORDS: usize = 1024;
@@ -42,7 +43,9 @@ mod determinism_tests {
             let vector: Vec<f32> = (0..DIM)
                 .map(|j| ((i * 1000 + j) as f32 * 0.001) % 1.0)
                 .collect();
-            engine.insert_record_from_f32(&vector).expect("insert failed");
+            engine
+                .insert_record_from_f32(&vector)
+                .expect("insert failed");
         }
         let hash = engine.get_proof().final_state_hash;
         println!("[{}] HASH: {:?}", label, &hash[..8]);
@@ -87,6 +90,9 @@ mod determinism_tests {
             engine.get_proof().final_state_hash
         };
 
-        assert_eq!(hash1, hash2, "Identical operations must produce identical state hash");
+        assert_eq!(
+            hash1, hash2,
+            "Identical operations must produce identical state hash"
+        );
     }
 }

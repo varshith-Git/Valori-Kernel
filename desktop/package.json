@@ -1,0 +1,18 @@
+{
+  "name": "valori-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Valori Desktop — Tauri control plane (Docker Desktop for AI Memory)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  }
+}

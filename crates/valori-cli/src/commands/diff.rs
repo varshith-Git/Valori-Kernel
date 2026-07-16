@@ -5,27 +5,26 @@
 //! `--from` and once to `--to` — then reports the state-hash delta and,
 //! optionally, nearest-neighbour rank changes for a query vector.
 
-use crate::engine::ForensicEngine;
+use crate::engine::{floats_to_fxp, ForensicEngine};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use std::collections::{HashMap, HashSet};
 use valori_kernel::index::SearchResult;
 use valori_kernel::types::id::RecordId;
-use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
 pub fn run(
     snapshot_path: &str,
-    log_path:      &str,
-    from_count:    u64,
-    to_count:      u64,
-    query_arg:     Option<String>,
-    top_k:         usize,
+    log_path: &str,
+    from_count: u64,
+    to_count: u64,
+    query_arg: Option<String>,
+    top_k: usize,
 ) -> anyhow::Result<()> {
     // ── Engine A — state at `from` ────────────────────────────────────────────
     let mut engine_a = ForensicEngine::from_snapshot(snapshot_path)?;
     engine_a.replay_to(log_path, from_count)?;
-    let hash_a   = engine_a.blake3_hex();
+    let hash_a = engine_a.blake3_hex();
     let events_a: HashSet<u64> = engine_a.applied_events.iter().copied().collect();
 
     // ── Engine B — state at `to` ──────────────────────────────────────────────
@@ -34,7 +33,11 @@ pub fn run(
     let hash_b = engine_b.blake3_hex();
 
     let state_changed = hash_a != hash_b;
-    let status_label  = if state_changed { "DRIFTED" } else { "IDENTICAL" };
+    let status_label = if state_changed {
+        "DRIFTED"
+    } else {
+        "IDENTICAL"
+    };
 
     // ── State comparison table ────────────────────────────────────────────────
     let mut cmp = Table::new();
@@ -48,13 +51,13 @@ pub fn run(
 
     cmp.add_row(vec![
         "Records",
-        &engine_a.state.record_count().to_string(),
-        &engine_b.state.record_count().to_string(),
+        &engine_a.record_count().to_string(),
+        &engine_b.record_count().to_string(),
     ]);
     cmp.add_row(vec![
         "Nodes",
-        &engine_a.state.node_count().to_string(),
-        &engine_b.state.node_count().to_string(),
+        &engine_a.node_count().to_string(),
+        &engine_b.node_count().to_string(),
     ]);
     cmp.add_row(vec![
         "Edges",
@@ -107,14 +110,15 @@ pub fn run(
 
     // ── Semantic diff (optional) ──────────────────────────────────────────────
     if let Some(query_str) = query_arg {
-        let floats: Vec<f64> = serde_json::from_str(&query_str)
-            .map_err(|_| anyhow::anyhow!(
+        let floats: Vec<f64> = serde_json::from_str(&query_str).map_err(|_| {
+            anyhow::anyhow!(
                 "Invalid --query value. Expected a JSON float array, e.g. '[0.1, 0.2]'. \
                  Got: {query_str}"
-            ))?;
+            )
+        })?;
 
         let query_fxp = floats_to_fxp(&floats);
-        let k         = top_k.max(1);
+        let k = top_k.max(1);
 
         let results_a = search(&engine_a, &query_fxp, k);
         let results_b = search(&engine_b, &query_fxp, k);
@@ -177,24 +181,15 @@ pub fn run(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-/// Convert f64 values to Q16.16 fixed-point vectors.
-/// Replicates `valori_kernel::fxp::ops::from_f32` without requiring the `std` feature.
-fn floats_to_fxp(floats: &[f64]) -> FxpVector {
-    FxpVector {
-        data: floats
-            .iter()
-            .map(|&f| FxpScalar(
-                (f as f32 * 65536.0)
-                    .round()
-                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
-            ))
-            .collect(),
-    }
-}
-
 fn search(engine: &ForensicEngine, query: &FxpVector, k: usize) -> Vec<SearchResult> {
-    let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
-    let found   = engine.state.search_l2(query, &mut buf, None);
+    let mut buf = vec![
+        SearchResult {
+            id: RecordId(0),
+            score: i64::MAX
+        };
+        k
+    ];
+    let found = engine.kernel_state().search_l2(query, &mut buf, None);
     buf.truncate(found);
     buf
 }

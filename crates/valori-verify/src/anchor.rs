@@ -44,6 +44,7 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
 use serde_json::{json, Value};
 use std::path::Path;
+use valori_wire::format_utc;
 
 const DOMAIN_SEP: &[u8] = b"valori-anchor-v1\0";
 
@@ -74,36 +75,6 @@ fn json_u64(v: &Value, field: &str) -> Result<u64> {
     v[field]
         .as_u64()
         .with_context(|| format!("anchor field '{field}' missing or not a u64"))
-}
-
-/// Format unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (no external deps).
-pub fn format_utc(unix_secs: u64) -> String {
-    const DBFM: [u32; 13] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365];
-    let sod = unix_secs % 86400;
-    let (h, m, s) = (sod / 3600, (sod % 3600) / 60, sod % 60);
-    let mut days = (unix_secs / 86400) as u32;
-    let mut year = 1970u32;
-    loop {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let diy = if leap { 366 } else { 365 };
-        if days < diy {
-            break;
-        }
-        days -= diy;
-        year += 1;
-    }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let mut month = 12u32;
-    for mi in 1..=12u32 {
-        let dbf = DBFM[mi as usize] + if leap && mi > 2 { 1 } else { 0 };
-        if days < dbf {
-            month = mi;
-            break;
-        }
-    }
-    let dbfm = DBFM[(month - 1) as usize] + if leap && month > 2 { 1 } else { 0 };
-    let day = days - dbfm + 1;
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
 
 // ── anchor payload ────────────────────────────────────────────────────────────
@@ -158,16 +129,25 @@ impl AnchorPayload {
         let event_count = json_u64(v, "event_count")?;
         let anchored_at_unix = json_u64(v, "anchored_at_unix")?;
 
-        let chain_head: [u8; 32] = chain_head_vec.try_into()
+        let chain_head: [u8; 32] = chain_head_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("chain_head must be 32 bytes"))?;
-        let state_hash: [u8; 32] = state_hash_vec.try_into()
+        let state_hash: [u8; 32] = state_hash_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("state_hash must be 32 bytes"))?;
-        let pk_bytes: [u8; 32] = pk_vec.try_into()
+        let pk_bytes: [u8; 32] = pk_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("public_key_ed25519 must be 32 bytes"))?;
-        let sig_bytes: [u8; 64] = sig_vec.try_into()
+        let sig_bytes: [u8; 64] = sig_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("signature_ed25519 must be 64 bytes"))?;
 
-        let payload = Self { chain_head, event_count, state_hash, anchored_at_unix };
+        let payload = Self {
+            chain_head,
+            event_count,
+            state_hash,
+            anchored_at_unix,
+        };
 
         let vk = VerifyingKey::from_bytes(&pk_bytes).context("invalid Ed25519 public key")?;
         let sig = Signature::from_bytes(&sig_bytes);
@@ -217,7 +197,8 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey> {
         .with_context(|| format!("cannot read signing key from {}", path.display()))?;
     let bytes = from_hex(hex_str.trim())
         .with_context(|| format!("signing key at {} is not valid hex", path.display()))?;
-    let key_bytes: [u8; 32] = bytes.try_into()
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("signing key must be 32 bytes (64 hex chars)"))?;
     Ok(SigningKey::from_bytes(&key_bytes))
 }
@@ -228,7 +209,8 @@ pub fn load_verifying_key(path: &Path) -> Result<VerifyingKey> {
         .with_context(|| format!("cannot read public key from {}", path.display()))?;
     let bytes = from_hex(hex_str.trim())
         .with_context(|| format!("public key at {} is not valid hex", path.display()))?;
-    let key_bytes: [u8; 32] = bytes.try_into()
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("public key must be 32 bytes (64 hex chars)"))?;
     VerifyingKey::from_bytes(&key_bytes).context("invalid Ed25519 public key bytes")
 }

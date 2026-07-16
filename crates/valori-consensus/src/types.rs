@@ -21,6 +21,15 @@ use valori_kernel::event::KernelEvent;
 /// Stable numeric node identity. Comes from `VALORI_NODE_ID` (Phase 1.8).
 pub type NodeId = u64;
 
+/// Identifies one independent Raft group ("shard") within a process
+/// (Phase S1 — multi-Raft skeleton). `ShardId(0)` is the sole shard when
+/// `VALORI_SHARD_COUNT=1`. Namespace-to-shard HTTP routing is live (S3–S9):
+/// `shard_for_namespace(ns, count) = ns % count` in valori-node.
+///
+/// This is the shared `valori-core` type (re-exported through the kernel) —
+/// the same `ShardId` the rest of the platform uses, not a local duplicate.
+pub use valori_kernel::types::id::ShardId;
+
 /// A cluster member as known to Raft membership config.
 ///
 /// `api_addr` is the public HTTP data-plane address (axum, port 3000-ish);
@@ -70,6 +79,16 @@ pub struct ClientRequest {
     /// Old nodes that pre-date this field decode it as 0 (`#[serde(default)]`).
     #[serde(default)]
     pub schema_version: u8,
+    /// Phase S3a: which namespace this event targets. The state machine
+    /// calls `KernelState::apply_event_ns(event, namespace_id)` with this
+    /// value for every event type whose own `KernelEvent` variant doesn't
+    /// already carry an internal `namespace_id` field (i.e. everything
+    /// except `InsertRecordEncrypted`/`AutoInsertRecordEncrypted`, which
+    /// carry their own and ignore this one). Old requests decode this as 0
+    /// (`#[serde(default)]`) — identical to prior behavior, since every
+    /// write went to namespace 0 regardless before this field existed.
+    #[serde(default)]
+    pub namespace_id: u16,
 }
 
 /// What the state machine returns to the waiting client after apply.
@@ -100,6 +119,12 @@ pub struct ClientResponse {
     /// Populated when the request used `KernelEvent::AutoCreateEdge`.
     #[serde(default)]
     pub allocated_edge_id: Option<u32>,
+    /// Populated when the request used `KernelEvent::AutoCreateNamespace`.
+    /// The NamespaceId assigned by the state machine at apply time (or the
+    /// pre-existing id, if the name was already registered — idempotent).
+    /// Phase S2.
+    #[serde(default)]
+    pub allocated_namespace_id: Option<u16>,
 }
 
 openraft::declare_raft_types!(

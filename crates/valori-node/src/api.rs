@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 // Since valori-kernel is a dependency, we can use its types if they are pub.
 // Assuming valori_kernel::types::enums::* is pub.
 
-
 // ── Collections / namespace seam ─────────────────────────────────────────────
 //
 // The API accepts a `collection` string on every data-path request.
@@ -44,8 +43,35 @@ pub struct InsertRecordRequest {
 }
 
 #[derive(Serialize)]
+pub struct InsertReceiptJson {
+    pub record_id: u32,
+    pub old_root: String,
+    pub new_root: String,
+    pub proof: String,
+    pub sequence: u64,
+    pub timestamp: u64,
+    pub state_hash: String,
+}
+
+impl From<valori_kernel::proof::InsertReceipt> for InsertReceiptJson {
+    fn from(r: valori_kernel::proof::InsertReceipt) -> Self {
+        let hex = |b: &[u8; 32]| b.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+        InsertReceiptJson {
+            record_id: r.record_id,
+            old_root: hex(&r.old_root),
+            new_root: hex(&r.new_root),
+            proof: hex(&r.proof),
+            sequence: r.sequence,
+            timestamp: r.timestamp,
+            state_hash: hex(&r.state_hash),
+        }
+    }
+}
+
+#[derive(Serialize)]
 pub struct InsertRecordResponse {
     pub id: u32,
+    pub receipt: InsertReceiptJson,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +84,9 @@ pub struct DeleteRecordRequest {
 #[derive(Serialize)]
 pub struct DeleteRecordResponse {
     pub success: bool,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -99,63 +128,12 @@ pub struct SearchRequest {
     pub metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-fn default_rerank() -> bool { true }
-
-/// Returns true when every key in `filter` is present in `meta` with a matching value.
-/// Supports exact equality for strings/booleans/null, and range operators
-/// (`eq`, `gt`, `gte`, `lt`, `lte`) for numbers.
-pub fn matches_metadata_filter(
-    meta: &serde_json::Value,
-    filter: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    let obj = match meta.as_object() {
-        Some(o) => o,
-        None => return false,
-    };
-    for (key, expected) in filter {
-        let actual = match obj.get(key) {
-            Some(v) => v,
-            None => return false,
-        };
-        if !value_matches(actual, expected) {
-            return false;
-        }
-    }
+fn default_rerank() -> bool {
     true
 }
 
-fn value_matches(actual: &serde_json::Value, expected: &serde_json::Value) -> bool {
-    // If expected is an object with range operators, apply numeric comparison.
-    if let Some(ops) = expected.as_object() {
-        let has_op = ops.contains_key("eq")
-            || ops.contains_key("gt") || ops.contains_key("gte")
-            || ops.contains_key("lt") || ops.contains_key("lte");
-        if has_op {
-            let num = match actual.as_f64() {
-                Some(n) => n,
-                None => return false,
-            };
-            if let Some(v) = ops.get("eq") {
-                if actual != v { return false; }
-            }
-            if let Some(v) = ops.get("gt").and_then(|v| v.as_f64()) {
-                if !(num > v) { return false; }
-            }
-            if let Some(v) = ops.get("gte").and_then(|v| v.as_f64()) {
-                if !(num >= v) { return false; }
-            }
-            if let Some(v) = ops.get("lt").and_then(|v| v.as_f64()) {
-                if !(num < v) { return false; }
-            }
-            if let Some(v) = ops.get("lte").and_then(|v| v.as_f64()) {
-                if !(num <= v) { return false; }
-            }
-            return true;
-        }
-    }
-    // Exact equality for all other types.
-    actual == expected
-}
+// Metadata predicate matching now lives in valori-search.
+pub use valori_search::matches_metadata_filter;
 
 #[derive(Serialize)]
 pub struct SearchHit {
@@ -191,15 +169,24 @@ pub struct SearchResponse {
 
 impl SearchResponse {
     pub fn simple(results: Vec<SearchHit>) -> Self {
-        Self { results, as_of_log_index: None, as_of_timestamp_unix: None, as_of_timestamp_iso: None, as_of_state_hash: None }
+        Self {
+            results,
+            as_of_log_index: None,
+            as_of_timestamp_unix: None,
+            as_of_timestamp_iso: None,
+            as_of_state_hash: None,
+        }
     }
 }
 
 /// A single entry in the timeline — one committed kernel event with its metadata.
 #[derive(Serialize)]
 pub struct TimelineEntry {
-    /// Sequential index (0-based) into the committed event log.
+    /// Sequential index within this entry's shard log (0-based).
+    /// Used as a tie-breaker when two shards share the same `timestamp_unix`.
     pub log_index: u64,
+    /// Shard that committed this event. Always 0 in standalone mode.
+    pub shard_id: u32,
     /// Unix-second wall-clock timestamp when this event was committed.
     pub timestamp_unix: u64,
     /// ISO 8601 UTC string for `timestamp_unix`.
@@ -229,24 +216,57 @@ pub struct TimelineResponse {
     pub to_unix: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationSummary {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub op_type: String,
+    pub status: String,
+    pub timing: String,
+    pub timestamp_unix: u64,
+    pub collection: String,
+    pub details: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationsListResponse {
+    pub operations: Vec<OperationSummary>,
+    pub total: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationDetailResponse {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub op_type: String,
+    pub status: String,
+    pub timing: String,
+    pub timestamp_unix: u64,
+    pub collection: String,
+    pub overview: serde_json::Value,
+    pub results: serde_json::Value,
+    pub proof: serde_json::Value,
+    pub metrics: serde_json::Value,
+}
+
 #[derive(Deserialize)]
 pub struct CreateNodeRequest {
     pub record_id: Option<u32>,
-    // NodeKind needs to be deserializable. 
+    // NodeKind needs to be deserializable.
     // valori-kernel NodeKind derives Copy, Clone, Debug, PartialEq. Does it derive Serialize/Deserialize?
     // If not, we need a mirror enum or manual impl.
-    // The user didn't ask to modify kernel. 
+    // The user didn't ask to modify kernel.
     // So we must redefine or use `#[serde(remote = ...)]`?
     // Or just "kind": u8 ?
     // User request: "You can define NodeKind and EdgeKind via valori-kernel’s enums (they are #[repr(u8)] + serde)."
-    // Ah, the user implied they *are* serde? 
+    // Ah, the user implied they *are* serde?
     // Or I should make them serde in kernel?
     // "Do NOT modify valori-kernel".
     // "You can define NodeKind ... via valori-kernel's enums (they are #[repr(u8)] + serde)" -> Maybe the user thinks they are serde?
     // Or maybe "You can define [your own API types] via ..."
     // I will redefine them here for serde support if kernel ones don't have it.
     // Let's assume for now I wrap them: kind: u8 in JSON, mapped to enum.
-    pub kind: u8, 
+    pub kind: u8,
     #[serde(default)]
     pub collection: Option<String>,
 }
@@ -254,6 +274,9 @@ pub struct CreateNodeRequest {
 #[derive(Serialize)]
 pub struct CreateNodeResponse {
     pub node_id: u32,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -268,6 +291,9 @@ pub struct CreateEdgeRequest {
 #[derive(Serialize)]
 pub struct CreateEdgeResponse {
     pub edge_id: u32,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -308,6 +334,8 @@ pub struct MemoryUpsertResponse {
     pub record_id: u32,
     pub document_node_id: u32,
     pub chunk_node_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -320,6 +348,23 @@ pub struct MemorySearchVectorRequest {
     /// recall path re-ranks older memories down. See `SearchRequest`.
     #[serde(default)]
     pub decay_half_life_secs: Option<u64>,
+    /// Phase S6 (cluster mode only; ignored standalone): `"local"` skips
+    /// the read-index round trip (eventually consistent, faster). Absent
+    /// or any other value defaults to linearizable, matching `/v1/search`.
+    #[serde(default)]
+    pub consistency: Option<String>,
+    /// Phase I7 — restrict results to records whose stored metadata satisfies
+    /// every key/value predicate. Same semantics as `SearchRequest::metadata_filter`.
+    #[serde(default)]
+    pub metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Phase C5 — when `true` (default) and `query_text` is provided, re-ranks
+    /// candidates by hybrid BM25 + vector score before returning the top-k.
+    #[serde(default = "crate::api::default_rerank")]
+    pub rerank: bool,
+    /// Phase C5 — raw query text for BM25 hybrid re-ranking. Required when
+    /// `rerank=true`; ignored otherwise.
+    #[serde(default)]
+    pub query_text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -339,9 +384,12 @@ pub struct ListNodesResponse {
 #[derive(Serialize)]
 pub struct DeleteNodeResponse {
     pub success: bool,
+    /// Raft log index of the committed write — cluster path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MemorySearchHit {
     pub memory_id: String,
     pub record_id: u32,
@@ -357,7 +405,7 @@ pub struct MemorySearchHit {
 
 // ... existing content ...
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct MemorySearchResponse {
     pub results: Vec<MemorySearchHit>,
 }
@@ -411,8 +459,8 @@ pub struct SnapshotRestoreResponse {
 #[derive(Serialize, Debug)]
 pub struct EventProofResponse {
     pub kernel_version: u32,
-    pub event_log_hash: String,       // hex-encoded BLAKE3
-    pub final_state_hash: String,     // hex-encoded BLAKE3  
+    pub event_log_hash: String,        // hex-encoded BLAKE3
+    pub final_state_hash: String,      // hex-encoded BLAKE3
     pub snapshot_hash: Option<String>, // hex-encoded BLAKE3 (if snapshot exists)
     pub event_count: u64,
     pub committed_height: u64,
@@ -501,6 +549,8 @@ pub struct MemoryConsolidateResponse {
     pub supersedes_edge_id: u32,
     /// BLAKE3 state hash after all three events are applied.
     pub state_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }
 
 // ── C4.3: Contradiction detection ────────────────────────────────────────────
@@ -529,4 +579,6 @@ pub struct MemoryContradictResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edge_id: Option<u32>,
     pub state_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_index: Option<u64>,
 }

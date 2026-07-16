@@ -18,8 +18,10 @@ use std::time::Duration;
 
 use openraft::{Config, Raft};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
-use valori_consensus::{serve_raft, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
+use valori_consensus::{
+    serve_raft_single, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -52,10 +54,18 @@ async fn spawn_node(id: NodeId) -> TestNode {
         .unwrap(),
     );
     let sm = ValoriStateMachine::default();
-    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), ValoriLogStore::new(), sm.clone())
+    let raft = Raft::new(
+        id,
+        config,
+        ValoriNetworkFactory::new(ShardId(0)),
+        ValoriLogStore::new(),
+        sm.clone(),
+    )
+    .await
+    .unwrap();
+    let (addr, server) = serve_raft_single(raft.clone(), "127.0.0.1:0")
         .await
         .unwrap();
-    let (addr, server) = serve_raft(raft.clone(), "127.0.0.1:0").await.unwrap();
     TestNode {
         raft,
         sm,
@@ -68,7 +78,11 @@ async fn spawn_node(id: NodeId) -> TestNode {
 }
 
 async fn three_node_cluster() -> Vec<TestNode> {
-    let nodes = vec![spawn_node(1).await, spawn_node(2).await, spawn_node(3).await];
+    let nodes = vec![
+        spawn_node(1).await,
+        spawn_node(2).await,
+        spawn_node(3).await,
+    ];
     let members: BTreeMap<NodeId, ValoriNode> = nodes
         .iter()
         .enumerate()
@@ -105,6 +119,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+        namespace_id: 0,
     }
 }
 
@@ -116,7 +131,11 @@ async fn leader_crash_triggers_reelection_and_writes_continue() {
     // Write through the original leader first.
     let mut next_record = 0u32;
     for _ in 0..3 {
-        nodes[old_leader].raft.client_write(insert(next_record)).await.unwrap();
+        nodes[old_leader]
+            .raft
+            .client_write(insert(next_record))
+            .await
+            .unwrap();
         next_record += 1;
     }
 
@@ -130,7 +149,10 @@ async fn leader_crash_triggers_reelection_and_writes_continue() {
             .raft
             .wait(Some(Duration::from_secs(10)))
             .metrics(
-                |m| m.current_leader.is_some() && m.current_leader != Some((old_leader + 1) as NodeId),
+                |m| {
+                    m.current_leader.is_some()
+                        && m.current_leader != Some((old_leader + 1) as NodeId)
+                },
                 "survivor elected a new leader",
             )
             .await
@@ -221,7 +243,7 @@ async fn majority_loss_stalls_writes_instead_of_forking() {
     // what is FORBIDDEN is returning success.
     let write = nodes[leader].raft.client_write(insert(1));
     match tokio::time::timeout(Duration::from_secs(3), write).await {
-        Err(_elapsed) => {} // hung waiting for quorum — correct
+        Err(_elapsed) => {}      // hung waiting for quorum — correct
         Ok(Err(_raft_err)) => {} // surfaced an error — correct
         Ok(Ok(resp)) => panic!(
             "write committed without quorum (log_index {}) — safety violation",
@@ -235,4 +257,52 @@ async fn majority_loss_stalls_writes_instead_of_forking() {
         count_before,
         "no quorum → no apply"
     );
+}
+
+// ── Phase S2: namespace registry converges over real Raft ────────────────────
+//
+// The consensus-level tests in tests/state_machine.rs prove the apply()
+// dispatch logic in isolation (in-memory, no network). This test proves the
+// fix at the layer that actually matters: a name -> id mapping submitted on
+// the leader must be visible, identically, on FOLLOWERS THAT NEVER RECEIVED
+// A DIRECT WRITE — over a real gRPC transport, real leader election, real
+// log replication. This is the lowest layer that doesn't require booting the
+// HTTP data plane at all.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn namespace_registry_converges_across_real_raft_nodes() {
+    let nodes = three_node_cluster().await;
+    let leader = leader_index(&nodes);
+
+    let create = ClientRequest {
+        event: KernelEvent::AutoCreateNamespace {
+            name: "tenant-acme".to_string(),
+        },
+        request_id: None,
+        schema_version: 0,
+        namespace_id: 0,
+    };
+    let resp = nodes[leader].raft.client_write(create).await.unwrap();
+    let allocated_id = resp
+        .data
+        .allocated_namespace_id
+        .expect("namespace id must be allocated");
+
+    for node in &nodes {
+        node.raft
+            .wait(Some(Duration::from_secs(10)))
+            .applied_index_at_least(Some(resp.data.log_index), "namespace create applied")
+            .await
+            .unwrap();
+    }
+
+    // Every node — including the two that never received the HTTP/client_write
+    // call directly — must resolve the SAME id for the SAME name.
+    for node in &nodes {
+        assert_eq!(
+            node.sm.resolve_namespace(Some("tenant-acme")).await,
+            Some(allocated_id),
+            "every replica must agree on the namespace id, not just the one that received the write"
+        );
+    }
 }

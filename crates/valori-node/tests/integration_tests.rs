@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg(dim: usize) -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -16,8 +17,12 @@ fn test_engine_workflow() {
     let cfg = make_cfg(4);
     let mut engine = Engine::new(&cfg);
 
-    let id1 = engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
-    let id2 = engine.insert_record_from_f32(&[0.0, 1.0, 0.0, 0.0]).unwrap();
+    let id1 = engine
+        .insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0])
+        .unwrap();
+    let id2 = engine
+        .insert_record_from_f32(&[0.0, 1.0, 0.0, 0.0])
+        .unwrap();
 
     assert_eq!(id1, 0);
     assert_eq!(id2, 1);
@@ -28,7 +33,7 @@ fn test_engine_workflow() {
 
     let nid1 = engine.create_node_for_record(Some(id1), 0, 0).unwrap();
     let nid2 = engine.create_node_for_record(Some(id2), 0, 0).unwrap();
-    let eid  = engine.create_edge(nid1, nid2, 0).unwrap();
+    let eid = engine.create_edge(nid1, nid2, 0).unwrap();
     assert_eq!(eid, 0);
 
     let snapshot = engine.snapshot().unwrap();
@@ -47,11 +52,17 @@ fn test_input_bounds_validation() {
     let mut engine = Engine::new(&cfg);
 
     // Values within the Q16.16 safe range are accepted.
-    assert!(engine.insert_record_from_f32(&[100.0, -100.0, 32000.0, -32000.0]).is_ok());
+    assert!(engine
+        .insert_record_from_f32(&[100.0, -100.0, 32000.0, -32000.0])
+        .is_ok());
 
     // Values outside the Q16.16 range must be rejected.
-    assert!(engine.insert_record_from_f32(&[1.0, 1.0, 33000.0, 1.0]).is_err());
-    assert!(engine.insert_record_from_f32(&[1.0, -33000.0, 1.0, 1.0]).is_err());
+    assert!(engine
+        .insert_record_from_f32(&[1.0, 1.0, 33000.0, 1.0])
+        .is_err());
+    assert!(engine
+        .insert_record_from_f32(&[1.0, -33000.0, 1.0, 1.0])
+        .is_err());
 
     // Out-of-range search query must also be rejected.
     assert!(engine.search_l2(&[1.0, 1.0, 33000.0, 1.0], 2).is_err());
@@ -81,7 +92,9 @@ fn test_dim_enforced_from_config() {
 
     // And a second wrong-size vector after a correct insert must also be rejected.
     assert!(
-        engine.insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).is_err(),
+        engine
+            .insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .is_err(),
         "6-element vector must still be rejected after a valid insert"
     );
 }
@@ -92,7 +105,9 @@ fn test_search_dim_validated() {
     let mut engine = Engine::new(&cfg);
 
     // Insert a valid record to lock the dim.
-    engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
+    engine
+        .insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0])
+        .unwrap();
 
     // A wrong-dim query must be rejected.
     assert!(

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { useTheme } from "@/lib/theme";
 
 // -- Types ---------------------------------------------------------------------
 
@@ -25,9 +26,10 @@ interface Props {
 type Lang = "python" | "typescript" | "curl";
 
 // -- Cosine helper -------------------------------------------------------------
-// Valori returns L2² distance. For unit-normalised vectors: cosine ≈ 1 - score*32768
+// Valori returns L2² distance (f32). For unit-normalised vectors:
+//   cosine = 1 - L2²/2   (ranges 0 to 4 for unit vectors)
 function cosineFromScore(score: number) {
-  return Math.max(0, (1 - score * 32768) * 100);
+  return Math.max(0, Math.min(100, (1 - score / 2) * 100));
 }
 
 // -- Vector formatting ---------------------------------------------------------
@@ -291,21 +293,36 @@ function tokenize(code: string, lang: "python" | "typescript" | "curl"): Token[]
   return tokens;
 }
 
-const TOKEN_COLOR: Record<Token["kind"], string> = {
+// Two full palettes rather than one set of "works everywhere" colors: the
+// dark set is tuned for a near-black background, the light set for
+// near-white — reusing one hex for both leaves "plain" (the majority of any
+// snippet — punctuation, whitespace-adjacent identifiers) illegible in
+// whichever theme it wasn't tuned for.
+const TOKEN_COLOR_DARK: Record<Token["kind"], string> = {
   kw:      "#38bdf8",   // sky
   str:     "#4ade80",   // emerald
-  comment: "#52525b",   // zinc-600
+  comment: "#71717a",   // zinc-500
   num:     "#fb923c",   // orange
   fn:      "#fbbf24",   // amber
   plain:   "#d4d4d8",   // zinc-300
 };
+const TOKEN_COLOR_LIGHT: Record<Token["kind"], string> = {
+  kw:      "#0369a1",   // sky-700
+  str:     "#15803d",   // emerald-700
+  comment: "#71717a",   // zinc-500
+  num:     "#c2410c",   // orange-700
+  fn:      "#a16207",   // amber-700
+  plain:   "#3f3f46",   // zinc-700
+};
 
 function SyntaxCode({ code, lang }: { code: string; lang: "python" | "typescript" | "curl" }) {
+  const { theme } = useTheme();
+  const tokenColor = theme === "light" ? TOKEN_COLOR_LIGHT : TOKEN_COLOR_DARK;
   const tokens = tokenize(code, lang);
   return (
     <pre className="font-mono text-[12.5px] leading-[1.65] p-5 overflow-x-auto">
       {tokens.map((t, i) => (
-        <span key={i} style={{ color: TOKEN_COLOR[t.kind] }}>
+        <span key={i} style={{ color: tokenColor[t.kind] }}>
           {t.text}
         </span>
       ))}
@@ -349,6 +366,40 @@ export function CodePanel({
   embedEndpoint,
 }: Props) {
   const [lang, setLang] = useState<Lang>("python");
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    // Move focus into the panel on open
+    const firstFocusable = panelRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    firstFocusable?.focus();
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((el) => !el.hasAttribute("disabled"));
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -375,7 +426,7 @@ export function CodePanel({
       />
 
       {/* Panel */}
-      <div className="fixed right-0 top-0 bottom-0 z-50 w-[560px] flex flex-col bg-background border-l border-border shadow-2xl">
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-label="Code generation panel" className="fixed right-0 top-0 bottom-0 z-50 w-[560px] flex flex-col bg-background border-l border-border shadow-2xl">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">

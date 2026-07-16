@@ -11,9 +11,8 @@ use std::time::Duration;
 
 use valori_consensus::types::ValoriNode;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterConfigError};
-use valori_node::commit::{CommitError, Committer, EventLogAuditSink};
-use valori_node::events::event_log::EventLogWriter;
-use valori_node::events::event_replay::read_event_log;
+use valori_node::commit::{CommitError, Committer};
+use valori_node::events::event_replay::read_all_segments;
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -81,22 +80,30 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
     let dir = tempfile::tempdir().unwrap();
     let log_path = dir.path().join("events.log");
 
-    // The audit sink is the node's real chained event-log writer.
-    let writer = EventLogWriter::open(&log_path, Some(4)).unwrap();
-    let audit = EventLogAuditSink::new(writer);
-
     // Boot a single-node cluster; raft_bind :0 picks a free port.
+    // bootstrap_cluster now builds the real chained event-log writer itself
+    // (Phase S13) from the path — no more hand-constructing EventLogWriter/
+    // EventLogAuditSink here.
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(audit), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+        .await
+        .unwrap();
 
     handle
         .raft
@@ -115,7 +122,10 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
     assert!(r1.log_index < r2.log_index && r2.log_index < r3.log_index);
 
     // Kernel state reflects the commits.
-    assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 1);
+    assert_eq!(
+        handle.state_machine.with_state(|s| s.record_count()).await,
+        1
+    );
 
     // log_height reads Raft metrics, which lag client_write by a hair
     // (the Phase 2.4 finding) — wait for the metrics to catch up.
@@ -129,7 +139,11 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
 
     // THE point of the phase: the audit log on disk is a normal chained
     // v3 segment — replayable and chain-checked by the standalone path.
-    let events = read_event_log(&log_path, Some(4)).unwrap();
+    let events: Vec<_> = read_all_segments(&log_path, Some(4))
+        .unwrap()
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
     assert_eq!(
         events.iter().map(|e| e.event_type()).collect::<Vec<_>>(),
         vec!["InsertRecord", "InsertRecord", "DeleteRecord"],
@@ -137,21 +151,96 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
     );
 }
 
+// Phase S13 regression: shard_count == 1 must stay byte-for-byte the pre-S13
+// single-shard layout — unsuffixed filename, no "-shard0" sibling file — and
+// the new top-level ClusterHandle.event_log_writer alias must point at the
+// exact same file the caller configured.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn single_shard_event_log_path_is_unsuffixed_and_matches_pre_s13_naming() {
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("events.log");
+
+    let cfg = ClusterConfig {
+        node_id: 1,
+        raft_bind: "127.0.0.1:0".into(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        init: true,
+        raft_log_path: None,
+        tls: None,
+        shard_count: 1,
+    };
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+        .await
+        .unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .metrics(|m| m.current_leader == Some(1), "self-elected")
+        .await
+        .unwrap();
+
+    assert!(log_path.exists(), "the configured path itself must exist");
+    assert!(
+        !dir.path().join("events-shard0.log").exists(),
+        "shard_count == 1 must never produce a suffixed sibling file"
+    );
+
+    let mut committer = handle.committer();
+    let r1 = committer.commit(insert(0)).unwrap();
+    let r2 = committer.commit(insert(1)).unwrap();
+    handle
+        .raft
+        .wait(Some(Duration::from_secs(10)))
+        .applied_index_at_least(Some(r2.log_index), "metrics caught up")
+        .await
+        .unwrap();
+    let _ = r1;
+
+    let events = read_all_segments(&log_path, Some(4)).unwrap();
+    assert_eq!(events.len(), 2);
+
+    // The new flat-field alias must report the exact same path as the
+    // configured base path — proving it correctly threads shard 0's real
+    // writer handle back out to the caller.
+    let via_handle_path = handle
+        .event_log_writer
+        .as_ref()
+        .expect("shard 0 must have a real writer when a path was configured")
+        .lock()
+        .unwrap()
+        .path()
+        .to_path_buf();
+    assert_eq!(via_handle_path, log_path);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deterministic_rejection_surfaces_as_rejected_not_io() {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
-        .await
-        .unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -166,7 +255,10 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
         matches!(err, CommitError::Rejected(_)),
         "kernel rejection must surface as Rejected, got {err:?}"
     );
-    assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 0);
+    assert_eq!(
+        handle.state_machine.with_state(|s| s.record_count()).await,
+        0
+    );
 }
 
 // ── Phase 2.10: crash-restart with the persistent Raft log ───────────────────
@@ -179,19 +271,24 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: Some(raft_log.clone()),
         tls: None,
+        shard_count: 1,
     };
 
     // ── Life 1: write 5 records, record the hash, then crash ─────────────────
     let hash_before = {
-        let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
-            .await
-            .unwrap();
+        let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
         handle
             .raft
             .wait(Some(Duration::from_secs(10)))
@@ -211,24 +308,29 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
         // Abort watcher tasks and the gRPC server, then await them so every
         // Arc<Database> clone is dropped and the redb lock released before
         // Life 2 tries to open the same file.
-        for t in &handle.watcher_tasks { t.abort(); }
+        for t in &handle.watcher_tasks {
+            t.abort();
+        }
         let server_task = handle.server_task;
         server_task.abort();
         let _ = server_task.await;
-        for t in handle.watcher_tasks { let _ = t.await; }
+        for t in handle.watcher_tasks {
+            let _ = t.await;
+        }
         hash
     };
 
     // ── Life 2: same redb file, fresh everything else ────────────────────────
     // init: true is safe — openraft refuses a second initialize and the
     // bootstrap treats that as "fine" (membership is in the log).
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
-        .await
-        .unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
-        .metrics(|m| m.current_leader == Some(1), "re-elected from persisted vote+membership")
+        .metrics(
+            |m| m.current_leader == Some(1),
+            "re-elected from persisted vote+membership",
+        )
         .await
         .unwrap();
 
@@ -254,7 +356,10 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     // And the reborn node keeps accepting writes.
     let mut committer = handle.committer();
     committer.commit(insert(5)).unwrap();
-    assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 6);
+    assert_eq!(
+        handle.state_machine.with_state(|s| s.record_count()).await,
+        6
+    );
 }
 
 // ── Phase 2.10c: Raft metrics reach the Prometheus endpoint ──────────────────
@@ -266,16 +371,21 @@ async fn raft_metrics_appear_in_prometheus_output() {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(valori_consensus::NullAuditSink), 0)
-        .await
-        .unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -292,9 +402,12 @@ async fn raft_metrics_appear_in_prometheus_output() {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let rendered = loop {
         let r = valori_node::telemetry::get_metrics();
-        if r.contains("valori_raft_is_leader 1")
-            && r.contains("valori_raft_last_applied_index")
-        {
+        let applied_ok = r
+            .lines()
+            .find(|l| l.starts_with("valori_raft_last_applied_index"))
+            .and_then(|l| l.split_whitespace().last()?.parse::<f64>().ok())
+            .map_or(false, |v| v >= 3.0);
+        if r.contains("valori_raft_is_leader 1") && applied_ok {
             break r;
         }
         assert!(
@@ -305,12 +418,23 @@ async fn raft_metrics_appear_in_prometheus_output() {
     };
 
     assert!(rendered.contains("valori_raft_term"), "{rendered}");
-    assert!(rendered.contains("valori_raft_current_leader 1"), "{rendered}");
+    assert!(
+        rendered.contains("valori_raft_current_leader 1"),
+        "{rendered}"
+    );
     // 3 writes + the initial membership/blank entries: index >= 3.
     let applied_line = rendered
         .lines()
         .find(|l| l.starts_with("valori_raft_last_applied_index"))
         .unwrap();
-    let applied: f64 = applied_line.split_whitespace().last().unwrap().parse().unwrap();
-    assert!(applied >= 3.0, "applied index gauge should cover the writes: {applied_line}");
+    let applied: f64 = applied_line
+        .split_whitespace()
+        .last()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        applied >= 3.0,
+        "applied index gauge should cover the writes: {applied_line}"
+    );
 }

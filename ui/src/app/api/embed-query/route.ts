@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 // Shared embedding logic — same providers as ingest, single-text variant.
 interface EmbedConfig {
@@ -11,7 +12,7 @@ interface EmbedConfig {
 async function embedOne(text: string, cfg: EmbedConfig): Promise<number[]> {
   switch (cfg.provider) {
     case "openai": {
-      const res = await fetch(cfg.endpoint || "https://api.openai.com/v1/embeddings", {
+      const res = await fetchWithTimeout(cfg.endpoint || "https://api.openai.com/v1/embeddings", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
         body: JSON.stringify({ input: text, model: cfg.model || "text-embedding-3-small" }),
@@ -24,7 +25,7 @@ async function embedOne(text: string, cfg: EmbedConfig): Promise<number[]> {
       return d.data[0].embedding;
     }
     case "cohere": {
-      const res = await fetch(cfg.endpoint || "https://api.cohere.ai/v1/embed", {
+      const res = await fetchWithTimeout(cfg.endpoint || "https://api.cohere.ai/v1/embed", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
         body: JSON.stringify({
@@ -43,15 +44,15 @@ async function embedOne(text: string, cfg: EmbedConfig): Promise<number[]> {
         .replace(/\/api\/embed(?:dings)?$/, "")
         .replace(/\/$/, "");
       const model = cfg.model || "nomic-embed-text";
-      const safeText = text.slice(0, 6000);
+      const safeText = text.slice(0, 1800);
 
-      let res = await fetch(`${base}/api/embed`, {
+      let res = await fetchWithTimeout(`${base}/api/embed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model, input: safeText }),
       });
       if (res.status === 404) {
-        res = await fetch(`${base}/api/embeddings`, {
+        res = await fetchWithTimeout(`${base}/api/embeddings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model, prompt: safeText }),
@@ -72,7 +73,7 @@ async function embedOne(text: string, cfg: EmbedConfig): Promise<number[]> {
       return d.embeddings[0];
     }
     case "custom": {
-      const res = await fetch(cfg.endpoint, {
+      const res = await fetchWithTimeout(cfg.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

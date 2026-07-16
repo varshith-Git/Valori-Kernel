@@ -22,7 +22,7 @@ use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
 use valori_wire::{
-    chain_advance_v3, encode_entry, encode_header_v3, hex, LogEntry, FORMAT_Q16_16, VERSION_V3,
+    chain_advance_v3, encode_entry, encode_header_v4, hex, LogEntry, FORMAT_Q16_16, VERSION_V4,
 };
 
 const DIM: usize = 4;
@@ -34,7 +34,10 @@ struct Lcg(u64);
 
 impl Lcg {
     fn next(&mut self) -> u32 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (self.0 >> 33) as u32
     }
 
@@ -111,7 +114,7 @@ fn main() -> ExitCode {
     };
     let mut out = std::io::BufWriter::new(file);
 
-    if let Err(e) = out.write_all(&encode_header_v3(DIM as u32, FORMAT_Q16_16, 0, &[0u8; 32])) {
+    if let Err(e) = out.write_all(&encode_header_v4(DIM as u32, FORMAT_Q16_16, 0, &[0u8; 32])) {
         eprintln!("error: write failed: {e}");
         return ExitCode::from(2);
     }
@@ -120,7 +123,7 @@ fn main() -> ExitCode {
     for (idx, evt) in events.iter().enumerate() {
         let wall_time_secs = BASE_TIMESTAMP + idx as u64;
         let log_entry = LogEntry::Event(evt.clone());
-        let bytes = match encode_entry(VERSION_V3, &chain_head, wall_time_secs, None, &log_entry) {
+        let bytes = match encode_entry(VERSION_V4, &chain_head, wall_time_secs, None, &log_entry) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("error: encode failed: {e}");

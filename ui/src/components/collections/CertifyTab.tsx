@@ -1,6 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { sha256hex } from "@/lib/receipts";
+import { fetchGlobalHash } from "@/lib/proof";
+import { timeAgo } from "@/lib/time";
+import { printHtml } from "@/lib/print";
+import { CopyBtn } from "@/components/ui/CopyBtn";
+import { StatusPanel } from "@/components/ui/StatusPanel";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -55,25 +62,10 @@ function clearBaseline(namespace: string) {
   try { localStorage.removeItem(baselineKey(namespace)); } catch {}
 }
 
-async function sha256hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return "sha256:" + Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 function shortHash(h: string | null | undefined, n = 16): string {
   if (!h) return "—";
   const core = h.startsWith("sha256:") ? h.slice(7) : h;
   return core.slice(0, n) + "…" + core.slice(-8);
-}
-
-function timeSince(iso: string): string {
-  const secs = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
 }
 
 // --- Certificate fetch + sign -------------------------------------------------
@@ -94,15 +86,6 @@ async function fetchAudit(namespace: string): Promise<AuditSnap> {
   });
   if (!res.ok) throw new Error(`Audit fetch failed (${res.status})`);
   return (await res.json()) as AuditSnap;
-}
-
-async function fetchGlobalHash(): Promise<string | null> {
-  try {
-    const res = await fetch("/api/proof", { cache: "no-store" });
-    if (!res.ok) return null;
-    const d = await res.json() as { final_state_hash?: string };
-    return d.final_state_hash ?? null;
-  } catch { return null; }
 }
 
 async function buildCertificate(
@@ -150,9 +133,6 @@ async function buildCertificate(
 // --- Print popup --------------------------------------------------------------
 
 function printCertificate(cert: CertData) {
-  const w = window.open("", "_blank", "width=860,height=900");
-  if (!w) { alert("Allow popups to print the certificate."); return; }
-
   const fmt = new Intl.DateTimeFormat(undefined, {
     dateStyle: "long", timeStyle: "medium",
   }).format(new Date(cert.issued_at));
@@ -164,12 +144,7 @@ function printCertificate(cert: CertData) {
     <div class="hl">${label}</div>
     <div class="hb">${value ?? "(unavailable)"}</div>`;
 
-  w.document.write(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Valori Proof Certificate</title>
-<style>
+  const body = `<style>
   @page{margin:18mm;size:A4}
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Courier New',Courier,monospace;color:#111;background:#fff;font-size:12px;line-height:1.5}
@@ -191,8 +166,6 @@ function printCertificate(cert: CertData) {
   .foot{display:flex;justify-content:space-between;font-size:9px;color:#888;margin-top:10px}
   @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style>
-</head>
-<body>
 <div class="wrap">
   <div class="top">
     <div>
@@ -204,9 +177,7 @@ function printCertificate(cert: CertData) {
       <div>v${cert.version}</div>
     </div>
   </div>
-
   <div class="cert-title">Proof Certificate</div>
-
   <table>
     ${row("Collection", cert.collection)}
     ${row("Namespace", cert.namespace)}
@@ -215,13 +186,10 @@ function printCertificate(cert: CertData) {
     ${row("Global events", cert.state.global_event_count?.toLocaleString() ?? "—")}
     ${row("Namespace events", cert.state.ns_event_count.toLocaleString())}
   </table>
-
   ${hashBox("BLAKE3 Global State Hash", cert.state.blake3_global_hash)}
   ${hashBox("SHA-256 Namespace Proof Hash", cert.state.sha256_namespace_hash)}
-
   <div class="fp-lbl">Certificate Fingerprint &nbsp;(SHA-256 of payload)</div>
   <div class="fp">${cert.certificate_hash}</div>
-
   <div class="note">
     <strong>To verify independently:</strong> Replay events.log through
     <code>valori-verify</code> and compare the <code>final_state_hash</code> field against the
@@ -230,40 +198,13 @@ function printCertificate(cert: CertData) {
     event log. The certificate fingerprint is SHA-256 of this document with the fingerprint field
     set to null.
   </div>
-
   <div class="foot">
     <span>Valori Kernel · deterministic · tamper-evident · Q16.16 fixed-point</span>
     <span>ID: ${(cert.certificate_hash ?? "").slice(7, 15).toUpperCase()}</span>
   </div>
-</div>
-</body>
-</html>`);
-  w.document.close();
-  w.focus();
-  setTimeout(() => { w.print(); }, 400);
-}
+</div>`;
 
-// --- Copy button --------------------------------------------------------------
-
-function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
-  const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 1500);
-  }, [text]);
-  return (
-    <button
-      onClick={copy}
-      className={`text-xs px-3 py-1.5 rounded border transition-all ${
-        done
-          ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
-          : "border-input text-muted-foreground hover:text-foreground hover:border-ring bg-card"
-      }`}
-    >
-      {done ? "✓ copied" : label}
-    </button>
-  );
+  printHtml(body, "Valori Proof Certificate");
 }
 
 // --- Certificate section ------------------------------------------------------
@@ -548,14 +489,14 @@ function TamperSection({ namespace }: { namespace: string }) {
       status = "loading";
     } else if (current.ns_hash === baseline.ns_hash) {
       status = "match";
-      detailMsg = `Namespace state identical to baseline saved ${timeSince(baseline.saved_at)}`;
+      detailMsg = `Namespace state identical to baseline saved ${timeAgo(baseline.saved_at)}`;
       if (baseline.blake3 && current.blake3 && baseline.blake3 !== current.blake3) {
         status = "mismatch";
         detailMsg = "Namespace hash matches but global state has changed — another namespace was modified";
       }
     } else {
       status = "mismatch";
-      detailMsg = `Namespace proof hash changed since baseline saved ${timeSince(baseline.saved_at)}`;
+      detailMsg = `Namespace proof hash changed since baseline saved ${timeAgo(baseline.saved_at)}`;
     }
   } else if (!baseline) {
     status = "no-baseline";
@@ -603,7 +544,7 @@ function TamperSection({ namespace }: { namespace: string }) {
                 <span>{baseline.ns_event_count.toLocaleString()} ns events</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-muted-foreground font-mono">{timeSince(baseline.saved_at)}</span>
+                <span className="text-[10px] text-muted-foreground font-mono">{timeAgo(baseline.saved_at)}</span>
                 {baseline.note && (
                   <span className="text-[10px] text-muted-foreground italic truncate">{baseline.note}</span>
                 )}
@@ -650,7 +591,7 @@ function TamperSection({ namespace }: { namespace: string }) {
             <span className="text-[10px] text-muted-foreground font-mono flex items-center gap-1">
               {loading && <span className="animate-spin inline-block">⟳</span>}
               {current
-                ? `updated ${timeSince(current.fetched_at)}`
+                ? `updated ${timeAgo(current.fetched_at)}`
                 : "fetching…"}
             </span>
           </div>
@@ -682,57 +623,36 @@ function TamperSection({ namespace }: { namespace: string }) {
 
       {/* Status banner */}
       {status === "no-baseline" && (
-        <div className="rounded-xl border border-input bg-accent/50 px-5 py-4 flex items-center gap-4">
-          <span className="text-2xl text-muted-foreground">◌</span>
-          <div>
-            <p className="text-sm font-medium text-muted-foreground">No baseline set</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Save the current state as a baseline to enable tamper detection.
-            </p>
-          </div>
-        </div>
+        <StatusPanel tone="neutral" icon="◌" title="No baseline set"
+          message="Save the current state as a baseline to enable tamper detection." />
       )}
 
       {status === "loading" && (
-        <div className="rounded-xl border border-input bg-accent/50 px-5 py-4 flex items-center gap-4">
-          <span className="text-2xl text-muted-foreground animate-spin">⟳</span>
-          <p className="text-sm text-muted-foreground">Fetching current state…</p>
-        </div>
+        <StatusPanel tone="neutral" icon={<span className="animate-spin inline-block">⟳</span>}
+          title="Fetching current state…" />
       )}
 
       {status === "match" && (
-        <div className="rounded-xl border-2 border-emerald-800 bg-emerald-950/30 px-5 py-5 flex items-start gap-4">
-          <span className="text-3xl text-emerald-400 flex-shrink-0">✓</span>
-          <div>
-            <p className="text-base font-bold text-emerald-400 tracking-wide">HASH MATCH</p>
-            <p className="text-xs text-emerald-700 mt-1">{detailMsg}</p>
-            <p className="text-[10px] text-muted-foreground font-mono mt-2">
-              ns: <span className="text-muted-foreground">{shortHash(current?.ns_hash, 20)}</span>
-            </p>
-          </div>
-        </div>
+        <StatusPanel tone="success" icon="✓" title="HASH MATCH" message={detailMsg}>
+          <p className="text-[10px] text-muted-foreground font-mono mt-2">
+            ns: <span className="text-muted-foreground">{shortHash(current?.ns_hash, 20)}</span>
+          </p>
+        </StatusPanel>
       )}
 
       {status === "mismatch" && (
-        <div className="rounded-xl border-2 border-red-800 bg-red-950/30 px-5 py-5 flex flex-col gap-3">
-          <div className="flex items-start gap-4">
-            <span className="text-3xl text-red-400 flex-shrink-0">✗</span>
-            <div>
-              <p className="text-base font-bold text-red-400 tracking-wide">HASH MISMATCH</p>
-              <p className="text-xs text-red-700 mt-1">{detailMsg}</p>
-            </div>
-          </div>
-          <div className="rounded-lg bg-background border border-red-900/40 px-4 py-3 font-mono text-[10px] flex flex-col gap-2">
+        <StatusPanel tone="error" icon="✗" title="HASH MISMATCH" message={detailMsg}>
+          <div className="rounded-lg bg-background border border-red-500/20 px-4 py-3 font-mono text-[10px] flex flex-col gap-2 mt-3">
             <div className="flex gap-2 items-start">
               <span className="text-muted-foreground w-20 flex-shrink-0">Baseline</span>
               <span className="text-muted-foreground break-all">{shortHash(baseline?.ns_hash, 32)}</span>
             </div>
             <div className="flex gap-2 items-start">
               <span className="text-muted-foreground w-20 flex-shrink-0">Current</span>
-              <span className="text-red-400 break-all">{shortHash(current?.ns_hash, 32)}</span>
+              <span className="text-red-600 dark:text-red-400 break-all">{shortHash(current?.ns_hash, 32)}</span>
             </div>
           </div>
-        </div>
+        </StatusPanel>
       )}
     </div>
   );
@@ -748,9 +668,9 @@ export function CertifyTab({
   collection: string;
 }) {
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
+    <TabShell>
       <CertSection collection={collection} namespace={namespace} />
       <TamperSection namespace={namespace} />
-    </div>
+    </TabShell>
   );
 }

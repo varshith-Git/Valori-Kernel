@@ -6,8 +6,8 @@ export interface ChunkingOptions {
 export function recursiveCharacterSplit(text: string, options: ChunkingOptions): string[] {
   let { chunkSize, chunkOverlap } = options;
 
-  // Enforce guardrails
-  chunkSize = Math.max(100, Math.min(2000, chunkSize));
+  // Enforce sensible guardrails without restricting large-context models
+  chunkSize = Math.max(100, Math.min(100000, chunkSize));
   chunkOverlap = Math.min(Math.floor(chunkSize / 2), Math.max(0, chunkOverlap));
 
   // The separators to try, from most semantic (paragraphs) to least (characters)

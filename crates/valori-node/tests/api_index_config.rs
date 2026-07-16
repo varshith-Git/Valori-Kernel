@@ -1,13 +1,17 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Phase 3.13 — HNSW parameter exposure tests.
 
-use valori_node::config::{NodeConfig, IndexKind};
-use valori_node::server::build_router;
-use valori_node::engine::Engine;
-use axum::{body::Body, http::{Request, StatusCode}};
-use tower::ServiceExt;
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
+use valori_node::config::{IndexKind, NodeConfig};
+use valori_node::engine::Engine;
+use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 4;
 
@@ -18,7 +22,11 @@ fn make_engine_brute() -> Arc<RwLock<Engine>> {
     Arc::new(RwLock::new(Engine::new(&cfg)))
 }
 
-fn make_engine_hnsw(m: Option<usize>, ef_construction: Option<usize>, ef_search: Option<usize>) -> Arc<RwLock<Engine>> {
+fn make_engine_hnsw(
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+    ef_search: Option<usize>,
+) -> Arc<RwLock<Engine>> {
     let mut cfg = NodeConfig::default();
     cfg.dim = DIM;
     cfg.index_kind = IndexKind::Hnsw;
@@ -37,7 +45,9 @@ async fn get_index_config(shared: Arc<RwLock<Engine>>) -> (StatusCode, serde_jso
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 16).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 16)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     (status, json)
 }

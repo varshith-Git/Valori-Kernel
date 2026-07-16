@@ -15,6 +15,7 @@
 //! ```text
 //! v2:  [16-byte header][bincode EntryV2][bincode EntryV2]...
 //! v3:  [48-byte header][bincode EntryV3][bincode EntryV3]...
+//! v4:  [48-byte header][bincode EntryV4][u32 LE CRC32]...  (per-entry CRC suffix)
 //! ```
 //!
 //! v2 header: `version u32 LE (=2) | dim u32 LE | reserved u64 LE`
@@ -57,8 +58,16 @@ use valori_kernel::event::KernelEvent;
 
 pub const VERSION_V2: u32 = 2;
 pub const VERSION_V3: u32 = 3;
+/// V4 adds a 4-byte CRC32 suffix to every entry for cheap inline corruption detection.
+/// Format: `[bincode(EntryV4)][u32 LE CRC32 of the bincode bytes]`
+/// The chain hash, header layout, and EntryV4 fields are identical to V3.
+pub const VERSION_V4: u32 = 4;
 pub const HEADER_SIZE_V2: usize = 16;
 pub const HEADER_SIZE_V3: usize = 48;
+/// V4 reuses the V3 header layout.
+pub const HEADER_SIZE_V4: usize = HEADER_SIZE_V3;
+/// Byte length of the per-entry CRC32 suffix in V4 segments.
+pub const CRC32_SUFFIX_LEN: usize = 4;
 
 // ── Phase 1.7 hardening constants (reserved; enforced in Phase 1.7) ──────────
 
@@ -66,30 +75,28 @@ pub const HEADER_SIZE_V3: usize = 48;
 ///
 /// A crafted entry can encode a Vec<u8> with a claimed length of usize::MAX;
 /// without this cap, bincode allocates immediately and causes an OOM.
-/// Applied via `bincode::config::standard().with_limit::<MAX_ENTRY_DECODE_BYTES>()`
-/// in every decode call inside valori-wire and valori-verify.
-///
-/// **Phase 1.7 — reserved constant; cfg() enforcement wired in Phase 1.7.**
-pub const MAX_ENTRY_DECODE_BYTES: u64 = 1 << 20; // 1 MiB per entry
+/// Applied via `bincode::config::standard().with_limit::<DECODE_LIMIT>()`
+/// (the usize twin of this constant) in every decode call in this crate.
+pub const MAX_ENTRY_DECODE_BYTES: u64 = DECODE_LIMIT as u64;
 
 /// Hard cap on entries decoded from a single segment file.
-/// Prevents infinite loops on circular/malformed data.
-///
-/// **Phase 1.7 — reserved; enforced in valori-verify decode loop.**
+/// Prevents unbounded loops on crafted/malformed data.
+/// Enforced in the valori-verify decode loop.
 pub const MAX_ENTRIES_PER_SEGMENT: u64 = 10_000_000;
 
-/// Maximum size in bytes of the metadata blob inside a single InsertRecord event.
+/// Maximum size in bytes of a metadata blob inside a single event.
 /// Kept separately from MAX_ENTRY_DECODE_BYTES so that the per-field guard
-/// can produce a more specific error message than the overall limit.
-///
-/// **Phase 1.7 — reserved; enforced in decode_entry sanity check.**
+/// produces a more specific error than the overall allocation limit.
+/// Enforced by `encode_entry` on every metadata-bearing event variant —
+/// write-side only, so pre-cap logs remain readable.
 pub const METADATA_CAP: usize = 65_536; // 64 KiB
 
 /// Maximum decompressed size for a zstd-compressed segment file.
 /// Protects the verifier and the node from zstd "bombs".
-/// Override via VALORI_VERIFY_MAX_SEGMENT_MB env var (verifier only).
 ///
-/// **Phase 1.7 — reserved; enforced in zstd decompression wrapper.**
+/// **Reserved — zstd segment compression is not implemented yet; this cap
+/// is not enforced anywhere today. It must be applied to the decompression
+/// wrapper when zstd lands.**
 pub const MAX_SEGMENT_DECOMPRESSED_BYTES: usize = 512 * 1024 * 1024; // 512 MiB
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,9 +118,11 @@ pub const MAX_DIM: u32 = 32_768;
 pub enum WireError {
     #[error("file is {0} bytes — smaller than the smallest valid header; not an event log")]
     TooShort(usize),
-    #[error("unsupported segment version {0} (this build understands v2 and v3)")]
+    #[error("unsupported segment version {0} (this build understands v2, v3, and v4)")]
     UnsupportedVersion(u32),
-    #[error("unsupported arithmetic format id {0} (this build understands {FORMAT_Q16_16} = Q16.16)")]
+    #[error(
+        "unsupported arithmetic format id {0} (this build understands {FORMAT_Q16_16} = Q16.16)"
+    )]
     UnsupportedFormat(u8),
     #[error("entry decode failed: {0}")]
     Decode(String),
@@ -123,6 +132,17 @@ pub enum WireError {
     InvalidDim(u32),
     #[error("entry exceeds the {DECODE_LIMIT}-byte allocation limit — file is likely crafted or corrupted")]
     DecodeLimitExceeded,
+    #[error("metadata blob of {0} bytes exceeds the {METADATA_CAP}-byte cap — file is likely crafted or corrupted")]
+    MetadataTooLarge(usize),
+    /// Fewer bytes remain than a complete entry needs — the shape a crash
+    /// mid-write leaves at the tail of a segment. Distinct from `Decode`
+    /// (enough bytes, wrong content — real corruption) so segment-replay
+    /// callers can tell "safe to stop here" from "must hard-error" without
+    /// a byte-offset heuristic.
+    #[error(
+        "not enough bytes remain to decode a complete entry — likely a truncated trailing write"
+    )]
+    Truncated,
 }
 
 pub type Result<T> = core::result::Result<T, WireError>;
@@ -142,6 +162,18 @@ pub enum LogEntry {
     /// membership cannot change without it appearing between the data
     /// events it interleaves with. Added Phase 2.9 (append-only variant 2).
     Admin(AdminEvent),
+    /// A data event scoped to a non-default namespace (collection). Added
+    /// Phase S15 (append-only variant 3): `KernelEvent` itself carries no
+    /// namespace, so before this variant existed, standalone recovery
+    /// replayed every event into the default namespace and collections
+    /// silently lost their contents across restarts. Writers emit this
+    /// variant only when `namespace_id != 0` — default-namespace logs stay
+    /// byte-identical to pre-S15, and pre-S15 logs (all `Event`) replay
+    /// exactly as they always did.
+    EventNs {
+        namespace_id: u16,
+        event: KernelEvent,
+    },
 }
 
 /// Administrative actions worth auditing forever.
@@ -171,7 +203,9 @@ pub enum AdminEvent {
 impl AdminEvent {
     pub fn describe(&self) -> String {
         match self {
-            AdminEvent::NodeJoined { node_id, raft_addr, .. } => {
+            AdminEvent::NodeJoined {
+                node_id, raft_addr, ..
+            } => {
                 format!("NodeJoined {{ node {node_id} at {raft_addr} }}")
             }
             AdminEvent::NodeLeft { node_id, .. } => {
@@ -202,6 +236,11 @@ pub struct EntryV3 {
     pub request_id: Option<[u8; 16]>,
     pub entry: LogEntry,
 }
+
+/// V4 on-disk entry — identical fields to V3; the CRC32 suffix is appended
+/// after the bincode bytes by `encode_entry` and checked by `decode_entry`.
+/// The chain-hash computation is identical to V3.
+pub type EntryV4 = EntryV3;
 
 /// Version-independent view of a decoded entry.
 #[derive(Debug, Clone)]
@@ -246,7 +285,9 @@ pub fn parse_header(bytes: &[u8]) -> Result<SegmentHeader> {
             prev_segment_chain_head: [0u8; 32],
             header_len: HEADER_SIZE_V2,
         }),
-        VERSION_V3 => {
+        // V4 reuses the V3 header layout byte-for-byte (only the version
+        // field differs); one arm keeps the two from drifting.
+        VERSION_V3 | VERSION_V4 => {
             if bytes.len() < HEADER_SIZE_V3 {
                 return Err(WireError::TooShort(bytes.len()));
             }
@@ -269,6 +310,8 @@ pub fn parse_header(bytes: &[u8]) -> Result<SegmentHeader> {
     }
 }
 
+/// Legacy v3 header encoder — kept for fixture generation and tests only;
+/// writers must not emit new v3 segments (v4 is the current write format).
 pub fn encode_header_v3(
     dim: u32,
     format_id: u8,
@@ -277,6 +320,23 @@ pub fn encode_header_v3(
 ) -> [u8; HEADER_SIZE_V3] {
     let mut bytes = [0u8; HEADER_SIZE_V3];
     bytes[0..4].copy_from_slice(&VERSION_V3.to_le_bytes());
+    bytes[4..8].copy_from_slice(&dim.to_le_bytes());
+    bytes[8] = format_id;
+    // bytes[9..12] reserved, zero
+    bytes[12..16].copy_from_slice(&segment_seq.to_le_bytes());
+    bytes[16..48].copy_from_slice(prev_segment_chain_head);
+    bytes
+}
+
+/// V4 header encoder — identical layout to V3, version field set to 4.
+pub fn encode_header_v4(
+    dim: u32,
+    format_id: u8,
+    segment_seq: u32,
+    prev_segment_chain_head: &[u8; 32],
+) -> [u8; HEADER_SIZE_V4] {
+    let mut bytes = [0u8; HEADER_SIZE_V4];
+    bytes[0..4].copy_from_slice(&VERSION_V4.to_le_bytes());
     bytes[4..8].copy_from_slice(&dim.to_le_bytes());
     bytes[8] = format_id;
     // bytes[9..12] reserved, zero
@@ -298,20 +358,52 @@ fn cfg() -> impl bincode::config::Config {
     bincode::config::standard().with_limit::<DECODE_LIMIT>()
 }
 
+fn map_decode_err(e: bincode::error::DecodeError) -> WireError {
+    match e {
+        bincode::error::DecodeError::LimitExceeded => WireError::DecodeLimitExceeded,
+        // Not enough bytes to finish decoding — truncation, not corruption.
+        bincode::error::DecodeError::UnexpectedEnd { .. } => WireError::Truncated,
+        other => WireError::Decode(other.to_string()),
+    }
+}
+
+/// Reject any metadata blob larger than [`METADATA_CAP`].
+/// Covers every metadata-bearing `KernelEvent` variant, wrapped in either
+/// `LogEntry::Event` or `LogEntry::EventNs`.
+///
+/// Applied on ENCODE only: logs written before the cap existed may contain
+/// larger blobs and must stay readable forever (evolution policy rule 3);
+/// `DECODE_LIMIT` still bounds allocation on the read side.
+fn check_metadata_cap(entry: &LogEntry) -> Result<()> {
+    let event = match entry {
+        LogEntry::Event(e) => e,
+        LogEntry::EventNs { event, .. } => event,
+        _ => return Ok(()),
+    };
+    let meta_len = match event {
+        KernelEvent::InsertRecord { metadata, .. }
+        | KernelEvent::AutoInsertRecord { metadata, .. }
+        | KernelEvent::UpdateRecordMetadata { metadata, .. } => metadata.as_ref().map(|m| m.len()),
+        KernelEvent::InsertRecordEncrypted {
+            metadata_ciphertext,
+            ..
+        } => metadata_ciphertext.as_ref().map(|m| m.len()),
+        _ => None,
+    };
+    match meta_len {
+        Some(len) if len > METADATA_CAP => Err(WireError::MetadataTooLarge(len)),
+        _ => Ok(()),
+    }
+}
+
 /// Decode one entry at `bytes[0..]` for the given segment version.
 /// Returns the normalized entry and the number of bytes consumed.
 pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)> {
-    match version {
+    let (decoded, consumed) = match version {
         VERSION_V2 => {
-            let (e, n): (EntryV2, usize) = bincode::serde::decode_from_slice(bytes, cfg())
-                .map_err(|e| {
-                    if e.to_string().contains("LimitExceeded") || e.to_string().contains("limit") {
-                        WireError::DecodeLimitExceeded
-                    } else {
-                        WireError::Decode(e.to_string())
-                    }
-                })?;
-            Ok((
+            let (e, n): (EntryV2, usize) =
+                bincode::serde::decode_from_slice(bytes, cfg()).map_err(map_decode_err)?;
+            (
                 DecodedEntry {
                     prev_hash: e.prev_hash,
                     wall_time_secs: e.wall_time_secs,
@@ -319,18 +411,12 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
                     entry: e.entry,
                 },
                 n,
-            ))
+            )
         }
         VERSION_V3 => {
-            let (e, n): (EntryV3, usize) = bincode::serde::decode_from_slice(bytes, cfg())
-                .map_err(|e| {
-                    if e.to_string().contains("LimitExceeded") || e.to_string().contains("limit") {
-                        WireError::DecodeLimitExceeded
-                    } else {
-                        WireError::Decode(e.to_string())
-                    }
-                })?;
-            Ok((
+            let (e, n): (EntryV3, usize) =
+                bincode::serde::decode_from_slice(bytes, cfg()).map_err(map_decode_err)?;
+            (
                 DecodedEntry {
                     prev_hash: e.prev_hash,
                     wall_time_secs: e.wall_time_secs,
@@ -338,15 +424,43 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
                     entry: e.entry,
                 },
                 n,
-            ))
+            )
         }
-        v => Err(WireError::UnsupportedVersion(v)),
-    }
+        VERSION_V4 => {
+            // Decode the bincode payload, then verify the 4-byte CRC32 suffix.
+            let (e, n): (EntryV4, usize) =
+                bincode::serde::decode_from_slice(bytes, cfg()).map_err(map_decode_err)?;
+            // CRC32 suffix immediately follows the bincode bytes. Missing
+            // suffix bytes is a truncation (not enough bytes), not corruption.
+            if n + CRC32_SUFFIX_LEN > bytes.len() {
+                return Err(WireError::Truncated);
+            }
+            let stored_crc = u32::from_le_bytes(bytes[n..n + CRC32_SUFFIX_LEN].try_into().unwrap());
+            let computed_crc = crc32fast::hash(&bytes[..n]);
+            if computed_crc != stored_crc {
+                return Err(WireError::Decode(format!(
+                    "V4 entry CRC32 mismatch: stored {stored_crc:#010x}, computed {computed_crc:#010x}"
+                )));
+            }
+            (
+                DecodedEntry {
+                    prev_hash: e.prev_hash,
+                    wall_time_secs: e.wall_time_secs,
+                    request_id: e.request_id,
+                    entry: e.entry,
+                },
+                n + CRC32_SUFFIX_LEN,
+            )
+        }
+        v => return Err(WireError::UnsupportedVersion(v)),
+    };
+    Ok((decoded, consumed))
 }
 
 /// Encode one entry for the given segment version.
 /// `request_id` is dropped (with no error) when encoding legacy v2 —
 /// callers should not pass one for v2 segments.
+/// V4 appends a 4-byte LE CRC32 of the bincode bytes after the payload.
 pub fn encode_entry(
     version: u32,
     prev_hash: &[u8; 32],
@@ -354,6 +468,7 @@ pub fn encode_entry(
     request_id: Option<[u8; 16]>,
     entry: &LogEntry,
 ) -> Result<Vec<u8>> {
+    check_metadata_cap(entry)?;
     match version {
         VERSION_V2 => bincode::serde::encode_to_vec(
             &EntryV2 {
@@ -374,6 +489,21 @@ pub fn encode_entry(
             cfg(),
         )
         .map_err(|e| WireError::Encode(e.to_string())),
+        VERSION_V4 => {
+            let mut payload = bincode::serde::encode_to_vec(
+                &EntryV4 {
+                    prev_hash: *prev_hash,
+                    wall_time_secs,
+                    request_id,
+                    entry: entry.clone(),
+                },
+                cfg(),
+            )
+            .map_err(|e| WireError::Encode(e.to_string()))?;
+            let crc = crc32fast::hash(&payload);
+            payload.extend_from_slice(&crc.to_le_bytes());
+            Ok(payload)
+        }
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }
@@ -409,7 +539,19 @@ pub fn chain_advance_v3(
 pub fn chain_advance(version: u32, head: &[u8; 32], e: &DecodedEntry) -> Result<[u8; 32]> {
     match version {
         VERSION_V2 => Ok(chain_advance_v2(head, e.wall_time_secs, &e.entry)),
-        VERSION_V3 => Ok(chain_advance_v3(head, e.wall_time_secs, e.request_id, &e.entry)),
+        VERSION_V3 => Ok(chain_advance_v3(
+            head,
+            e.wall_time_secs,
+            e.request_id,
+            &e.entry,
+        )),
+        // V4 chain hash is identical to V3 — CRC32 is only a transport check, not part of the chain.
+        VERSION_V4 => Ok(chain_advance_v3(
+            head,
+            e.wall_time_secs,
+            e.request_id,
+            &e.entry,
+        )),
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }

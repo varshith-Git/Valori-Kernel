@@ -84,11 +84,12 @@ These clients expose the raw power of the Valori Kernel. All methods on `SyncRem
 - **`insert_with_proof(vector: List[float], tag: int = 0, collection: str = "default") -> Tuple[int, bytes]`**
   - Inserts a vector and returns `(record_id, proof_bytes)` — the BLAKE3 Merkle proof for the vector.
 
-- **`soft_delete(record_id: int) -> None`**
+- **`soft_delete(record_id: int, collection: str = "default") -> None`**
   - Marks a record inactive without physically removing it. The record is excluded from search results and its text is removed from the Valori Reranker index.
 
-- **`delete(record_id: int) -> None`**
+- **`delete(record_id: int, collection: str = "default") -> None`**
   - Permanently removes a record from the vector index and the RecordPool.
+  - **`collection`**: record ids are only unique within their own collection (each collection's data may live on its own shard in cluster mode) — pass the same `collection` the record was inserted into.
 
 - **`search(query: List[float], k: int, filter_tag: Optional[int] = None, consistency: Optional[str] = None, collection: str = "default", as_of: Optional[str] = None, as_of_log_index: Optional[int] = None, decay_half_life_secs: Optional[int] = None, rerank: bool = True, query_text: Optional[str] = None) -> List[dict]`**
   - K-nearest-neighbour search. Returns `[{"id": int, "score": float}, ...]`.
@@ -162,22 +163,46 @@ track IDs manually.
 
 ### Knowledge Graph — Low-Level API *(still fully supported)*
 
-- **`create_node(kind: int, record_id: Optional[int] = None) -> int`**
+`collection` on every method below defaults to `"default"`. It is
+**remote-client-only** (`SyncRemoteClient`/`AsyncRemoteClient`) — the
+embedded `LocalClient` is single-tenant and has no collection concept, so
+its graph methods take no `collection` parameter at all. Node/edge ids are
+only unique within their own collection (each collection's data may live
+on its own shard in cluster mode), so always pass the same `collection`
+a node/edge was created in when looking it up again.
+
+- **`create_node(kind: int, record_id: Optional[int] = None, collection: str = "default") -> int`**
   - Creates a Node. Returns a raw integer node ID.
-- **`create_edge(from_id: int, to_id: int, kind: int) -> int`**
+- **`create_edge(from_id: int, to_id: int, kind: int, collection: str = "default") -> int`**
   - Creates a directional Edge. Returns a raw integer edge ID.
 - **`delete_node(node_id: int) -> None`**
   - Cascade-deletes a node and all its incident edges.
 - **`delete_edge(edge_id: int) -> None`**
   - Deletes a single directed edge.
-- **`get_node(node_id: int) -> Optional[dict]`**
+- **`get_node(node_id: int, collection: str = "default") -> Optional[dict]`**
   - Returns `{"kind": int, "record_id": int | None}`.
-- **`get_edges(node_id: int) -> List[dict]`**
+- **`get_edges(node_id: int, collection: str = "default") -> List[dict]`**
   - Returns `[{"edge_id": int, "to_node": int, "kind": int}, …]`.
-- **`walk(start_node: int, max_depth: int = 2) -> List[int]`**
-  - BFS traversal; returns integer node IDs.
-- **`expand(start_node: int, max_depth: int = 2) -> List[int]`**
-  - BFS traversal; returns all reachable vector record IDs.
+- **`neighbors(node_id: int, collection: str = "default") -> List[int]`**
+  - Returns the raw `to_node` ids from `get_edges()` — the immediate neighbours.
+- **`walk(start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]`**
+  - Client-side BFS traversal (one `get_edges()` round trip per node); returns integer node IDs.
+- **`expand(start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]`**
+  - Client-side BFS via `walk()`; returns all reachable vector record IDs.
+- **`subgraph(root_node: int, depth: int = 2, collection: str = "default") -> dict`** *(remote client only)*
+  - Server-side bounded BFS from `root_node` (depth capped at 4 server-side) — one round trip
+    instead of `walk()`'s N round trips. Returns `{"nodes": [...], "edges": [...]}` where each
+    node has `id`, `kind`, `record`, and each edge has `id`, `from`, `to`, `kind`.
+
+  ```python
+  # Everything below targets a named collection instead of "default".
+  n1 = client.create_node(kind=NODE_DOCUMENT, collection="tenant-acme")
+  n2 = client.create_node(kind=NODE_CHUNK, collection="tenant-acme")
+  client.create_edge(n1, n2, kind=EDGE_PARENT_OF, collection="tenant-acme")
+
+  client.get_node(n1, collection="tenant-acme")
+  client.subgraph(n1, depth=2, collection="tenant-acme")
+  ```
 
 ### Snapshots & Audit Trails
 - **`get_state_hash() -> str`**

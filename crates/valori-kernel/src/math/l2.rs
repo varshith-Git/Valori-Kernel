@@ -92,12 +92,12 @@ unsafe fn l2_sq_neon(a: &[i32], b: &[i32]) -> i64 {
     let mut acc1 = vdupq_n_s64(0i64); // lanes 2,3
 
     while i + 4 <= len {
-        let va   = vld1q_s32(a.as_ptr().add(i));
-        let vb   = vld1q_s32(b.as_ptr().add(i));
+        let va = vld1q_s32(a.as_ptr().add(i));
+        let vb = vld1q_s32(b.as_ptr().add(i));
         let diff = vsubq_s32(va, vb);
 
         // vmull_s32: int32x2_t × int32x2_t → int64x2_t (widening)
-        let sq0 = vmull_s32(vget_low_s32(diff),  vget_low_s32(diff));
+        let sq0 = vmull_s32(vget_low_s32(diff), vget_low_s32(diff));
         let sq1 = vmull_s32(vget_high_s32(diff), vget_high_s32(diff));
         acc0 = vaddq_s64(acc0, sq0);
         acc1 = vaddq_s64(acc1, sq1);
@@ -151,10 +151,10 @@ unsafe fn l2_sq_avx2(a: &[i32], b: &[i32]) -> i64 {
         // _mm256_mul_epi32 multiplies lower 32 bits of each 64-bit lane.
         // Since lo/hi are sign-extended i32→i64, the lower 32 bits hold the
         // full i32 value, so this correctly computes diff² as i64.
-        acc = _mm256_add_epi64(acc, _mm256_add_epi64(
-            _mm256_mul_epi32(lo, lo),
-            _mm256_mul_epi32(hi, hi),
-        ));
+        acc = _mm256_add_epi64(
+            acc,
+            _mm256_add_epi64(_mm256_mul_epi32(lo, lo), _mm256_mul_epi32(hi, hi)),
+        );
         i += 8;
     }
 
@@ -195,10 +195,10 @@ unsafe fn l2_sq_sse41(a: &[i32], b: &[i32]) -> i64 {
         // Widen i32 → i64 in two halves.
         let lo = _mm_cvtepi32_epi64(diff);
         let hi = _mm_cvtepi32_epi64(_mm_srli_si128(diff, 8));
-        acc = _mm_add_epi64(acc, _mm_add_epi64(
-            _mm_mul_epi32(lo, lo),
-            _mm_mul_epi32(hi, hi),
-        ));
+        acc = _mm_add_epi64(
+            acc,
+            _mm_add_epi64(_mm_mul_epi32(lo, lo), _mm_mul_epi32(hi, hi)),
+        );
         i += 4;
     }
 
@@ -224,7 +224,9 @@ mod tests {
     use crate::types::scalar::FxpScalar;
 
     fn make_vec(vals: &[i32]) -> FxpVector {
-        FxpVector { data: vals.iter().map(|&v| FxpScalar(v)).collect() }
+        FxpVector {
+            data: vals.iter().map(|&v| FxpScalar(v)).collect(),
+        }
     }
 
     #[test]
@@ -245,10 +247,14 @@ mod tests {
     fn large_dim_matches_scalar() {
         // dim=384, values in Q16.16 range, compare SIMD vs scalar
         let dim = 384usize;
-        let a_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| ((i * 1337 + 42) % 60000) as i32 - 30000).collect();
-        let b_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| ((i * 7919 + 11) % 60000) as i32 - 30000).collect();
+        let a_raw: alloc::vec::Vec<i32> = (0..dim)
+            .map(|i| ((i * 1337 + 42) % 60000) as i32 - 30000)
+            .collect();
+        let b_raw: alloc::vec::Vec<i32> = (0..dim)
+            .map(|i| ((i * 7919 + 11) % 60000) as i32 - 30000)
+            .collect();
         let scalar = l2_sq_scalar(&a_raw, &b_raw);
-        let simd   = l2_sq_i32(&a_raw, &b_raw);
+        let simd = l2_sq_i32(&a_raw, &b_raw);
         assert_eq!(simd, scalar, "SIMD result must match scalar for dim={dim}");
     }
 
@@ -256,8 +262,8 @@ mod tests {
     fn odd_dim_tail_correct() {
         // dim=5 — exercises the scalar tail path
         let a = make_vec(&[100, 200, 300, 400, 500]);
-        let b = make_vec(&[0,   0,   0,   0,   0  ]);
-        let expected: i64 = 100*100 + 200*200 + 300*300 + 400*400 + 500*500;
+        let b = make_vec(&[0, 0, 0, 0, 0]);
+        let expected: i64 = 100 * 100 + 200 * 200 + 300 * 300 + 400 * 400 + 500 * 500;
         assert_eq!(fxp_l2_sq(&a, &b), expected);
     }
 
@@ -267,7 +273,7 @@ mod tests {
         let a_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| (i as i32 * 511) - 32000).collect();
         let b_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| (i as i32 * 317) - 16000).collect();
         let scalar = l2_sq_scalar(&a_raw, &b_raw);
-        let simd   = l2_sq_i32(&a_raw, &b_raw);
+        let simd = l2_sq_i32(&a_raw, &b_raw);
         assert_eq!(simd, scalar);
     }
 }

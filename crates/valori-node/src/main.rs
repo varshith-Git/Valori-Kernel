@@ -1,10 +1,11 @@
-use valori_node::config::NodeConfig;
-use valori_node::server::{build_router_with_keys, SharedEngine};
-use valori_node::api_keys::KeyStore;
-use valori_node::engine::Engine;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use valori_node::api_keys::KeyStore;
+use valori_node::config::NodeConfig;
+use valori_node::engine::Engine;
+use valori_node::server::{build_router_with_keys, SharedEngine};
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
@@ -47,17 +48,22 @@ async fn main() {
     let mut engine = Engine::new(&cfg);
 
     // ── Crash Recovery ────────────────────────────────────────────────────────
-    // Priority order: event log (canonical truth) → snapshot → fresh start.
+    // Priority order: event log (canonical truth) → snapshot → legacy WAL
+    // (replayed on top of the snapshot, if any) → fresh start.
     // try_recover() never panics; on failure it logs and continues with the
     // next source. A corrupt snapshot no longer kills the process.
     let mode = engine.try_recover();
     match mode {
-        valori_node::engine::RecoveryMode::EventLog(n) =>
-            tracing::info!("Recovered {} events from event log", n),
-        valori_node::engine::RecoveryMode::Snapshot =>
-            tracing::info!("Recovered from snapshot"),
-        valori_node::engine::RecoveryMode::Fresh =>
-            tracing::info!("Starting fresh (no prior state found)"),
+        valori_node::engine::RecoveryMode::EventLog(n) => {
+            tracing::info!("Recovered {} events from event log", n)
+        }
+        valori_node::engine::RecoveryMode::Snapshot => tracing::info!("Recovered from snapshot"),
+        valori_node::engine::RecoveryMode::Wal(n) => {
+            tracing::info!("Recovered {} commands from legacy WAL", n)
+        }
+        valori_node::engine::RecoveryMode::Fresh => {
+            tracing::info!("Starting fresh (no prior state found)")
+        }
     }
 
     let shared_state: SharedEngine = Arc::new(RwLock::new(engine));
@@ -71,17 +77,32 @@ async fn main() {
                 interval.tick().await;
 
                 tracing::debug!("Auto-snapshotting...");
-                let engine = state_clone.read().await;
-                match engine.save_snapshot(Some(&path)) {
-                    Ok(_) => tracing::info!("Snapshot saved to {:?}", path),
-                    Err(e) => tracing::error!("Snapshot failed: {:?}", e),
+                let state_for_snap = state_clone.clone();
+                let path_for_snap = path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    state_for_snap
+                        .blocking_read()
+                        .save_snapshot(Some(&path_for_snap))
+                })
+                .await
+                {
+                    Ok(Ok(_)) => tracing::info!("Snapshot saved to {:?}", path),
+                    Ok(Err(e)) => tracing::error!("Snapshot failed: {:?}", e),
+                    Err(e) => tracing::error!("Snapshot task panicked: {:?}", e),
                 }
             }
         });
     }
 
     let key_store = Arc::new(KeyStore::new(cfg.keys_path.clone()));
-    let app = build_router_with_keys(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone(), key_store);
+    let receipt_store = Arc::new(valori_effect::ReceiptStore::new(256));
+    let app = build_router_with_keys(
+        shared_state.clone(),
+        cfg.auth_token.clone(),
+        cfg.cors_origin.clone(),
+        key_store,
+        receipt_store,
+    );
 
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);
@@ -110,7 +131,10 @@ async fn main() {
         std::process::exit(1);
     });
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shared_state.clone(), cfg.snapshot_path.clone()))
+        .with_graceful_shutdown(shutdown_signal(
+            shared_state.clone(),
+            cfg.snapshot_path.clone(),
+        ))
         .await
         .unwrap();
 }
@@ -126,8 +150,10 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
     #[cfg(unix)]
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut s) => { s.recv().await; }
-            Err(_)    => std::future::pending::<()>().await,
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
         }
     };
     #[cfg(not(unix))]
@@ -139,11 +165,18 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
     }
 
     if let Some(path) = snapshot_path {
-        tracing::info!("Shutdown signal received — saving final snapshot to {:?}", path);
-        let engine = state.read().await;
-        match engine.save_snapshot(Some(path.as_path())) {
-            Ok(_)  => tracing::info!("Final snapshot saved"),
-            Err(e) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
+        tracing::info!(
+            "Shutdown signal received — saving final snapshot to {:?}",
+            path
+        );
+        match tokio::task::spawn_blocking(move || {
+            state.blocking_read().save_snapshot(Some(path.as_path()))
+        })
+        .await
+        {
+            Ok(Ok(_)) => tracing::info!("Final snapshot saved"),
+            Ok(Err(e)) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
+            Err(e) => tracing::error!("Final snapshot task panicked: {:?}", e),
         }
     }
 }
@@ -153,8 +186,6 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
 async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
     use valori_node::cluster::bootstrap_cluster;
     use valori_node::cluster_server::build_cluster_router;
-    use valori_node::commit::EventLogAuditSink;
-    use valori_node::events::event_log::EventLogWriter;
 
     let node_cfg = NodeConfig::default();
 
@@ -166,44 +197,37 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         "Booting in CLUSTER mode"
     );
 
-    // The audit sink: quorum-committed events land in the chained
-    // events.log, same format the standalone path and valori-verify use.
-    let (audit_sink, audit_writer): (
-        Box<dyn valori_consensus::AuditSink>,
-        Option<Arc<std::sync::Mutex<EventLogWriter>>>,
-    ) = match &node_cfg.event_log_path {
-        Some(path) => {
-            let writer = EventLogWriter::open(path, Some(node_cfg.dim as u32))
-                .unwrap_or_else(|e| {
-                    eprintln!("FATAL: cannot open audit log {path:?}: {e}");
-                    std::process::exit(1);
-                });
-            let mut sink = EventLogAuditSink::new(writer);
-            if let Some(limit) = node_cfg.event_log_rotation_bytes {
-                sink = sink.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
-            }
-            let handle = sink.writer();
-            (Box::new(sink), Some(handle))
-        }
-        None => {
-            tracing::warn!(
-                "VALORI_EVENT_LOG_PATH is not set — cluster running WITHOUT an \
-                 audit log. Committed events are replicated but not chained to \
-                 disk on this node."
-            );
-            (Box::new(valori_consensus::NullAuditSink), None)
-        }
-    };
+    if node_cfg.event_log_path.is_none() {
+        tracing::warn!(
+            "VALORI_EVENT_LOG_PATH is not set — cluster running WITHOUT an \
+             audit log. Committed events are replicated but not chained to \
+             disk on this node."
+        );
+    }
 
-    let handle = bootstrap_cluster(&cluster_cfg, audit_sink, node_cfg.dim)
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("FATAL: cluster bootstrap failed: {e}");
-            std::process::exit(1);
-        });
+    // Phase S13: bootstrap_cluster builds a real per-shard audit sink for
+    // every shard itself (quorum-committed events land in each shard's own
+    // chained events.log, same format the standalone path and valori-verify
+    // use) — this just passes the raw path + rotation config through instead
+    // of pre-constructing a single EventLogWriter/EventLogAuditSink here.
+    let rotation_bytes = match node_cfg.event_log_rotation_bytes {
+        Some(0) => None,
+        other => other,
+    };
+    let handle = bootstrap_cluster(
+        &cluster_cfg,
+        node_cfg.event_log_path.as_deref(),
+        rotation_bytes,
+        node_cfg.dim,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("FATAL: cluster bootstrap failed: {e}");
+        std::process::exit(1);
+    });
     tracing::info!("Raft listening on {}", handle.raft_addr);
 
-    let app = build_cluster_router(&handle, audit_writer);
+    let app = build_cluster_router(&handle, handle.event_log_writer.clone());
     let addr = node_cfg.bind_addr;
     tracing::info!("HTTP API listening on {addr}");
 
@@ -219,5 +243,35 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         eprintln!("FATAL: {msg}");
         std::process::exit(1);
     });
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(cluster_shutdown_signal())
+        .await
+        .unwrap();
+}
+
+/// Resolve on SIGTERM / Ctrl-C so axum drains in-flight requests and the
+/// process exits cleanly — Raft's redb log is the durable store in cluster
+/// mode, and a clean exit lets redb release its file lock and flush.
+async fn cluster_shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c   => {}
+        _ = terminate => {}
+    }
+    tracing::info!("Shutdown signal received — draining and exiting (Raft log is durable)");
 }

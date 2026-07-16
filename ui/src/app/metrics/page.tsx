@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import useSWR from "swr";
 
 // -- Constants -----------------------------------------------------------------
@@ -67,7 +67,7 @@ function fmtRate(r: number) {
 }
 
 // -- Sparkline SVG -------------------------------------------------------------
-function Sparkline({
+const Sparkline = React.memo(function Sparkline({
   data,
   color,
   fillOpacity = 0.12,
@@ -81,7 +81,7 @@ function Sparkline({
   if (data.length < 2) {
     return (
       <svg width="100%" height={height} viewBox="0 0 280 56" preserveAspectRatio="none">
-        <line x1="0" y1={height / 2} x2="280" y2={height / 2} stroke="#27272a" strokeWidth="1" />
+        <line x1="0" y1={height / 2} x2="280" y2={height / 2} stroke="var(--border)" strokeWidth="1" />
       </svg>
     );
   }
@@ -108,8 +108,8 @@ function Sparkline({
   const fill = `color-mix(in srgb, ${color} ${Math.round(fillOpacity * 100)}%, transparent)`;
 
   return (
-    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
-      <polygon points={areaPts} fill={fill} />
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="transition-all duration-300">
+      <polygon points={areaPts} fill={fill} className="transition-all duration-300" />
       <polyline
         points={linePts}
         fill="none"
@@ -117,11 +117,12 @@ function Sparkline({
         strokeWidth="1.5"
         strokeLinejoin="round"
         strokeLinecap="round"
+        className="transition-all duration-300"
       />
-      <circle cx={lx} cy={ly} r="2.5" fill={color} />
+      <circle cx={lx} cy={ly} r="3" fill={color} className="transition-all duration-300 drop-shadow-md" style={{ filter: `drop-shadow(0 0 4px ${color})` }} />
     </svg>
   );
-}
+});
 
 // -- Metric card ---------------------------------------------------------------
 function MetricCard({
@@ -145,7 +146,7 @@ function MetricCard({
 }) {
   const trendIcon = trend === "up" ? "↑" : trend === "down" ? "↓" : "→";
   const trendColor =
-    trend === "up" ? "#4ade80" : trend === "down" ? "#f87171" : "#71717a";
+    trend === "up" ? "var(--status-ok)" : trend === "down" ? "var(--destructive)" : "var(--muted-foreground)";
 
   const vals = series.map((d) => d.value);
   const minV = vals.length ? Math.min(...vals) : 0;
@@ -153,8 +154,10 @@ function MetricCard({
 
   return (
     <div
-      className={`rounded-xl border overflow-hidden flex flex-col ${
-        alert ? "border-destructive bg-destructive/10" : "border-border bg-card"
+      className={`rounded-xl border overflow-hidden flex flex-col transition-all duration-300 hover:-translate-y-1 hover:shadow-xl ${
+        alert
+          ? "border-destructive/50 bg-destructive/10 shadow-[0_0_15px_color-mix(in_oklch,var(--destructive)_20%,transparent)]"
+          : "border-border/50 bg-card/40 backdrop-blur-md shadow-[0_4px_24px_oklch(0_0_0/20%)] hover:border-border"
       }`}
     >
       {/* Top row */}
@@ -255,7 +258,7 @@ function FillBar({ label, pct, color }: { label: string; pct: number; color: str
           style={{
             width: `${Math.min(pct, 100)}%`,
             background:
-              pct >= 90 ? "#f87171" : pct >= 70 ? "#fbbf24" : color,
+              pct >= 90 ? "var(--destructive)" : pct >= 70 ? "var(--status-warn)" : color,
           }}
         />
       </div>
@@ -353,7 +356,7 @@ export default function MetricsPage() {
   const latAlert = latCurrent > 500;
   const latAmber = latCurrent > 100;
 
-  const latColor = latAlert ? "#f87171" : latAmber ? "#fbbf24" : "#38bdf8";
+  const latColor = latAlert ? "var(--destructive)" : latAmber ? "var(--status-warn)" : "var(--status-info)";
 
   const latTrend = latSeries.length >= 3
     ? latSeries.at(-1)!.value > latSeries.at(-3)!.value ? "up"
@@ -375,7 +378,7 @@ export default function MetricsPage() {
     : "var(--color-red-500)";
 
   return (
-    <div className="flex flex-col gap-6 max-w-5xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
 
       {/* -- Header -- */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -388,12 +391,12 @@ export default function MetricsPage() {
         <div className="ml-auto flex items-center gap-3">
           <span
             className="flex items-center gap-1.5 text-[11px] font-mono"
-            style={{ color: connected ? "#4ade80" : "#f87171" }}
+            style={{ color: connected ? "var(--status-ok)" : "var(--destructive)" }}
           >
             <span
               className="w-1.5 h-1.5 rounded-full"
               style={{
-                background: connected ? "#4ade80" : "#f87171",
+                background: connected ? "var(--status-ok)" : "var(--destructive)",
                 animation: connected ? "pulse 2s infinite" : "none",
               }}
             />
@@ -503,13 +506,13 @@ export default function MetricsPage() {
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               {[
                 { k: "Status", v: health.status, color: statusColor },
-                { k: "Version", v: health.version, color: "#71717a" },
-                { k: "Dimension", v: String(health.dim), color: "#71717a" },
-                { k: "Index", v: health.index, color: "#71717a" },
-                { k: "Persistence", v: health.persistence, color: "#71717a" },
-                { k: "Nodes", v: health.nodes?.live?.toLocaleString() ?? "N/A", color: "#38bdf8" },
-                { k: "Edges", v: health.edges?.live?.toLocaleString() ?? "N/A", color: "#4ade80" },
-                { k: "Events", v: health.event_log_height !== undefined && health.event_log_height !== null ? health.event_log_height!.toLocaleString() : "—", color: "#fbbf24" },
+                { k: "Version", v: health.version, color: "var(--muted-foreground)" },
+                { k: "Dimension", v: String(health.dim), color: "var(--muted-foreground)" },
+                { k: "Index", v: health.index, color: "var(--muted-foreground)" },
+                { k: "Persistence", v: health.persistence, color: "var(--muted-foreground)" },
+                { k: "Nodes", v: health.nodes?.live?.toLocaleString() ?? "N/A", color: "var(--status-info)" },
+                { k: "Edges", v: health.edges?.live?.toLocaleString() ?? "N/A", color: "var(--status-ok)" },
+                { k: "Events", v: health.event_log_height !== undefined && health.event_log_height !== null ? health.event_log_height!.toLocaleString() : "—", color: "var(--status-warn)" },
               ].map(({ k, v, color }) => (
                 <div key={k} className="flex flex-col gap-0.5">
                   <span className="text-[10px] text-muted-foreground">{k}</span>

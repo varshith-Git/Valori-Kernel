@@ -1,8 +1,8 @@
 //! Graph Edge definition.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::types::id::{NodeId, EdgeId};
 use crate::types::enums::EdgeKind;
+use crate::types::id::{EdgeId, NodeId};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphEdge {

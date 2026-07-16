@@ -5,6 +5,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const nodeId = Number(req.nextUrl.searchParams.get("nodeId") ?? "1");
+
+  // Snapshot mode — return currently-buffered lines as plain JSON, no stream.
+  // Used by callers that just want "what's in the ring buffer right now"
+  // (e.g. a failed-start diagnostics panel) without holding an SSE connection
+  // open, which never resolves on its own (it only ends on client abort).
+  if (req.nextUrl.searchParams.get("snapshot") === "1") {
+    return Response.json(pm.getLogs(nodeId, 0).lines);
+  }
+
   const enc = new TextEncoder();
 
   const stream = new ReadableStream({

@@ -367,11 +367,17 @@ docs/                 # Architecture docs, API reference, phase build history
 
 ## 12. PR checklist
 
+Read [`docs/architecture/layers.md`](docs/architecture/layers.md) before contributing. It is the normative architecture document — it defines ownership, invariants, and allowed dependency directions.
+
 Before opening a pull request:
 
+- [ ] Changes follow `docs/architecture/layers.md` — new code lives in the right crate
+- [ ] No upward dependency introduced — `cargo build --workspace` is clean
 - [ ] `cargo test -p valori-kernel -p valori-node` passes
-- [ ] If you touched `valori-kernel`: `cargo build -p valori-kernel --target wasm32-unknown-unknown` passes
-- [ ] New endpoint added to **both** `server.rs` and `cluster_server.rs`
+- [ ] If you touched `valori-kernel`: `cargo build -p valori-kernel --target wasm32-unknown-unknown` passes (WASM / `no_std` invariant)
+- [ ] Route parity: `cargo test -p valori-node --test route_parity` passes; new endpoints added to **both** `server.rs` and `cluster_server.rs`
+- [ ] Compatibility fixtures intact — no fixture test failures; if a format changed intentionally, new fixtures committed and old ones preserved under a versioned name
+- [ ] Public API justified — every new `pub fn` has a real external caller today
 - [ ] Python SDK updated (both `SyncRemoteClient` and `AsyncRemoteClient`) if the API surface changed
 - [ ] UI: no hardcoded dark colors — use semantic CSS tokens (`--background`, `--foreground`, `--border`, `--v-accent`, etc.)
 - [ ] `CHANGELOG.md` updated under `[Unreleased]`

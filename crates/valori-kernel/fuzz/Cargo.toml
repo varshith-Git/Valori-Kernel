@@ -1,0 +1,35 @@
+[workspace]
+
+[package]
+name = "valori-kernel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+valori-kernel = { path = "..", features = ["std"] }
+valori-core = { path = "../../valori-core" }
+serde_json = "1"
+
+# Fuzz targets must be binaries.
+[[bin]]
+name = "fuzz_apply_event"
+path = "fuzz_targets/fuzz_apply_event.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_snapshot_roundtrip"
+path = "fuzz_targets/fuzz_snapshot_roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_search"
+path = "fuzz_targets/fuzz_search.rs"
+test = false
+doc = false

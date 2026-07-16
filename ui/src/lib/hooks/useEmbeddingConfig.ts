@@ -20,6 +20,29 @@ export const PROVIDER_DEFAULTS: Record<EmbeddingProvider, { model: string; endpo
   custom: { model: "", endpoint: "", dim: 0 },
 };
 
+export const MODEL_DIMS: Record<string, number> = {
+  // OpenAI
+  "text-embedding-3-small":  1536,
+  "text-embedding-3-large":  3072,
+  "text-embedding-ada-002":  1536,
+  // Cohere
+  "embed-english-v3.0":       1024,
+  "embed-multilingual-v3.0":  1024,
+  "embed-english-light-v3.0": 384,
+  // Ollama
+  "nomic-embed-text":  768,
+  "mxbai-embed-large": 1024,
+  "all-minilm":        384,
+};
+
+export function getModelDim(provider: EmbeddingProvider, model: string): number {
+  return MODEL_DIMS[model] ?? PROVIDER_DEFAULTS[provider]?.dim ?? 0;
+}
+
+export function registerModelDims(dims: Record<string, number>) {
+  Object.assign(MODEL_DIMS, dims);
+}
+
 const STORAGE_KEY = "valori:embedding_config";
 
 const DEFAULT_CONFIG: EmbeddingConfig = {

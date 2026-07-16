@@ -1,0 +1,70 @@
+name: Kernel ABI — no_std + WASM build gate
+
+# Enforces two non-negotiable invariants from CLAUDE.md:
+#   1. valori-kernel must compile for wasm32-unknown-unknown (no_std portability moat)
+#   2. valori-core must compile for wasm32-unknown-unknown (same requirement)
+#
+# Runs on every PR that touches either crate. A `use std::` leak in either
+# crate fails this check before the PR can merge.
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "crates/valori-kernel/**"
+      - "crates/valori-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/kernel-abi.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "crates/valori-kernel/**"
+      - "crates/valori-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+jobs:
+  wasm-build:
+    name: no_std / WASM ABI gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: wasm32-unknown-unknown
+          cache-key: wasm-abi
+
+      - name: Build valori-core for WASM (no_std)
+        run: cargo build -p valori-core --lib --target wasm32-unknown-unknown --release --no-default-features
+
+      - name: Build valori-kernel for WASM (no_std)
+        run: cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release --no-default-features
+
+      - name: Confirm no std leakage (grep check)
+        run: |
+          # Catch any `use std::` in kernel or core source before it reaches the WASM build.
+          # The WASM build above is the real gate; this makes the failure message clearer.
+          #
+          # Anchored to real `use` statements (optionally indented, e.g. inside a
+          # #[cfg(test)] mod) so this doesn't also flag the word "use std::"
+          # appearing inside a comment, like the invariant reminder atop lib.rs.
+          #
+          # Excluded path is a module already gated with #[cfg(feature = "std")] in lib.rs
+          # and therefore never compiled for WASM:
+          #   crates/valori-kernel/src/adapters/ — #[cfg(feature = "std")] pub mod adapters
+          leaks=$(grep -rnE "^\s*use std::" \
+               crates/valori-kernel/src/ \
+               crates/valori-core/src/ 2>/dev/null \
+             | grep -Ev "valori-kernel/src/adapters/" || true)
+          if [ -n "$leaks" ]; then
+            echo "$leaks"
+            echo ""
+            echo "ERROR: 'use std::' found in valori-kernel or valori-core."
+            echo "Use 'core::' or 'alloc::' instead, or gate with #[cfg(feature = \"std\")]."
+            exit 1
+          fi
+          echo "No std leakage found."

@@ -3,12 +3,13 @@
 //!
 //! Populate leader → snapshot → fresh follower bootstraps from snapshot →
 //! verify record count → verify live replication continues.
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 use valori_node::config::{NodeConfig, NodeMode};
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::time::Duration;
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::test]
 async fn test_replication_bootstrap() {
@@ -31,14 +32,18 @@ async fn test_replication_bootstrap() {
         let log_path = std::env::temp_dir().join("leader_boot_events.log");
         let _ = std::fs::remove_file(&log_path);
 
-        use valori_node::events::{EventCommitter, EventJournal};
         use valori_node::events::event_log::EventLogWriter;
+        use valori_node::events::{EventCommitter, EventJournal};
 
-        let log_writer = EventLogWriter::open(&log_path, Some(4))
-            .expect("Failed to open leader event log");
+        let log_writer =
+            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open leader event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        let state_clone = engine.clone_kernel_state();
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
+            log_writer,
+            journal,
+            state_clone,
+        ));
     }
 
     let leader_app = build_router(leader_state.clone(), None, None);
@@ -77,7 +82,9 @@ async fn test_replication_bootstrap() {
     follower_config.dim = 4;
     follower_config.max_nodes = 100;
     follower_config.max_edges = 100;
-    follower_config.mode = NodeMode::Follower { leader_url: leader_url.clone() };
+    follower_config.mode = NodeMode::Follower {
+        leader_url: leader_url.clone(),
+    };
 
     let follower_state = Arc::new(RwLock::new(Engine::new(&follower_config)));
 
@@ -86,14 +93,18 @@ async fn test_replication_bootstrap() {
         let log_path = std::env::temp_dir().join("follower_boot_events.log");
         let _ = std::fs::remove_file(&log_path);
 
-        use valori_node::events::{EventCommitter, EventJournal};
         use valori_node::events::event_log::EventLogWriter;
+        use valori_node::events::{EventCommitter, EventJournal};
 
-        let log_writer = EventLogWriter::open(&log_path, Some(4))
-            .expect("Failed to open follower event log");
+        let log_writer =
+            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open follower event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        let state_clone = engine.clone_kernel_state();
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
+            log_writer,
+            journal,
+            state_clone,
+        ));
     }
 
     let f_state = follower_state.clone();
@@ -108,9 +119,12 @@ async fn test_replication_bootstrap() {
 
     let count = {
         let engine = follower_state.read().await;
-        engine.state.record_count()
+        engine.record_count()
     };
-    assert_eq!(count, 10, "Follower should have bootstrapped 10 records from snapshot");
+    assert_eq!(
+        count, 10,
+        "Follower should have bootstrapped 10 records from snapshot"
+    );
 
     // ── 6. Verify live replication continues ──────────────────────────────────
     client
@@ -124,7 +138,10 @@ async fn test_replication_bootstrap() {
 
     let count_after = {
         let engine = follower_state.read().await;
-        engine.state.record_count()
+        engine.record_count()
     };
-    assert_eq!(count_after, 11, "Follower should have replicated the new event (11 total)");
+    assert_eq!(
+        count_after, 11,
+        "Follower should have replicated the new event (11 total)"
+    );
 }

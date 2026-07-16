@@ -46,18 +46,24 @@ impl StandaloneCommitter {
 
 impl Committer for StandaloneCommitter {
     fn commit(&mut self, event: KernelEvent) -> Result<CommitReceipt, CommitError> {
-        self.inner.commit_event(event).map(|_| CommitReceipt {
-            log_index: self.inner.journal().committed_height(),
-        }).map_err(translate)
+        self.inner
+            .commit_event(event)
+            .map(|_| CommitReceipt {
+                log_index: self.inner.journal().committed_height(),
+            })
+            .map_err(translate)
     }
 
     fn commit_batch(&mut self, events: Vec<KernelEvent>) -> Result<CommitReceipt, CommitError> {
         if events.is_empty() {
             return Err(CommitError::EmptyBatch);
         }
-        self.inner.commit_batch(events).map(|_| CommitReceipt {
-            log_index: self.inner.journal().committed_height(),
-        }).map_err(translate)
+        self.inner
+            .commit_batch(events)
+            .map(|_| CommitReceipt {
+                log_index: self.inner.journal().committed_height(),
+            })
+            .map_err(translate)
     }
 
     fn log_height(&self) -> u64 {
@@ -65,7 +71,9 @@ impl Committer for StandaloneCommitter {
     }
 
     fn flush(&mut self) -> Result<(), CommitError> {
-        self.inner.flush_log().map_err(|e| CommitError::Io(e.to_string()))
+        self.inner
+            .flush_log()
+            .map_err(|e| CommitError::Io(e.to_string()))
     }
 }
 

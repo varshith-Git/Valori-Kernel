@@ -14,8 +14,10 @@ use std::time::Duration;
 
 use openraft::{Config, Raft};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
-use valori_consensus::{serve_raft, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
+use valori_consensus::{
+    serve_raft_single, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -42,10 +44,18 @@ async fn spawn_node(id: NodeId) -> TestNode {
     );
 
     let sm = ValoriStateMachine::default();
-    let raft = Raft::new(id, config, ValoriNetworkFactory::default(), ValoriLogStore::new(), sm.clone())
+    let raft = Raft::new(
+        id,
+        config,
+        ValoriNetworkFactory::new(ShardId(0)),
+        ValoriLogStore::new(),
+        sm.clone(),
+    )
+    .await
+    .unwrap();
+    let (addr, _task) = serve_raft_single(raft.clone(), "127.0.0.1:0")
         .await
         .unwrap();
-    let (addr, _task) = serve_raft(raft.clone(), "127.0.0.1:0").await.unwrap();
 
     TestNode {
         raft,
@@ -67,6 +77,7 @@ fn insert(id: u32, rid: Option<[u8; 16]>) -> ClientRequest {
         },
         request_id: rid,
         schema_version: 0,
+        namespace_id: 0,
     }
 }
 
@@ -155,11 +166,20 @@ async fn late_joiner_catches_up_via_snapshot_after_log_purge() {
     // the cluster: every node (including the snapshot-restored one) must
     // recognise it as a duplicate when applying.
     n1.raft
-        .change_membership([1, 2].into_iter().collect::<std::collections::BTreeSet<_>>(), false)
+        .change_membership(
+            [1, 2]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            false,
+        )
         .await
         .unwrap();
 
-    let retry = n1.raft.client_write(insert(99, Some([5u8; 16]))).await.unwrap();
+    let retry = n1
+        .raft
+        .client_write(insert(99, Some([5u8; 16])))
+        .await
+        .unwrap();
     assert!(
         retry.data.deduplicated,
         "request_id from before the snapshot must still deduplicate"
@@ -174,7 +194,10 @@ async fn late_joiner_catches_up_via_snapshot_after_log_purge() {
         if h1 == h2 {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "node 2 diverged after dedup");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "node 2 diverged after dedup"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -186,7 +209,9 @@ async fn snapshot_then_more_writes_joiner_gets_snapshot_plus_tail() {
     let n1 = spawn_node(1).await;
     n1.raft
         .initialize(
-            [(1, n1.node.clone())].into_iter().collect::<BTreeMap<NodeId, ValoriNode>>(),
+            [(1, n1.node.clone())]
+                .into_iter()
+                .collect::<BTreeMap<NodeId, ValoriNode>>(),
         )
         .await
         .unwrap();
@@ -199,12 +224,21 @@ async fn snapshot_then_more_writes_joiner_gets_snapshot_plus_tail() {
     // 10 writes → snapshot + purge.
     let mut snap_index = 0;
     for i in 0..10u32 {
-        snap_index = n1.raft.client_write(insert(i, None)).await.unwrap().data.log_index;
+        snap_index = n1
+            .raft
+            .client_write(insert(i, None))
+            .await
+            .unwrap()
+            .data
+            .log_index;
     }
     n1.raft.trigger().snapshot().await.unwrap();
     n1.raft
         .wait(Some(Duration::from_secs(10)))
-        .metrics(|m| m.snapshot.map_or(0, |s| s.index) >= snap_index, "snapshotted")
+        .metrics(
+            |m| m.snapshot.map_or(0, |s| s.index) >= snap_index,
+            "snapshotted",
+        )
         .await
         .unwrap();
     n1.raft.trigger().purge_log(snap_index).await.unwrap();

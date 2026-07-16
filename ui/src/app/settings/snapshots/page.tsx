@@ -31,13 +31,20 @@ export default function SnapshotsPage() {
   const [uploading, setUploading] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [loadError, setLoadError] = useState(false);
 
   const load = async () => {
     setLoading(true);
-    const res = await fetch("/api/storage/snapshots");
-    const d: SnapshotListResponse = await res.json().catch(() => ({ snapshots: [], count: 0 }));
-    setData(d);
-    setLoading(false);
+    setLoadError(false);
+    try {
+      const res = await fetch("/api/storage/snapshots");
+      const d: SnapshotListResponse = await res.json().catch(() => ({ snapshots: [], count: 0 }));
+      setData(d);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -85,7 +92,7 @@ export default function SnapshotsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
+    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Snapshot Store</h1>
@@ -118,9 +125,19 @@ export default function SnapshotsPage() {
         <div className="flex flex-col gap-2 animate-pulse">
           {[1, 2, 3].map((i) => <div key={i} className="h-14 rounded-lg bg-accent" />)}
         </div>
+      ) : loadError ? (
+        <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-6 flex flex-col gap-3">
+          <p className="text-sm font-medium text-red-500">Couldn&apos;t reach the server</p>
+          <button
+            onClick={load}
+            className="self-start rounded-lg border border-input bg-card px-3 py-1.5 text-xs text-accent-foreground hover:bg-accent transition-colors"
+          >
+            Retry
+          </button>
+        </div>
       ) : data?.disabled ? (
         <div className="rounded-xl border border-amber-500/25 bg-amber-500/12 p-6">
-          <p className="text-sm font-medium text-amber-400">Object store not configured</p>
+          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">Object store not configured</p>
           <p className="text-xs text-amber-700 mt-2">
             Set <code className="font-mono bg-amber-500/20 px-1 rounded">VALORI_OBJECT_STORE_URL</code> to enable S3 snapshot storage.
           </p>
@@ -147,13 +164,13 @@ VALORI_OBJECT_STORE_ENDPOINT=http://localhost:9000`}
               key={s.key}
               className="grid grid-cols-[1fr_8rem_12rem_8rem] gap-4 items-center px-4 py-3 border-b border-border last:border-0 hover:bg-card/50 transition-colors"
             >
-              <span className="font-mono text-xs text-accent-foreground truncate">{s.key}</span>
+              <span className="font-mono text-xs text-accent-foreground truncate" title={s.key}>{s.key}</span>
               <span className="text-xs text-muted-foreground">{fmt(s.size)}</span>
               <span className="text-xs text-muted-foreground">{fmtDate(s.last_modified)}</span>
               <button
                 onClick={() => restore(s.key)}
                 disabled={restoring === s.key}
-                className="text-xs text-muted-foreground hover:text-amber-400 disabled:opacity-40 transition-colors text-right"
+                className="text-xs text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 disabled:opacity-40 transition-colors text-right"
               >
                 {restoring === s.key ? "restoring…" : "restore →"}
               </button>

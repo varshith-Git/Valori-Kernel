@@ -6,53 +6,28 @@ import {
   Terminal, Plus, Trash2, UserPlus, Link2, CheckCircle2, XCircle,
 } from "lucide-react";
 import type { LaunchConfig, NodeCfg, NodeState, NodeStatus } from "@/lib/server/process-manager";
+import { buildMembers, makeDefaultNodes as makeDefaultNodesShared, nextNodeConfig as nextNodeConfigShared } from "@/lib/server/cluster-config";
+import { DIMENSIONS } from "@/lib/dimensions";
+import { timeAgo } from "@/lib/time";
 
 // ─── constants ───────────────────────────────────────────────────────────────
-
-const DIMENSIONS = [
-  { value: 128,  label: "128  — tiny / tests"                         },
-  { value: 256,  label: "256  — lightweight"                          },
-  { value: 384,  label: "384  — MiniLM-L6-v2, paraphrase-MiniLM"     },
-  { value: 512,  label: "512  — CLIP ViT-B/32"                        },
-  { value: 768,  label: "768  — BERT-base, all-mpnet-base-v2, nomic"  },
-  { value: 1024, label: "1024 — BERT-large, bge-large-en"             },
-  { value: 1536, label: "1536 — text-embedding-ada-002, e5-large"     },
-  { value: 2048, label: "2048 — e5-mistral-7b"                        },
-  { value: 3072, label: "3072 — text-embedding-3-large"               },
-  { value: 4096, label: "4096 — Llama / Mistral hidden-state"         },
-];
 
 const INDEX_TYPES = [
   { value: "brute", label: "Brute-force L2  - exact, always consistent"      },
   { value: "hnsw",  label: "HNSW graph      - approximate, faster at scale"  },
   { value: "ivf",   label: "IVF             - clustered, best for 100k+ vecs" },
+  { value: "bq",    label: "BQ              - binary quantization, fast scan" },
+  { value: "auto",  label: "Auto            - brute <10k, BQ 10k–2M, HNSW >2M" },
 ];
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-function buildMembers(nodes: NodeCfg[], host = "localhost"): string {
-  return nodes
-    .map(n => `${n.id}=${host}:${n.raftPort ?? (3100 + n.id)}/${host}:${n.httpPort}`)
-    .join(",");
-}
 
 // Advanced/cluster launches persist under ~/.valori/cluster (the everyday
 // per-project flow lives on Home and writes to ~/.valori/projects/<name>).
 const CLUSTER_DIR = "~/.valori/cluster";
 
 function makeDefaultNodes(count: number): NodeCfg[] {
-  return Array.from({ length: count }, (_, i) => {
-    const id = i + 1;
-    return {
-      id,
-      httpPort:     3000 + id,
-      raftPort:     3100 + id,
-      eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
-      snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
-      raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
-      clusterInit:  id === 1,
-    };
-  });
+  return makeDefaultNodesShared(count, { dir: CLUSTER_DIR });
 }
 
 function defaultSingle(): LaunchConfig {
@@ -68,19 +43,7 @@ function defaultCluster(count = 3): LaunchConfig {
 }
 
 function nextNodeConfig(existing: NodeCfg[]): NodeCfg {
-  const maxId   = Math.max(...existing.map(n => n.id));
-  const maxHttp = Math.max(...existing.map(n => n.httpPort));
-  const maxRaft = Math.max(...existing.map(n => n.raftPort ?? (3100 + n.id)));
-  const id = maxId + 1;
-  return {
-    id,
-    httpPort:     maxHttp + 1,
-    raftPort:     maxRaft + 1,
-    eventLogPath: `${CLUSTER_DIR}/n${id}-events.log`,
-    snapshotPath: `${CLUSTER_DIR}/n${id}.snap`,
-    raftLogPath:  `${CLUSTER_DIR}/n${id}-raft.redb`,
-    clusterInit:  false,
-  };
+  return nextNodeConfigShared(existing, CLUSTER_DIR);
 }
 
 // ─── status badge ─────────────────────────────────────────────────────────────
@@ -312,16 +275,6 @@ interface ConnData {
   history: HistoryEntry[];
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
 function ConnectPanel() {
   const [data, setData]       = useState<ConnData | null>(null);
   const [input, setInput]     = useState("");
@@ -383,7 +336,7 @@ function ConnectPanel() {
                 {data.source === "env" ? "VALORI_API_URL" : data.source === "history" ? "auto-restored" : "override"}
               </span>
             </div>
-            <code className="text-sm font-mono text-foreground truncate">{data.url}</code>
+            <code className="text-sm font-mono text-foreground truncate" title={data.url}>{data.url}</code>
             {data.reachable && (
               <p className="text-xs text-emerald-500">dim={data.dim ?? "?"} · {(data.records ?? 0).toLocaleString()} records</p>
             )}
@@ -393,7 +346,7 @@ function ConnectPanel() {
               ? <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium"><CheckCircle2 size={14} /> Online</span>
               : <span className="flex items-center gap-1 text-xs text-muted-foreground"><XCircle size={14} /> Offline</span>
             }
-            <button onClick={load} className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Refresh">
+            <button type="button" onClick={load} className="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors" title="Refresh">
               <RefreshCw size={13} />
             </button>
           </div>
@@ -414,11 +367,11 @@ function ConnectPanel() {
                     : "border-border bg-card hover:border-input"
                 }`}
               >
-                <span className={`w-2 h-2 rounded-full shrink-0 ${h.reachable ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${h.reachable ? "bg-emerald-500 dark:bg-emerald-400" : "bg-muted-foreground/40"}`} />
                 <div className="flex-1 min-w-0">
-                  <code className="text-sm font-mono text-foreground truncate block">{h.url}</code>
+                  <code className="text-sm font-mono text-foreground truncate block" title={h.url}>{h.url}</code>
                   <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
-                    <span>{relativeTime(h.lastConnected)}</span>
+                    <span>{timeAgo(h.lastConnected)}</span>
                     {h.dim     && <span>dim={h.dim}</span>}
                     {h.records != null && <span>{h.records.toLocaleString()} records</span>}
                     {isActive(h.url) && <span className="text-[var(--v-accent)] font-medium">● active</span>}
@@ -585,7 +538,7 @@ export default function LaunchPage() {
   const singleActive = singleStatus?.status === "running" || singleStatus?.status === "starting";
 
   return (
-    <div className="flex flex-col gap-8 max-w-4xl pb-12">
+    <div className="flex flex-col gap-8 w-full max-w-[1600px] pb-12">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-foreground tracking-tight">Cluster Launcher</h1>
@@ -634,7 +587,7 @@ export default function LaunchPage() {
           <div className="grid grid-cols-2 gap-3">
             <Sel label="Dimension"   value={singleCfg.dim}   onChange={v => setSingleCfg({ ...singleCfg, dim: Number(v) })} options={DIMENSIONS} />
             <F   label="HTTP Port"   value={sc.httpPort}      onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, httpPort: Number(v) }] })} type="number" />
-            <Sel label="Index type"  value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" | "ivf" })} options={INDEX_TYPES} />
+            <Sel label="Index type"  value={singleCfg.index}  onChange={v => setSingleCfg({ ...singleCfg, index: v as "brute" | "hnsw" | "ivf" | "bq" | "auto" })} options={INDEX_TYPES} />
             <F   label="Max records" value={singleCfg.maxRecords} onChange={v => setSingleCfg({ ...singleCfg, maxRecords: Number(v) })} type="number" />
             <F   label="Event log path" value={sc.eventLogPath ?? ""} onChange={v => setSingleCfg({ ...singleCfg, nodes: [{ ...sc, eventLogPath: v }] })}
                  note="Leave blank for in-memory only" />
@@ -693,9 +646,9 @@ export default function LaunchPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <Sel label="Dimension"   value={clusterCfg.dim}   onChange={v => setClusterCfg({ ...clusterCfg, dim: Number(v) })} options={DIMENSIONS} />
-              <Sel label="Index type"  value={clusterCfg.index} onChange={v => setClusterCfg({ ...clusterCfg, index: v as "brute" | "hnsw" | "ivf" })} options={INDEX_TYPES} />
+              <Sel label="Index type"  value={clusterCfg.index} onChange={v => setClusterCfg({ ...clusterCfg, index: v as "brute" | "hnsw" | "ivf" | "bq" | "auto" })} options={INDEX_TYPES} />
               <F   label="Max records" value={clusterCfg.maxRecords} onChange={v => setClusterCfg({ ...clusterCfg, maxRecords: Number(v) })} type="number" />
               <F   label="Auth token"  value={clusterCfg.authToken ?? ""} onChange={v => setClusterCfg({ ...clusterCfg, authToken: v })} type="password" />
             </div>

@@ -10,7 +10,6 @@ use axum::http::{header, Method, Request, StatusCode};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
-use valori_consensus::NullAuditSink;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig, ClusterHandle};
 use valori_node::cluster_server::build_cluster_router;
 
@@ -18,14 +17,21 @@ async fn boot_leader() -> ClusterHandle {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: "10.0.0.1:3000".into(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -56,7 +62,9 @@ async fn post_json(
         .headers()
         .get(header::LOCATION)
         .map(|v| v.to_str().unwrap().to_string());
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, location, json)
 }
@@ -68,8 +76,12 @@ async fn insert_then_search_over_http() {
 
     // Three points on a line; query nearest to the middle one.
     for v in [[0.0f32, 0.0], [1.0, 1.0], [5.0, 5.0]] {
-        let (status, _, body) =
-            post_json(router.clone(), "/records", serde_json::json!({ "values": v })).await;
+        let (status, _, body) = post_json(
+            router.clone(),
+            "/records",
+            serde_json::json!({ "values": v }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
     }
 
@@ -131,7 +143,10 @@ async fn request_id_deduplicates_an_http_retry() {
     let (s2, _, b2) = post_json(router, "/records", body).await;
     assert_eq!(s2, StatusCode::OK);
     assert_eq!(b2["deduplicated"], true, "retry must be recognised: {b2}");
-    assert_eq!(handle.state_machine.with_state(|s| s.record_count()).await, 1);
+    assert_eq!(
+        handle.state_machine.with_state(|s| s.record_count()).await,
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -145,19 +160,28 @@ async fn write_to_a_follower_redirects_with_location() {
         init: false,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let h2 = bootstrap_cluster(&cfg2, Box::new(NullAuditSink), 0).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
 
     h1.raft
         .add_learner(
             2,
-            ValoriNode { api_addr: "10.0.0.2:3000".into(), raft_addr: h2.raft_addr.to_string() },
+            ValoriNode {
+                api_addr: "10.0.0.2:3000".into(),
+                raft_addr: h2.raft_addr.to_string(),
+            },
             true,
         )
         .await
         .unwrap();
     h1.raft
-        .change_membership([1u64, 2].into_iter().collect::<std::collections::BTreeSet<_>>(), false)
+        .change_membership(
+            [1u64, 2]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            false,
+        )
         .await
         .unwrap();
 
@@ -191,13 +215,23 @@ async fn health_and_metrics_are_served() {
 
     let resp = router
         .clone()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let resp = router
-        .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

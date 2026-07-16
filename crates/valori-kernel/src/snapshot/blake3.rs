@@ -70,9 +70,7 @@ use blake3;
 /// events, not silent drift.
 pub const STATE_HASH_DOMAIN_VERSION: u8 = 2;
 
-pub fn hash_state_blake3(
-    state: &KernelState,
-) -> [u8; 32] {
+pub fn hash_state_blake3(state: &KernelState) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
 
     // Domain separation: a Q8.8 state must never hash-collide with a
@@ -114,17 +112,25 @@ pub fn hash_state_blake3(
         if let Some(node) = slot {
             hasher.update(&node.id.0.to_le_bytes());
             hasher.update(&[node.kind as u8]);
-            
+
             // Record ID (None = sentinel u32::MAX)
             match node.record {
-                Some(id) => { hasher.update(&id.0.to_le_bytes()); }
-                None => { hasher.update(&u32::MAX.to_le_bytes()); }
+                Some(id) => {
+                    hasher.update(&id.0.to_le_bytes());
+                }
+                None => {
+                    hasher.update(&u32::MAX.to_le_bytes());
+                }
             }
-            
+
             // First out edge (None = sentinel u32::MAX)
             match node.first_out_edge {
-                Some(id) => { hasher.update(&id.0.to_le_bytes()); }
-                None => { hasher.update(&u32::MAX.to_le_bytes()); }
+                Some(id) => {
+                    hasher.update(&id.0.to_le_bytes());
+                }
+                None => {
+                    hasher.update(&u32::MAX.to_le_bytes());
+                }
             }
         }
     }
@@ -136,11 +142,15 @@ pub fn hash_state_blake3(
             hasher.update(&[edge.kind as u8]);
             hasher.update(&edge.from.0.to_le_bytes());
             hasher.update(&edge.to.0.to_le_bytes());
-            
+
             // Next out edge (None = sentinel u32::MAX)
             match edge.next_out {
-                Some(id) => { hasher.update(&id.0.to_le_bytes()); }
-                None => { hasher.update(&u32::MAX.to_le_bytes()); }
+                Some(id) => {
+                    hasher.update(&id.0.to_le_bytes());
+                }
+                None => {
+                    hasher.update(&u32::MAX.to_le_bytes());
+                }
             }
         }
     }

@@ -11,12 +11,15 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", log_path, e))?;
 
     if bytes.len() < 16 {
-        println!("\n⚠️  Event log is empty or too short to parse ({} bytes).\n", bytes.len());
+        println!(
+            "\n⚠️  Event log is empty or too short to parse ({} bytes).\n",
+            bytes.len()
+        );
         return Ok(());
     }
 
     let log_version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-    let dim         = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    let dim = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
 
     println!(
         "\nEvent Timeline  ·  {}  (log-version {}, dim {})\n",
@@ -35,8 +38,8 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
 
     let header = valori_wire::parse_header(&bytes)
         .map_err(|e| anyhow::anyhow!("Invalid event log header: {e}"))?;
-    let mut offset    = header.header_len;
-    let mut event_num = 0u64;      // 1-based display counter
+    let mut offset = header.header_len;
+    let mut event_num = 0u64; // 1-based display counter
 
     while offset < bytes.len() {
         match valori_wire::decode_entry(header.version, &bytes[offset..]) {
@@ -44,17 +47,37 @@ pub fn run(log_path: &str, limit: usize) -> anyhow::Result<()> {
                 offset += bytes_read;
 
                 match chained.entry {
+                    // S15: EventNs is the same as Event for the timeline, just
+                    // tagged with the collection it landed in.
                     LogEntry::Event(event) => {
                         event_num += 1;
-
                         let (type_cell, detail) = describe_event(&event);
-
                         table.add_row(vec![
                             Cell::new(event_num.to_string()),
                             type_cell,
                             Cell::new(detail),
                         ]);
+                        if limit > 0 && event_num as usize >= limit {
+                            println!("{table}");
+                            println!(
+                                "\n  … display limited to first {limit} events. \
+                                 Pass --limit 0 to show all.\n"
+                            );
+                            return Ok(());
+                        }
+                    }
 
+                    LogEntry::EventNs {
+                        namespace_id,
+                        event,
+                    } => {
+                        event_num += 1;
+                        let (type_cell, detail) = describe_event(&event);
+                        table.add_row(vec![
+                            Cell::new(event_num.to_string()),
+                            type_cell,
+                            Cell::new(format!("[ns {namespace_id}] {detail}")),
+                        ]);
                         if limit > 0 && event_num as usize >= limit {
                             println!("{table}");
                             println!(
@@ -131,10 +154,7 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
 
         KernelEvent::CreateEdge { id, from, to, kind } => (
             Cell::new("CreateEdge").fg(Color::Cyan),
-            format!(
-                "edge_id={}  {}→{}  kind={:?}",
-                id.0, from.0, to.0, kind
-            ),
+            format!("edge_id={}  {}→{}  kind={:?}", id.0, from.0, to.0, kind),
         ),
 
         KernelEvent::DeleteEdge { id } => (
@@ -149,14 +169,27 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
 
         KernelEvent::InsertRecordEncrypted { id, key_id, .. } => (
             Cell::new("InsertRecordEncrypted").fg(Color::Magenta),
-            format!("record_id={}  key={}", id.0,
-                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+            format!(
+                "record_id={}  key={}",
+                id.0,
+                key_id
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ),
         ),
 
         KernelEvent::ShredKey { key_id } => (
             Cell::new("ShredKey").fg(Color::Magenta),
-            format!("key={}  [permanently unrecoverable]",
-                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+            format!(
+                "key={}  [permanently unrecoverable]",
+                key_id
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ),
         ),
 
         KernelEvent::AutoInsertRecord { tag, .. } => (
@@ -165,7 +198,9 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
         ),
 
         KernelEvent::AutoCreateNode { kind, record } => {
-            let rec = record.map(|r| format!(" → record_id={}", r.0)).unwrap_or_default();
+            let rec = record
+                .map(|r| format!(" → record_id={}", r.0))
+                .unwrap_or_default();
             (
                 Cell::new("AutoCreateNode").fg(Color::Cyan),
                 format!("kind={:?}{rec}  (id assigned at apply)", kind),
@@ -174,18 +209,47 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
 
         KernelEvent::AutoCreateEdge { from, to, kind } => (
             Cell::new("AutoCreateEdge").fg(Color::Cyan),
-            format!("{}→{}  kind={:?}  (id assigned at apply)", from.0, to.0, kind),
+            format!(
+                "{}→{}  kind={:?}  (id assigned at apply)",
+                from.0, to.0, kind
+            ),
         ),
 
-        KernelEvent::AutoInsertRecordEncrypted { namespace_id, key_id, tag, .. } => (
+        KernelEvent::AutoInsertRecordEncrypted {
+            namespace_id,
+            key_id,
+            tag,
+            ..
+        } => (
             Cell::new("AutoInsertRecordEncrypted").fg(Color::Magenta),
-            format!("ns={namespace_id} key={}  tag={tag}  (id assigned at apply)",
-                key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
+            format!(
+                "ns={namespace_id} key={}  tag={tag}  (id assigned at apply)",
+                key_id
+                    .iter()
+                    .take(4)
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ),
         ),
 
         KernelEvent::SetMeta { key, value } => (
             Cell::new("SetMeta").fg(Color::White),
             format!("key={key:?}  value={value:?}"),
+        ),
+
+        KernelEvent::AutoCreateNamespace { name } => (
+            Cell::new("AutoCreateNamespace").fg(Color::Cyan),
+            format!("name={name:?}  (id assigned at apply)"),
+        ),
+
+        KernelEvent::DropNamespace { name } => (
+            Cell::new("DropNamespace").fg(Color::Red),
+            format!("name={name:?} (cascade-deleted records/nodes)"),
+        ),
+
+        KernelEvent::UpdateRecordMetadata { id, .. } => (
+            Cell::new("UpdateRecordMetadata").fg(Color::White),
+            format!("record_id={}", id.0),
         ),
     }
 }

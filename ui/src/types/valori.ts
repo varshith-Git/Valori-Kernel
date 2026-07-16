@@ -11,6 +11,8 @@ export interface SearchResult {
   id: number;
   score: number;
   collection?: string;
+  text?: string;
+  source?: string;
 }
 
 export interface SearchResponse {
@@ -21,6 +23,7 @@ export interface SearchResponse {
 
 export interface Collection {
   name: string;
+  id?: number;
   record_count?: number;
 }
 

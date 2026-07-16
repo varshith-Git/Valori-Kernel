@@ -23,9 +23,15 @@ RUN apt-get update && \
 # Copy only Cargo manifests first; the build layer is invalidated only when
 # dependencies change, not on every source edit.
 COPY Cargo.toml Cargo.lock ./
+COPY crates/valori-core/Cargo.toml      crates/valori-core/
 COPY crates/valori-kernel/Cargo.toml    crates/valori-kernel/
 COPY crates/valori-node/Cargo.toml      crates/valori-node/
 COPY crates/valori-wire/Cargo.toml      crates/valori-wire/
+COPY crates/valori-storage/Cargo.toml   crates/valori-storage/
+COPY crates/valori-state/Cargo.toml     crates/valori-state/
+COPY crates/valori-metadata/Cargo.toml  crates/valori-metadata/
+COPY crates/valori-planner/Cargo.toml   crates/valori-planner/
+COPY crates/valori-effect/Cargo.toml    crates/valori-effect/
 COPY crates/valori-cli/Cargo.toml       crates/valori-cli/
 COPY crates/valori-verify/Cargo.toml    crates/valori-verify/
 COPY crates/valori-consensus/Cargo.toml crates/valori-consensus/
@@ -33,11 +39,18 @@ COPY crates/valori-consensus/Cargo.toml crates/valori-consensus/
 # for workspace resolution even though valori-node never depends on them.
 COPY crates/valori-ffi/Cargo.toml       crates/valori-ffi/
 COPY crates/valori-mcp/Cargo.toml       crates/valori-mcp/
+COPY crates/valori-search/Cargo.toml    crates/valori-search/
+COPY crates/valori-index/Cargo.toml     crates/valori-index/
+COPY crates/valori-rag/Cargo.toml       crates/valori-rag/
+COPY crates/valori-ingest/Cargo.toml    crates/valori-ingest/
+COPY crates/valori-engine/Cargo.toml    crates/valori-engine/
+COPY crates/valori-daemon/Cargo.toml    crates/valori-daemon/
+COPY crates/valori-models/Cargo.toml    crates/valori-models/
 COPY embedded/Cargo.toml                embedded/
 
 # Stub src files to allow `cargo build` to populate the dep cache.
 # valori-ffi / valori-mcp / embedded stubs are inert (not in valori-node's dep graph).
-RUN for crate in valori-kernel valori-node valori-wire valori-cli valori-verify valori-consensus valori-ffi valori-mcp; do \
+RUN for crate in valori-core valori-kernel valori-node valori-wire valori-storage valori-state valori-metadata valori-planner valori-effect valori-cli valori-verify valori-consensus valori-ffi valori-mcp valori-search valori-index valori-rag valori-ingest valori-engine valori-daemon valori-models; do \
         mkdir -p crates/$crate/src && \
         printf 'pub fn stub() {}\n' > crates/$crate/src/lib.rs && \
         printf 'fn main() {}\n' > crates/$crate/src/main.rs; \

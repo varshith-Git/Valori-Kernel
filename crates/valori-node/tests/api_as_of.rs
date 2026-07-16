@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,9 +46,17 @@ async fn insert(client: &reqwest::Client, base: &str, vec: [f32; 4]) -> u32 {
     let resp = client
         .post(format!("{base}/records"))
         .json(&serde_json::json!({ "values": vec }))
-        .send().await.unwrap();
-    assert!(resp.status().is_success(), "insert failed: {}", resp.status());
-    resp.json::<serde_json::Value>().await.unwrap()["id"].as_u64().unwrap() as u32
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "insert failed: {}",
+        resp.status()
+    );
+    resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_u64()
+        .unwrap() as u32
 }
 
 async fn search_as_of_index(
@@ -64,8 +73,14 @@ async fn search_as_of_index(
             "k": k,
             "as_of_log_index": log_index
         }))
-        .send().await.unwrap();
-    assert!(resp.status().is_success(), "search failed: {}", resp.status());
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "search failed: {}",
+        resp.status()
+    );
     resp.json().await.unwrap()
 }
 
@@ -85,7 +100,11 @@ async fn as_of_log_index_returns_past_state() {
     let body = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, 0).await;
 
     let results = body["results"].as_array().unwrap();
-    assert_eq!(results.len(), 1, "only 1 record should exist at log_index 0");
+    assert_eq!(
+        results.len(),
+        1,
+        "only 1 record should exist at log_index 0"
+    );
     assert_eq!(results[0]["id"].as_u64().unwrap(), id0 as u64);
 
     // Proof fields must be present.
@@ -110,7 +129,10 @@ async fn as_of_state_hash_advances_with_new_events() {
 
     let hash0 = body0["as_of_state_hash"].as_str().unwrap();
     let hash2 = body2["as_of_state_hash"].as_str().unwrap();
-    assert_ne!(hash0, hash2, "state hash must change as more events are applied");
+    assert_ne!(
+        hash0, hash2,
+        "state hash must change as more events are applied"
+    );
 
     // log_index 2 should find all 3 records.
     assert_eq!(body2["results"].as_array().unwrap().len(), 3);
@@ -129,7 +151,9 @@ async fn as_of_log_index_out_of_range_returns_error() {
             "k": 5,
             "as_of_log_index": 999
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert!(
         resp.status().is_client_error() || resp.status().is_server_error(),
@@ -147,7 +171,9 @@ async fn timeline_returns_structured_events() {
 
     let resp = client
         .get(format!("{base}/v1/timeline"))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
     let body: serde_json::Value = resp.json().await.unwrap();
 
@@ -161,7 +187,10 @@ async fn timeline_returns_structured_events() {
         assert!(ev["record_id"].as_u64().is_some());
         // timestamp_iso must look like an ISO 8601 date.
         let iso = ev["timestamp_iso"].as_str().unwrap();
-        assert!(iso.contains('T') && iso.ends_with('Z'), "unexpected timestamp_iso: {iso}");
+        assert!(
+            iso.contains('T') && iso.ends_with('Z'),
+            "unexpected timestamp_iso: {iso}"
+        );
     }
 }
 
@@ -172,7 +201,9 @@ async fn timeline_empty_when_no_events() {
 
     let resp = client
         .get(format!("{base}/v1/timeline"))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["total"].as_u64().unwrap(), 0);
@@ -188,10 +219,15 @@ async fn timeline_from_filter_excludes_past_events() {
     // Use a timestamp far in the future.
     let resp = client
         .get(format!("{base}/v1/timeline?from=2099-01-01T00:00:00Z"))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["total"].as_u64().unwrap(), 0,
-        "no events should have timestamps >= year 2099");
+    assert_eq!(
+        body["total"].as_u64().unwrap(),
+        0,
+        "no events should have timestamps >= year 2099"
+    );
     assert!(body["from_unix"].is_number(), "from_unix must be present");
 }

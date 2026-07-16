@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest) {
       ? "/v1/community/search"
       : "/v1/community/detect";
 
-    const res = await fetch(`${getApiUrl()}${endpoint}`, {
+    const res = await fetchWithTimeout(`${getApiUrl()}${endpoint}`, {
       method: "POST",
       headers: headers(),
       body: JSON.stringify(body),

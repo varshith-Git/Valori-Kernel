@@ -1,0 +1,99 @@
+name: Desktop app build (Phase D1.3)
+
+# Builds the Valori Desktop installer on all three platforms — a matrix
+# build because Tauri bundlers are native to the OS they run on (DMG needs
+# macOS, MSI needs Windows/WiX, AppImage needs Linux); there's no
+# cross-compiling a real installer from one host. Each job:
+#   1. Builds valori-daemon + valori-node (release) for the matrix's own
+#      platform.
+#   2. Runs `tauri build`, which bundles both as sidecars via
+#      `beforeBuildCommand` (`scripts/prepare-sidecars.mjs --release` +
+#      `scripts/prepare-ui-server.mjs` — see phase-D3.1/D1.3 docs) and
+#      produces the platform's native installer.
+#   3. Uploads the installer as a workflow artifact.
+#
+# Code signing and notarization are explicitly out of scope here (Phase
+# D1.4, once there's something to distribute publicly) — these are
+# unsigned, local-verification-only builds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "crates/valori-daemon/**"
+      - "crates/valori-node/**"
+      - "ui/**"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "crates/valori-daemon/**"
+      - "crates/valori-node/**"
+      - "ui/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            runner: macos-14
+            artifact-glob: "desktop/src-tauri/target/release/bundle/dmg/*.dmg"
+          - platform: windows
+            runner: windows-latest
+            artifact-glob: "desktop/src-tauri/target/release/bundle/msi/*.msi"
+          - platform: linux
+            runner: ubuntu-22.04
+            artifact-glob: "desktop/src-tauri/target/release/bundle/appimage/*.AppImage"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+            desktop/src-tauri/target/
+          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('**/Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-desktop-cargo-
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Linux system deps (Tauri + AppImage)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install ui/ dependencies
+        run: npm install
+        working-directory: ui
+
+      - name: Install desktop/ dependencies
+        run: npm install
+        working-directory: desktop
+
+      - name: Build installer
+        run: npm run build
+        working-directory: desktop
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: valori-desktop-${{ matrix.platform }}
+          path: ${{ matrix.artifact-glob }}
+          retention-days: 14

@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Adjacency List for graph traversal.
 
-use crate::graph::pool::{NodePool, EdgePool};
+use crate::error::{KernelError, Result};
 use crate::graph::edge::GraphEdge;
-use crate::types::id::{NodeId, EdgeId};
+use crate::graph::pool::{EdgePool, NodePool};
 use crate::types::enums::EdgeKind;
-use crate::error::{Result, KernelError};
+use crate::types::id::{EdgeId, NodeId};
 
 /// Adds an edge to the graph, maintaining both outgoing and incoming linked lists.
 ///
@@ -27,19 +27,19 @@ pub fn add_edge(
 
     // Snapshot current list heads — immutable borrows are dropped after these lines
     let head_out = nodes.get(from).and_then(|n| n.first_out_edge);
-    let head_in  = nodes.get(to).and_then(|n| n.first_in_edge);
+    let head_in = nodes.get(to).and_then(|n| n.first_in_edge);
 
     // Build the new edge, prepending it to both lists
     let mut edge = GraphEdge::new(EdgeId(0), kind, from, to);
     edge.next_out = head_out;
-    edge.next_in  = head_in;
+    edge.next_in = head_in;
 
     let edge_id = edges.insert(edge)?;
 
     // Update outgoing head on the source node
     nodes.get_mut(from).unwrap().first_out_edge = Some(edge_id);
     // Update incoming head on the destination node
-    nodes.get_mut(to).unwrap().first_in_edge    = Some(edge_id);
+    nodes.get_mut(to).unwrap().first_in_edge = Some(edge_id);
 
     Ok(edge_id)
 }
@@ -52,7 +52,10 @@ pub struct OutEdgeIterator<'a> {
 
 impl<'a> OutEdgeIterator<'a> {
     pub fn new(edges: &'a EdgePool, start: Option<EdgeId>) -> Self {
-        Self { edges, current: start }
+        Self {
+            edges,
+            current: start,
+        }
     }
 }
 
@@ -75,7 +78,10 @@ pub struct InEdgeIterator<'a> {
 
 impl<'a> InEdgeIterator<'a> {
     pub fn new(edges: &'a EdgePool, start: Option<EdgeId>) -> Self {
-        Self { edges, current: start }
+        Self {
+            edges,
+            current: start,
+        }
     }
 }
 

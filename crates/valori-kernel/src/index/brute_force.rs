@@ -2,25 +2,22 @@
 //! Brute-force index.
 
 use crate::index::{SearchResult, VectorIndex};
-use crate::storage::pool::RecordPool;
-use crate::types::vector::FxpVector;
-use crate::types::id::RecordId;
 use crate::math::l2::fxp_l2_sq;
+use crate::storage::pool::RecordPool;
+use crate::types::id::RecordId;
+use crate::types::vector::FxpVector;
+use alloc::collections::BinaryHeap;
 
 /// A stateless brute-force index that scans the RecordPool.
 #[derive(Default, Clone)]
 pub struct BruteForceIndex;
 
-impl BruteForceIndex {
-    // Keep internal implementation for direct use or trait delegation
-}
-
 impl VectorIndex for BruteForceIndex {
-    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector) { }
+    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector) {}
 
-    fn on_delete(&mut self, _id: RecordId) { }
+    fn on_delete(&mut self, _id: RecordId) {}
 
-    fn rebuild(&mut self, _pool: &RecordPool) { }
+    fn rebuild(&mut self, _pool: &RecordPool) {}
 
     fn search(
         &self,
@@ -30,59 +27,44 @@ impl VectorIndex for BruteForceIndex {
         filter: Option<u64>,
     ) -> usize {
         let k = results.len();
-        if k == 0 { return 0; }
-
-        // Initialize results with worst possible
-        for r in results.iter_mut() {
-            *r = SearchResult { score: i64::MAX, id: RecordId(u32::MAX) };
+        if k == 0 {
+            return 0;
         }
 
-        let mut count = 0;
+        // Max-heap (worst-on-top) of capacity k: O(log k) per candidate instead of O(k).
+        // BinaryHeap<SearchResult> is a max-heap; peek() gives the *largest* score
+        // (farthest record), which we evict when a closer candidate arrives.
+        let mut heap: BinaryHeap<SearchResult> = BinaryHeap::with_capacity(k + 1);
 
         for record in pool.iter() {
-            // Apply Filter
             if let Some(req_tag) = filter {
-                // Where is the tag stored?
-                // Record struct has `flags`. Does it have `tag`?
-                // I need to check `crates/kernel/src/storage/record.rs`. 
-                // Assuming I ported it, I should check if it has `tag`.
-                // Actually `Snapshot` decoding expected `tag`? No, `KernelEvent` had `tag`.
-                // But `Record` struct in `snapshot/decode.rs` mismatch error (Step 2873) complained about `vector` and `flags`.
-                // It did NOT complain about `tag`.
-                // Wait, if `Record` doesn't have `tag`, I can't filter!
-                
-                // Let's assume for now I cannot filter if Record doesn't support it.
-                // But I MUST support it.
-                // I will add `tag` to Record struct in `storage/record.rs` in next step.
-                // For now, I'll invoke a hypothetical `record.tag`.
                 if record.tag != req_tag {
                     continue;
                 }
             }
 
             let dist_sq = fxp_l2_sq(&record.vector, query);
-            let candidate = SearchResult { score: dist_sq, id: record.id };
+            let candidate = SearchResult {
+                score: dist_sq,
+                id: record.id,
+            };
 
-            if count < k {
-                // Insert into sorted position
-                let mut pos = count;
-                while pos > 0 && results[pos - 1] > candidate {
-                    results[pos] = results[pos - 1];
-                    pos -= 1;
-                }
-                results[pos] = candidate;
-                count += 1;
-            } else {
-                // Determine if we should replace the worst current result (last item)
-                if candidate < results[k - 1] {
-                     let mut pos = k - 1;
-                     while pos > 0 && results[pos - 1] > candidate {
-                         results[pos] = results[pos - 1];
-                         pos -= 1;
-                     }
-                     results[pos] = candidate;
+            if heap.len() < k {
+                heap.push(candidate);
+            } else if let Some(&worst) = heap.peek() {
+                if candidate < worst {
+                    heap.pop();
+                    heap.push(candidate);
                 }
             }
+        }
+
+        // Drain heap into results slice in ascending order (best first).
+        let count = heap.len();
+        let mut tmp: alloc::vec::Vec<SearchResult> = heap.into_iter().collect();
+        tmp.sort_unstable();
+        for (i, r) in tmp.into_iter().enumerate() {
+            results[i] = r;
         }
 
         count
@@ -100,7 +82,7 @@ impl BruteForceIndex {
         // Use the trait method here or self implementation if we duplicated?
         // Let's call the trait method explicitly via UFCS or just impl logic?
         // To strictly avoid code dup, we could move implementation to a standalone fn or keep it here.
-        // For simplicity: duplicate logic or re-use? 
+        // For simplicity: duplicate logic or re-use?
         // We implemented the trait. Let's make this helper use the trait impl.
         VectorIndex::search(self, pool, query, &mut buf, None);
         buf

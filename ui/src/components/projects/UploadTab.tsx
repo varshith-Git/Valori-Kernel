@@ -4,12 +4,14 @@ import { useRef, useState } from "react";
 import { UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 
 interface Props {
   collection: string;
 }
 
 export function UploadTab({ collection }: Props) {
+  const { config } = useEmbeddingConfig();
   const [paste, setPaste] = useState("");
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -58,12 +60,12 @@ export function UploadTab({ collection }: Props) {
         return parsed.map((r) => r.values as number[]);
       }
       // [0.1, 0.2, 0.3] — single vector
-      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "number")) {
+      if (Array.isArray(parsed) && parsed.every((r) => typeof r === "number")) {
         return [parsed as number[]];
       }
-      return "Expected [[v1, v2], [v3, v4]] or [{values: [...]}, ...]";
+      return "JSON must be an array of numbers or array of arrays";
     } catch {
-      return "Invalid JSON";
+      return "Invalid JSON syntax";
     }
   };
 
@@ -77,8 +79,8 @@ export function UploadTab({ collection }: Props) {
       formData.append("collection", collection);
       formData.append("provider", provider);
       formData.append("model", model);
-      formData.append("chunkSize", "500");
-      formData.append("chunkOverlap", "50");
+      formData.append("chunkSize", String(config.chunkSize));
+      formData.append("chunkOverlap", String(config.chunkOverlap));
 
       const res = await fetch("/api/ingest", {
         method: "POST",

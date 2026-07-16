@@ -1,0 +1,31 @@
+[package]
+name = "valori-ingest"
+version = "0.2.4"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Embedding client and document chunking primitives for the Valori platform"
+publish = false
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+blake3 = "1.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = "0.7"
+tracing = "0.1"
+async-trait = "0.1"
+valori-models = { path = "../valori-models" }
+# Reader format support — pure Rust, no system deps
+pulldown-cmark = { version = "0.13", default-features = false }
+scraper = { version = "0.27", default-features = false }
+pdf-extract = { version = "0.12", default-features = false }
+lopdf = { version = "0.42", default-features = false }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+infer = { version = "0.16", default-features = false }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

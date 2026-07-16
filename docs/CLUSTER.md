@@ -100,6 +100,7 @@ VALORI_RAFT_LOG_PATH=/data/raft.redb \
 | `VALORI_RAFT_LOG_PATH` | recommended | redb path for a persistent Raft log + vote (survives restarts). Omit for in-memory. |
 | `VALORI_TLS_CA` / `VALORI_TLS_CERT` / `VALORI_TLS_KEY` | no | All three → mutual TLS on the Raft channel. Partial → boot error. |
 | `VALORI_TLS_DOMAIN` | no | Shared cert domain name. Default `valori-cluster.internal`. |
+| `VALORI_SHARD_COUNT` | no | **Phase S1 — multi-Raft skeleton.** Number of independent Raft groups this process runs, sharing one gRPC listener. Default `1` (byte-identical to today's single-Raft-group behavior). Every configured member runs every shard (symmetric placement) — there is no namespace routing yet, so shards beyond 0 have no HTTP surface. See [phase-S1-multi-raft-skeleton.md](phases/phase-S1-multi-raft-skeleton.md). |
 
 A malformed topology is a **hard stop** — the node refuses to boot rather than
 silently starting standalone (which would be a split-brain factory).

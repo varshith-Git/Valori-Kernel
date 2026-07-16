@@ -16,6 +16,7 @@ use valori_mcp::stdio::handle_line;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 8;
 
@@ -62,11 +63,17 @@ async fn recall_receipt_verifies_against_live_node() {
     }
 
     // Recall near the first memory.
-    let recall = call(&server, "memory_recall", json!({ "query_vector": vec_n(0.10), "k": 2 })).await;
+    let recall = call(
+        &server,
+        "memory_recall",
+        json!({ "query_vector": vec_n(0.10), "k": 2 }),
+    )
+    .await;
     assert_eq!(recall["isError"], json!(false));
 
     // The tool payload is JSON text inside content[0].text.
-    let payload: Value = serde_json::from_str(recall["content"][0]["text"].as_str().unwrap()).unwrap();
+    let payload: Value =
+        serde_json::from_str(recall["content"][0]["text"].as_str().unwrap()).unwrap();
 
     let results = payload["results"].as_array().expect("results array");
     assert!(!results.is_empty(), "recall returned no memories");
@@ -76,10 +83,15 @@ async fn recall_receipt_verifies_against_live_node() {
     let state_hash = receipt["state_hash"].as_str().unwrap();
     assert_eq!(state_hash.len(), 64);
     // Event log was enabled → the receipt must carry the event-log proof.
-    let event_log_hash = receipt["event_log_hash"].as_str().expect("event_log_hash present");
+    let event_log_hash = receipt["event_log_hash"]
+        .as_str()
+        .expect("event_log_hash present");
     assert_eq!(event_log_hash.len(), 64);
     let committed_height = receipt["committed_height"].as_u64().unwrap();
-    assert!(committed_height >= 3, "expected >=3 committed events, got {committed_height}");
+    assert!(
+        committed_height >= 3,
+        "expected >=3 committed events, got {committed_height}"
+    );
 
     // THE PROOF: independently reconstruct the receipt body and recompute the
     // digest, exactly as an external auditor would. It must match byte-for-byte.
@@ -126,21 +138,31 @@ async fn decay_recall_carries_factor_and_verifiable_receipt() {
         assert!(out["isError"] != json!(true), "write failed: {out:?}");
     }
 
-    let recall = call(&server, "memory_recall",
-        json!({ "query_vector": vec_n(0.10), "k": 3, "decay_half_life_secs": 3600 })).await;
+    let recall = call(
+        &server,
+        "memory_recall",
+        json!({ "query_vector": vec_n(0.10), "k": 3, "decay_half_life_secs": 3600 }),
+    )
+    .await;
     assert_eq!(recall["isError"], json!(false));
-    let payload: Value = serde_json::from_str(recall["content"][0]["text"].as_str().unwrap()).unwrap();
+    let payload: Value =
+        serde_json::from_str(recall["content"][0]["text"].as_str().unwrap()).unwrap();
 
     let results = payload["results"].as_array().expect("results array");
     assert!(!results.is_empty(), "decayed recall returned no memories");
     for r in results {
-        let f = r["decay_factor"].as_f64().expect("decay_factor present under decay");
+        let f = r["decay_factor"]
+            .as_f64()
+            .expect("decay_factor present under decay");
         assert!(f > 0.0 && f <= 1.0, "factor in (0,1], got {f}");
     }
 
     // The receipt must still verify over the decayed result set.
     let receipt = &payload["receipt"];
-    let fingerprints: Vec<ResultFingerprint> = receipt["results"].as_array().unwrap().iter()
+    let fingerprints: Vec<ResultFingerprint> = receipt["results"]
+        .as_array()
+        .unwrap()
+        .iter()
         .map(|f| ResultFingerprint {
             memory_id: f["memory_id"].as_str().unwrap().to_string(),
             record_id: f["record_id"].as_u64().unwrap(),
@@ -176,7 +198,10 @@ async fn timeline_reflects_writes() {
     let out = call(&server, "memory_timeline", json!({})).await;
     let payload: Value = serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
     let total = payload["total"].as_u64().unwrap_or(0);
-    assert!(total >= 2, "timeline should record the writes, got total={total}");
+    assert!(
+        total >= 2,
+        "timeline should record the writes, got total={total}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -195,14 +220,20 @@ async fn full_handshake_over_line_transport() {
     assert!(init.contains("protocolVersion"));
 
     // notifications/initialized → no reply
-    assert!(handle_line(&server, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
-        .await
-        .is_none());
+    assert!(handle_line(
+        &server,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
+    )
+    .await
+    .is_none());
 
     // tools/list → six tools
-    let list = handle_line(&server, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#)
-        .await
-        .unwrap();
+    let list = handle_line(
+        &server,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    )
+    .await
+    .unwrap();
     let v: Value = serde_json::from_str(&list).unwrap();
     assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 7);
 }
@@ -214,8 +245,14 @@ async fn graphrag_returns_hits_and_subgraph_with_verifiable_receipt() {
     let server = McpServer::new(backend);
 
     // Write a memory and capture its document + chunk graph nodes.
-    let write = call(&server, "memory_write", json!({ "vector": vec_n(0.10), "text": "seed" })).await;
-    let wpayload: Value = serde_json::from_str(write["content"][0]["text"].as_str().unwrap()).unwrap();
+    let write = call(
+        &server,
+        "memory_write",
+        json!({ "vector": vec_n(0.10), "text": "seed" }),
+    )
+    .await;
+    let wpayload: Value =
+        serde_json::from_str(write["content"][0]["text"].as_str().unwrap()).unwrap();
     let chunk_node = wpayload["chunk_node_id"].as_u64().unwrap();
     let doc_node = wpayload["document_node_id"].as_u64().unwrap();
 
@@ -228,31 +265,55 @@ async fn graphrag_returns_hits_and_subgraph_with_verifiable_receipt() {
         .send()
         .await
         .unwrap();
-    assert!(r.status().is_success(), "edge creation failed: {}", r.status());
+    assert!(
+        r.status().is_success(),
+        "edge creation failed: {}",
+        r.status()
+    );
 
     // A couple more memories so KNN has choices.
     call(&server, "memory_write", json!({ "vector": vec_n(0.50) })).await;
     call(&server, "memory_write", json!({ "vector": vec_n(0.90) })).await;
 
     // GraphRAG in one call.
-    let out = call(&server, "memory_graph_recall",
-        json!({ "query_vector": vec_n(0.10), "k": 3, "depth": 2 })).await;
+    let out = call(
+        &server,
+        "memory_graph_recall",
+        json!({ "query_vector": vec_n(0.10), "k": 3, "depth": 2 }),
+    )
+    .await;
     assert_eq!(out["isError"], json!(false));
     let payload: Value = serde_json::from_str(out["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    // One call returned BOTH the vector hits and the connected subgraph.
-    assert!(!payload["hits"].as_array().unwrap().is_empty(), "no hits");
+    // One call returned BOTH the vector hits (now under "results") and the connected subgraph.
+    assert!(
+        !payload["results"].as_array().unwrap().is_empty(),
+        "no hits"
+    );
     let nodes = payload["subgraph"]["nodes"].as_array().unwrap();
     let edges = payload["subgraph"]["edges"].as_array().unwrap();
-    assert!(nodes.iter().any(|n| n["id"].as_u64() == Some(chunk_node)), "seed chunk node missing");
-    assert!(nodes.iter().any(|n| n["id"].as_u64() == Some(doc_node)), "edge target (doc) not expanded");
-    assert!(edges.iter().any(|e| e["from"].as_u64() == Some(chunk_node) && e["to"].as_u64() == Some(doc_node)),
-        "the chunk->doc edge should be in the subgraph");
+    assert!(
+        nodes.iter().any(|n| n["id"].as_u64() == Some(chunk_node)),
+        "seed chunk node missing"
+    );
+    assert!(
+        nodes.iter().any(|n| n["id"].as_u64() == Some(doc_node)),
+        "edge target (doc) not expanded"
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|e| e["from"].as_u64() == Some(chunk_node) && e["to"].as_u64() == Some(doc_node)),
+        "the chunk->doc edge should be in the subgraph"
+    );
 
     // THE PROOF: recompute the receipt digest — which now binds BOTH the hits
     // AND the subgraph — exactly as an external auditor would.
     let receipt = &payload["receipt"];
-    let fingerprints: Vec<ResultFingerprint> = receipt["results"].as_array().unwrap().iter()
+    let fingerprints: Vec<ResultFingerprint> = receipt["results"]
+        .as_array()
+        .unwrap()
+        .iter()
         .map(|f| ResultFingerprint {
             memory_id: f["memory_id"].as_str().unwrap().to_string(),
             record_id: f["record_id"].as_u64().unwrap(),

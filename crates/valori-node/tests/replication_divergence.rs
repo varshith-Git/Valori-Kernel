@@ -3,12 +3,13 @@
 //!
 //! Leader → Follower replication → corrupt follower state directly → assert
 //! the divergence-check loop detects it and auto-heals.
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 use valori_node::config::{NodeConfig, NodeMode};
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::time::Duration;
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::test]
 async fn test_replication_divergence() {
@@ -31,14 +32,18 @@ async fn test_replication_divergence() {
         let log_path = std::env::temp_dir().join("leader_div_events.log");
         let _ = std::fs::remove_file(&log_path);
 
-        use valori_node::events::{EventCommitter, EventJournal};
         use valori_node::events::event_log::EventLogWriter;
+        use valori_node::events::{EventCommitter, EventJournal};
 
-        let log_writer = EventLogWriter::open(&log_path, Some(4))
-            .expect("Failed to open leader event log");
+        let log_writer =
+            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open leader event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        let state_clone = engine.clone_kernel_state();
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
+            log_writer,
+            journal,
+            state_clone,
+        ));
     }
 
     let leader_app = build_router(leader_state.clone(), None, None);
@@ -57,7 +62,9 @@ async fn test_replication_divergence() {
     follower_config.dim = 4;
     follower_config.max_nodes = 100;
     follower_config.max_edges = 100;
-    follower_config.mode = NodeMode::Follower { leader_url: leader_url.clone() };
+    follower_config.mode = NodeMode::Follower {
+        leader_url: leader_url.clone(),
+    };
 
     let follower_state = Arc::new(RwLock::new(Engine::new(&follower_config)));
 
@@ -66,14 +73,18 @@ async fn test_replication_divergence() {
         let log_path = std::env::temp_dir().join("follower_div_events.log");
         let _ = std::fs::remove_file(&log_path);
 
-        use valori_node::events::{EventCommitter, EventJournal};
         use valori_node::events::event_log::EventLogWriter;
+        use valori_node::events::{EventCommitter, EventJournal};
 
-        let log_writer = EventLogWriter::open(&log_path, Some(4))
-            .expect("Failed to open follower event log");
+        let log_writer =
+            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open follower event log");
         let journal = EventJournal::new();
-        let state_clone = engine.state.clone();
-        engine.event_committer = Some(EventCommitter::new(log_writer, journal, state_clone));
+        let state_clone = engine.clone_kernel_state();
+        engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
+            log_writer,
+            journal,
+            state_clone,
+        ));
     }
 
     let follower_app = build_router(follower_state.clone(), None, None);
@@ -118,13 +129,14 @@ async fn test_replication_divergence() {
     tracing::info!("Corrupting follower: deleting record {}", record_id_val);
     {
         let mut engine = follower_state.write().await;
-        use valori_kernel::state::command::Command;
+        use valori_kernel::event::KernelEvent;
         use valori_kernel::types::id::RecordId;
 
-        let cmd = Command::DeleteRecord {
-            id: RecordId(record_id_val as u32),
-        };
-        engine.state.apply(&cmd).unwrap();
+        engine
+            .apply_event_for_test(&KernelEvent::SoftDeleteRecord {
+                id: RecordId(record_id_val as u32),
+            })
+            .unwrap();
     }
 
     // ── 6. Wait for divergence loop to fire (runs every 5 s) ─────────────────

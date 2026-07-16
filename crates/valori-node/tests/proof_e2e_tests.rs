@@ -9,19 +9,20 @@
 //!   - snapshot → restore preserves state hash
 
 use tempfile::tempdir;
-use valori_node::config::NodeConfig;
-use valori_node::engine::Engine;
-use valori_node::events::event_log::EventLogWriter;
-use valori_node::events::event_journal::EventJournal;
-use valori_node::events::event_commit::EventCommitter;
-use valori_node::events::event_replay::recover_from_event_log;
+use valori_kernel::event::KernelEvent;
 use valori_kernel::proof::generate_proof_bytes;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
-use valori_kernel::event::KernelEvent;
-use valori_kernel::types::id::RecordId;
-use valori_kernel::types::vector::FxpVector;
-use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::state::kernel::KernelState;
+use valori_kernel::types::id::RecordId;
+use valori_kernel::types::scalar::FxpScalar;
+use valori_kernel::types::vector::FxpVector;
+use valori_node::config::NodeConfig;
+use valori_node::engine::Engine;
+use valori_node::events::event_commit::EventCommitter;
+use valori_node::events::event_journal::EventJournal;
+use valori_node::events::event_log::EventLogWriter;
+use valori_node::events::event_replay::recover_from_event_log;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 4;
 
@@ -35,10 +36,13 @@ fn make_cfg(dir: &std::path::Path) -> NodeConfig {
 
 fn make_fxp_vec(values: [f32; DIM]) -> FxpVector {
     FxpVector {
-        data: values.iter().map(|&f| {
-            // Q16.16 conversion — same as engine.rs
-            FxpScalar((f * 65536.0) as i32)
-        }).collect(),
+        data: values
+            .iter()
+            .map(|&f| {
+                // Q16.16 conversion — same as engine.rs
+                FxpScalar((f * 65536.0) as i32)
+            })
+            .collect(),
     }
 }
 
@@ -64,13 +68,19 @@ fn test_proof_bytes_deterministic_and_sensitive() {
 
     let proof_a = generate_proof_bytes(&values);
     let proof_b = generate_proof_bytes(&values);
-    assert_eq!(proof_a, proof_b, "Proof must be deterministic for same input");
+    assert_eq!(
+        proof_a, proof_b,
+        "Proof must be deterministic for same input"
+    );
     assert!(!proof_a.is_empty(), "Proof must not be empty");
 
     let mut different = values.clone();
     different[0] += 1;
     let proof_other = generate_proof_bytes(&different);
-    assert_ne!(proof_a, proof_other, "Different inputs must produce different proofs");
+    assert_ne!(
+        proof_a, proof_other,
+        "Different inputs must produce different proofs"
+    );
 }
 
 // ── Test 2: hash_state_blake3 changes on real inserts ────────────────────────
@@ -83,11 +93,15 @@ fn test_hash_changes_on_insert() {
 
     let hash_empty = engine.get_proof().final_state_hash;
 
-    engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
     let hash_1 = engine.get_proof().final_state_hash;
     assert_ne!(hash_empty, hash_1, "Hash must change after first insert");
 
-    engine.insert_record_from_f32(&[0.5, 0.6, 0.7, 0.8]).unwrap();
+    engine
+        .insert_record_from_f32(&[0.5, 0.6, 0.7, 0.8])
+        .unwrap();
     let hash_2 = engine.get_proof().final_state_hash;
     assert_ne!(hash_1, hash_2, "Hash must change after second insert");
 }
@@ -108,12 +122,18 @@ fn test_hash_deterministic_across_runs() {
         let mut engine = Engine::new(&cfg);
         for i in 0..5u32 {
             let v = i as f32 / 10.0;
-            engine.insert_record_from_f32(&[v, v + 0.1, v + 0.2, v + 0.3]).unwrap();
+            engine
+                .insert_record_from_f32(&[v, v + 0.1, v + 0.2, v + 0.3])
+                .unwrap();
         }
         engine.get_proof().final_state_hash
     }
 
-    assert_eq!(build_hash(), build_hash(), "Same operations must produce identical state hash");
+    assert_eq!(
+        build_hash(),
+        build_hash(),
+        "Same operations must produce identical state hash"
+    );
 }
 
 // ── Test 4: crash → event-log recovery → hash matches pre-crash hash ─────────
@@ -132,7 +152,9 @@ fn test_event_log_recovery_preserves_hash() {
 
         for i in 0..4u32 {
             let v = i as f32 / 5.0;
-            committer.commit_event(make_insert_event(i, [v, v, v, v])).unwrap();
+            committer
+                .commit_event(make_insert_event(i, [v, v, v, v]))
+                .unwrap();
         }
 
         hash_state_blake3(committer.live_state())
@@ -159,7 +181,9 @@ fn test_snapshot_round_trip_preserves_hash() {
 
     for i in 0..4u32 {
         let v = i as f32 / 10.0;
-        engine.insert_record_from_f32(&[v, v + 0.05, v + 0.1, v + 0.15]).unwrap();
+        engine
+            .insert_record_from_f32(&[v, v + 0.05, v + 0.1, v + 0.15])
+            .unwrap();
     }
 
     let hash_before = engine.get_proof().final_state_hash;
@@ -171,5 +195,8 @@ fn test_snapshot_round_trip_preserves_hash() {
     engine2.restore(&snap).unwrap();
     let hash_after = engine2.get_proof().final_state_hash;
 
-    assert_eq!(hash_before, hash_after, "State hash must survive snapshot → restore");
+    assert_eq!(
+        hash_before, hash_after,
+        "State hash must survive snapshot → restore"
+    );
 }

@@ -16,9 +16,12 @@ fn entry(term: u64, node: NodeId, index: u64) -> Entry {
     Entry {
         log_id: log_id(term, node, index),
         payload: openraft::EntryPayload::Normal(ClientRequest {
-            event: KernelEvent::DeleteRecord { id: RecordId(index as u32) },
+            event: KernelEvent::DeleteRecord {
+                id: RecordId(index as u32),
+            },
             request_id: Some([index as u8; 16]),
             schema_version: 0,
+            namespace_id: 0,
         }),
     }
 }
@@ -58,7 +61,11 @@ async fn append_read_truncate_purge_roundtrip() {
 
     store.purge(log_id(1, 1, 1)).await.unwrap(); // replayed older purge
     let state = store.get_log_state().await.unwrap();
-    assert_eq!(state.last_purged_log_id, Some(log_id(1, 1, 2)), "floor is monotonic");
+    assert_eq!(
+        state.last_purged_log_id,
+        Some(log_id(1, 1, 2)),
+        "floor is monotonic"
+    );
 }
 
 #[tokio::test]
@@ -109,7 +116,11 @@ async fn everything_survives_reopen() {
     let got = store.try_get_log_entries(3..=3).await.unwrap();
     match &got[0].payload {
         openraft::EntryPayload::Normal(req) => {
-            assert_eq!(req.request_id, Some([3u8; 16]), "payload bytes intact after reopen");
+            assert_eq!(
+                req.request_id,
+                Some([3u8; 16]),
+                "payload bytes intact after reopen"
+            );
         }
         other => panic!("expected Normal payload, got {other:?}"),
     }
@@ -153,6 +164,7 @@ mod compliance {
 
     #[test]
     fn openraft_compliance_suite_over_redb() {
-        Suite::test_all(Builder).expect("redb store must pass the same suite the memory store passes");
+        Suite::test_all(Builder)
+            .expect("redb store must pass the same suite the memory store passes");
     }
 }

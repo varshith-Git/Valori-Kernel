@@ -8,7 +8,7 @@
 
 [![Version](https://img.shields.io/pypi/v/valoricore?style=flat-square&color=6c47ff&label=valoricore)](https://pypi.org/project/valoricore/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square)](LICENSE-MIT)
-[![Build](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valoricore-Kernel/ci.yml?style=flat-square&label=CI)](https://github.com/varshith-Git/Valoricore-Kernel/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valori-Kernel/docker-build.yml?style=flat-square&label=CI)](https://github.com/varshith-Git/Valori-Kernel/actions)
 [![Determinism](https://img.shields.io/badge/determinism-multi--arch%20verified-brightgreen?style=flat-square)](.github/workflows/multi-arch-determinism.yml)
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b?style=flat-square)](https://arxiv.org/abs/2512.22280)
 [![Tests](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valori-Kernel/test-count.yml?label=tests&style=flat-square)](https://github.com/varshith-Git/Valori-Kernel/actions/workflows/test-count.yml)
@@ -114,7 +114,7 @@ flowchart TB
 
 | | |
 |---|---|
-| **Determinism** | Q16.16 fixed-point — bit-identical across x86, ARM, RISC-V, Cortex-M4 |
+| **Determinism** | Q16.16 fixed-point — bit-identical across x86, ARM, RISC-V, Cortex-M4; NEON/AVX2/SSE4.1 SIMD with scalar fallback |
 | **Audit trail** | Append-only BLAKE3-chained event log; offline verifiable with no server |
 | **Tamper detection** | Locates the exact altered event, byte offset, and commit timestamp |
 | **Raft cluster** | 3/5-node consensus via openraft 0.9 + tonic/gRPC + mTLS |
@@ -122,7 +122,7 @@ flowchart TB
 | **Agent memory (MCP)** | `valori-mcp` — verifiable recall with BLAKE3 receipt; works with Claude Desktop |
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
 | **Valori Reranker** | Server-side hybrid retrieval — vector top-K pooled then re-scored by term frequency; 90% accuracy on hard lexical queries, 0.4 s latency, no external dependency |
-| **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
+| **Built-in ingest** | `POST /v1/ingest` — chunk + embed + insert + graph + audit in one call; `POST /v1/ingest/update` — diff-based document update (BLAKE3 content hash, re-embeds only changed chunks); `POST /v1/ingest?async=true` + `GET /v1/ingest/status/:job_id` — non-blocking background ingest; works in standalone and 3/5-node cluster; `VALORI_EMBED_PROVIDER=ollama\|openai\|custom`; `/v1/ingest/document` for chunking only |
 | **Tree-RAG** | `POST /v1/tree/{build,query,verify}` — navigate a doc's table-of-contents to the right section with breadcrumb + line citations and a replayable BLAKE3 retrieval receipt; deterministic, no embeddings, catches tampering |
 | **Self-maintaining memory** | `consolidate` (supersede a memory) and `contradict` (flag conflicts) commit `Supersedes`/`Contradicts` edges to the audit chain |
 | **Multi-tenancy** | Up to 1 024 named collections; per-tenant API keys with RBAC |
@@ -180,6 +180,20 @@ Reproduce: `python3 benchmarks/local_perf.py --million`
 | 10,000 | 1.224 ms | 1.285 ms | 1.354 ms | 810 q/s |
 | 50,000 | 10.129 ms | 10.735 ms | 11.336 ms | 98 q/s |
 | 1,000,000 | 247.815 ms | 288.795 ms | 308.291 ms | 3 q/s |
+
+### Search latency vs dataset size (bruteforce, dim=384, k=10) — measured 2026-07-08
+
+Apple M-series · release build · NEON SIMD · random Gaussian vectors · localhost HTTP
+
+| Records | p50 | p95 | p99 |
+|---|---|---|---|
+| 1,000 | 6.5 ms | 6.7 ms | 6.8 ms |
+| 5,000 | 28.8 ms | 29.6 ms | 78.3 ms |
+| 10,000 | 56.3 ms | 56.6 ms | 57.8 ms |
+| 25,000 | 138.9 ms | 139.3 ms | 140.0 ms |
+| 50,000 | 275.1 ms | 277.7 ms | 279.6 ms |
+
+> SIMD (NEON/AVX2) is active for L2 distance and dot product. At dim=384 the current throughput ceiling is cache-miss cost from heap-allocated per-record vectors (~5.5 µs/record). **Switch to `VALORI_INDEX=hnsw` for N > 10k at dim=384** to stay sub-millisecond.
 
 ### Index comparison @ 1 million records (dim=128, k=10)
 
@@ -313,7 +327,7 @@ The fastest path if you're not writing code — a full point-and-click UI over y
 
 ```bash
 docker compose up -d              # start the node (port 3000)
-cd ui && npm ci npm install && npm run devnpm install && npm run dev npm run dev   # start the dashboard (port 3001)
+cd ui && npm install && npm run dev                # start the dashboard (port 3001)
 # open http://localhost:3001
 ```
 
@@ -385,6 +399,17 @@ from valoricore.remote import SyncRemoteClient
 db = SyncRemoteClient("http://localhost:3000")
 result = db.ingest(text, source="paper.pdf", strategy="auto", collection="research")
 print(f"{result['chunk_count']} chunks inserted, doc node {result['document_node_id']}")
+
+# Update the document later — only changed chunks are re-embedded:
+updated = db.ingest_update(result["document_node_id"], new_text, source="paper-v2.pdf")
+print(f"kept {updated['kept_count']}, added {updated['added_count']}, removed {updated['removed_count']}")
+
+# Background ingest — returns immediately, poll for completion:
+job_id = db.ingest_async(text, source="large-doc.pdf", collection="research")
+status = db.ingest_status(job_id)   # {"status": "pending"|"running"|"done"|"error", ...}
+
+# Graph node management:
+db.delete_node(node_id, collection="research")   # cascade-removes all incident edges
 ```
 
 **Tree-RAG — jump to the right section instead of similar text:**
@@ -440,6 +465,7 @@ cargo build --release -p valori-node
 VALORI_DIM=128 \
 VALORI_EVENT_LOG_PATH=./data/events.log \
 VALORI_SNAPSHOT_PATH=./data/snapshot.bin \
+VALORI_SNAPSHOT_INTERVAL=60 \
   ./target/release/valori-node
 
 # Tests

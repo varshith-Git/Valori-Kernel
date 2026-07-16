@@ -1,0 +1,127 @@
+name: Desktop Release
+
+# Builds, signs, and publishes the Tauri desktop app for all platforms.
+# Triggered by tags of the form `desktop-v*` (e.g. desktop-v0.2.0).
+#
+# Required GitHub secrets:
+#   TAURI_SIGNING_PRIVATE_KEY         — output of `cargo tauri signer generate`
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD — passphrase (may be empty string)
+#
+# To generate the key pair (run once, store the public key in tauri.conf.json):
+#   cargo install tauri-cli --locked
+#   cargo tauri signer generate -w ~/.tauri/valori.key
+#   # Copy the printed public key into plugins.updater.pubkey in tauri.conf.json
+#   # Store the private key file contents as TAURI_SIGNING_PRIVATE_KEY secret
+#   # Store the passphrase as TAURI_SIGNING_PRIVATE_KEY_PASSWORD secret
+
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. desktop-v0.2.0)"
+        required: true
+
+permissions:
+  contents: write  # create GitHub Release and upload assets
+
+jobs:
+  publish:
+    name: Build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - platform: macos-14
+            args: "--target aarch64-apple-darwin"
+            rust_target: aarch64-apple-darwin
+
+          # macOS Intel
+          - platform: macos-13
+            args: "--target x86_64-apple-darwin"
+            rust_target: x86_64-apple-darwin
+
+          # Linux x86_64
+          - platform: ubuntu-22.04
+            args: ""
+            rust_target: ""
+
+          # Windows x86_64
+          - platform: windows-latest
+            args: ""
+            rust_target: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Node.js (needed by prepare-ui-server.mjs / Next.js build) ────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
+      # ── Rust ─────────────────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            desktop/src-tauri -> desktop/src-tauri/target
+            desktop/node-launcher -> desktop/node-launcher/target
+
+      # ── Linux system libraries ────────────────────────────────────────────────
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # ── Build + sign + publish via tauri-action ───────────────────────────────
+      # tauri-action handles:
+      #   1. `tauri build` (which runs beforeBuildCommand: prepare-sidecars + prepare-ui-server)
+      #   2. Code-signing bundles with TAURI_SIGNING_PRIVATE_KEY
+      #   3. Generating latest.json (the updater manifest)
+      #   4. Uploading all artifacts to a GitHub Release draft
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name || github.event.inputs.tag }}
+          releaseName: "Valori Desktop ${{ github.ref_name || github.event.inputs.tag }}"
+          releaseBody: |
+            ## What's new
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+
+            ## Installation
+
+            Download the installer for your platform below.
+            The app checks for updates automatically on each launch.
+
+            ## Verification
+
+            Each bundle is signed with a Tauri signing key. The app will refuse
+            to install unsigned updates.
+          releaseDraft: true
+          prerelease: ${{ contains(github.ref_name || github.event.inputs.tag, '-') }}
+          args: ${{ matrix.args }}

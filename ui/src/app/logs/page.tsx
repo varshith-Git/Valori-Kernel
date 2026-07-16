@@ -5,14 +5,14 @@ import useSWR from "swr";
 
 // -- Colour-code each event kind -----------------------------------------------
 function lineColor(line: string): string {
-  if (/InsertRecord|AutoInsertRecord/.test(line))      return "#4ade80"; // emerald
-  if (/DeleteRecord|SoftDeleteRecord/.test(line))      return "#f87171"; // red
-  if (/CreateNode|AutoCreateNode/.test(line))          return "#38bdf8"; // sky
-  if (/DeleteNode/.test(line))                         return "#fb923c"; // orange
-  if (/CreateEdge|AutoCreateEdge/.test(line))          return "#a78bfa"; // violet
-  if (/DeleteEdge/.test(line))                         return "#fbbf24"; // amber
-  if (/ShredKey|InsertRecordEncrypted/.test(line))     return "#f472b6"; // pink
-  return "#71717a";                                                       // zinc-500
+  if (/InsertRecord|AutoInsertRecord/.test(line))      return "var(--color-emerald-500)";
+  if (/DeleteRecord|SoftDeleteRecord/.test(line))      return "var(--color-red-500)";
+  if (/CreateNode|AutoCreateNode/.test(line))          return "var(--color-sky-500)";
+  if (/DeleteNode/.test(line))                         return "var(--color-orange-500)";
+  if (/CreateEdge|AutoCreateEdge/.test(line))          return "var(--color-violet-500)";
+  if (/DeleteEdge/.test(line))                         return "var(--color-amber-500)";
+  if (/ShredKey|InsertRecordEncrypted/.test(line))     return "var(--color-pink-500)";
+  return "var(--muted-foreground)";
 }
 
 // -- Extract event kind label --------------------------------------------------
@@ -33,9 +33,11 @@ function CopyBtn({
 }) {
   const [done, setDone] = useState(false);
   const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 1600);
+    try {
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 1600);
+    } catch { /* clipboard denied — no-op */ }
   };
   return (
     <button
@@ -59,7 +61,7 @@ function LogLine({ index, line }: { index: number; line: string }) {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className="group flex items-start gap-3 px-4 py-[3px] hover:bg-white/[0.03] font-mono text-[12.5px] leading-5"
+      className="group flex items-start gap-3 px-4 py-[3px] hover:bg-accent/50 font-mono text-[12.5px] leading-5"
     >
       {/* Line number */}
       <span className="flex-shrink-0 w-10 text-right text-muted-foreground select-none tabular-nums">
@@ -103,6 +105,8 @@ export default function LogsPage() {
   );
 
   const rawLines: string[] = Array.isArray(data) ? data : [];
+  const errorStatus = error instanceof Error ? Number(error.message.replace("HTTP ", "")) : undefined;
+  const notEnabled = errorStatus === 400;
 
   // Filter
   const filterLower = filter.toLowerCase();
@@ -163,8 +167,8 @@ export default function LogsPage() {
 
         {/* Status dot */}
         {error ? (
-          <span className="text-[10px] text-red-400">
-            ● event log not enabled (pass VALORI_EVENT_LOG_PATH)
+          <span className="text-[10px] text-red-600 dark:text-red-400">
+            ● {notEnabled ? "event log not enabled (pass VALORI_EVENT_LOG_PATH)" : "backend unreachable"}
           </span>
         ) : isLoading ? (
           <span className="text-[10px] text-muted-foreground">loading…</span>
@@ -199,6 +203,22 @@ export default function LogsPage() {
         >
           ↓ tail
         </button>
+
+        {/* Jump to first error */}
+        {rawLines.some(l => /error|ERROR|panic|PANIC|failed|FAILED/i.test(l)) && (
+          <button
+            onClick={() => {
+              setFilter("error");
+              setTimeout(() => {
+                const el = containerRef.current;
+                if (el) el.scrollTop = 0;
+              }, 50);
+            }}
+            className="text-[10px] px-2 py-1 rounded border border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
+          >
+            ⚠ errors
+          </button>
+        )}
 
         <CopyBtn text={allText} label="copy all" />
       </div>
@@ -262,13 +282,17 @@ export default function LogsPage() {
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto"
       >
-        {/* No event log configured */}
+        {/* No event log configured, or backend unreachable */}
         {error && (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-            <span className="font-mono text-muted-foreground text-sm">event log not enabled</span>
-            <code className="font-mono text-[11px] text-muted-foreground bg-card border border-border rounded px-3 py-2">
-              VALORI_EVENT_LOG_PATH=/tmp/valori-events.log cargo run -p valori-node
-            </code>
+            <span className="font-mono text-muted-foreground text-sm">
+              {notEnabled ? "event log not enabled" : "backend unreachable — is the node running?"}
+            </span>
+            {notEnabled && (
+              <code className="font-mono text-[11px] text-muted-foreground bg-card border border-border rounded px-3 py-2">
+                VALORI_EVENT_LOG_PATH=/tmp/valori-events.log cargo run -p valori-node
+              </code>
+            )}
           </div>
         )}
 
@@ -283,7 +307,7 @@ export default function LogsPage() {
 
         {/* Log lines */}
         {!error && lines.map((line, i) => (
-          <LogLine key={i} index={i} line={line} />
+          <LogLine key={`${line.substring(0, 40)}-${i}`} index={i} line={line} />
         ))}
 
         {/* Scroll anchor */}

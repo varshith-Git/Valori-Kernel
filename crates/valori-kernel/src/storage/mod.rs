@@ -1,2 +1,2 @@
-pub mod record;
 pub mod pool;
+pub mod record;

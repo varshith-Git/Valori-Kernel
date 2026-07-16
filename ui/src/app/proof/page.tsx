@@ -1,23 +1,29 @@
 "use client";
 
+import { useEffect } from "react";
 import { useProof } from "@/lib/hooks/useProof";
 import { useHealth } from "@/lib/hooks/useHealth";
+import { markProofViewed } from "@/lib/onboarding";
 import { ProofHash } from "@/components/proof/ProofHash";
 import { MetricCard } from "@/components/proof/MetricCard";
 import { ProofExport } from "@/components/proof/ProofExport";
+import { ReceiptCard } from "@/components/proof/ReceiptCard";
 
 export default function DashboardPage() {
   const { hash, isLoading, error } = useProof();
   const { chainHeight, recordCount, dim, online } = useHealth();
 
+  // Onboarding: a real hash on screen counts as "verified your first proof".
+  useEffect(() => { if (hash) markProofViewed(); }, [hash]);
+
   return (
-    <div className="flex flex-col gap-8 max-w-4xl">
+    <div className="flex flex-col gap-8 w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">Proof Dashboard</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Live BLAKE3 state hash — updates on every committed event
+            For you — live BLAKE3 state hash, updates on every committed event
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -32,12 +38,12 @@ export default function DashboardPage() {
       {/* State hash — the hero element */}
       <div className="rounded-xl border border-[var(--v-accent)] bg-card p-6 [box-shadow:0_0_24px_var(--v-accent-muted)]">
         {!online && !isLoading ? (
-          <div className="text-sm text-red-400">
+          <div className="text-sm text-destructive">
             Backend unreachable — start Valori on{" "}
             <code className="font-mono">localhost:3000</code>
           </div>
         ) : error && online ? (
-          <div className="text-sm text-amber-400">
+          <div className="text-sm text-amber-500">
             Proof endpoint error — check VALORI_EVENT_LOG_PATH is set
           </div>
         ) : (
@@ -45,8 +51,11 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* Operation Receipt */}
+      <ReceiptCard />
+
       {/* Metrics row */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard
           label="Chain height"
           value={chainHeight?.toLocaleString() ?? null}

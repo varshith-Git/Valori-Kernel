@@ -15,11 +15,11 @@
 //! so the `Vec` avoids repeated reallocations on the hot path.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::state::kernel::KernelState;
 use crate::error::Result;
+use crate::state::kernel::KernelState;
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 6; // V6: namespace_id per record/node + namespace head arrays
+pub const SCHEMA_VERSION: u32 = 7; // V7: adds the KernelState.meta sidecar (SetMeta-committed key/value pairs)
 
 // ── infallible push helpers ────────────────────────────────────────────────────
 // Writing to a Vec<u8> can only fail on OOM, which panics (same as any alloc).
@@ -66,17 +66,18 @@ fn push_bytes(out: &mut alloc::vec::Vec<u8>, data: &[u8]) {
 ///
 /// Absent slot: 1 byte.  We pessimistically assume all slots are present.
 pub fn encode_capacity_hint(state: &KernelState) -> usize {
-    let dim         = state.dim.unwrap_or(0);
+    let dim = state.dim.unwrap_or(0);
     let total_slots = state.records.raw_records().len();
-    let node_count  = state.node_count();
-    let edge_count  = state.edge_count();
+    let node_count = state.node_count();
+    let edge_count = state.edge_count();
 
     64                                          // header
     + total_slots * (28 + dim * 4)             // records (V6 layout, all present)
     + node_count  * 30                         // nodes   (V6 layout)
     + edge_count  * 29                         // edges
     + 2 * 1024 * 4                             // namespace head arrays (2 × 1024 × u32)
-    + 4096                                     // small safety margin
+    + state.meta.len() * 128                   // V7: rough per-entry meta estimate
+    + 4096 // small safety margin
 }
 
 // ── public API ────────────────────────────────────────────────────────────────
@@ -130,7 +131,12 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
     }
 
     // Nodes
-    let node_count = state.nodes.raw_nodes().iter().filter(|s| s.is_some()).count() as u32;
+    let node_count = state
+        .nodes
+        .raw_nodes()
+        .iter()
+        .filter(|s| s.is_some())
+        .count() as u32;
     push_u32(out, node_count);
 
     for slot in state.nodes.raw_nodes().iter() {
@@ -139,17 +145,26 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
             push_u8(out, node.kind as u8);
 
             match node.record {
-                Some(rid) => { push_u8(out, 1); push_u32(out, rid.0); }
-                None      => push_u8(out, 0),
+                Some(rid) => {
+                    push_u8(out, 1);
+                    push_u32(out, rid.0);
+                }
+                None => push_u8(out, 0),
             }
             match node.first_out_edge {
-                Some(eid) => { push_u8(out, 1); push_u32(out, eid.0); }
-                None      => push_u8(out, 0),
+                Some(eid) => {
+                    push_u8(out, 1);
+                    push_u32(out, eid.0);
+                }
+                None => push_u8(out, 0),
             }
             // V4: incoming edge back-pointer
             match node.first_in_edge {
-                Some(eid) => { push_u8(out, 1); push_u32(out, eid.0); }
-                None      => push_u8(out, 0),
+                Some(eid) => {
+                    push_u8(out, 1);
+                    push_u32(out, eid.0);
+                }
+                None => push_u8(out, 0),
             }
             // V6: namespace linked-list fields
             push_u16(out, node.namespace_id);
@@ -159,7 +174,12 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
     }
 
     // Edges
-    let edge_count = state.edges.raw_edges().iter().filter(|s| s.is_some()).count() as u32;
+    let edge_count = state
+        .edges
+        .raw_edges()
+        .iter()
+        .filter(|s| s.is_some())
+        .count() as u32;
     push_u32(out, edge_count);
 
     for slot in state.edges.raw_edges().iter() {
@@ -170,13 +190,19 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
             push_u32(out, edge.to.0);
 
             match edge.next_out {
-                Some(eid) => { push_u8(out, 1); push_u32(out, eid.0); }
-                None      => push_u8(out, 0),
+                Some(eid) => {
+                    push_u8(out, 1);
+                    push_u32(out, eid.0);
+                }
+                None => push_u8(out, 0),
             }
             // V4: incoming list back-pointer
             match edge.next_in {
-                Some(eid) => { push_u8(out, 1); push_u32(out, eid.0); }
-                None      => push_u8(out, 0),
+                Some(eid) => {
+                    push_u8(out, 1);
+                    push_u32(out, eid.0);
+                }
+                None => push_u8(out, 0),
             }
         }
     }
@@ -188,6 +214,16 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
     }
     for &head in state.namespace_node_heads.iter().take(MAX_NAMESPACES) {
         push_u32(out, head);
+    }
+
+    // V7: KernelState.meta — SetMeta-committed key/value pairs. BTreeMap
+    // iteration is key-ordered, so encoding is deterministic across replicas.
+    push_u32(out, state.meta.len() as u32);
+    for (key, value) in state.meta.iter() {
+        push_u32(out, key.len() as u32);
+        push_bytes(out, key.as_bytes());
+        push_u32(out, value.len() as u32);
+        push_bytes(out, value.as_bytes());
     }
 
     Ok(())

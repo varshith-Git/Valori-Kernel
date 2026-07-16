@@ -1,0 +1,145 @@
+name: CI
+
+# PR quality gate — blocks merge on lint, type, or test failure.
+# Every job is independent so they run in parallel and fail fast.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ── Rust fmt ──────────────────────────────────────────────────────────────────
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: fmt
+      - run: cargo fmt --all -- --check
+
+  # ── Rust clippy ───────────────────────────────────────────────────────────────
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ── Rust unit tests ───────────────────────────────────────────────────────────
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: test
+      - run: cargo test -p valori-kernel -p valori-node
+
+  # ── Route parity gate (standalone ↔ cluster) ─────────────────────────────────
+  route-parity:
+    name: route parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: route-parity
+      - run: cargo test -p valori-node --test route_parity -- --nocapture
+
+  # ── UI TypeScript typecheck ───────────────────────────────────────────────────
+  ui-typecheck:
+    name: ui typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+
+  # ── Coverage (llvm-cov) ───────────────────────────────────────────────────────
+  # Reports line/branch coverage for valori-kernel and writes a summary to the
+  # job page. The lcov artifact can be downloaded and imported into any local
+  # coverage viewer. Does not gate on a minimum threshold — that is tracked in
+  # the K3 baseline doc and raised manually per phase.
+  coverage:
+    name: coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          components: llvm-tools-preview
+          cache-key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage — valori-kernel
+        run: |
+          cargo llvm-cov \
+            --package valori-kernel \
+            --lcov --output-path lcov.info
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 14
+
+      - name: Write coverage summary to job page
+        run: |
+          echo "## Coverage — valori-kernel" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report \
+            --package valori-kernel \
+            --summary-only >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Miri — kernel UB detection ────────────────────────────────────────────────
+  # Runs a focused subset of valori-kernel tests under Miri to catch undefined
+  # behaviour in the FXP arithmetic and cryptographic proof paths.
+  # Scope is intentionally narrow: only pure-computation test suites with no
+  # OS I/O or thread dependencies. The full test suite is covered by the `test`
+  # job above.
+  miri:
+    name: miri (kernel UB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: nightly
+          components: miri
+          cache-key: miri
+
+      - name: miri setup
+        run: cargo miri setup
+
+      - name: miri — fxp arithmetic (Q16.16 ops)
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: cargo miri test -p valori-kernel --test fxp
+
+      - name: miri — proof (Merkle root + InsertReceipt)
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: cargo miri test -p valori-kernel --test proof

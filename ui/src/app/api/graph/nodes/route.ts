@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -11,10 +12,13 @@ function authHeaders(): Record<string, string> {
 
 export async function GET(req: NextRequest) {
   try {
-    const collection = req.nextUrl.searchParams.get("collection");
+    const params = req.nextUrl.searchParams;
     const url = new URL(`${getApiUrl()}/graph/nodes`);
-    if (collection) url.searchParams.set("collection", collection);
-    const res = await fetch(url.toString(), {
+    for (const key of ["collection", "kind", "limit", "offset"]) {
+      const v = params.get(key);
+      if (v !== null) url.searchParams.set(key, v);
+    }
+    const res = await fetchWithTimeout(url.toString(), {
       headers: authHeaders(),
       cache: "no-store",
     });

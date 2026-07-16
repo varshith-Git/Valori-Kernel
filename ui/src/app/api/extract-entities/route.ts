@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -9,7 +10,7 @@ export async function POST(req: NextRequest) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${getApiUrl()}/v1/ingest/extract-entities`, {
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/ingest/extract-entities`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),

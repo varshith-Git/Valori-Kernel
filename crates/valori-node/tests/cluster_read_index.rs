@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use valori_consensus::types::{NodeId, ValoriNode};
-use valori_consensus::{ClientRequest, NullAuditSink};
+use valori_consensus::ClientRequest;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
@@ -33,10 +33,17 @@ async fn boot(id: NodeId) -> Node {
         init: false,
         raft_log_path: None,
         tls: None,
+        shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Box::new(NullAuditSink), 0).await.unwrap();
-    let (api, task) = serve_cluster_api(&handle, "127.0.0.1:0", None).await.unwrap();
-    Node { handle, api_addr: api.to_string(), _http_task: task }
+    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let (api, task) = serve_cluster_api(&handle, "127.0.0.1:0", None)
+        .await
+        .unwrap();
+    Node {
+        handle,
+        api_addr: api.to_string(),
+        _http_task: task,
+    }
 }
 
 /// Stand up a 2-node cluster and return the nodes once a leader exists.
@@ -47,8 +54,20 @@ async fn two_node_cluster() -> Vec<Node> {
     // All gRPC + HTTP servers are listening now, so the first election succeeds
     // without retries. Build membership from the actually-bound addresses.
     let members: std::collections::BTreeMap<NodeId, ValoriNode> = [
-        (1, ValoriNode { api_addr: n1.api_addr.clone(), raft_addr: n1.handle.raft_addr.to_string() }),
-        (2, ValoriNode { api_addr: n2.api_addr.clone(), raft_addr: n2.handle.raft_addr.to_string() }),
+        (
+            1,
+            ValoriNode {
+                api_addr: n1.api_addr.clone(),
+                raft_addr: n1.handle.raft_addr.to_string(),
+            },
+        ),
+        (
+            2,
+            ValoriNode {
+                api_addr: n2.api_addr.clone(),
+                raft_addr: n2.handle.raft_addr.to_string(),
+            },
+        ),
     ]
     .into_iter()
     .collect();
@@ -67,7 +86,13 @@ async fn two_node_cluster() -> Vec<Node> {
 }
 
 fn leader_id(nodes: &[Node]) -> NodeId {
-    nodes[0].handle.raft.metrics().borrow().current_leader.expect("a leader")
+    nodes[0]
+        .handle
+        .raft
+        .metrics()
+        .borrow()
+        .current_leader
+        .expect("a leader")
 }
 
 async fn search(api_addr: &str, query: Vec<f32>, consistency: &str) -> serde_json::Value {
@@ -89,8 +114,14 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
     let leader = leader_id(&nodes);
 
     // Pick the follower (the node that is not the leader).
-    let follower = nodes.iter().find(|n| n.handle.raft.metrics().borrow().id != leader).unwrap();
-    let leader_node = nodes.iter().find(|n| n.handle.raft.metrics().borrow().id == leader).unwrap();
+    let follower = nodes
+        .iter()
+        .find(|n| n.handle.raft.metrics().borrow().id != leader)
+        .unwrap();
+    let leader_node = nodes
+        .iter()
+        .find(|n| n.handle.raft.metrics().borrow().id == leader)
+        .unwrap();
 
     // Write through the leader's Raft handle (AutoInsertRecord → id 0).
     let resp = leader_node
@@ -98,12 +129,15 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
         .raft
         .client_write(ClientRequest {
             event: KernelEvent::AutoInsertRecord {
-                vector: FxpVector { data: vec![FxpScalar(100), FxpScalar(200), FxpScalar(300)] },
+                vector: FxpVector {
+                    data: vec![FxpScalar(100), FxpScalar(200), FxpScalar(300)],
+                },
                 metadata: None,
                 tag: 0,
             },
             schema_version: 0,
             request_id: None,
+            namespace_id: 0,
         })
         .await
         .unwrap();
@@ -113,7 +147,11 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
     // runs the read-index round trip to the leader and waits to catch up.
     let body = search(&follower.api_addr, vec![1.0, 2.0, 3.0], "linearizable").await;
     let results = body["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 1, "follower linearizable read missed the write: {body}");
+    assert_eq!(
+        results.len(),
+        1,
+        "follower linearizable read missed the write: {body}"
+    );
     assert_eq!(results[0]["id"], 0);
 }
 
@@ -121,29 +159,47 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
 async fn read_index_endpoint_serves_on_leader_and_redirects_intent_on_follower() {
     let nodes = two_node_cluster().await;
     let leader = leader_id(&nodes);
-    let leader_node = nodes.iter().find(|n| n.handle.raft.metrics().borrow().id == leader).unwrap();
-    let follower = nodes.iter().find(|n| n.handle.raft.metrics().borrow().id != leader).unwrap();
+    let leader_node = nodes
+        .iter()
+        .find(|n| n.handle.raft.metrics().borrow().id == leader)
+        .unwrap();
+    let follower = nodes
+        .iter()
+        .find(|n| n.handle.raft.metrics().borrow().id != leader)
+        .unwrap();
 
     let client = reqwest::Client::new();
 
     // Leader answers with a read index.
     let on_leader = client
-        .get(format!("http://{}/v1/cluster/read-index", leader_node.api_addr))
+        .get(format!(
+            "http://{}/v1/cluster/read-index",
+            leader_node.api_addr
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(on_leader.status(), reqwest::StatusCode::OK);
     let v: serde_json::Value = on_leader.json().await.unwrap();
-    assert!(v.get("read_index").and_then(|x| x.as_u64()).is_some(), "leader read-index: {v}");
+    assert!(
+        v.get("read_index").and_then(|x| x.as_u64()).is_some(),
+        "leader read-index: {v}"
+    );
 
     // Follower cannot establish a read index itself — it answers 503 and names
     // the leader so the caller re-resolves.
     let on_follower = client
-        .get(format!("http://{}/v1/cluster/read-index", follower.api_addr))
+        .get(format!(
+            "http://{}/v1/cluster/read-index",
+            follower.api_addr
+        ))
         .send()
         .await
         .unwrap();
-    assert_eq!(on_follower.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        on_follower.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
     let v: serde_json::Value = on_follower.json().await.unwrap();
     assert_eq!(v["leader"].as_u64(), Some(leader));
 }

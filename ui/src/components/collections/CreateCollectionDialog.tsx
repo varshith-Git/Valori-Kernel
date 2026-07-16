@@ -67,9 +67,19 @@ export function CreateCollectionDialog({
               setErr("");
             }}
             onKeyDown={(e) => e.key === "Enter" && submit()}
-            className="bg-accent border-input text-foreground placeholder:text-muted-foreground"
+            className={`bg-accent text-foreground placeholder:text-muted-foreground ${
+              name && !VALID.test(name)
+                ? "border-red-500 focus-visible:ring-red-500/30"
+                : "border-input"
+            }`}
           />
-          {name && (
+          <p className="text-[11px] text-muted-foreground">
+            Letters, numbers, <code className="font-mono">_</code> and <code className="font-mono">-</code> only · cannot be changed later
+          </p>
+          {name && !VALID.test(name) && (
+            <p className="text-xs text-red-500">Invalid character — use only a–z, 0–9, _ or -</p>
+          )}
+          {name && VALID.test(name) && (
             <p className="text-xs text-muted-foreground">
               Namespace:{" "}
               <code className="font-mono text-muted-foreground">
@@ -90,7 +100,7 @@ export function CreateCollectionDialog({
           </Button>
           <Button
             size="sm"
-            disabled={!name || busy}
+            disabled={!name || !VALID.test(name) || busy}
             onClick={submit}
             className="bg-primary text-primary-foreground hover:bg-primary/90"
           >

@@ -17,7 +17,7 @@ export function LLMSelector() {
     if (config.provider !== "ollama") return;
     setOllamaModels(null);
     setOllamaErr(false);
-    fetch("/api/ollama-models")
+    fetch("/api/ollama-models?type=llm")
       .then((r) => r.json())
       .then((d: { models: string[]; error?: string }) => {
         if (d.error || d.models.length === 0) { setOllamaErr(true); return; }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -340,7 +341,7 @@ export function DiffTab({ namespace }: { namespace: string }) {
   }, [nsA, nsB]);
 
   return (
-    <div className="flex flex-col gap-5 max-w-4xl">
+    <TabShell>
 
       {/* Selectors */}
       <div className="rounded-xl border border-border bg-card p-5">
@@ -581,6 +582,6 @@ export function DiffTab({ namespace }: { namespace: string }) {
           </p>
         </>
       )}
-    </div>
+    </TabShell>
   );
 }

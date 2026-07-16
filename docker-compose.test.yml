@@ -1,0 +1,95 @@
+# Valori — integration test compose file
+# Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+#
+# Spins up test nodes for:
+#   - BQ index verification
+#   - Auto-tier index verification
+#   - Standalone sharding verification
+#
+# Usage:
+#   docker build -t valori-node:test .
+#   docker compose -f docker-compose.test.yml up -d
+#   python3 tests/integration/test_docker.py
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  # ── Node 1: BQ index ────────────────────────────────────────────────────────
+  valori-bq:
+    image: valori-node:test
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valori-bq
+    ports:
+      - "3100:3000"
+    environment:
+      VALORI_DIM: "128"
+      VALORI_MAX_RECORDS: "10000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_INDEX: "bq"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - valori-bq-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+
+  # ── Node 2: Auto-tier index ──────────────────────────────────────────────────
+  valori-auto:
+    image: valori-node:test
+    container_name: valori-auto
+    ports:
+      - "3101:3000"
+    environment:
+      VALORI_DIM: "128"
+      VALORI_MAX_RECORDS: "100000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_INDEX: "auto"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - valori-auto-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+
+  # ── Node 3: Standalone sharding (4 shards) ──────────────────────────────────
+  valori-sharded:
+    image: valori-node:test
+    container_name: valori-sharded
+    ports:
+      - "3102:3000"
+    environment:
+      VALORI_DIM: "128"
+      VALORI_MAX_RECORDS: "100000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_INDEX: "brute"
+      VALORI_SHARD_COUNT: "4"
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+    volumes:
+      - valori-sharded-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+
+volumes:
+  valori-bq-data:
+  valori-auto-data:
+  valori-sharded-data:

@@ -14,24 +14,20 @@ name = "valori"
 path = "src/main.rs"
 
 [[bin]]
-name = "bench_ingest"
-path = "src/bin/bench_ingest.rs"
-
-[[bin]]
 name = "bench_1m"
 path = "src/bin/bench_1m.rs"
-
-[[bin]]
-name = "bench_filter"
-path = "src/bin/bench_filter.rs"
 
 [[bin]]
 name = "bench_persistence"
 path = "src/bin/bench_persistence.rs"
 
 [[bin]]
-name = "bench_recall"
-path = "src/bin/bench_recall.rs"
+name = "bench_wal_replay"
+path = "src/bin/bench_wal_replay.rs"
+
+[[bin]]
+name = "bench_bf_vs_bq"
+path = "src/bin/bench_bf_vs_bq.rs"
 
 [dependencies]
 clap        = { version = "4.5",   features = ["derive"] }
@@ -43,6 +39,9 @@ bincode     = { version = "2.0.1", features = ["serde"] }
 valori-node   = { workspace = true }
 valori-kernel = { workspace = true, features = ["std"] }
 valori-wire    = { workspace = true }
+valori-storage = { workspace = true }
+# RSS measurement for the bf-vs-bq memory benchmark (bench_bf_vs_bq).
+libc             = "0.2"
 serde       = { version = "1.0",   features = ["derive"] }
 serde_json  = "1.0"
 memmap2     = "0.9"
@@ -62,3 +61,6 @@ valori-consensus = { workspace = true }
 [dev-dependencies]
 tempfile = "3.24.0"
 axum     = "0.7"
+
+[lints]
+workspace = true

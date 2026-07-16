@@ -5,9 +5,22 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-valori-kernel = { workspace = true, features = ["std"] }
-valori-wire = { workspace = true }
+valori-kernel  = { workspace = true, features = ["std"] }
+valori-search  = { workspace = true }
+valori-index   = { workspace = true }
+valori-rag     = { workspace = true }
+valori-ingest  = { workspace = true }
+valori-models  = { workspace = true }
+valori-engine  = { workspace = true }
+valori-wire    = { workspace = true }
+valori-storage = { workspace = true }
+valori-state   = { workspace = true }
 valori-consensus = { workspace = true }
+valori-core     = { workspace = true, features = ["std"] }
+valori-planner  = { workspace = true }
+valori-effect   = { workspace = true }
+valori-metadata = { workspace = true }
+async-trait = "0.1"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 tokio = { version = "1.0", features = ["full"] }
 axum = "0.7"
@@ -25,11 +38,12 @@ reqwest = { version = "0.12.28", default-features = false, features = ["json", "
 axum-extra = { version = "0.9", features = ["typed-header"] }
 headers = "0.4"
 tower-http = { version = "0.5", features = ["cors", "validate-request", "limit"] }
+dirs = "5"
 metrics = "0.21"
 metrics-exporter-prometheus = "0.12"
 futures = "0.3.31"
 tokio-stream = "0.1.17"
-opendal = { version = "0.55.0", features = ["services-s3", "services-fs"] }
+opendal = { version = "0.58", features = ["services-s3", "services-fs"] }
 bytes = "1.0"
 tap = "1.0.1"
 base64 = "0.22.1"
@@ -45,3 +59,6 @@ getrandom = "0.2"
 [dev-dependencies] 
 tempfile = "3.23.0"
 tower = { version = "0.5.2", features = ["util"] }
+
+[lints]
+workspace = true

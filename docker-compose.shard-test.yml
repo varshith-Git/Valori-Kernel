@@ -1,0 +1,101 @@
+services:
+  node-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valori-shard-test-1
+    ports:
+      - "3001:3000"
+    environment:
+      VALORI_DIM: "4"
+      VALORI_MAX_RECORDS: "10000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
+      VALORI_NODE_ID: "1"
+      VALORI_RAFT_BIND: "0.0.0.0:3100"
+      VALORI_RAFT_LOG_PATH: "/data/raft.redb"
+      VALORI_EVENT_LOG_PATH: "/data/events.log"
+      VALORI_SNAPSHOT_PATH: "/data/state.snap"
+      VALORI_SHARD_COUNT: "3"
+      VALORI_CLUSTER_INIT: "1"
+    volumes:
+      - node-1-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: "5s"
+      timeout: "3s"
+      start_period: "30s"
+      retries: 5
+  node-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valori-shard-test-2
+    ports:
+      - "3002:3000"
+    environment:
+      VALORI_DIM: "4"
+      VALORI_MAX_RECORDS: "10000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
+      VALORI_NODE_ID: "2"
+      VALORI_RAFT_BIND: "0.0.0.0:3100"
+      VALORI_RAFT_LOG_PATH: "/data/raft.redb"
+      VALORI_EVENT_LOG_PATH: "/data/events.log"
+      VALORI_SNAPSHOT_PATH: "/data/state.snap"
+      VALORI_SHARD_COUNT: "3"
+    depends_on:
+      node-1:
+        condition: service_healthy
+    volumes:
+      - node-2-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: "5s"
+      timeout: "3s"
+      start_period: "30s"
+      retries: 5
+  node-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: valori-shard-test-3
+    ports:
+      - "3003:3000"
+    environment:
+      VALORI_DIM: "4"
+      VALORI_MAX_RECORDS: "10000"
+      VALORI_MAX_NODES: "10000"
+      VALORI_MAX_EDGES: "50000"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_CLUSTER_MEMBERS: "1=node-1:3100/node-1:3000,2=node-2:3100/node-2:3000,3=node-3:3100/node-3:3000"
+      VALORI_NODE_ID: "3"
+      VALORI_RAFT_BIND: "0.0.0.0:3100"
+      VALORI_RAFT_LOG_PATH: "/data/raft.redb"
+      VALORI_EVENT_LOG_PATH: "/data/events.log"
+      VALORI_SNAPSHOT_PATH: "/data/state.snap"
+      VALORI_SHARD_COUNT: "3"
+    depends_on:
+      node-1:
+        condition: service_healthy
+    volumes:
+      - node-3-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/valori-node", "--health-check"]
+      interval: "5s"
+      timeout: "3s"
+      start_period: "30s"
+      retries: 5
+
+volumes:
+  node-1-data:
+  node-2-data:
+  node-3-data:
+
+networks:
+  default:
+    name: valori-shard-test

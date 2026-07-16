@@ -16,9 +16,9 @@ use std::time::Duration;
 use openraft::{Config, Raft};
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
 
-use valori_consensus::types::{ClientRequest, NodeId, TypeConfig, ValoriNode};
+use valori_consensus::types::{ClientRequest, NodeId, ShardId, TypeConfig, ValoriNode};
 use valori_consensus::{
-    serve_raft_tls, RaftTlsConfig, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
+    serve_raft_tls_single, RaftTlsConfig, ValoriLogStore, ValoriNetworkFactory, ValoriStateMachine,
 };
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
@@ -80,13 +80,15 @@ async fn spawn_tls_node(id: NodeId, tls: RaftTlsConfig) -> TestNode {
     let raft = Raft::new(
         id,
         config,
-        ValoriNetworkFactory::with_tls(tls.clone()),
+        ValoriNetworkFactory::with_tls(ShardId(0), tls.clone()),
         ValoriLogStore::new(),
         sm.clone(),
     )
     .await
     .unwrap();
-    let (addr, _task) = serve_raft_tls(raft.clone(), "127.0.0.1:0", tls).await.unwrap();
+    let (addr, _task) = serve_raft_tls_single(raft.clone(), "127.0.0.1:0", tls)
+        .await
+        .unwrap();
     TestNode {
         raft,
         sm,
@@ -107,6 +109,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
+        namespace_id: 0,
     }
 }
 
@@ -116,8 +119,9 @@ async fn two_node_mtls_cluster_elects_and_replicates() {
     let n1 = spawn_tls_node(1, tls_config(&ca, &make_leaf(&ca))).await;
     let n2 = spawn_tls_node(2, tls_config(&ca, &make_leaf(&ca))).await;
 
-    let members: BTreeMap<NodeId, ValoriNode> =
-        [(1, n1.node.clone()), (2, n2.node.clone())].into_iter().collect();
+    let members: BTreeMap<NodeId, ValoriNode> = [(1, n1.node.clone()), (2, n2.node.clone())]
+        .into_iter()
+        .collect();
     n1.raft.initialize(members).await.unwrap();
     n1.raft
         .wait(Some(Duration::from_secs(10)))
@@ -130,7 +134,13 @@ async fn two_node_mtls_cluster_elects_and_replicates() {
 
     let mut last_index = 0;
     for i in 0..5u32 {
-        last_index = leader.raft.client_write(insert(i)).await.unwrap().data.log_index;
+        last_index = leader
+            .raft
+            .client_write(insert(i))
+            .await
+            .unwrap()
+            .data
+            .log_index;
     }
 
     for n in [&n1, &n2] {
@@ -156,7 +166,9 @@ async fn peer_from_a_different_ca_is_refused_at_the_handshake() {
     let n1 = spawn_tls_node(1, tls_config(&cluster_ca, &make_leaf(&cluster_ca))).await;
     n1.raft
         .initialize(
-            [(1, n1.node.clone())].into_iter().collect::<BTreeMap<NodeId, ValoriNode>>(),
+            [(1, n1.node.clone())]
+                .into_iter()
+                .collect::<BTreeMap<NodeId, ValoriNode>>(),
         )
         .await
         .unwrap();
@@ -177,8 +189,8 @@ async fn peer_from_a_different_ca_is_refused_at_the_handshake() {
     .await;
 
     let joined = match result {
-        Err(_elapsed) => false,                  // blocked forever at the handshake — refused
-        Ok(Err(_)) => false,                     // surfaced an error — refused
+        Err(_elapsed) => false, // blocked forever at the handshake — refused
+        Ok(Err(_)) => false,    // surfaced an error — refused
         Ok(Ok(_)) => {
             // add_learner returned — but did the rogue actually receive state?
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -198,23 +210,27 @@ async fn plaintext_client_cannot_reach_a_tls_server() {
     let n1 = spawn_tls_node(1, tls_config(&ca, &make_leaf(&ca))).await;
     n1.raft
         .initialize(
-            [(1, n1.node.clone())].into_iter().collect::<BTreeMap<NodeId, ValoriNode>>(),
+            [(1, n1.node.clone())]
+                .into_iter()
+                .collect::<BTreeMap<NodeId, ValoriNode>>(),
         )
         .await
         .unwrap();
 
     // A plain-HTTP gRPC client pointed at the TLS port must fail to carry
     // a single RPC (downgrade is impossible, not just discouraged).
-    let endpoint =
-        tonic::transport::Endpoint::from_shared(format!("http://{}", n1.node.raft_addr))
-            .unwrap()
-            .connect_timeout(Duration::from_secs(2));
+    let endpoint = tonic::transport::Endpoint::from_shared(format!("http://{}", n1.node.raft_addr))
+        .unwrap()
+        .connect_timeout(Duration::from_secs(2));
     let result = tokio::time::timeout(Duration::from_secs(5), async {
         let channel = endpoint.connect().await?;
         let mut client =
             valori_consensus::network::proto::raft_service_client::RaftServiceClient::new(channel);
         client
-            .vote(valori_consensus::network::proto::RaftRequest { payload: vec![] })
+            .vote(valori_consensus::network::proto::RaftRequest {
+                payload: vec![],
+                shard_id: 0,
+            })
             .await
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
         Ok::<(), Box<dyn std::error::Error>>(())
