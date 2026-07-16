@@ -33,26 +33,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust + wasm32 target
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-setup
         with:
           targets: wasm32-unknown-unknown
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-wasm-abi-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-wasm-abi-
+          cache-key: wasm-abi
 
       - name: Build valori-core for WASM (no_std)
-        run: cargo build -p valori-core --lib --target wasm32-unknown-unknown --release
+        run: cargo build -p valori-core --lib --target wasm32-unknown-unknown --release --no-default-features
 
       - name: Build valori-kernel for WASM (no_std)
-        run: cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release
+        run: cargo build -p valori-kernel --lib --target wasm32-unknown-unknown --release --no-default-features
 
       - name: Confirm no std leakage (grep check)
         run: |
