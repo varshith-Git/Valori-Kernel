@@ -48,9 +48,17 @@ jobs:
         run: |
           # Catch any `use std::` in kernel or core source before it reaches the WASM build.
           # The WASM build above is the real gate; this makes the failure message clearer.
-          if grep -rn "use std::" \
+          #
+          # Excluded paths are modules already gated with #[cfg(feature = "std")] in lib.rs
+          # and therefore never compiled for WASM:
+          #   crates/valori-kernel/src/adapters/ — #[cfg(feature = "std")] pub mod adapters
+          #   crates/valori-kernel/src/hnsw.rs   — #[cfg(feature = "std")] pub mod hnsw
+          leaks=$(grep -rn "use std::" \
                crates/valori-kernel/src/ \
-               crates/valori-core/src/ 2>/dev/null; then
+               crates/valori-core/src/ 2>/dev/null \
+             | grep -Ev "valori-kernel/src/adapters/|valori-kernel/src/hnsw\.rs")
+          if [ -n "$leaks" ]; then
+            echo "$leaks"
             echo ""
             echo "ERROR: 'use std::' found in valori-kernel or valori-core."
             echo "Use 'core::' or 'alloc::' instead, or gate with #[cfg(feature = \"std\")]."
