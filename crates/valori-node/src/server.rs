@@ -290,42 +290,21 @@ pub fn build_router_with_keys(
         .route("/v1/proof/state", axum::routing::get(get_proof))
         .route("/v1/proof/event-log", axum::routing::get(get_event_proof))
         .route("/v1/proof/receipt", axum::routing::get(get_latest_receipt))
-        .route(
-            "/v1/proof/receipt/:id",
-            axum::routing::get(get_receipt_by_id),
-        )
+        .route("/v1/proof/receipt/:id", axum::routing::get(get_receipt_by_id))
         .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
-        .route(
-            "/v1/replication/events",
-            axum::routing::get(get_replication_events),
-        )
-        .route(
-            "/v1/replication/state",
-            axum::routing::get(get_replication_state),
-        )
+        .route("/v1/replication/events", axum::routing::get(get_replication_events))
+        .route("/v1/replication/state", axum::routing::get(get_replication_state))
         .route("/v1/timeline", axum::routing::get(get_timeline))
         .route("/v1/operations", axum::routing::get(get_operations))
-        .route(
-            "/v1/operations/:id",
-            axum::routing::get(get_operation_by_id),
-        )
-        .route(
-            "/v1/operations/:id/execution",
-            axum::routing::get(get_operation_execution),
-        )
+        .route("/v1/operations/:id", axum::routing::get(get_operation_by_id))
+        .route("/v1/operations/:id/execution", axum::routing::get(get_operation_execution))
         .route(
             "/v1/namespaces",
             post(create_collection_handler).get(list_collections_handler),
         )
         .route("/v1/namespaces/:name", delete(drop_collection_handler))
-        .route(
-            "/v1/storage/snapshots",
-            axum::routing::get(list_remote_snapshots),
-        )
-        .route(
-            "/v1/storage/snapshots/upload",
-            post(upload_snapshot_to_store),
-        )
+        .route("/v1/storage/snapshots", axum::routing::get(list_remote_snapshots))
+        .route("/v1/storage/snapshots/upload", post(upload_snapshot_to_store))
         .route("/v1/storage/snapshots/restore", post(restore_from_store))
         .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
         .route("/v1/storage/wal/archive", post(archive_wal_segment))
