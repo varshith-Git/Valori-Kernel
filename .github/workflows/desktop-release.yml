@@ -43,9 +43,10 @@ jobs:
             args: "--target x86_64-apple-darwin"
             rust_target: x86_64-apple-darwin
 
-          # Linux x86_64
+          # Linux x86_64 — AppImage skipped (linuxdeploy needs FUSE, unavailable
+          # on GitHub runners); deb + rpm cover all major Linux distros.
           - platform: ubuntu-22.04
-            args: ""
+            args: "--bundles deb,rpm"
             rust_target: ""
 
           # Windows x86_64
