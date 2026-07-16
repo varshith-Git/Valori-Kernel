@@ -10,9 +10,9 @@
 //! For Q16.16 vectors with dim ≤ 65536 and values in [-32768, 32767], the max
 //! pre-shift sum is 65536 × 32767² ≈ 7×10¹³ which fits comfortably in i64.
 
-use crate::types::vector::FxpVector;
-use crate::types::scalar::FxpScalar;
 use crate::fxp::qformat::FRAC_BITS;
+use crate::types::scalar::FxpScalar;
+use crate::types::vector::FxpVector;
 
 // ── public entry point ────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ unsafe fn dot_neon(a: &[i32], b: &[i32]) -> i64 {
         let va = vld1q_s32(a.as_ptr().add(i));
         let vb = vld1q_s32(b.as_ptr().add(i));
         // vmull_s32: int32x2 × int32x2 → int64x2 (widening, no overflow)
-        acc0 = vaddq_s64(acc0, vmull_s32(vget_low_s32(va),  vget_low_s32(vb)));
+        acc0 = vaddq_s64(acc0, vmull_s32(vget_low_s32(va), vget_low_s32(vb)));
         acc1 = vaddq_s64(acc1, vmull_s32(vget_high_s32(va), vget_high_s32(vb)));
         i += 4;
     }
@@ -112,10 +112,13 @@ unsafe fn dot_avx2(a: &[i32], b: &[i32]) -> i64 {
         let va_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(va, 1));
         let vb_lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(vb));
         let vb_hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(vb, 1));
-        acc = _mm256_add_epi64(acc, _mm256_add_epi64(
-            _mm256_mul_epi32(va_lo, vb_lo),
-            _mm256_mul_epi32(va_hi, vb_hi),
-        ));
+        acc = _mm256_add_epi64(
+            acc,
+            _mm256_add_epi64(
+                _mm256_mul_epi32(va_lo, vb_lo),
+                _mm256_mul_epi32(va_hi, vb_hi),
+            ),
+        );
         i += 8;
     }
 
@@ -150,10 +153,10 @@ unsafe fn dot_sse41(a: &[i32], b: &[i32]) -> i64 {
         let va_hi = _mm_cvtepi32_epi64(_mm_srli_si128(va, 8));
         let vb_lo = _mm_cvtepi32_epi64(vb);
         let vb_hi = _mm_cvtepi32_epi64(_mm_srli_si128(vb, 8));
-        acc = _mm_add_epi64(acc, _mm_add_epi64(
-            _mm_mul_epi32(va_lo, vb_lo),
-            _mm_mul_epi32(va_hi, vb_hi),
-        ));
+        acc = _mm_add_epi64(
+            acc,
+            _mm_add_epi64(_mm_mul_epi32(va_lo, vb_lo), _mm_mul_epi32(va_hi, vb_hi)),
+        );
         i += 4;
     }
 
@@ -176,7 +179,9 @@ mod tests {
     use crate::types::scalar::FxpScalar;
 
     fn make_vec(vals: &[i32]) -> FxpVector {
-        FxpVector { data: vals.iter().map(|&v| FxpScalar(v)).collect() }
+        FxpVector {
+            data: vals.iter().map(|&v| FxpScalar(v)).collect(),
+        }
     }
 
     #[test]
@@ -208,14 +213,27 @@ mod tests {
     #[test]
     fn large_dim_matches_scalar() {
         let dim = 384usize;
-        let a_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| ((i * 1337 + 42) % 30000) as i32 - 15000).collect();
-        let b_raw: alloc::vec::Vec<i32> = (0..dim).map(|i| ((i * 7919 + 11) % 30000) as i32 - 15000).collect();
+        let a_raw: alloc::vec::Vec<i32> = (0..dim)
+            .map(|i| ((i * 1337 + 42) % 30000) as i32 - 15000)
+            .collect();
+        let b_raw: alloc::vec::Vec<i32> = (0..dim)
+            .map(|i| ((i * 7919 + 11) % 30000) as i32 - 15000)
+            .collect();
         let a = make_vec(&a_raw);
         let b = make_vec(&b_raw);
         // Compare SIMD result against scalar baseline
-        let scalar_raw: i64 = a_raw.iter().zip(b_raw.iter()).map(|(&x, &y)| (x as i64) * (y as i64)).sum();
-        let expected = FxpScalar((scalar_raw >> FRAC_BITS).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
-        assert_eq!(fxp_dot(&a, &b), expected, "SIMD dot must match scalar for dim={dim}");
+        let scalar_raw: i64 = a_raw
+            .iter()
+            .zip(b_raw.iter())
+            .map(|(&x, &y)| (x as i64) * (y as i64))
+            .sum();
+        let expected =
+            FxpScalar((scalar_raw >> FRAC_BITS).clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+        assert_eq!(
+            fxp_dot(&a, &b),
+            expected,
+            "SIMD dot must match scalar for dim={dim}"
+        );
     }
 
     #[test]

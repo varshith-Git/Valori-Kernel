@@ -44,7 +44,10 @@ pub enum IntegrityStatus {
 
 impl IntegrityReport {
     pub fn is_healthy(&self) -> bool {
-        matches!(self.status, IntegrityStatus::Verified | IntegrityStatus::Remote | IntegrityStatus::Unverified)
+        matches!(
+            self.status,
+            IntegrityStatus::Verified | IntegrityStatus::Remote | IntegrityStatus::Unverified
+        )
     }
 }
 
@@ -92,23 +95,28 @@ impl<'a> IntegrityManager<'a> {
 
     /// Verify a single package by model id.
     pub fn verify(&self, id: &str) -> ModelResult<IntegrityReport> {
-        let pkg = self.store.get(id).ok_or_else(|| {
-            crate::error::ModelError::NotFound(format!("package '{id}'"))
-        })?;
+        let pkg = self
+            .store
+            .get(id)
+            .ok_or_else(|| crate::error::ModelError::NotFound(format!("package '{id}'")))?;
         Ok(self.check(&pkg.model))
     }
 
     /// Verify all installed packages.
     pub fn verify_all(&self) -> Vec<IntegrityReport> {
-        self.store.list().into_iter().map(|pkg| self.check(&pkg.model)).collect()
+        self.store
+            .list()
+            .into_iter()
+            .map(|pkg| self.check(&pkg.model))
+            .collect()
     }
 
     fn check(&self, model: &crate::manifest::ModelManifest) -> IntegrityReport {
         let result = verify_manifest_full(model);
         let status = match result.status {
-            VerifyStatus::Ok        => IntegrityStatus::Verified,
-            VerifyStatus::Remote    => IntegrityStatus::Remote,
-            VerifyStatus::Missing   => IntegrityStatus::Missing,
+            VerifyStatus::Ok => IntegrityStatus::Verified,
+            VerifyStatus::Remote => IntegrityStatus::Remote,
+            VerifyStatus::Missing => IntegrityStatus::Missing,
             VerifyStatus::Unverified => IntegrityStatus::Unverified,
             VerifyStatus::Corrupted => IntegrityStatus::Corrupted,
         };
@@ -130,9 +138,9 @@ impl<'a> IntegrityManager<'a> {
 /// - Size discrepancy → [`RepairAction::SizeRepaired`] (rescans disk).
 /// - Missing / corrupted → [`RepairAction::NeedsReinstall`] (caller re-downloads).
 pub fn repair(store: &mut PackageStore, id: &str) -> ModelResult<RepairResult> {
-    let pkg = store.get(id).ok_or_else(|| {
-        crate::error::ModelError::NotFound(format!("package '{id}'"))
-    })?;
+    let pkg = store
+        .get(id)
+        .ok_or_else(|| crate::error::ModelError::NotFound(format!("package '{id}'")))?;
     let mgr = IntegrityManager::new(store);
     let report = mgr.check(&pkg.model);
 
@@ -142,14 +150,15 @@ pub fn repair(store: &mut PackageStore, id: &str) -> ModelResult<RepairResult> {
             store.repair(id)?;
             RepairAction::AlreadyHealthy
         }
-        IntegrityStatus::Missing | IntegrityStatus::Corrupted => {
-            RepairAction::NeedsReinstall {
-                download_url: pkg.model.download_url.clone(),
-            }
-        }
+        IntegrityStatus::Missing | IntegrityStatus::Corrupted => RepairAction::NeedsReinstall {
+            download_url: pkg.model.download_url.clone(),
+        },
     };
 
-    Ok(RepairResult { id: id.to_string(), action })
+    Ok(RepairResult {
+        id: id.to_string(),
+        action,
+    })
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -157,10 +166,10 @@ pub fn repair(store: &mut PackageStore, id: &str) -> ModelResult<RepairResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::downloader::sha256_hex;
+    use crate::manifest::ModelManifest;
     use crate::package_store::PackageStore;
     use crate::types::{ManifestStatus, ModelFormat, ModelTask, ProviderKind};
-    use crate::manifest::ModelManifest;
-    use crate::downloader::sha256_hex;
 
     fn remote_manifest(id: &str) -> ModelManifest {
         ModelManifest {

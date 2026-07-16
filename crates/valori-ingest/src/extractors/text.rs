@@ -40,7 +40,9 @@ mod tests {
 
     #[test]
     fn extracts_utf8_text() {
-        let doc = TextExtractor.extract(b"hello world", Some("a.txt")).unwrap();
+        let doc = TextExtractor
+            .extract(b"hello world", Some("a.txt"))
+            .unwrap();
         assert_eq!(doc.content, "hello world");
         assert_eq!(doc.mime_type, "text/plain");
         assert_eq!(doc.source, "a.txt");

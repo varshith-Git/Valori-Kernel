@@ -44,7 +44,10 @@ pub struct CollectionRegistry {
 
 impl CollectionRegistry {
     pub fn new() -> Self {
-        Self { map: std::collections::HashMap::new(), next_id: 1 }
+        Self {
+            map: std::collections::HashMap::new(),
+            next_id: 1,
+        }
     }
 
     /// Resolve a collection name to its `NamespaceId`.
@@ -131,7 +134,12 @@ mod tests {
 
     #[test]
     fn collection_shard_routing() {
-        let c = Collection { name: "x".into(), project: "p".into(), namespace_id: 5, created_at: 0 };
+        let c = Collection {
+            name: "x".into(),
+            project: "p".into(),
+            namespace_id: 5,
+            created_at: 0,
+        };
         assert_eq!(c.shard_id(4), 1); // 5 % 4 = 1
         assert_eq!(c.shard_id(1), 0); // everything on shard 0 when count=1
     }

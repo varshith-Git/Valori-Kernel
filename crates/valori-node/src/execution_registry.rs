@@ -105,7 +105,10 @@ pub struct ExecutionRegistry {
 
 impl ExecutionRegistry {
     pub fn new(capacity: usize) -> Self {
-        Self { entries: Mutex::new(VecDeque::with_capacity(capacity.min(4096))), capacity }
+        Self {
+            entries: Mutex::new(VecDeque::with_capacity(capacity.min(4096))),
+            capacity,
+        }
     }
 
     /// Record a completed execution, evicting the oldest entry if at capacity.
@@ -122,7 +125,11 @@ impl ExecutionRegistry {
     /// isn't an ingest-level operation) or it aged out of the ring buffer.
     pub fn get(&self, operation_id: &str) -> Option<Arc<ExecutionRecord>> {
         let entries = self.entries.lock().unwrap();
-        entries.iter().rev().find(|r| r.operation_id == operation_id).cloned()
+        entries
+            .iter()
+            .rev()
+            .find(|r| r.operation_id == operation_id)
+            .cloned()
     }
 }
 
@@ -161,8 +168,12 @@ mod tests {
     fn insert_then_get_round_trips() {
         let registry = ExecutionRegistry::default();
         let record = ExecutionRecord::from_pipeline_result(
-            "ingest-1".into(), "default".into(), &fake_result("doc.md"),
-            Some("receipt-1".into()), Some("aaa".into()), Some("bbb".into()),
+            "ingest-1".into(),
+            "default".into(),
+            &fake_result("doc.md"),
+            Some("receipt-1".into()),
+            Some("aaa".into()),
+            Some("bbb".into()),
         );
         registry.insert(record);
         let got = registry.get("ingest-1").unwrap();
@@ -175,11 +186,18 @@ mod tests {
         let registry = ExecutionRegistry::new(2);
         for i in 0..3 {
             registry.insert(ExecutionRecord::from_pipeline_result(
-                format!("ingest-{i}"), "default".into(), &fake_result("doc.md"),
-                None, None, None,
+                format!("ingest-{i}"),
+                "default".into(),
+                &fake_result("doc.md"),
+                None,
+                None,
+                None,
             ));
         }
-        assert!(registry.get("ingest-0").is_none(), "oldest entry should have been evicted");
+        assert!(
+            registry.get("ingest-0").is_none(),
+            "oldest entry should have been evicted"
+        );
         assert!(registry.get("ingest-1").is_some());
         assert!(registry.get("ingest-2").is_some());
     }

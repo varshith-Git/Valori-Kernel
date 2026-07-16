@@ -79,7 +79,10 @@ fn main() -> anyhow::Result<()> {
         }
         let replay_elapsed = t_replay.elapsed();
 
-        assert_eq!(replayed, n, "replay must recover every appended event — WAL is lossy or truncated");
+        assert_eq!(
+            replayed, n,
+            "replay must recover every appended event — WAL is lossy or truncated"
+        );
 
         println!(
             "{:>10} | {:>10.3?} | {:>10} ev/s | {:>7.2} MB | {:>10.3?} | {:>10} ev/s",
@@ -94,8 +97,12 @@ fn main() -> anyhow::Result<()> {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    println!("\nNote: append_event() flushes to the OS on every call (matches the real write path —");
-    println!("not batched here for realism), so append throughput is fsync/flush-bound, not CPU-bound.");
+    println!(
+        "\nNote: append_event() flushes to the OS on every call (matches the real write path —"
+    );
+    println!(
+        "not batched here for realism), so append throughput is fsync/flush-bound, not CPU-bound."
+    );
 
     Ok(())
 }

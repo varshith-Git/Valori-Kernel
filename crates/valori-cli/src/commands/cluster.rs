@@ -64,7 +64,8 @@ pub fn status(url: &str) -> Result<()> {
     println!("  node id        : {}", body["node_id"]);
     println!(
         "  leader         : {}",
-        leader.map_or("NONE — election in progress".to_string(), |l| l.to_string())
+        leader.map_or("NONE — election in progress".to_string(), |l| l
+            .to_string())
     );
     println!("  is leader      : {}", body["is_leader"]);
     println!("  term           : {}", body["term"]);
@@ -146,9 +147,7 @@ pub fn upgrade(url: &str, target_version: &str) -> Result<()> {
 
     let leader_id = match status["current_leader"].as_u64() {
         Some(id) => id,
-        None => bail!(
-            "no elected leader right now — wait for the election to finish, then retry"
-        ),
+        None => bail!("no elected leader right now — wait for the election to finish, then retry"),
     };
 
     let members = status["members"]
@@ -177,7 +176,11 @@ pub fn upgrade(url: &str, target_version: &str) -> Result<()> {
     println!("  ┌─────────────────────────────────────────────────────────┐");
     for (i, m) in ordered.iter().enumerate() {
         let id = m["id"].as_u64().unwrap_or(0);
-        let tag = if id == leader_id { " ← leader, upgraded last" } else { "" };
+        let tag = if id == leader_id {
+            " ← leader, upgraded last"
+        } else {
+            ""
+        };
         println!(
             "  │  {}. node {}   api={}{}",
             i + 1,
@@ -288,9 +291,7 @@ pub fn upgrade(url: &str, target_version: &str) -> Result<()> {
     }
 
     println!("  ✅ Rolling upgrade to v{target_version} complete!");
-    println!(
-        "  Verify all nodes agree: valori cluster status --url {url}"
-    );
+    println!("  Verify all nodes agree: valori cluster status --url {url}");
     println!();
     Ok(())
 }

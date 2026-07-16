@@ -20,16 +20,15 @@
 
 extern crate alloc;
 
-pub mod id;
 pub mod enums;
 pub mod error;
+pub mod id;
 pub mod version;
 
-pub use id::{
-    RecordId, NodeId, EdgeId, NamespaceId, CollectionId, ExecutionId,
-    ShardId, ClusterEpoch,
-    DEFAULT_NS, NS_LIST_NIL, MAX_NAMESPACES,
-};
-pub use enums::{NodeKind, EdgeKind};
+pub use enums::{EdgeKind, NodeKind};
 pub use error::{CoreError, Result};
+pub use id::{
+    ClusterEpoch, CollectionId, EdgeId, ExecutionId, NamespaceId, NodeId, RecordId, ShardId,
+    DEFAULT_NS, MAX_NAMESPACES, NS_LIST_NIL,
+};
 pub use version::Version;

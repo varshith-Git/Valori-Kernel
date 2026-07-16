@@ -9,12 +9,12 @@ use valori_node::events::event_log::LogEntry;
 use valori_wire::{decode_entry, parse_header};
 
 const DEFAULT_SNAPSHOT: &str = "snapshot.val";
-const DEFAULT_LOG:      &str = "events.log";
+const DEFAULT_LOG: &str = "events.log";
 
 pub fn run(
-    dir:          Option<PathBuf>,
+    dir: Option<PathBuf>,
     snapshot_arg: Option<String>,
-    log_arg:      Option<String>,
+    log_arg: Option<String>,
 ) -> anyhow::Result<()> {
     let (s_path, w_path) = match &dir {
         Some(d) => (d.join(DEFAULT_SNAPSHOT), d.join(DEFAULT_LOG)),
@@ -89,7 +89,9 @@ pub fn run(
                     };
                     table.add_row(vec![
                         Cell::new("snapshot.val"),
-                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new("OK")
+                            .fg(Color::Green)
+                            .add_attribute(Attribute::Bold),
                         Cell::new(detail),
                     ]);
                 }
@@ -137,7 +139,7 @@ pub fn run(
                     }
                 };
                 let log_version = header.version;
-                let dim         = header.dim;
+                let dim = header.dim;
                 let mut event_count: u64 = 0;
                 let mut offset = header.header_len;
                 let mut corrupt_msg: Option<String> = None;
@@ -172,7 +174,9 @@ pub fn run(
                 } else {
                     table.add_row(vec![
                         Cell::new("events.log"),
-                        Cell::new("OK").fg(Color::Green).add_attribute(Attribute::Bold),
+                        Cell::new("OK")
+                            .fg(Color::Green)
+                            .add_attribute(Attribute::Bold),
                         Cell::new(format!(
                             "{:.2} KB  │  {} event(s)  │  dim {}  │  log-version {}",
                             bytes.len() as f64 / 1024.0,

@@ -10,21 +10,24 @@ use serde::{Deserialize, Serialize};
 
 /// Identifies a vector record in the kernel's record pool.
 /// Sequential, 0-based, never reused within a KernelState instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct RecordId(pub u32);
 
 /// Identifies a node in the knowledge graph.
 /// Sequential, 0-based within a KernelState instance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct NodeId(pub u32);
 
 /// Identifies a directed edge in the knowledge graph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct EdgeId(pub u32);
 
@@ -37,8 +40,9 @@ pub struct EdgeId(pub u32);
 /// integer; the kernel only ever sees the raw ID.
 ///
 /// Alias: `CollectionId` is the user-facing name for the same concept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct NamespaceId(pub u16);
 
@@ -63,16 +67,18 @@ pub const MAX_NAMESPACES: usize = 1024;
 
 /// Identifies a logical shard.
 /// Namespace → shard routing: `shard_id = namespace_id % shard_count`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct ShardId(pub u32);
 
 /// Monotonically increasing cluster epoch.
 /// Bumped on every membership change (node join/leave, shard reassignment).
 /// Used by the planner to detect stale execution plans.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct ClusterEpoch(pub u64);
 
@@ -99,21 +105,25 @@ impl ExecutionId {
 
     /// Construct from a 16-byte UUID array.
     pub fn from_bytes(b: [u8; 16]) -> Self {
-        let hi = u64::from_be_bytes([b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]]);
-        let lo = u64::from_be_bytes([b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]]);
+        let hi = u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        let lo = u64::from_be_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
         ExecutionId { hi, lo }
     }
 
     pub fn to_bytes(self) -> [u8; 16] {
         let hi = self.hi.to_be_bytes();
         let lo = self.lo.to_be_bytes();
-        [hi[0],hi[1],hi[2],hi[3],hi[4],hi[5],hi[6],hi[7],
-         lo[0],lo[1],lo[2],lo[3],lo[4],lo[5],lo[6],lo[7]]
+        [
+            hi[0], hi[1], hi[2], hi[3], hi[4], hi[5], hi[6], hi[7], lo[0], lo[1], lo[2], lo[3],
+            lo[4], lo[5], lo[6], lo[7],
+        ]
     }
 }
 
 impl Default for ExecutionId {
-    fn default() -> Self { Self::ZERO }
+    fn default() -> Self {
+        Self::ZERO
+    }
 }
 
 impl core::fmt::Display for ExecutionId {
@@ -164,7 +174,10 @@ mod tests {
 
     #[test]
     fn execution_id_roundtrip() {
-        let id = ExecutionId { hi: 0x0102030405060708, lo: 0x090a0b0c0d0e0f10 };
+        let id = ExecutionId {
+            hi: 0x0102030405060708,
+            lo: 0x090a0b0c0d0e0f10,
+        };
         let bytes = id.to_bytes();
         assert_eq!(ExecutionId::from_bytes(bytes), id);
     }
@@ -182,12 +195,17 @@ mod tests {
 
     #[test]
     fn execution_id_string_roundtrip() {
-        let id = ExecutionId { hi: 0x0102030405060708, lo: 0xf90a0b0c0d0e0f10 };
+        let id = ExecutionId {
+            hi: 0x0102030405060708,
+            lo: 0xf90a0b0c0d0e0f10,
+        };
         let s = format!("{id}");
         assert_eq!(s.parse::<ExecutionId>().unwrap(), id);
         assert!("".parse::<ExecutionId>().is_err());
         assert!("job_0102".parse::<ExecutionId>().is_err());
-        assert!("zz02030405060708f90a0b0c0d0e0f10".parse::<ExecutionId>().is_err());
+        assert!("zz02030405060708f90a0b0c0d0e0f10"
+            .parse::<ExecutionId>()
+            .is_err());
     }
 
     #[cfg(feature = "std")]
@@ -195,7 +213,10 @@ mod tests {
     fn new_random_unique_100k() {
         let mut seen = std::collections::HashSet::new();
         for _ in 0..100_000 {
-            assert!(seen.insert(ExecutionId::new_random()), "duplicate ExecutionId");
+            assert!(
+                seen.insert(ExecutionId::new_random()),
+                "duplicate ExecutionId"
+            );
         }
     }
 
@@ -205,7 +226,9 @@ mod tests {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 std::thread::spawn(|| {
-                    (0..10_000).map(|_| ExecutionId::new_random()).collect::<Vec<_>>()
+                    (0..10_000)
+                        .map(|_| ExecutionId::new_random())
+                        .collect::<Vec<_>>()
                 })
             })
             .collect();
@@ -225,7 +248,10 @@ mod tests {
     fn new_random_unique_1m_stress() {
         let mut seen = std::collections::HashSet::with_capacity(1_000_000);
         for _ in 0..1_000_000 {
-            assert!(seen.insert(ExecutionId::new_random()), "duplicate ExecutionId");
+            assert!(
+                seen.insert(ExecutionId::new_random()),
+                "duplicate ExecutionId"
+            );
         }
     }
 }

@@ -61,14 +61,25 @@ pub async fn create_collection<O: CollectionOps>(
         return Err(bad_request("collection name cannot be empty"));
     }
     if name.len() > 64 {
-        return Err(bad_request("collection name must be 64 characters or fewer"));
+        return Err(bad_request(
+            "collection name must be 64 characters or fewer",
+        ));
     }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        return Err(bad_request("collection name may only contain [a-zA-Z0-9_-]"));
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(bad_request(
+            "collection name may only contain [a-zA-Z0-9_-]",
+        ));
     }
     if name == "default" {
         // Idempotent no-op — "default" always exists as id 0.
-        return Ok(Json(CreateCollectionResponse { name, id: 0, created: false }));
+        return Ok(Json(CreateCollectionResponse {
+            name,
+            id: 0,
+            created: false,
+        }));
     }
     let outcome = ops.create(&name).await?;
     Ok(Json(CreateCollectionResponse {

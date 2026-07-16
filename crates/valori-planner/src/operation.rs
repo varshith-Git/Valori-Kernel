@@ -35,11 +35,15 @@ impl OperationHash {
 pub struct OperationId(pub ExecutionId);
 
 impl OperationId {
-    pub fn new() -> Self { OperationId(ExecutionId::new_random()) }
+    pub fn new() -> Self {
+        OperationId(ExecutionId::new_random())
+    }
 }
 
 impl Default for OperationId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // ── OperationKind ─────────────────────────────────────────────────────────────
@@ -255,7 +259,14 @@ impl Operation {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        Operation { id, kind, inputs, policy, hash, created_at }
+        Operation {
+            id,
+            kind,
+            inputs,
+            policy,
+            hash,
+            created_at,
+        }
     }
 }
 
@@ -270,22 +281,22 @@ impl Operation {
 /// value; never reassign an existing one.
 fn kind_discriminant(kind: OperationKind) -> u8 {
     match kind {
-        OperationKind::Ingest          => 0,
-        OperationKind::Search          => 1,
-        OperationKind::MemoryUpsert    => 2,
-        OperationKind::Consolidate     => 3,
-        OperationKind::Contradict      => 4,
-        OperationKind::HealthCheck     => 5,
-        OperationKind::Delete          => 6,
-        OperationKind::BatchInsert     => 7,
-        OperationKind::GraphRag        => 8,
-        OperationKind::MemorySearch    => 9,
+        OperationKind::Ingest => 0,
+        OperationKind::Search => 1,
+        OperationKind::MemoryUpsert => 2,
+        OperationKind::Consolidate => 3,
+        OperationKind::Contradict => 4,
+        OperationKind::HealthCheck => 5,
+        OperationKind::Delete => 6,
+        OperationKind::BatchInsert => 7,
+        OperationKind::GraphRag => 8,
+        OperationKind::MemorySearch => 9,
         OperationKind::CommunityDetect => 10,
         OperationKind::CommunitySearch => 11,
-        OperationKind::TreeBuild       => 12,
-        OperationKind::TreeQuery       => 13,
-        OperationKind::TreeHybrid      => 14,
-        OperationKind::Snapshot        => 15,
+        OperationKind::TreeBuild => 12,
+        OperationKind::TreeQuery => 13,
+        OperationKind::TreeHybrid => 14,
+        OperationKind::Snapshot => 15,
     }
 }
 
@@ -316,8 +327,12 @@ mod tests {
     #[test]
     fn hash_is_deterministic() {
         let inputs = OperationInputs::Search {
-            k: 5, collection: "default".into(), shard_id: 0,
-            rerank: true, decay: false, metadata_filter: false,
+            k: 5,
+            collection: "default".into(),
+            shard_id: 0,
+            rerank: true,
+            decay: false,
+            metadata_filter: false,
             consistency: ConsistencyLevel::Local,
         };
         let policy = ExecutionPolicy::default();
@@ -332,8 +347,12 @@ mod tests {
         let a = compute_operation_hash(
             OperationKind::Search,
             &OperationInputs::Search {
-                k: 5, collection: "default".into(), shard_id: 0,
-                rerank: true, decay: false, metadata_filter: false,
+                k: 5,
+                collection: "default".into(),
+                shard_id: 0,
+                rerank: true,
+                decay: false,
+                metadata_filter: false,
                 consistency: ConsistencyLevel::Local,
             },
             &policy,
@@ -341,8 +360,12 @@ mod tests {
         let b = compute_operation_hash(
             OperationKind::Search,
             &OperationInputs::Search {
-                k: 10, collection: "default".into(), shard_id: 0,
-                rerank: true, decay: false, metadata_filter: false,
+                k: 10,
+                collection: "default".into(),
+                shard_id: 0,
+                rerank: true,
+                decay: false,
+                metadata_filter: false,
                 consistency: ConsistencyLevel::Local,
             },
             &policy,

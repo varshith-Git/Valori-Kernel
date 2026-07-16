@@ -11,8 +11,8 @@ impl Extractor for DocxExtractor {
     /// Extract text from DOCX bytes. CPU-bound; wrap in `spawn_blocking` if on an async thread.
     fn extract(&self, bytes: &[u8], source: Option<&str>) -> Result<Document, IngestError> {
         let cursor = Cursor::new(bytes);
-        let mut zip = zip::ZipArchive::new(cursor)
-            .map_err(|e| IngestError::Reader(e.to_string()))?;
+        let mut zip =
+            zip::ZipArchive::new(cursor).map_err(|e| IngestError::Reader(e.to_string()))?;
 
         let body = read_entry(&mut zip, "word/document.xml")?;
         let text = extract_text_runs(&body)?;
@@ -26,8 +26,13 @@ impl Extractor for DocxExtractor {
         Ok(Document {
             id,
             source: source.unwrap_or("document.docx").to_string(),
-            mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document".to_string(),
-            metadata: DocumentMetadata { title, author, ..Default::default() },
+            mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_string(),
+            metadata: DocumentMetadata {
+                title,
+                author,
+                ..Default::default()
+            },
             content: text,
         })
     }
@@ -35,7 +40,9 @@ impl Extractor for DocxExtractor {
     fn capabilities(&self) -> ReaderCapabilities {
         ReaderCapabilities {
             extensions: vec!["docx"],
-            mime_types: vec!["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+            mime_types: vec![
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ],
             supports_streaming: false,
             supports_metadata: true,
             supports_images: false,
@@ -43,11 +50,16 @@ impl Extractor for DocxExtractor {
     }
 }
 
-fn read_entry(zip: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, IngestError> {
-    let mut entry = zip.by_name(name)
+fn read_entry(
+    zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    name: &str,
+) -> Result<Vec<u8>, IngestError> {
+    let mut entry = zip
+        .by_name(name)
         .map_err(|_| IngestError::Reader(format!("entry '{name}' not found in archive")))?;
     let mut buf = Vec::new();
-    entry.read_to_end(&mut buf)
+    entry
+        .read_to_end(&mut buf)
         .map_err(|e| IngestError::Reader(e.to_string()))?;
     Ok(buf)
 }

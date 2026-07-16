@@ -41,7 +41,9 @@ pub struct MemoryEventStore {
 
 impl MemoryEventStore {
     pub fn new() -> Self {
-        Self { events: Mutex::new(VecDeque::with_capacity(MAX_EVENTS)) }
+        Self {
+            events: Mutex::new(VecDeque::with_capacity(MAX_EVENTS)),
+        }
     }
 }
 

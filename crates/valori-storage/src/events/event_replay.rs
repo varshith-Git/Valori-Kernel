@@ -4,33 +4,33 @@
 //! This module enforces the recovery contract:
 //! **Event Log ALWAYS wins. Snapshot is just a cache.**
 
-use valori_kernel::state::kernel::KernelState;
-use valori_kernel::event::KernelEvent;
-use valori_kernel::error::KernelError;
-use valori_kernel::snapshot::blake3::hash_state_blake3;
 use crate::events::event_journal::EventJournal;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
 use thiserror::Error;
+use valori_kernel::error::KernelError;
+use valori_kernel::event::KernelEvent;
+use valori_kernel::snapshot::blake3::hash_state_blake3;
+use valori_kernel::state::kernel::KernelState;
 
 #[derive(Error, Debug)]
 pub enum ReplayError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    
+
     #[error("Event log header invalid")]
     InvalidHeader,
-    
+
     #[error("Dimension mismatch: log has {log_dim}, expected {expected_dim}")]
     DimensionMismatch { log_dim: u32, expected_dim: u32 },
-    
+
     #[error("Event deserialization failed: {0}")]
     Deserialization(String),
-    
+
     #[error("Event application failed: {0:?}")]
     EventApplication(KernelError),
-    
+
     #[error("Event log corrupted at offset {offset}")]
     Corrupted { offset: usize },
 }
@@ -40,17 +40,14 @@ pub type Result<T> = std::result::Result<T, ReplayError>;
 /// Replay events into a fresh kernel state, each into its recorded
 /// namespace (S15 — pre-S15 `Event` entries carry namespace 0, so old logs
 /// replay exactly as they always did).
-pub fn replay_events(
-    events: &[(u16, KernelEvent)]
-) -> Result<KernelState> {
+pub fn replay_events(events: &[(u16, KernelEvent)]) -> Result<KernelState> {
     let mut state = KernelState::new();
 
     for (idx, (namespace_id, event)) in events.iter().enumerate() {
-        state.apply_event_ns(event, *namespace_id)
-            .map_err(|e| {
-                tracing::error!("Event replay failed at index {}: {:?}", idx, e);
-                ReplayError::EventApplication(e)
-            })?;
+        state.apply_event_ns(event, *namespace_id).map_err(|e| {
+            tracing::error!("Event replay failed at index {}: {:?}", idx, e);
+            ReplayError::EventApplication(e)
+        })?;
     }
 
     Ok(state)
@@ -75,11 +72,14 @@ fn read_segment_full(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resul
     let header = valori_wire::parse_header(&buffer).map_err(|_| ReplayError::InvalidHeader)?;
     if let Some(expected) = expected_dim {
         if header.dim != expected {
-            return Err(ReplayError::DimensionMismatch { log_dim: header.dim, expected_dim: expected });
+            return Err(ReplayError::DimensionMismatch {
+                log_dim: header.dim,
+                expected_dim: expected,
+            });
         }
     }
 
-    use crate::events::event_log::{walk_segment_body, SegmentWalkError, LogEntry};
+    use crate::events::event_log::{walk_segment_body, LogEntry, SegmentWalkError};
 
     let (decoded_entries, chain_head) = walk_segment_body(
         header.version,
@@ -98,7 +98,10 @@ fn read_segment_full(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resul
             LogEntry::Event(event) => {
                 events.push((valori_kernel::types::id::DEFAULT_NS.0, event));
             }
-            LogEntry::EventNs { namespace_id, event } => {
+            LogEntry::EventNs {
+                namespace_id,
+                event,
+            } => {
                 events.push((namespace_id, event));
             }
             _ => {}
@@ -128,9 +131,10 @@ pub fn read_all_segments(
 
     // The live file plus any `events.log.<suffix>` archives in the same dir.
     let mut paths = vec![live_path.to_path_buf()];
-    if let (Some(dir), Some(fname)) =
-        (live_path.parent(), live_path.file_name().and_then(|n| n.to_str()))
-    {
+    if let (Some(dir), Some(fname)) = (
+        live_path.parent(),
+        live_path.file_name().and_then(|n| n.to_str()),
+    ) {
         let prefix = format!("{fname}.");
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
@@ -169,7 +173,7 @@ pub fn read_all_segments(
 /// Full recovery from the event log — replays every local segment (sealed
 /// archives + the live file) so a rotated log recovers losslessly.
 pub fn recover_from_event_log(
-    log_path: impl AsRef<Path>
+    log_path: impl AsRef<Path>,
 ) -> Result<(KernelState, EventJournal, u64)> {
     tracing::info!("Starting recovery from event log: {:?}", log_path.as_ref());
 
@@ -205,10 +209,10 @@ pub fn verify_snapshot_consistency(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::event_log::EventLogWriter;
+    use tempfile::tempdir;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use tempfile::tempdir;
-    use crate::events::event_log::EventLogWriter;
 
     #[test]
     fn test_replay_from_log() {
@@ -224,7 +228,9 @@ mod tests {
                     metadata: None,
                     tag: 0,
                 };
-                writer.append(&crate::events::event_log::LogEntry::Event(event)).unwrap();
+                writer
+                    .append(&crate::events::event_log::LogEntry::Event(event))
+                    .unwrap();
             }
         }
 
@@ -232,7 +238,7 @@ mod tests {
 
         assert_eq!(count, 5);
         assert_eq!(journal.committed_height(), 5);
-        
+
         for i in 0..5 {
             assert!(state.get_record(RecordId(i)).is_some());
         }
@@ -278,7 +284,11 @@ mod tests {
         let sealed_head = *w.chain_head();
         w.rotate(
             &archive,
-            Some(LogEntry::Checkpoint { event_count: 3, snapshot_hash: sealed_head, timestamp: 0 }),
+            Some(LogEntry::Checkpoint {
+                event_count: 3,
+                snapshot_hash: sealed_head,
+                timestamp: 0,
+            }),
         )
         .unwrap();
         for i in 3..5 {
@@ -290,7 +300,10 @@ mod tests {
         assert_eq!(count, 5, "must replay archived (3) + live (2) segments");
         assert_eq!(journal.committed_height(), 5);
         for i in 0..5 {
-            assert!(state.get_record(RecordId(i)).is_some(), "record {i} lost across rotation");
+            assert!(
+                state.get_record(RecordId(i)).is_some(),
+                "record {i} lost across rotation"
+            );
         }
     }
 
@@ -311,15 +324,28 @@ mod tests {
 
         {
             let writer = EventLogWriter::open(&log_path, Some(16)).unwrap();
-            let mut committer = EventCommitter::new(writer, EventJournal::new(), KernelState::new());
+            let mut committer =
+                EventCommitter::new(writer, EventJournal::new(), KernelState::new());
             // A default-namespace record (id 0) and a namespace-1 record (id 1).
-            committer.commit_event(KernelEvent::InsertRecord {
-                id: RecordId(0), vector: FxpVector::new_zeros(16), metadata: None, tag: 0,
-            }).unwrap();
-            committer.commit_event_ns(
-                KernelEvent::InsertRecord { id: RecordId(1), vector: FxpVector::new_zeros(16), metadata: None, tag: 0 },
-                1,
-            ).unwrap();
+            committer
+                .commit_event(KernelEvent::InsertRecord {
+                    id: RecordId(0),
+                    vector: FxpVector::new_zeros(16),
+                    metadata: None,
+                    tag: 0,
+                })
+                .unwrap();
+            committer
+                .commit_event_ns(
+                    KernelEvent::InsertRecord {
+                        id: RecordId(1),
+                        vector: FxpVector::new_zeros(16),
+                        metadata: None,
+                        tag: 0,
+                    },
+                    1,
+                )
+                .unwrap();
             // Drop flushes the buffered writes to disk.
         }
 
@@ -329,8 +355,16 @@ mod tests {
         // Record 1 must be in namespace 1, NOT namespace 0.
         let ns0: Vec<u32> = state.iter_records_in_ns(0).map(|r| r.id.0).collect();
         let ns1: Vec<u32> = state.iter_records_in_ns(1).map(|r| r.id.0).collect();
-        assert_eq!(ns0, vec![0], "only the default-namespace record belongs in ns 0");
-        assert_eq!(ns1, vec![1], "the namespaced record must recover into ns 1, not ns 0");
+        assert_eq!(
+            ns0,
+            vec![0],
+            "only the default-namespace record belongs in ns 0"
+        );
+        assert_eq!(
+            ns1,
+            vec![1],
+            "the namespaced record must recover into ns 1, not ns 0"
+        );
     }
 
     #[test]
@@ -347,7 +381,15 @@ mod tests {
             w.append(&LogEntry::Event(ev(i))).unwrap();
         }
         let head = *w.chain_head();
-        w.rotate(&archive, Some(LogEntry::Checkpoint { event_count: 3, snapshot_hash: head, timestamp: 0 })).unwrap();
+        w.rotate(
+            &archive,
+            Some(LogEntry::Checkpoint {
+                event_count: 3,
+                snapshot_hash: head,
+                timestamp: 0,
+            }),
+        )
+        .unwrap();
         w.append(&LogEntry::Event(ev(3))).unwrap();
         drop(w);
 

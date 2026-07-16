@@ -23,7 +23,10 @@ pub enum ExecutionStatus {
     /// Scheduled but not yet running.
     Pending,
     /// At least one task is executing.
-    Running { completed_tasks: u32, total_tasks: u32 },
+    Running {
+        completed_tasks: u32,
+        total_tasks: u32,
+    },
     /// All tasks completed successfully.
     Succeeded,
     /// At least one task failed and the execution was abandoned.
@@ -34,7 +37,10 @@ pub enum ExecutionStatus {
 
 impl ExecutionStatus {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed { .. } | Self::Cancelled)
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed { .. } | Self::Cancelled
+        )
     }
 }
 
@@ -54,7 +60,11 @@ pub struct ExecutionHandle {
 impl ExecutionHandle {
     pub fn new(id: OperationId) -> Self {
         let (sender, receiver) = watch::channel(ExecutionStatus::Pending);
-        ExecutionHandle { id, sender: Arc::new(sender), receiver }
+        ExecutionHandle {
+            id,
+            sender: Arc::new(sender),
+            receiver,
+        }
     }
 
     /// Update the execution status. Notifies all subscribers.
@@ -108,7 +118,10 @@ impl ExecutionContext {
     }
 
     pub fn completed_count(&self) -> u32 {
-        self.task_states.iter().filter(|s| **s == TaskState::Done).count() as u32
+        self.task_states
+            .iter()
+            .filter(|s| **s == TaskState::Done)
+            .count() as u32
     }
 
     pub fn total_count(&self) -> u32 {
@@ -116,7 +129,12 @@ impl ExecutionContext {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.task_states.iter().all(|s| matches!(s, TaskState::Done | TaskState::Failed(_) | TaskState::Skipped))
+        self.task_states.iter().all(|s| {
+            matches!(
+                s,
+                TaskState::Done | TaskState::Failed(_) | TaskState::Skipped
+            )
+        })
     }
 }
 
@@ -132,8 +150,16 @@ pub struct CacheKey {
 }
 
 impl CacheKey {
-    pub fn new(op_hash: OperationHash, fp: &PlannerFingerprint, ctx_hash: PlanningContextHash) -> Self {
-        CacheKey { op_hash, fp_hash: fp.hash, ctx_hash }
+    pub fn new(
+        op_hash: OperationHash,
+        fp: &PlannerFingerprint,
+        ctx_hash: PlanningContextHash,
+    ) -> Self {
+        CacheKey {
+            op_hash,
+            fp_hash: fp.hash,
+            ctx_hash,
+        }
     }
 }
 
@@ -151,7 +177,10 @@ pub struct ExecutionCache {
 
 impl ExecutionCache {
     pub fn new(capacity: usize) -> Self {
-        ExecutionCache { capacity, inner: RwLock::new(HashMap::new()) }
+        ExecutionCache {
+            capacity,
+            inner: RwLock::new(HashMap::new()),
+        }
     }
 
     pub async fn get(&self, key: &CacheKey) -> Option<Arc<ExecutionGraph>> {
@@ -221,7 +250,9 @@ impl ExecutionRegistry {
 
     /// Number of currently-active (non-terminal) handles.
     pub async fn active_count(&self) -> usize {
-        self.active.read().await
+        self.active
+            .read()
+            .await
             .values()
             .filter(|h| !h.current_status().is_terminal())
             .count()
@@ -238,7 +269,10 @@ mod tests {
         let id = OperationId::new();
         let h = ExecutionHandle::new(id);
         assert_eq!(h.current_status(), ExecutionStatus::Pending);
-        h.update(ExecutionStatus::Running { completed_tasks: 1, total_tasks: 3 });
+        h.update(ExecutionStatus::Running {
+            completed_tasks: 1,
+            total_tasks: 3,
+        });
         assert!(!h.current_status().is_terminal());
         h.update(ExecutionStatus::Succeeded);
         assert!(h.current_status().is_terminal());
@@ -246,19 +280,43 @@ mod tests {
 
     #[tokio::test]
     async fn cache_insert_and_get() {
-        use crate::operation::{OperationKind, OperationInputs, ExecutionPolicy, compute_operation_hash};
-        use crate::context::{PlannerFingerprint, PlanningContextHash, PlanningContext, CapabilitySet};
+        use crate::context::{
+            CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+        };
         use crate::graph::ExecutionGraph;
         use crate::graph::ExecutionRetentionPolicy;
+        use crate::operation::{
+            compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+        };
 
-        let op = compute_operation_hash(OperationKind::HealthCheck, &OperationInputs::HealthCheck, &ExecutionPolicy::default());
+        let op = compute_operation_hash(
+            OperationKind::HealthCheck,
+            &OperationInputs::HealthCheck,
+            &ExecutionPolicy::default(),
+        );
         let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
         let ctx = PlanningContextHash::compute(&PlanningContext {
-            capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count: 1 },
-            schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+            capability_set: CapabilitySet {
+                embed: false,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
+            schema_version: 1,
+            shard_count: 1,
+            cluster_epoch: 0,
+            cluster_mode: false,
         });
         let key = CacheKey::new(op, &fp, ctx);
-        let graph = Arc::new(ExecutionGraph::build(op, fp, ctx, vec![], vec![], ExecutionRetentionPolicy::default()));
+        let graph = Arc::new(ExecutionGraph::build(
+            op,
+            fp,
+            ctx,
+            vec![],
+            vec![],
+            ExecutionRetentionPolicy::default(),
+        ));
 
         let cache = ExecutionCache::new(8);
         cache.insert(key.clone(), graph.clone()).await;

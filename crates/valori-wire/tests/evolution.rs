@@ -29,11 +29,17 @@ const BASE_TIME: u64 = 1_750_000_000;
 fn fixture_entries() -> Vec<LogEntry> {
     let mut entries = Vec::new();
     for i in 0..8u32 {
-        let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+            .collect();
         entries.push(LogEntry::Event(KernelEvent::InsertRecord {
             id: RecordId(i),
             vector: FxpVector { data },
-            metadata: if i % 2 == 0 { Some(vec![i as u8; 4]) } else { None },
+            metadata: if i % 2 == 0 {
+                Some(vec![i as u8; 4])
+            } else {
+                None
+            },
             tag: i as u64,
         }));
     }
@@ -84,8 +90,8 @@ fn walk(bytes: &[u8]) -> (u64, u64, [u8; 32]) {
 
 #[test]
 fn v2_fixture_decodes_forever() {
-    let bytes = std::fs::read(fixture_path("segment_v2.bin"))
-        .expect("committed v2 fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("segment_v2.bin")).expect("committed v2 fixture must exist");
     let (events, checkpoints, head) = walk(&bytes);
     assert_eq!(events, 9);
     assert_eq!(checkpoints, 1);
@@ -98,8 +104,8 @@ fn v2_fixture_decodes_forever() {
 
 #[test]
 fn v3_fixture_decodes_forever() {
-    let bytes = std::fs::read(fixture_path("segment_v3.bin"))
-        .expect("committed v3 fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("segment_v3.bin")).expect("committed v3 fixture must exist");
     let header = parse_header(&bytes).unwrap();
     assert_eq!(header.version, VERSION_V3);
     assert_eq!(header.format_id, FORMAT_Q16_16);
@@ -117,8 +123,8 @@ fn v3_fixture_decodes_forever() {
 
 #[test]
 fn v4_fixture_decodes_forever() {
-    let bytes = std::fs::read(fixture_path("segment_v4.bin"))
-        .expect("committed v4 fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("segment_v4.bin")).expect("committed v4 fixture must exist");
     let header = parse_header(&bytes).unwrap();
     assert_eq!(header.version, VERSION_V4);
     assert_eq!(header.format_id, FORMAT_Q16_16);
@@ -159,7 +165,11 @@ fn generate_fixtures() {
     let mut head = prev;
     for (i, entry) in fixture_entries().iter().enumerate() {
         let t = BASE_TIME + i as u64;
-        let rid = if i % 2 == 0 { Some([i as u8; 16]) } else { None };
+        let rid = if i % 2 == 0 {
+            Some([i as u8; 16])
+        } else {
+            None
+        };
         bytes.extend(encode_entry(VERSION_V3, &head, t, rid, entry).unwrap());
         head = valori_wire::chain_advance_v3(&head, t, rid, entry);
     }
@@ -173,7 +183,11 @@ fn generate_fixtures() {
     let mut head = prev;
     for (i, entry) in fixture_entries().iter().enumerate() {
         let t = BASE_TIME + i as u64;
-        let rid = if i % 2 == 0 { Some([i as u8; 16]) } else { None };
+        let rid = if i % 2 == 0 {
+            Some([i as u8; 16])
+        } else {
+            None
+        };
         bytes.extend(encode_entry(VERSION_V4, &head, t, rid, entry).unwrap());
         head = valori_wire::chain_advance_v3(&head, t, rid, entry);
     }

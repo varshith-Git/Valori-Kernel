@@ -69,6 +69,7 @@ fn is_range_predicate(ops: &Map<String, Value>) -> bool {
 }
 
 /// Apply numeric range operators. Returns `false` if `actual` is not a number.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn apply_range(actual: &Value, ops: &Map<String, Value>) -> bool {
     let num = match actual.as_f64() {
         Some(n) => n,
@@ -110,7 +111,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn meta(v: serde_json::Value) -> Value { v }
+    fn meta(v: serde_json::Value) -> Value {
+        v
+    }
 
     #[test]
     fn exact_string_match() {
@@ -176,8 +179,7 @@ mod tests {
     #[test]
     fn range_on_non_numeric_fails() {
         let m = meta(json!({"tag": "rust"}));
-        let f: MetadataFilter =
-            serde_json::from_value(json!({"tag": {"gte": 1}})).unwrap();
+        let f: MetadataFilter = serde_json::from_value(json!({"tag": {"gte": 1}})).unwrap();
         assert!(!matches_metadata_filter(&m, &f));
     }
 

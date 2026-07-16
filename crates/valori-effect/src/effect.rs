@@ -61,8 +61,12 @@ pub enum KernelCommandBody {
         metadata: Option<serde_json::Value>,
         tag: u8,
     },
-    SoftDeleteRecord { record_id: u32 },
-    HardDeleteRecord { record_id: u32 },
+    SoftDeleteRecord {
+        record_id: u32,
+    },
+    HardDeleteRecord {
+        record_id: u32,
+    },
     CreateNode {
         kind: u8,
         record_id: Option<u32>,
@@ -138,11 +142,19 @@ pub struct Effect {
 
 impl Effect {
     pub fn durable(id: EffectId, payload: EffectPayload) -> Self {
-        Effect { id, durability: EffectDurability::Durable, payload }
+        Effect {
+            id,
+            durability: EffectDurability::Durable,
+            payload,
+        }
     }
 
     pub fn ephemeral(id: EffectId, payload: EffectPayload) -> Self {
-        Effect { id, durability: EffectDurability::Ephemeral, payload }
+        Effect {
+            id,
+            durability: EffectDurability::Ephemeral,
+            payload,
+        }
     }
 }
 
@@ -190,7 +202,10 @@ mod tests {
         let eid = ExecutionId { hi: 0, lo: 1 };
         let e = Effect::durable(
             EffectId::new(&eid, 0, 0),
-            EffectPayload::Counter { name: "test".into(), value: 1.0 },
+            EffectPayload::Counter {
+                name: "test".into(),
+                value: 1.0,
+            },
         );
         let json = serde_json::to_string(&e).unwrap();
         let back: Effect = serde_json::from_str(&json).unwrap();

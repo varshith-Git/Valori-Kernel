@@ -76,7 +76,9 @@ pub async fn run(bind_host: &str) -> Result<()> {
     if bind_host == "0.0.0.0" {
         println!("  ⚠  Binding to 0.0.0.0 — ALL API ports will be reachable from the network.");
         println!("     The cluster starts WITHOUT authentication or mTLS.");
-        println!("     On a cloud VM (EC2, GCP, Azure) any internet host can read/write your data.");
+        println!(
+            "     On a cloud VM (EC2, GCP, Azure) any internet host can read/write your data."
+        );
         println!("     Restrict access with firewall/security-group rules BEFORE starting,");
         println!("     or use 127.0.0.1 (default) for local development.");
         println!();
@@ -179,7 +181,11 @@ async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
     let mut plan = Table::new();
     plan.set_header(vec!["node", "api port", "raft port", "role"]);
     for i in 0..n_nodes {
-        let role = if i == 0 { "bootstrap → leader" } else { "voter" };
+        let role = if i == 0 {
+            "bootstrap → leader"
+        } else {
+            "voter"
+        };
         plan.add_row(vec![
             Cell::new(i + 1),
             Cell::new(base_api + i as u16),
@@ -202,7 +208,13 @@ async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
     println!();
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
-    let project = SavedProject { name, created_at: now, n_nodes, base_api_port: base_api, base_raft_port: base_raft };
+    let project = SavedProject {
+        name,
+        created_at: now,
+        n_nodes,
+        base_api_port: base_api,
+        base_raft_port: base_raft,
+    };
 
     // Persist before starting (so a partial start doesn't lose the record)
     config.projects.retain(|p| p.name != project.name);
@@ -216,8 +228,17 @@ async fn prompt_new_cluster(config: &mut ValoriConfig) -> Result<SavedProject> {
 
 // ── Cluster start ─────────────────────────────────────────────────────────────
 
-async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut ValoriConfig) -> Result<()> {
-    let SavedProject { n_nodes, base_api_port, base_raft_port, .. } = project;
+async fn start_cluster(
+    project: SavedProject,
+    bind_host: &str,
+    _config: &mut ValoriConfig,
+) -> Result<()> {
+    let SavedProject {
+        n_nodes,
+        base_api_port,
+        base_raft_port,
+        ..
+    } = project;
 
     let members: BTreeMap<u64, ValoriNode> = (0..n_nodes)
         .map(|i| {
@@ -225,7 +246,7 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
                 (i + 1) as u64,
                 ValoriNode {
                     raft_addr: format!("127.0.0.1:{}", base_raft_port + i as u16),
-                    api_addr:  format!("127.0.0.1:{}", base_api_port  + i as u16),
+                    api_addr: format!("127.0.0.1:{}", base_api_port + i as u16),
                 },
             )
         })
@@ -234,8 +255,8 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
     // Start all nodes (init=false; we call initialize after all gRPC servers are up)
     let mut setups: Vec<NodeSetup> = Vec::new();
     for i in 0..n_nodes {
-        let node_id  = (i + 1) as u64;
-        let api_port  = base_api_port  + i as u16;
+        let node_id = (i + 1) as u64;
+        let api_port = base_api_port + i as u16;
         let raft_port = base_raft_port + i as u16;
 
         let pb = spinner(&format!(
@@ -262,9 +283,7 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
             .await
             .with_context(|| format!("port {api_port} already in use — run `lsof -i :{api_port}` to find the process"))?;
 
-        pb.finish_with_message(format!(
-            "✓  node {node_id}   http://{bind_host}:{api_port}"
-        ));
+        pb.finish_with_message(format!("✓  node {node_id}   http://{bind_host}:{api_port}"));
 
         setups.push(NodeSetup {
             node_id,
@@ -301,7 +320,14 @@ async fn start_cluster(project: SavedProject, bind_host: &str, _config: &mut Val
     cluster_cmd::status(&leader_url).ok();
 
     // Operations menu
-    menu_loop(leader_url, &mut setups, base_api_port, base_raft_port, bind_host).await
+    menu_loop(
+        leader_url,
+        &mut setups,
+        base_api_port,
+        base_raft_port,
+        bind_host,
+    )
+    .await
 }
 
 // ── Operations menu ───────────────────────────────────────────────────────────
@@ -337,7 +363,9 @@ async fn menu_loop(
         match choice {
             0 => insert_vector(&leader_url).await?,
             1 => search_vectors(setups).await?,
-            2 => { cluster_cmd::status(&leader_url).ok(); }
+            2 => {
+                cluster_cmd::status(&leader_url).ok();
+            }
             3 => {
                 add_local_node(setups, base_api_port, base_raft_port, bind_host).await?;
                 // Re-read leader in case it changed after membership update.
@@ -374,23 +402,32 @@ async fn insert_vector(leader_url: &str) -> Result<()> {
 
     let result = tokio::task::spawn_blocking(move || {
         match ureq::post(&url).send_json(serde_json::json!({ "values": values })) {
-            Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| anyhow::anyhow!("{e}")),
-            Err(ureq::Error::Status(c, r)) => {
-                Err(anyhow::anyhow!("HTTP {c}: {}", r.into_json::<serde_json::Value>().unwrap_or_default()))
-            }
+            Ok(r) => r
+                .into_json::<serde_json::Value>()
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            Err(ureq::Error::Status(c, r)) => Err(anyhow::anyhow!(
+                "HTTP {c}: {}",
+                r.into_json::<serde_json::Value>().unwrap_or_default()
+            )),
             Err(e) => Err(anyhow::anyhow!("{e}")),
         }
     })
     .await??;
 
-    println!("  ✅  inserted  id={}  log_index={}", result["id"], result["log_index"]);
+    println!(
+        "  ✅  inserted  id={}  log_index={}",
+        result["id"], result["log_index"]
+    );
     Ok(())
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
 async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
-    let any_url = setups.first().map(|s| s.api_url.clone()).unwrap_or_default();
+    let any_url = setups
+        .first()
+        .map(|s| s.api_url.clone())
+        .unwrap_or_default();
 
     let (raw, k) = tokio::task::spawn_blocking(|| -> Result<(String, usize)> {
         let raw = Input::<String>::new()
@@ -409,10 +446,13 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
 
     let body = tokio::task::spawn_blocking(move || {
         match ureq::post(&url).send_json(serde_json::json!({ "query": query, "k": k })) {
-            Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| anyhow::anyhow!("{e}")),
-            Err(ureq::Error::Status(c, r)) => {
-                Err(anyhow::anyhow!("HTTP {c}: {}", r.into_json::<serde_json::Value>().unwrap_or_default()))
-            }
+            Ok(r) => r
+                .into_json::<serde_json::Value>()
+                .map_err(|e| anyhow::anyhow!("{e}")),
+            Err(ureq::Error::Status(c, r)) => Err(anyhow::anyhow!(
+                "HTTP {c}: {}",
+                r.into_json::<serde_json::Value>().unwrap_or_default()
+            )),
             Err(e) => Err(anyhow::anyhow!("{e}")),
         }
     })
@@ -425,8 +465,16 @@ async fn search_vectors(setups: &[NodeSetup]) -> Result<()> {
             let mut t = Table::new();
             t.set_header(vec!["rank", "record id", "distance²"]);
             for (rank, h) in hits.iter().enumerate() {
-                let cell = if rank == 0 { Cell::new(rank + 1).fg(Color::Green) } else { Cell::new(rank + 1) };
-                t.add_row(vec![cell, Cell::new(h["id"].to_string()), Cell::new(h["distance_sq"].to_string())]);
+                let cell = if rank == 0 {
+                    Cell::new(rank + 1).fg(Color::Green)
+                } else {
+                    Cell::new(rank + 1)
+                };
+                t.add_row(vec![
+                    cell,
+                    Cell::new(h["id"].to_string()),
+                    Cell::new(h["distance_sq"].to_string()),
+                ]);
             }
             println!("{t}");
         }
@@ -444,7 +492,7 @@ async fn add_local_node(
     bind_host: &str,
 ) -> Result<()> {
     let next_id = setups.iter().map(|s| s.node_id).max().unwrap_or(0) + 1;
-    let api_port  = base_api_port  + (next_id - 1) as u16;
+    let api_port = base_api_port + (next_id - 1) as u16;
     let raft_port = base_raft_port + (next_id - 1) as u16;
 
     let pb = spinner(&format!(
@@ -455,7 +503,7 @@ async fn add_local_node(
     // Build the new node's ValoriNode descriptor.
     let new_node = ValoriNode {
         raft_addr: format!("127.0.0.1:{raft_port}"),
-        api_addr:  format!("127.0.0.1:{api_port}"),
+        api_addr: format!("127.0.0.1:{api_port}"),
     };
 
     // Members map for the new node's config (it needs to know all peers to connect).
@@ -463,11 +511,14 @@ async fn add_local_node(
         .iter()
         .map(|s| {
             let rp = base_raft_port + (s.node_id - 1) as u16;
-            let ap = base_api_port  + (s.node_id - 1) as u16;
-            (s.node_id, ValoriNode {
-                raft_addr: format!("127.0.0.1:{rp}"),
-                api_addr:  format!("127.0.0.1:{ap}"),
-            })
+            let ap = base_api_port + (s.node_id - 1) as u16;
+            (
+                s.node_id,
+                ValoriNode {
+                    raft_addr: format!("127.0.0.1:{rp}"),
+                    api_addr: format!("127.0.0.1:{ap}"),
+                },
+            )
         })
         .chain([(next_id, new_node.clone())])
         .collect();
@@ -502,17 +553,18 @@ async fn add_local_node(
     if let Some(leader) = setups.iter().find(|s| s.node_id == leader_id) {
         let pb2 = spinner("Joining cluster (learner → voter)");
 
-        leader.handle.raft
+        leader
+            .handle
+            .raft
             .add_learner(next_id, new_node, true)
             .await
             .map_err(|e| anyhow::anyhow!("add_learner failed: {e}"))?;
 
-        let voters: std::collections::BTreeSet<u64> = setups
-            .iter()
-            .map(|s| s.node_id)
-            .chain([next_id])
-            .collect();
-        leader.handle.raft
+        let voters: std::collections::BTreeSet<u64> =
+            setups.iter().map(|s| s.node_id).chain([next_id]).collect();
+        leader
+            .handle
+            .raft
             .change_membership(voters, false)
             .await
             .map_err(|e| anyhow::anyhow!("change_membership failed: {e}"))?;
@@ -615,7 +667,11 @@ fn spinner(msg: &str) -> ProgressBar {
 
 fn parse_floats(raw: &str) -> Result<Vec<f32>> {
     raw.split(',')
-        .map(|s| s.trim().parse::<f32>().map_err(|_| anyhow::anyhow!("'{s}' is not a float")))
+        .map(|s| {
+            s.trim()
+                .parse::<f32>()
+                .map_err(|_| anyhow::anyhow!("'{s}' is not a float"))
+        })
         .collect()
 }
 
@@ -623,7 +679,10 @@ fn print_header() {
     println!();
     println!("  ╔══════════════════════════════════════╗");
     println!("  ║        Valori  Cluster  Setup        ║");
-    println!("  ║    forensic vector database  v{}    ║", env!("CARGO_PKG_VERSION"));
+    println!(
+        "  ║    forensic vector database  v{}    ║",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("  ╚══════════════════════════════════════╝");
     println!();
 }

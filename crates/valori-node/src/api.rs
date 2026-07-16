@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 // Since valori-kernel is a dependency, we can use its types if they are pub.
 // Assuming valori_kernel::types::enums::* is pub.
 
-
 // ── Collections / namespace seam ─────────────────────────────────────────────
 //
 // The API accepts a `collection` string on every data-path request.
@@ -129,7 +128,9 @@ pub struct SearchRequest {
     pub metadata_filter: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-fn default_rerank() -> bool { true }
+fn default_rerank() -> bool {
+    true
+}
 
 // Metadata predicate matching now lives in valori-search.
 pub use valori_search::matches_metadata_filter;
@@ -168,7 +169,13 @@ pub struct SearchResponse {
 
 impl SearchResponse {
     pub fn simple(results: Vec<SearchHit>) -> Self {
-        Self { results, as_of_log_index: None, as_of_timestamp_unix: None, as_of_timestamp_iso: None, as_of_state_hash: None }
+        Self {
+            results,
+            as_of_log_index: None,
+            as_of_timestamp_unix: None,
+            as_of_timestamp_iso: None,
+            as_of_state_hash: None,
+        }
     }
 }
 
@@ -245,21 +252,21 @@ pub struct OperationDetailResponse {
 #[derive(Deserialize)]
 pub struct CreateNodeRequest {
     pub record_id: Option<u32>,
-    // NodeKind needs to be deserializable. 
+    // NodeKind needs to be deserializable.
     // valori-kernel NodeKind derives Copy, Clone, Debug, PartialEq. Does it derive Serialize/Deserialize?
     // If not, we need a mirror enum or manual impl.
-    // The user didn't ask to modify kernel. 
+    // The user didn't ask to modify kernel.
     // So we must redefine or use `#[serde(remote = ...)]`?
     // Or just "kind": u8 ?
     // User request: "You can define NodeKind and EdgeKind via valori-kernel’s enums (they are #[repr(u8)] + serde)."
-    // Ah, the user implied they *are* serde? 
+    // Ah, the user implied they *are* serde?
     // Or I should make them serde in kernel?
     // "Do NOT modify valori-kernel".
     // "You can define NodeKind ... via valori-kernel's enums (they are #[repr(u8)] + serde)" -> Maybe the user thinks they are serde?
     // Or maybe "You can define [your own API types] via ..."
     // I will redefine them here for serde support if kernel ones don't have it.
     // Let's assume for now I wrap them: kind: u8 in JSON, mapped to enum.
-    pub kind: u8, 
+    pub kind: u8,
     #[serde(default)]
     pub collection: Option<String>,
 }
@@ -452,8 +459,8 @@ pub struct SnapshotRestoreResponse {
 #[derive(Serialize, Debug)]
 pub struct EventProofResponse {
     pub kernel_version: u32,
-    pub event_log_hash: String,       // hex-encoded BLAKE3
-    pub final_state_hash: String,     // hex-encoded BLAKE3  
+    pub event_log_hash: String,        // hex-encoded BLAKE3
+    pub final_state_hash: String,      // hex-encoded BLAKE3
     pub snapshot_hash: Option<String>, // hex-encoded BLAKE3 (if snapshot exists)
     pub event_count: u64,
     pub committed_height: u64,

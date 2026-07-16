@@ -3,12 +3,12 @@
 //!
 //! Inserts one record, then verifies /v1/replication/events yields
 //! the historical InsertRecord event and streams new ones live.
-use valori_node::engine::Engine;
-use valori_node::EngineFromNodeConfig;
-use valori_node::server::build_router;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tempfile::tempdir;
+use tokio::sync::RwLock;
+use valori_node::engine::Engine;
+use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::test]
 async fn test_replication_stream_endpoint() {
@@ -40,7 +40,11 @@ async fn test_replication_stream_endpoint() {
     // Verify the event was committed in-memory.
     assert!(engine.event_committer().is_some());
     assert_eq!(
-        engine.event_committer().unwrap().journal().committed_height(),
+        engine
+            .event_committer()
+            .unwrap()
+            .journal()
+            .committed_height(),
         1
     );
 
@@ -60,13 +64,19 @@ async fn test_replication_stream_endpoint() {
     let url = format!("http://{}/v1/replication/events", addr);
 
     let mut res = client.get(&url).send().await.unwrap();
-    assert!(res.status().is_success(), "Streaming endpoint must return 200");
+    assert!(
+        res.status().is_success(),
+        "Streaming endpoint must return 200"
+    );
 
     // ── 5. First chunk: historical InsertRecord event ─────────────────────────
     let chunk1 = res.chunk().await.unwrap().unwrap();
     let s1 = String::from_utf8(chunk1.to_vec()).unwrap();
     println!("Chunk 1: {}", s1);
-    assert!(s1.contains("b64"), "First chunk must contain the historical event in base64");
+    assert!(
+        s1.contains("b64"),
+        "First chunk must contain the historical event in base64"
+    );
 
     // ── 6. Insert a live record ───────────────────────────────────────────────
     {
@@ -79,5 +89,8 @@ async fn test_replication_stream_endpoint() {
     let chunk2 = res.chunk().await.unwrap().unwrap();
     let s2 = String::from_utf8(chunk2.to_vec()).unwrap();
     println!("Chunk 2: {}", s2);
-    assert!(s2.contains("b64"), "Second chunk must contain at least one base64 event");
+    assert!(
+        s2.contains("b64"),
+        "Second chunk must contain at least one base64 event"
+    );
 }

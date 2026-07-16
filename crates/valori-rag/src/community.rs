@@ -11,7 +11,7 @@
 //! - Deterministic with tie-breaking (min label wins).
 //! - Zero allocation of a dense adjacency matrix.
 
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use valori_kernel::state::kernel::KernelState;
@@ -76,8 +76,12 @@ pub struct SearchRequest {
     pub drill_in: bool,
 }
 
-fn default_k() -> usize { 5 }
-fn default_depth() -> u32 { 1 }
+fn default_k() -> usize {
+    5
+}
+fn default_depth() -> u32 {
+    1
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct CommunityHit {
@@ -168,7 +172,8 @@ pub fn label_propagation(
     namespace_filter: Option<u16>,
     max_iter: u32,
 ) -> HashMap<u32, u32> {
-    let node_ids: Vec<u32> = state.iter_nodes()
+    let node_ids: Vec<u32> = state
+        .iter_nodes()
         .filter(|n| namespace_filter.map_or(true, |ns| n.namespace_id == ns))
         .map(|n| n.id.0)
         .collect();
@@ -209,7 +214,8 @@ pub fn label_propagation(
             }
 
             let max_count = *freq.values().max().unwrap();
-            let best = freq.into_iter()
+            let best = freq
+                .into_iter()
                 .filter(|(_, c)| *c == max_count)
                 .map(|(lbl, _)| lbl)
                 .min()
@@ -280,7 +286,10 @@ pub fn build_community_store(
         hasher.update(&nid.to_le_bytes());
         hasher.update(&cid.to_le_bytes());
     }
-    let receipt = hasher.finalize().as_bytes().iter()
+    let receipt = hasher
+        .finalize()
+        .as_bytes()
+        .iter()
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
 
@@ -299,12 +308,10 @@ pub fn build_community_store(
 
 /// Score a query vector against all community centroids using cosine similarity.
 /// Returns `(community_id, score)` pairs sorted best-first, truncated to `k`.
-pub fn rank_communities(
-    store: &CommunityStore,
-    query: &[f32],
-    k: usize,
-) -> Vec<(u32, f32)> {
-    let mut scores: Vec<(u32, f32)> = store.centroids.iter()
+pub fn rank_communities(store: &CommunityStore, query: &[f32], k: usize) -> Vec<(u32, f32)> {
+    let mut scores: Vec<(u32, f32)> = store
+        .centroids
+        .iter()
         .filter(|(_, c)| c.len() == query.len())
         .map(|(&cid, centroid)| {
             let dot: f32 = query.iter().zip(centroid.iter()).map(|(a, b)| a * b).sum();

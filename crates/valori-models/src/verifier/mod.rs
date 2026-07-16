@@ -66,7 +66,11 @@ pub fn verify_manifest_full(manifest: &ModelManifest) -> VerifyResult {
     let status = match &manifest.sha256 {
         None => VerifyStatus::Unverified,
         Some(expected) => {
-            if *expected == actual { VerifyStatus::Ok } else { VerifyStatus::Corrupted }
+            if *expected == actual {
+                VerifyStatus::Ok
+            } else {
+                VerifyStatus::Corrupted
+            }
         }
     };
 
@@ -93,7 +97,11 @@ mod tests {
             task: ModelTask::Embedding,
             dimensions: 384,
             quantization: None,
-            format: if path.is_some() { ModelFormat::Onnx } else { ModelFormat::Remote },
+            format: if path.is_some() {
+                ModelFormat::Onnx
+            } else {
+                ModelFormat::Remote
+            },
             sha256,
             size_bytes: 0,
             installed_at: Some(0),
@@ -134,10 +142,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("model.bin");
         std::fs::write(&file, b"hello valori").unwrap();
-        let m = make_manifest(
-            Some(file.display().to_string()),
-            Some("deadbeef".repeat(8)),
-        );
+        let m = make_manifest(Some(file.display().to_string()), Some("deadbeef".repeat(8)));
         assert_eq!(verify_manifest(&m), VerifyStatus::Corrupted);
     }
 

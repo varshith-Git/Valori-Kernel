@@ -13,11 +13,11 @@
 //! Effects: `KernelWrite(KernelCommand)` — Durable
 //!          `Counter("edges_created", 1.0)` — Ephemeral
 
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use crate::effect::{Effect, EffectId, EffectPayload, KernelCommand, KernelCommandBody};
 use crate::error::{EffectError, EffectResult};
 use crate::task::{Task, TaskContext, TaskOutput};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 // ── InsertNodeTask ────────────────────────────────────────────────────────────
 
@@ -42,7 +42,9 @@ pub struct InsertNodeTask;
 
 #[async_trait]
 impl Task for InsertNodeTask {
-    fn name(&self) -> &'static str { "insert_node" }
+    fn name(&self) -> &'static str {
+        "insert_node"
+    }
 
     async fn run(
         &self,
@@ -69,19 +71,38 @@ impl Task for InsertNodeTask {
         };
 
         let write_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 0);
-        let result = ctx.bus.dispatch(Effect::durable(write_id, EffectPayload::KernelWrite(cmd))).await?;
+        let result = ctx
+            .bus
+            .dispatch(Effect::durable(write_id, EffectPayload::KernelWrite(cmd)))
+            .await?;
 
         let node_id = result.get("node_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let state_hash = result.get("state_hash").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let state_hash = result
+            .get("state_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let metric_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 1);
-        let _ = ctx.bus.dispatch(Effect::ephemeral(
-            metric_id,
-            EffectPayload::Counter { name: "nodes_created".into(), value: 1.0 },
-        )).await;
+        let _ = ctx
+            .bus
+            .dispatch(Effect::ephemeral(
+                metric_id,
+                EffectPayload::Counter {
+                    name: "nodes_created".into(),
+                    value: 1.0,
+                },
+            ))
+            .await;
 
-        let out = InsertNodeOutput { node_id, state_hash_after: state_hash.clone() };
-        Ok(TaskOutput::with_value(serde_json::to_value(out).map_err(EffectError::Serde)?, state_hash))
+        let out = InsertNodeOutput {
+            node_id,
+            state_hash_after: state_hash.clone(),
+        };
+        Ok(TaskOutput::with_value(
+            serde_json::to_value(out).map_err(EffectError::Serde)?,
+            state_hash,
+        ))
     }
 }
 
@@ -108,7 +129,9 @@ pub struct InsertEdgeTask;
 
 #[async_trait]
 impl Task for InsertEdgeTask {
-    fn name(&self) -> &'static str { "insert_edge" }
+    fn name(&self) -> &'static str {
+        "insert_edge"
+    }
 
     async fn run(
         &self,
@@ -136,18 +159,37 @@ impl Task for InsertEdgeTask {
         };
 
         let write_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 0);
-        let result = ctx.bus.dispatch(Effect::durable(write_id, EffectPayload::KernelWrite(cmd))).await?;
+        let result = ctx
+            .bus
+            .dispatch(Effect::durable(write_id, EffectPayload::KernelWrite(cmd)))
+            .await?;
 
         let edge_id = result.get("edge_id").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let state_hash = result.get("state_hash").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let state_hash = result
+            .get("state_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let metric_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 1);
-        let _ = ctx.bus.dispatch(Effect::ephemeral(
-            metric_id,
-            EffectPayload::Counter { name: "edges_created".into(), value: 1.0 },
-        )).await;
+        let _ = ctx
+            .bus
+            .dispatch(Effect::ephemeral(
+                metric_id,
+                EffectPayload::Counter {
+                    name: "edges_created".into(),
+                    value: 1.0,
+                },
+            ))
+            .await;
 
-        let out = InsertEdgeOutput { edge_id, state_hash_after: state_hash.clone() };
-        Ok(TaskOutput::with_value(serde_json::to_value(out).map_err(EffectError::Serde)?, state_hash))
+        let out = InsertEdgeOutput {
+            edge_id,
+            state_hash_after: state_hash.clone(),
+        };
+        Ok(TaskOutput::with_value(
+            serde_json::to_value(out).map_err(EffectError::Serde)?,
+            state_hash,
+        ))
     }
 }

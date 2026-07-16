@@ -23,7 +23,10 @@ impl Reader for MarkdownReader {
             id,
             source: source_str,
             mime_type: "text/markdown".to_string(),
-            metadata: DocumentMetadata { title, ..Default::default() },
+            metadata: DocumentMetadata {
+                title,
+                ..Default::default()
+            },
             content: text,
         })
     }
@@ -32,9 +35,7 @@ impl Reader for MarkdownReader {
 /// Public so `MarkdownExtractor` can reuse the parsing logic without
 /// duplicating the pulldown-cmark traversal.
 pub fn extract_text_and_title(md: &str) -> (String, Option<String>) {
-    let opts = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH;
+    let opts = Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES | Options::ENABLE_STRIKETHROUGH;
     let parser = Parser::new_ext(md, opts);
 
     let mut out = String::new();
@@ -44,7 +45,9 @@ pub fn extract_text_and_title(md: &str) -> (String, Option<String>) {
 
     for event in parser {
         match event {
-            Event::Start(Tag::Heading { level, .. }) if level == pulldown_cmark::HeadingLevel::H1 => {
+            Event::Start(Tag::Heading { level, .. })
+                if level == pulldown_cmark::HeadingLevel::H1 =>
+            {
                 in_heading1 = true;
             }
             Event::End(TagEnd::Heading(_)) => {

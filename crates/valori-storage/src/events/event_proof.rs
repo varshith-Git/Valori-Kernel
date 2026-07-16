@@ -16,7 +16,9 @@ pub fn compute_event_log_hash(path: impl AsRef<std::path::Path>) -> std::io::Res
 
     loop {
         let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 { break; }
+        if bytes_read == 0 {
+            break;
+        }
         hasher.update(&buffer[..bytes_read]);
     }
 

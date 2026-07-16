@@ -36,19 +36,36 @@ pub fn router(daemon: SharedDaemon) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/shutdown", post(shutdown))
         // ── workspaces ──────────────────────────────────────────────────────
-        .route("/v1/workspaces", get(list_workspaces).post(create_workspace))
-        .route("/v1/workspaces/:name", patch(rename_workspace).delete(delete_workspace))
+        .route(
+            "/v1/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
+        .route(
+            "/v1/workspaces/:name",
+            patch(rename_workspace).delete(delete_workspace),
+        )
         // ── projects ────────────────────────────────────────────────────────
         .route("/v1/projects", get(list_projects).post(create_project))
-        .route("/v1/projects/:name", get(project_detail).patch(rename_project).delete(delete_project))
+        .route(
+            "/v1/projects/:name",
+            get(project_detail)
+                .patch(rename_project)
+                .delete(delete_project),
+        )
         .route("/v1/projects/:name/start", post(start_project))
         .route("/v1/projects/:name/stop", post(stop_project))
         .route("/v1/projects/:name/restart", post(restart_project))
         .route("/v1/projects/:name/logs", get(project_logs))
         .route("/v1/projects/:name/runtime", get(project_runtime))
         // ── collections (proxied to the running node) ───────────────────────
-        .route("/v1/projects/:name/collections", get(list_collections).post(create_collection))
-        .route("/v1/projects/:name/collections/:collection", axum::routing::delete(delete_collection))
+        .route(
+            "/v1/projects/:name/collections",
+            get(list_collections).post(create_collection),
+        )
+        .route(
+            "/v1/projects/:name/collections/:collection",
+            axum::routing::delete(delete_collection),
+        )
         // ── models (E1-lite) ────────────────────────────────────────────────
         .route("/v1/models", get(list_models))
         .route("/v1/models/install", post(install_model))
@@ -83,7 +100,9 @@ fn project_json(
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "valori-daemon", "version": env!("CARGO_PKG_VERSION") }))
+    Json(
+        json!({ "status": "ok", "service": "valori-daemon", "version": env!("CARGO_PKG_VERSION") }),
+    )
 }
 
 async fn version() -> Json<Value> {
@@ -137,7 +156,9 @@ async fn project_runtime(
     Path(name): Path<String>,
 ) -> DaemonResult<Json<Value>> {
     let stats = d.lock().await.project_resources(&name)?;
-    Ok(Json(serde_json::to_value(stats).unwrap_or_else(|_| json!({}))))
+    Ok(Json(
+        serde_json::to_value(stats).unwrap_or_else(|_| json!({})),
+    ))
 }
 
 // ── Workspaces ──────────────────────────────────────────────────────────────
@@ -156,7 +177,9 @@ async fn create_workspace(
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> DaemonResult<Json<Value>> {
     let ws = d.lock().await.create_workspace(&req.name)?;
-    Ok(Json(json!({ "name": ws.name, "created_at": ws.created_at, "projects": 0 })))
+    Ok(Json(
+        json!({ "name": ws.name, "created_at": ws.created_at, "projects": 0 }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -170,7 +193,9 @@ async fn rename_workspace(
     Json(req): Json<RenameWorkspaceRequest>,
 ) -> DaemonResult<Json<Value>> {
     let ws = d.lock().await.rename_workspace(&name, &req.name)?;
-    Ok(Json(json!({ "name": ws.name, "created_at": ws.created_at })))
+    Ok(Json(
+        json!({ "name": ws.name, "created_at": ws.created_at }),
+    ))
 }
 
 async fn delete_workspace(
@@ -200,14 +225,18 @@ async fn create_collection(
     Path(name): Path<String>,
     Json(req): Json<CreateCollectionRequest>,
 ) -> DaemonResult<Json<Value>> {
-    Ok(Json(d.lock().await.create_collection(&name, &req.name).await?))
+    Ok(Json(
+        d.lock().await.create_collection(&name, &req.name).await?,
+    ))
 }
 
 async fn delete_collection(
     State(d): State<SharedDaemon>,
     Path((name, collection)): Path<(String, String)>,
 ) -> DaemonResult<Json<Value>> {
-    Ok(Json(d.lock().await.delete_collection(&name, &collection).await?))
+    Ok(Json(
+        d.lock().await.delete_collection(&name, &collection).await?,
+    ))
 }
 
 // ── Models (stubs) ────────────────────────────────────────────────────────────
@@ -349,7 +378,9 @@ async fn rename_project(
 ) -> DaemonResult<Json<Value>> {
     let daemon = d.lock().await;
     let project = daemon.rename_project(&old_name, &req.name)?;
-    Ok(Json(json!({ "project": project_json(&project, &crate::runtime::NodeInfo::stopped(&req.name), None) })))
+    Ok(Json(
+        json!({ "project": project_json(&project, &crate::runtime::NodeInfo::stopped(&req.name), None) }),
+    ))
 }
 
 async fn delete_project(

@@ -19,3 +19,6 @@ default = ["std"]
 std = ["thiserror/std", "dep:getrandom"]
 
 # No dev-dependencies — core is intentionally dependency-free.
+
+[lints]
+workspace = true

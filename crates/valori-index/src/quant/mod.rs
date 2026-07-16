@@ -13,7 +13,9 @@ pub struct NoQuantizer;
 impl Quantizer for NoQuantizer {
     fn quantize(&self, vec: &[f32]) -> Vec<u8> {
         let mut out = Vec::with_capacity(vec.len() * 4);
-        for val in vec { out.extend_from_slice(&val.to_le_bytes()); }
+        for val in vec {
+            out.extend_from_slice(&val.to_le_bytes());
+        }
         out
     }
 
@@ -29,10 +31,12 @@ pub struct ScalarQuantizer;
 
 impl Quantizer for ScalarQuantizer {
     fn quantize(&self, vec: &[f32]) -> Vec<u8> {
-        vec.iter().map(|&v| {
-            let clamped = v.max(-1.0).min(1.0);
-            ((clamped + 1.0) * 127.5) as u8
-        }).collect()
+        vec.iter()
+            .map(|&v| {
+                let clamped = v.max(-1.0).min(1.0);
+                ((clamped + 1.0) * 127.5) as u8
+            })
+            .collect()
     }
 
     fn reconstruct(&self, data: &[u8]) -> Vec<f32> {

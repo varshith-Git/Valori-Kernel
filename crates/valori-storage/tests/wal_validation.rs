@@ -24,7 +24,9 @@ use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
 use valori_storage::events::event_log::{EventLogWriter, LogEntry};
-use valori_storage::events::event_replay::{read_all_segments, recover_from_event_log, replay_events};
+use valori_storage::events::event_replay::{
+    read_all_segments, recover_from_event_log, replay_events,
+};
 use valori_storage::wal_reader::WalReader;
 use valori_storage::wal_writer::WalWriter;
 
@@ -103,10 +105,16 @@ fn wal_truncated_at_various_points_recovers_complete_prefix_without_erroring() {
         }
         for (idx, evt) in recovered.iter().enumerate() {
             if let KernelEvent::InsertRecord { id, .. } = evt {
-                assert_eq!(id.0, idx as u32, "cut {cut_pct}%: recovered entries must be gap-free and in order");
+                assert_eq!(
+                    id.0, idx as u32,
+                    "cut {cut_pct}%: recovered entries must be gap-free and in order"
+                );
             }
         }
-        assert!(recovered.len() < 20, "cut {cut_pct}%: a real truncation must lose at least the last entry");
+        assert!(
+            recovered.len() < 20,
+            "cut {cut_pct}%: a real truncation must lose at least the last entry"
+        );
     }
 }
 
@@ -121,7 +129,10 @@ fn wal_shorter_than_header_errors_on_first_read_not_open() {
     // `WalReader::open` is lazy — it doesn't read the header until the
     // first `read_entry()` call, so opening itself must still succeed.
     let mut r = WalReader::open(&path, Some(DIM as u32)).expect("open is lazy, must not fail here");
-    assert!(r.read_entry().is_err(), "a header shorter than 16 bytes must fail on first read");
+    assert!(
+        r.read_entry().is_err(),
+        "a header shorter than 16 bytes must fail on first read"
+    );
 }
 
 // ── Event log: partial / truncated trailing entry (byte-exact) ─────────
@@ -145,9 +156,13 @@ fn event_log_truncated_trailing_entry_recovers_complete_prefix_on_reopen() {
         let cut = full_bytes.len() * cut_pct / 100;
         std::fs::write(&path, &full_bytes[..cut]).unwrap();
 
-        let w = EventLogWriter::open(&path, Some(DIM as u32))
-            .unwrap_or_else(|e| panic!("cut {cut_pct}%: a trailing partial write must be tolerated, got {e}"));
-        assert!(w.event_count() < 15, "cut {cut_pct}%: truncation must lose at least the last event");
+        let w = EventLogWriter::open(&path, Some(DIM as u32)).unwrap_or_else(|e| {
+            panic!("cut {cut_pct}%: a trailing partial write must be tolerated, got {e}")
+        });
+        assert!(
+            w.event_count() < 15,
+            "cut {cut_pct}%: truncation must lose at least the last event"
+        );
         drop(w);
     }
 }
@@ -170,7 +185,10 @@ fn recover_from_event_log_tolerates_trailing_truncation() {
         recover_from_event_log(&path).expect("a truncated tail must be tolerated, not hard-error");
     assert!(count < 15);
     for i in 0..count as u32 {
-        assert!(state.get_record(RecordId(i)).is_some(), "record {i} should have recovered");
+        assert!(
+            state.get_record(RecordId(i)).is_some(),
+            "record {i} should have recovered"
+        );
     }
 }
 

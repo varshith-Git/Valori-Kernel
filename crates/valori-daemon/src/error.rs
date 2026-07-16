@@ -53,11 +53,15 @@ impl IntoResponse for DaemonError {
         let status = match &self {
             DaemonError::NotFound(_) => StatusCode::NOT_FOUND,
             DaemonError::AlreadyExists(_) | DaemonError::Running(_) => StatusCode::CONFLICT,
-            DaemonError::InvalidInput(_) | DaemonError::InvalidState { .. } => StatusCode::BAD_REQUEST,
+            DaemonError::InvalidInput(_) | DaemonError::InvalidState { .. } => {
+                StatusCode::BAD_REQUEST
+            }
             DaemonError::NoFreePort
             | DaemonError::NodeBinaryMissing(_)
             | DaemonError::StartFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
-            DaemonError::Io(_) | DaemonError::Serde(_) | DaemonError::Model(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            DaemonError::Io(_) | DaemonError::Serde(_) | DaemonError::Model(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }

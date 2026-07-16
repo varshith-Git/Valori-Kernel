@@ -19,7 +19,11 @@ pub enum ProgressEvent {
     /// A stage finished successfully.
     StageCompleted { stage: StageName, duration_ms: u64 },
     /// Pipeline finished; carries the full result.
-    Done { records_written: usize, chunks_produced: usize, total_duration_ms: u64 },
+    Done {
+        records_written: usize,
+        chunks_produced: usize,
+        total_duration_ms: u64,
+    },
     /// Pipeline failed at a stage.
     Failed { stage: StageName, error: String },
 }
@@ -27,16 +31,22 @@ pub enum ProgressEvent {
 impl std::fmt::Display for ProgressEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProgressEvent::StageStarted { stage } =>
-                write!(f, "[{stage}] starting…"),
-            ProgressEvent::ChunkProgress { completed, total } =>
-                write!(f, "[embedder] {completed}/{total} chunks"),
-            ProgressEvent::StageCompleted { stage, duration_ms } =>
-                write!(f, "[{stage}] done ({duration_ms}ms)"),
-            ProgressEvent::Done { records_written, chunks_produced, total_duration_ms } =>
-                write!(f, "done chunks={chunks_produced} writes={records_written} time={total_duration_ms}ms"),
-            ProgressEvent::Failed { stage, error } =>
-                write!(f, "[{stage}] FAILED: {error}"),
+            ProgressEvent::StageStarted { stage } => write!(f, "[{stage}] starting…"),
+            ProgressEvent::ChunkProgress { completed, total } => {
+                write!(f, "[embedder] {completed}/{total} chunks")
+            }
+            ProgressEvent::StageCompleted { stage, duration_ms } => {
+                write!(f, "[{stage}] done ({duration_ms}ms)")
+            }
+            ProgressEvent::Done {
+                records_written,
+                chunks_produced,
+                total_duration_ms,
+            } => write!(
+                f,
+                "done chunks={chunks_produced} writes={records_written} time={total_duration_ms}ms"
+            ),
+            ProgressEvent::Failed { stage, error } => write!(f, "[{stage}] FAILED: {error}"),
         }
     }
 }

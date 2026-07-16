@@ -7,21 +7,18 @@
 //! - **Community** — Label Propagation detection + cosine community search.
 //! - **LLM** — minimal HTTP wrapper for entity extraction (uses community provider creds).
 
-pub mod graph;
-pub mod tree;
 pub mod community;
+pub mod graph;
 pub mod llm;
+pub mod tree;
 
 // Flat re-exports for the most commonly used items.
-pub use graph::{expand_subgraph, resolve_seed_nodes, MAX_DEPTH};
-pub use tree::{TreeIndex, TreeNode, Receipt, GENESIS};
 pub use community::{
-    CommunityStore, CommunitySummary, CommunityHit,
-    DetectRequest, DetectResponse, SearchRequest, SearchResponse,
-    ExtractEntitiesRequest, ExtractEntitiesResponse,
-    InsertedEntity, InsertedRelationship,
-    ExtractedEntity, ExtractedRelationship, LlmExtractionOutput,
-    label_propagation, build_community_store, rank_communities,
-    DEFAULT_MAX_ITER,
+    build_community_store, label_propagation, rank_communities, CommunityHit, CommunityStore,
+    CommunitySummary, DetectRequest, DetectResponse, ExtractEntitiesRequest,
+    ExtractEntitiesResponse, ExtractedEntity, ExtractedRelationship, InsertedEntity,
+    InsertedRelationship, LlmExtractionOutput, SearchRequest, SearchResponse, DEFAULT_MAX_ITER,
 };
-pub use llm::{LlmConfig, extract_entities_via_llm};
+pub use graph::{expand_subgraph, resolve_seed_nodes, MAX_DEPTH};
+pub use llm::{extract_entities_via_llm, LlmConfig};
+pub use tree::{Receipt, TreeIndex, TreeNode, GENESIS};

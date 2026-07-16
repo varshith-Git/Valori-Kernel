@@ -26,17 +26,30 @@ use crate::error::{ModelError, ModelResult};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadState {
     Queued,
-    Downloading { progress_bytes: u64, total_bytes: u64 },
+    Downloading {
+        progress_bytes: u64,
+        total_bytes: u64,
+    },
     /// Cancelled by the user; file partially written (will be resumed or deleted).
-    Paused { progress_bytes: u64 },
+    Paused {
+        progress_bytes: u64,
+    },
     Verifying,
-    Complete { sha256: String, bytes: u64 },
-    Failed { reason: String },
+    Complete {
+        sha256: String,
+        bytes: u64,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 impl DownloadState {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, DownloadState::Complete { .. } | DownloadState::Failed { .. })
+        matches!(
+            self,
+            DownloadState::Complete { .. } | DownloadState::Failed { .. }
+        )
     }
 }
 
@@ -86,15 +99,13 @@ impl DownloadJob {
 
     /// Signal the download to stop after the current chunk.
     pub fn cancel(&self) {
-        self.cancel.store(true, std::sync::atomic::Ordering::Release);
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Drive the download to completion; sends events on `tx`.
     /// Returns `Ok(sha256_hex)` on success.
-    pub async fn run(
-        &self,
-        tx: Option<mpsc::Sender<DownloadEvent>>,
-    ) -> ModelResult<String> {
+    pub async fn run(&self, tx: Option<mpsc::Sender<DownloadEvent>>) -> ModelResult<String> {
         macro_rules! send {
             ($event:expr) => {
                 if let Some(ref s) = tx {
@@ -111,9 +122,15 @@ impl DownloadJob {
 
         if !resp.status().is_success() {
             let reason = format!("HTTP {} for {}", resp.status(), self.url);
-            *self.state.lock().await = DownloadState::Failed { reason: reason.clone() };
+            *self.state.lock().await = DownloadState::Failed {
+                reason: reason.clone(),
+            };
             send!(DownloadEvent::Failed { reason });
-            return Err(ModelError::Download(format!("HTTP {} for {}", resp.status(), self.url)));
+            return Err(ModelError::Download(format!(
+                "HTTP {} for {}",
+                resp.status(),
+                self.url
+            )));
         }
 
         let total_bytes = resp.content_length();
@@ -133,8 +150,12 @@ impl DownloadJob {
 
         while let Some(chunk) = stream.next().await {
             if self.cancel.load(std::sync::atomic::Ordering::Acquire) {
-                *self.state.lock().await = DownloadState::Paused { progress_bytes: downloaded };
-                send!(DownloadEvent::Failed { reason: "cancelled".into() });
+                *self.state.lock().await = DownloadState::Paused {
+                    progress_bytes: downloaded,
+                };
+                send!(DownloadEvent::Failed {
+                    reason: "cancelled".into()
+                });
                 let _ = tokio::fs::remove_file(&self.dest).await;
                 return Err(ModelError::Download("download cancelled".into()));
             }
@@ -142,14 +163,18 @@ impl DownloadJob {
             let chunk = chunk.map_err(|e| ModelError::Download(format!("stream: {e}")))?;
             hasher.update(&chunk);
             downloaded += chunk.len() as u64;
-            file.write_all(&chunk).await
+            file.write_all(&chunk)
+                .await
                 .map_err(|e| ModelError::Download(format!("write: {e}")))?;
 
             *self.state.lock().await = DownloadState::Downloading {
                 progress_bytes: downloaded,
                 total_bytes: total_bytes.unwrap_or(0),
             };
-            send!(DownloadEvent::Progress { downloaded, total: total_bytes });
+            send!(DownloadEvent::Progress {
+                downloaded,
+                total: total_bytes
+            });
         }
 
         file.flush().await?;
@@ -165,13 +190,23 @@ impl DownloadJob {
                 "SHA-256 mismatch: expected {}, got {got}",
                 self.expected_sha
             );
-            *self.state.lock().await = DownloadState::Failed { reason: reason.clone() };
-            send!(DownloadEvent::Failed { reason: reason.clone() });
+            *self.state.lock().await = DownloadState::Failed {
+                reason: reason.clone(),
+            };
+            send!(DownloadEvent::Failed {
+                reason: reason.clone()
+            });
             return Err(ModelError::Verify(reason));
         }
 
-        *self.state.lock().await = DownloadState::Complete { sha256: got.clone(), bytes: downloaded };
-        send!(DownloadEvent::Complete { sha256: got.clone(), bytes: downloaded });
+        *self.state.lock().await = DownloadState::Complete {
+            sha256: got.clone(),
+            bytes: downloaded,
+        };
+        send!(DownloadEvent::Complete {
+            sha256: got.clone(),
+            bytes: downloaded
+        });
         tracing::info!(url = %self.url, bytes = downloaded, sha256 = %got, "download complete");
         Ok(got)
     }
@@ -220,9 +255,20 @@ mod tests {
 
     #[test]
     fn download_state_terminal_check() {
-        assert!(DownloadState::Complete { sha256: "x".into(), bytes: 1 }.is_terminal());
-        assert!(DownloadState::Failed { reason: "err".into() }.is_terminal());
-        assert!(!DownloadState::Downloading { progress_bytes: 0, total_bytes: 100 }.is_terminal());
+        assert!(DownloadState::Complete {
+            sha256: "x".into(),
+            bytes: 1
+        }
+        .is_terminal());
+        assert!(DownloadState::Failed {
+            reason: "err".into()
+        }
+        .is_terminal());
+        assert!(!DownloadState::Downloading {
+            progress_bytes: 0,
+            total_bytes: 100
+        }
+        .is_terminal());
         assert!(!DownloadState::Queued.is_terminal());
     }
 }

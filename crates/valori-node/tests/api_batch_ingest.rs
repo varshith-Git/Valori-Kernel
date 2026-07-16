@@ -1,14 +1,17 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::config::NodeConfig;
-use valori_node::EngineFromNodeConfig;
-use valori_node::server::build_router;
-use valori_node::engine::Engine;
-use valori_node::api::{BatchInsertRequest, BatchInsertResponse};
-use axum::{body::Body, http::{Request, StatusCode}};
-use tower::ServiceExt;
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tempfile::tempdir;
+use tokio::sync::RwLock;
+use tower::ServiceExt;
+use valori_node::api::{BatchInsertRequest, BatchInsertResponse};
+use valori_node::config::NodeConfig;
+use valori_node::engine::Engine;
+use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 16;
 
@@ -37,13 +40,24 @@ async fn test_batch_ingest_success() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None, texts: None }).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&BatchInsertRequest {
+                batch,
+                collection: None,
+                metadata: None,
+                request_ids: None,
+                texts: None,
+            })
+            .unwrap(),
+        ))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
     let resp: BatchInsertResponse = serde_json::from_slice(&body).unwrap();
     assert_eq!(resp.ids, vec![0, 1, 2]);
 }
@@ -67,7 +81,16 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
         .method("POST")
         .uri("/v1/vectors/batch_insert")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&BatchInsertRequest { batch, collection: None, metadata: None, request_ids: None, texts: None }).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&BatchInsertRequest {
+                batch,
+                collection: None,
+                metadata: None,
+                request_ids: None,
+                texts: None,
+            })
+            .unwrap(),
+        ))
         .unwrap();
 
     let response = app.oneshot(req).await.unwrap();

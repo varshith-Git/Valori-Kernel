@@ -2,10 +2,10 @@
 //! 1-bit Binary Quantization (BQ) index with two-stage exact L2 rescoring.
 
 use crate::index::{SearchResult, VectorIndex};
-use crate::storage::pool::RecordPool;
-use crate::types::vector::FxpVector;
-use crate::types::id::RecordId;
 use crate::math::l2::fxp_l2_sq;
+use crate::storage::pool::RecordPool;
+use crate::types::id::RecordId;
+use crate::types::vector::FxpVector;
 use core::cmp::Ordering;
 
 /// A deterministic 1-bit Binary Quantization (BQ) index with two-stage exact L2 rescoring.
@@ -117,7 +117,8 @@ impl VectorIndex for BinaryQuantizationIndex {
             return;
         }
 
-        self.codes.resize(pool.total_slots() * self.words_per_vec, 0);
+        self.codes
+            .resize(pool.total_slots() * self.words_per_vec, 0);
         for (idx, opt) in pool.raw_records().iter().enumerate() {
             if let Some(r) = opt {
                 if r.is_searchable() && r.vector.len() == self.dim {
@@ -154,7 +155,8 @@ impl VectorIndex for BinaryQuantizationIndex {
 
         let query_code = self.encode_vector(query);
         let candidates_cap = (40 * k).max(400);
-        let mut candidates: alloc::vec::Vec<(u32, RecordId)> = alloc::vec::Vec::with_capacity(candidates_cap + 1);
+        let mut candidates: alloc::vec::Vec<(u32, RecordId)> =
+            alloc::vec::Vec::with_capacity(candidates_cap + 1);
 
         // Stage 1: Coarse BQ Scan via Hamming Distance
         for record in pool.iter() {
@@ -177,10 +179,13 @@ impl VectorIndex for BinaryQuantizationIndex {
             let cand_item = (h_dist, record.id);
 
             if candidates.len() < candidates_cap {
-                let pos = candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
+                let pos =
+                    candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
                 candidates.insert(pos, cand_item);
-            } else if Self::cmp_cand(&cand_item, &candidates[candidates_cap - 1]) == Ordering::Less {
-                let pos = candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
+            } else if Self::cmp_cand(&cand_item, &candidates[candidates_cap - 1]) == Ordering::Less
+            {
+                let pos =
+                    candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
                 candidates.pop();
                 candidates.insert(pos, cand_item);
             }

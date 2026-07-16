@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Tests for proof.rs — Merkle tree and DeterministicProof.
 
-use valori_kernel::proof::{merkle_root, generate_proof_bytes, DeterministicProof, InsertReceipt};
+use valori_kernel::proof::{generate_proof_bytes, merkle_root, DeterministicProof, InsertReceipt};
 
 // ─── merkle_root ────────────────────────────────────────────────────────────
 
@@ -130,13 +130,22 @@ fn insert_receipt_verify_detects_tampering() {
     let receipt = InsertReceipt::build(1, [0u8; 32], &[65536], [1u8; 32], 0, 0);
     let mut tampered = receipt.clone();
     tampered.record_id = 99;
-    assert!(!tampered.verify(), "tampering with record_id must fail verify");
+    assert!(
+        !tampered.verify(),
+        "tampering with record_id must fail verify"
+    );
     let mut tampered2 = receipt.clone();
     tampered2.sequence = 999;
-    assert!(!tampered2.verify(), "tampering with sequence must fail verify");
+    assert!(
+        !tampered2.verify(),
+        "tampering with sequence must fail verify"
+    );
     let mut tampered3 = receipt.clone();
     tampered3.new_root[0] ^= 0xFF;
-    assert!(!tampered3.verify(), "tampering with new_root must fail verify");
+    assert!(
+        !tampered3.verify(),
+        "tampering with new_root must fail verify"
+    );
 }
 
 #[test]
@@ -160,6 +169,12 @@ fn insert_receipt_state_hash_differs_from_old_and_new_root() {
     let old_root = [0xAA; 32];
     let new_root = [0xBB; 32];
     let receipt = InsertReceipt::build(1, old_root, &[65536], new_root, 0, 0);
-    assert_ne!(receipt.state_hash, old_root, "state_hash must differ from old_root");
-    assert_ne!(receipt.state_hash, new_root, "state_hash must differ from new_root");
+    assert_ne!(
+        receipt.state_hash, old_root,
+        "state_hash must differ from old_root"
+    );
+    assert_ne!(
+        receipt.state_hash, new_root,
+        "state_hash must differ from new_root"
+    );
 }

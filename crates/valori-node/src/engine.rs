@@ -5,13 +5,12 @@
 //! without changes — they just need `use valori_node::EngineFromNodeConfig;`.
 
 pub use valori_engine::{
-    Engine, EngineHealth, ExecutionResources, PoolStats, RecoveryMode,
-    EngineConfig, IndexKind, QuantizationKind,
-    EngineError, CommitError, MetadataStore, Persistence,
+    CommitError, Engine, EngineConfig, EngineError, EngineHealth, ExecutionResources, IndexKind,
+    MetadataStore, Persistence, PoolStats, QuantizationKind, RecoveryMode,
 };
 
-use std::sync::Arc;
 use crate::config::NodeConfig;
+use std::sync::Arc;
 
 /// Extension trait that bridges `NodeConfig` → `EngineConfig` so all the
 /// existing `Engine::new(&cfg)` call sites continue to work after the Engine
@@ -44,27 +43,27 @@ impl EngineFromNodeConfig for Engine {
         };
 
         let engine_cfg = EngineConfig {
-            dim:                        cfg.dim,
-            max_records:                cfg.max_records,
-            max_nodes:                  cfg.max_nodes,
-            max_edges:                  cfg.max_edges,
-            index_kind:                 cfg.index_kind,
-            quantization_kind:          cfg.quantization_kind,
-            hnsw_m:                     cfg.hnsw_m,
-            hnsw_ef_construction:       cfg.hnsw_ef_construction,
-            hnsw_ef_search:             cfg.hnsw_ef_search,
-            ivf_n_list:                 cfg.ivf_n_list,
-            ivf_n_probe:                cfg.ivf_n_probe,
-            snapshot_path:              cfg.snapshot_path.clone(),
-            wal_path:                   cfg.wal_path.clone(),
-            event_log_path:             cfg.event_log_path.clone(),
-            event_log_rotation_bytes:   cfg.event_log_rotation_bytes,
-            decay_half_life_secs:       cfg.decay_half_life_secs,
-            shard_count:                cfg.shard_count,
-            object_store_keep:          cfg.object_store_keep,
-            object_store:               crate::object_store::ObjectStoreBackend::from_env(),
+            dim: cfg.dim,
+            max_records: cfg.max_records,
+            max_nodes: cfg.max_nodes,
+            max_edges: cfg.max_edges,
+            index_kind: cfg.index_kind,
+            quantization_kind: cfg.quantization_kind,
+            hnsw_m: cfg.hnsw_m,
+            hnsw_ef_construction: cfg.hnsw_ef_construction,
+            hnsw_ef_search: cfg.hnsw_ef_search,
+            ivf_n_list: cfg.ivf_n_list,
+            ivf_n_probe: cfg.ivf_n_probe,
+            snapshot_path: cfg.snapshot_path.clone(),
+            wal_path: cfg.wal_path.clone(),
+            event_log_path: cfg.event_log_path.clone(),
+            event_log_rotation_bytes: cfg.event_log_rotation_bytes,
+            decay_half_life_secs: cfg.decay_half_life_secs,
+            shard_count: cfg.shard_count,
+            object_store_keep: cfg.object_store_keep,
+            object_store: crate::object_store::ObjectStoreBackend::from_env(),
             vault,
-            embed_config:               embed_config_from_node(cfg),
+            embed_config: embed_config_from_node(cfg),
         };
 
         Engine::with_config(engine_cfg)
@@ -73,14 +72,20 @@ impl EngineFromNodeConfig for Engine {
 
 pub(crate) fn embed_config_from_node(cfg: &NodeConfig) -> Option<valori_ingest::EmbedConfig> {
     let provider = cfg.embed_provider.clone()?;
-    let model = cfg.embed_model.clone().unwrap_or_else(|| match provider.as_str() {
-        "openai" => "text-embedding-3-small".into(),
-        _        => "nomic-embed-text".into(),
-    });
-    let url = cfg.embed_url.clone().unwrap_or_else(|| match provider.as_str() {
-        "openai" => "https://api.openai.com".into(),
-        _        => "http://localhost:11434".into(),
-    });
+    let model = cfg
+        .embed_model
+        .clone()
+        .unwrap_or_else(|| match provider.as_str() {
+            "openai" => "text-embedding-3-small".into(),
+            _ => "nomic-embed-text".into(),
+        });
+    let url = cfg
+        .embed_url
+        .clone()
+        .unwrap_or_else(|| match provider.as_str() {
+            "openai" => "https://api.openai.com".into(),
+            _ => "http://localhost:11434".into(),
+        });
     Some(valori_ingest::EmbedConfig {
         provider,
         model,

@@ -10,14 +10,19 @@
 use axum::response::Response;
 use axum::Json;
 
-use crate::api::{MetadataGetRequest, MetadataGetResponse, MetadataSetRequest, MetadataSetResponse};
+use crate::api::{
+    MetadataGetRequest, MetadataGetResponse, MetadataSetRequest, MetadataSetResponse,
+};
 
 #[async_trait::async_trait]
 pub trait MetaOps: Send + Sync {
     /// Commit the metadata write (audited on both paths: standalone through
     /// `set_meta_audited`, cluster through `KernelEvent::SetMeta` via Raft).
-    async fn set_meta(&self, target_id: String, metadata: serde_json::Value)
-        -> Result<(), Response>;
+    async fn set_meta(
+        &self,
+        target_id: String,
+        metadata: serde_json::Value,
+    ) -> Result<(), Response>;
     async fn get_meta(&self, target_id: &str) -> Option<serde_json::Value>;
 }
 
@@ -31,5 +36,8 @@ pub async fn meta_set<O: MetaOps>(
 
 pub async fn meta_get<O: MetaOps>(ops: &O, req: MetadataGetRequest) -> Json<MetadataGetResponse> {
     let metadata = ops.get_meta(&req.target_id).await;
-    Json(MetadataGetResponse { target_id: req.target_id, metadata })
+    Json(MetadataGetResponse {
+        target_id: req.target_id,
+        metadata,
+    })
 }

@@ -8,8 +8,8 @@
 //!
 //! Persistence is a single `<home>/workspaces.json` (write-then-rename).
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::error::{DaemonError, DaemonResult};
 
@@ -40,7 +40,14 @@ impl JsonWorkspaceStore {
             Err(e) => return Err(e.into()),
         };
         if !workspaces.iter().any(|w| w.name == DEFAULT_WORKSPACE) {
-            workspaces.insert(0, Workspace { id: crate::new_id(), name: DEFAULT_WORKSPACE.into(), created_at: now_unix() });
+            workspaces.insert(
+                0,
+                Workspace {
+                    id: crate::new_id(),
+                    name: DEFAULT_WORKSPACE.into(),
+                    created_at: now_unix(),
+                },
+            );
         }
         let mgr = Self { file, workspaces };
         mgr.flush()?;
@@ -74,12 +81,18 @@ impl crate::store::WorkspaceStore for JsonWorkspaceStore {
 
     fn create(&mut self, name: &str) -> DaemonResult<Workspace> {
         if !is_valid_name(name) {
-            return Err(DaemonError::InvalidInput(format!("invalid workspace name '{name}'")));
+            return Err(DaemonError::InvalidInput(format!(
+                "invalid workspace name '{name}'"
+            )));
         }
         if self.exists(name) {
             return Err(DaemonError::AlreadyExists(format!("workspace '{name}'")));
         }
-        let ws = Workspace { id: crate::new_id(), name: name.to_string(), created_at: now_unix() };
+        let ws = Workspace {
+            id: crate::new_id(),
+            name: name.to_string(),
+            created_at: now_unix(),
+        };
         self.workspaces.push(ws.clone());
         self.flush()?;
         Ok(ws)
@@ -87,10 +100,14 @@ impl crate::store::WorkspaceStore for JsonWorkspaceStore {
 
     fn rename(&mut self, from: &str, to: &str) -> DaemonResult<Workspace> {
         if from == DEFAULT_WORKSPACE {
-            return Err(DaemonError::InvalidInput("the 'default' workspace cannot be renamed".into()));
+            return Err(DaemonError::InvalidInput(
+                "the 'default' workspace cannot be renamed".into(),
+            ));
         }
         if !is_valid_name(to) {
-            return Err(DaemonError::InvalidInput(format!("invalid workspace name '{to}'")));
+            return Err(DaemonError::InvalidInput(format!(
+                "invalid workspace name '{to}'"
+            )));
         }
         if self.exists(to) {
             return Err(DaemonError::AlreadyExists(format!("workspace '{to}'")));
@@ -108,7 +125,9 @@ impl crate::store::WorkspaceStore for JsonWorkspaceStore {
 
     fn delete(&mut self, name: &str) -> DaemonResult<()> {
         if name == DEFAULT_WORKSPACE {
-            return Err(DaemonError::InvalidInput("the 'default' workspace cannot be deleted".into()));
+            return Err(DaemonError::InvalidInput(
+                "the 'default' workspace cannot be deleted".into(),
+            ));
         }
         if !self.exists(name) {
             return Err(DaemonError::NotFound(format!("workspace '{name}'")));
@@ -125,7 +144,9 @@ impl crate::store::WorkspaceStore for JsonWorkspaceStore {
 fn is_valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 fn now_unix() -> u64 {
@@ -148,7 +169,10 @@ mod tests {
 
         wm.create("healthcare").unwrap();
         assert_eq!(wm.count(), 2);
-        assert!(matches!(wm.create("healthcare"), Err(DaemonError::AlreadyExists(_))));
+        assert!(matches!(
+            wm.create("healthcare"),
+            Err(DaemonError::AlreadyExists(_))
+        ));
 
         wm.rename("healthcare", "clinical").unwrap();
         assert!(wm.exists("clinical") && !wm.exists("healthcare"));

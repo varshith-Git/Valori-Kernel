@@ -7,10 +7,10 @@
 //!   3. Soft-deleted vectors are excluded from IVF query results.
 //!   4. `rebuild_index()` reproduces the same search results as direct insert.
 
-use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
-use valori_node::EngineFromNodeConfig;
-use valori_node::engine::Engine;
 use valori_index::VectorIndex;
+use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
+use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 8;
 const N_VECTORS: usize = 200;
@@ -60,7 +60,8 @@ fn test_ivf_returns_results_after_insert() {
 
     assert!(
         !results.is_empty(),
-        "IVF search must return at least one result after {} inserts", N_VECTORS
+        "IVF search must return at least one result after {} inserts",
+        N_VECTORS
     );
 }
 
@@ -97,7 +98,9 @@ fn test_ivf_recall_at_1() {
     assert!(
         recall >= 0.5,
         "IVF recall@1 on exact-match queries should be ≥ 50 %, got {:.0} % ({}/{} hits)",
-        recall * 100.0, hits, sample_indices.len()
+        recall * 100.0,
+        hits,
+        sample_indices.len()
     );
 }
 
@@ -110,10 +113,14 @@ fn test_ivf_excludes_soft_deleted_records() {
     // Insert a cluster of very similar vectors, all near [0, 0, ..., 0].
     // Record 0 will be soft-deleted; the others remain.
     let near_origin: Vec<f32> = (0..DIM).map(|_| 0.001).collect();
-    let r0 = engine.insert_record_from_f32(&near_origin).expect("insert r0");
+    let r0 = engine
+        .insert_record_from_f32(&near_origin)
+        .expect("insert r0");
 
     for _ in 1..10 {
-        engine.insert_record_from_f32(&near_origin).expect("insert near-origin");
+        engine
+            .insert_record_from_f32(&near_origin)
+            .expect("insert near-origin");
     }
     // Pad with distant vectors so the index has enough variety for IVF to form clusters.
     for i in 10..N_VECTORS {
@@ -130,7 +137,8 @@ fn test_ivf_excludes_soft_deleted_records() {
     assert!(
         results.iter().all(|(id, _)| *id != r0),
         "soft-deleted record {} must not appear in IVF results; got {:?}",
-        r0, results
+        r0,
+        results
     );
 }
 
@@ -143,7 +151,7 @@ fn test_ivf_excludes_soft_deleted_records() {
 
 #[test]
 fn test_ivf_autoscale_centroid_count() {
-    use valori_index::{IvfIndex, IvfConfig};
+    use valori_index::{IvfConfig, IvfIndex};
 
     let cfg = IvfConfig::default(); // auto_scale = true
 
@@ -166,14 +174,21 @@ fn test_ivf_autoscale_centroid_count() {
         "n_list should be {} for N={} with auto_scale=true, got {}",
         expected_n_list, n, idx.config.n_list
     );
-    assert_eq!(idx.n_at_last_build, n, "n_at_last_build should match record count");
+    assert_eq!(
+        idx.n_at_last_build, n,
+        "n_at_last_build should match record count"
+    );
 }
 
 #[test]
 fn test_ivf_autoscale_disabled_by_manual_override() {
-    use valori_index::{IvfIndex, IvfConfig};
+    use valori_index::{IvfConfig, IvfIndex};
 
-    let cfg = IvfConfig { n_list: 5, n_probe: 2, auto_scale: false };
+    let cfg = IvfConfig {
+        n_list: 5,
+        n_probe: 2,
+        auto_scale: false,
+    };
     let n: usize = 400;
     let dim = 4;
     let records: Vec<(u32, Vec<f32>)> = (0..n)
@@ -183,12 +198,15 @@ fn test_ivf_autoscale_disabled_by_manual_override() {
     let mut idx = IvfIndex::new(cfg, dim);
     idx.build(&records);
 
-    assert_eq!(idx.config.n_list, 5, "manual override should pin n_list to 5");
+    assert_eq!(
+        idx.config.n_list, 5,
+        "manual override should pin n_list to 5"
+    );
 }
 
 #[test]
 fn test_ivf_needs_rebuild_after_2x_growth() {
-    use valori_index::{IvfIndex, IvfConfig};
+    use valori_index::{IvfConfig, IvfIndex};
 
     let cfg = IvfConfig::default();
     let dim = 4;
@@ -200,9 +218,15 @@ fn test_ivf_needs_rebuild_after_2x_growth() {
     let mut idx = IvfIndex::new(cfg, dim);
     idx.build(&records);
 
-    assert!(!idx.needs_rebuild(n_build),       "no rebuild needed at build size");
-    assert!(!idx.needs_rebuild(n_build * 2),   "no rebuild needed at exact 2×");
-    assert!( idx.needs_rebuild(n_build * 2 + 1), "rebuild needed past 2×");
+    assert!(
+        !idx.needs_rebuild(n_build),
+        "no rebuild needed at build size"
+    );
+    assert!(
+        !idx.needs_rebuild(n_build * 2),
+        "no rebuild needed at exact 2×"
+    );
+    assert!(idx.needs_rebuild(n_build * 2 + 1), "rebuild needed past 2×");
 }
 
 // ── Test 4: rebuild_index reproduces the same nearest neighbour ───────────────
@@ -225,7 +249,8 @@ fn test_ivf_rebuild_index_consistency() {
     let after = engine.search_l2(&query, 5).expect("search after rebuild");
 
     assert_eq!(
-        before.len(), after.len(),
+        before.len(),
+        after.len(),
         "result count must not change after rebuild"
     );
     // Top-1 must be the same record.

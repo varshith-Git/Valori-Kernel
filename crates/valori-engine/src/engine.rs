@@ -25,7 +25,7 @@ use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
-use valori_index::{BruteForceIndex, Quantizer, VectorIndex, NoQuantizer, ScalarQuantizer};
+use valori_index::{BruteForceIndex, NoQuantizer, Quantizer, ScalarQuantizer, VectorIndex};
 use valori_metadata::CollectionRegistry;
 use valori_storage::events::event_commit::EventCommitter;
 use valori_storage::events::event_journal::EventJournal;
@@ -101,7 +101,10 @@ pub struct ExecutionResources {
 
 impl ExecutionResources {
     fn new() -> Self {
-        Self { tree_cache: HashMap::new(), community_store: None }
+        Self {
+            tree_cache: HashMap::new(),
+            community_store: None,
+        }
     }
 }
 
@@ -156,25 +159,32 @@ impl Engine {
         match kind {
             IndexKind::BruteForce | IndexKind::Auto => Box::new(BruteForceIndex::new()),
             IndexKind::Hnsw => {
-                use valori_index::{HnswIndex, HnswConfig};
+                use valori_index::{HnswConfig, HnswIndex};
                 let mut hnsw_cfg = HnswConfig::default();
                 if let Some(m) = cfg.hnsw_m {
                     hnsw_cfg.m = m;
                     hnsw_cfg.m_max0 = m * 2;
                     hnsw_cfg.lambda = 1.0 / (m as f64).ln();
                 }
-                if let Some(ef) = cfg.hnsw_ef_construction { hnsw_cfg.ef_construction = ef; }
-                if let Some(ef) = cfg.hnsw_ef_search       { hnsw_cfg.ef_search = ef; }
+                if let Some(ef) = cfg.hnsw_ef_construction {
+                    hnsw_cfg.ef_construction = ef;
+                }
+                if let Some(ef) = cfg.hnsw_ef_search {
+                    hnsw_cfg.ef_search = ef;
+                }
                 Box::new(HnswIndex::new_with_config(hnsw_cfg))
             }
             IndexKind::Ivf => {
-                use valori_index::{IvfIndex, IvfConfig};
+                use valori_index::{IvfConfig, IvfIndex};
                 let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
-                Box::new(IvfIndex::new(IvfConfig {
-                    n_list:  cfg.ivf_n_list.unwrap_or(100),
-                    n_probe: cfg.ivf_n_probe.unwrap_or(10),
-                    auto_scale,
-                }, cfg.dim))
+                Box::new(IvfIndex::new(
+                    IvfConfig {
+                        n_list: cfg.ivf_n_list.unwrap_or(100),
+                        n_probe: cfg.ivf_n_probe.unwrap_or(10),
+                        auto_scale,
+                    },
+                    cfg.dim,
+                ))
             }
             IndexKind::Bq => {
                 use valori_index::BqIndex;
@@ -198,7 +208,7 @@ impl Engine {
             QuantizationKind::None => Box::new(NoQuantizer),
             QuantizationKind::Scalar => Box::new(ScalarQuantizer {}),
             QuantizationKind::Product => {
-                use valori_index::{ProductQuantizer, PqConfig};
+                use valori_index::{PqConfig, ProductQuantizer};
                 Box::new(ProductQuantizer::new(PqConfig::default(), cfg.dim))
             }
         };
@@ -210,7 +220,11 @@ impl Engine {
                     let live_state = KernelState::with_dim(cfg.dim);
                     let mut committer = EventCommitter::new(log_writer, journal, live_state);
                     if let Some(limit) = cfg.event_log_rotation_bytes {
-                        committer = committer.with_rotation_bytes(if limit == 0 { None } else { Some(limit) });
+                        committer = committer.with_rotation_bytes(if limit == 0 {
+                            None
+                        } else {
+                            Some(limit)
+                        });
                     }
                     Persistence::EventLog(committer)
                 }
@@ -234,9 +248,13 @@ impl Engine {
             Persistence::Ephemeral
         };
 
-        let metadata_path = cfg.event_log_path.as_ref()
+        let metadata_path = cfg
+            .event_log_path
+            .as_ref()
             .map(|p| p.with_extension("metadata.json"));
-        let namespaces_path = cfg.event_log_path.as_ref()
+        let namespaces_path = cfg
+            .event_log_path
+            .as_ref()
             .or(cfg.snapshot_path.as_ref())
             .map(|p| p.with_extension("namespaces.json"));
 
@@ -260,17 +278,23 @@ impl Engine {
             use valori_index::HnswConfig;
             let mut c = HnswConfig::default();
             if let Some(m) = cfg.hnsw_m {
-                c.m = m; c.m_max0 = m * 2; c.lambda = 1.0 / (m as f64).ln();
+                c.m = m;
+                c.m_max0 = m * 2;
+                c.lambda = 1.0 / (m as f64).ln();
             }
-            if let Some(ef) = cfg.hnsw_ef_construction { c.ef_construction = ef; }
-            if let Some(ef) = cfg.hnsw_ef_search       { c.ef_search = ef; }
+            if let Some(ef) = cfg.hnsw_ef_construction {
+                c.ef_construction = ef;
+            }
+            if let Some(ef) = cfg.hnsw_ef_search {
+                c.ef_search = ef;
+            }
             c
         };
         let ivf_config = {
             use valori_index::IvfConfig;
             let auto_scale = cfg.ivf_n_list.is_none() && cfg.ivf_n_probe.is_none();
             IvfConfig {
-                n_list:  cfg.ivf_n_list.unwrap_or(100),
+                n_list: cfg.ivf_n_list.unwrap_or(100),
                 n_probe: cfg.ivf_n_probe.unwrap_or(10),
                 auto_scale,
             }
@@ -312,10 +336,18 @@ impl Engine {
 
     #[inline]
     pub fn shard_for_ns(&self, namespace_id: u16) -> usize {
-        if self.shard_count <= 1 { 0 } else { namespace_id as usize % self.shard_count }
+        if self.shard_count <= 1 {
+            0
+        } else {
+            namespace_id as usize % self.shard_count
+        }
     }
 
-    fn commit_and_apply_ns(&mut self, event: &valori_kernel::event::KernelEvent, namespace_id: u16) -> Result<(), EngineError> {
+    fn commit_and_apply_ns(
+        &mut self,
+        event: &valori_kernel::event::KernelEvent,
+        namespace_id: u16,
+    ) -> Result<(), EngineError> {
         self.persistence.log_event_ns(event, namespace_id)?;
         self.apply_committed_event_ns(event, namespace_id)
     }
@@ -352,22 +384,18 @@ impl Engine {
 
     pub fn flush_metadata(&self) -> Result<(), EngineError> {
         if let Some(ref path) = self.metadata_path {
-            self.metadata
-                .flush_to(path)
-                .map_err(|e| EngineError::InvalidInput(
-                    format!("Failed to flush metadata sidecar: {}", e),
-                ))?;
+            self.metadata.flush_to(path).map_err(|e| {
+                EngineError::InvalidInput(format!("Failed to flush metadata sidecar: {}", e))
+            })?;
         }
         Ok(())
     }
 
     pub fn load_metadata(&mut self) -> Result<(), EngineError> {
         if let Some(ref path) = self.metadata_path {
-            self.metadata
-                .load_from(path)
-                .map_err(|e| EngineError::InvalidInput(
-                    format!("Failed to load metadata sidecar: {}", e),
-                ))?;
+            self.metadata.load_from(path).map_err(|e| {
+                EngineError::InvalidInput(format!("Failed to load metadata sidecar: {}", e))
+            })?;
         }
         Ok(())
     }
@@ -380,7 +408,11 @@ impl Engine {
         }
     }
 
-    pub fn set_meta_audited(&mut self, key: String, value: serde_json::Value) -> Result<(), EngineError> {
+    pub fn set_meta_audited(
+        &mut self,
+        key: String,
+        value: serde_json::Value,
+    ) -> Result<(), EngineError> {
         let event = valori_kernel::event::KernelEvent::SetMeta {
             key: key.clone(),
             value: value.to_string(),
@@ -392,23 +424,20 @@ impl Engine {
 
     pub fn flush_namespaces(&self) -> Result<(), EngineError> {
         if let Some(ref path) = self.namespaces_path {
-            let json = serde_json::to_vec(&self.namespaces)
-                .map_err(|e| EngineError::InvalidInput(
-                    format!("Failed to serialize namespace registry: {}", e),
-                ))?;
+            let json = serde_json::to_vec(&self.namespaces).map_err(|e| {
+                EngineError::InvalidInput(format!("Failed to serialize namespace registry: {}", e))
+            })?;
             let tmp = {
                 let mut s = path.clone().into_os_string();
                 s.push(".tmp");
                 PathBuf::from(s)
             };
-            std::fs::write(&tmp, &json)
-                .map_err(|e| EngineError::InvalidInput(
-                    format!("Failed to write namespace sidecar: {}", e),
-                ))?;
-            std::fs::rename(&tmp, path)
-                .map_err(|e| EngineError::InvalidInput(
-                    format!("Failed to commit namespace sidecar: {}", e),
-                ))?;
+            std::fs::write(&tmp, &json).map_err(|e| {
+                EngineError::InvalidInput(format!("Failed to write namespace sidecar: {}", e))
+            })?;
+            std::fs::rename(&tmp, path).map_err(|e| {
+                EngineError::InvalidInput(format!("Failed to commit namespace sidecar: {}", e))
+            })?;
         }
         Ok(())
     }
@@ -417,16 +446,21 @@ impl Engine {
         if let Some(ref path) = self.namespaces_path {
             match std::fs::read(path) {
                 Ok(bytes) => {
-                    let reg: CollectionRegistry = serde_json::from_slice(&bytes)
-                        .map_err(|e| EngineError::InvalidInput(
-                            format!("Failed to parse namespace sidecar: {}", e),
-                        ))?;
+                    let reg: CollectionRegistry = serde_json::from_slice(&bytes).map_err(|e| {
+                        EngineError::InvalidInput(format!(
+                            "Failed to parse namespace sidecar: {}",
+                            e
+                        ))
+                    })?;
                     self.namespaces = reg;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(EngineError::InvalidInput(
-                    format!("Failed to read namespace sidecar: {}", e),
-                )),
+                Err(e) => {
+                    return Err(EngineError::InvalidInput(format!(
+                        "Failed to read namespace sidecar: {}",
+                        e
+                    )))
+                }
             }
         }
         Ok(())
@@ -437,12 +471,12 @@ impl Engine {
     pub fn health(&self) -> EngineHealth {
         let live_records = self.state.record_count();
         let slot_records = self.state.total_record_slots();
-        let live_nodes   = self.state.node_count();
-        let live_edges   = self.state.edge_count();
+        let live_nodes = self.state.node_count();
+        let live_edges = self.state.edge_count();
 
-        let rec_fill  = pct(live_records, self.max_records);
-        let node_fill = pct(live_nodes,   self.max_nodes);
-        let edge_fill = pct(live_edges,   self.max_edges);
+        let rec_fill = pct(live_records, self.max_records);
+        let node_fill = pct(live_nodes, self.max_nodes);
+        let edge_fill = pct(live_edges, self.max_edges);
 
         let status = if rec_fill >= 100.0 || node_fill >= 100.0 || edge_fill >= 100.0 {
             "full"
@@ -464,7 +498,10 @@ impl Engine {
             version: env!("CARGO_PKG_VERSION"),
             dim: self.state.dim.unwrap_or(self.dim),
             index: if self.index_kind == IndexKind::Auto {
-                format!("auto({})", format!("{:?}", self.current_effective_kind).to_lowercase())
+                format!(
+                    "auto({})",
+                    format!("{:?}", self.current_effective_kind).to_lowercase()
+                )
             } else {
                 format!("{:?}", self.index_kind)
             },
@@ -487,10 +524,15 @@ impl Engine {
                 capacity: self.max_edges,
                 fill_pct: round1(edge_fill),
             },
-            event_log_height: self.event_committer().map(|c| c.journal().committed_height()),
-            event_log_path: self.event_committer()
+            event_log_height: self
+                .event_committer()
+                .map(|c| c.journal().committed_height()),
+            event_log_path: self
+                .event_committer()
                 .map(|c| c.event_log().path().to_string_lossy().into_owned()),
-            snapshot_path: self.snapshot_path.as_ref()
+            snapshot_path: self
+                .snapshot_path
+                .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
             embed_enabled: self.embed_config.is_some(),
             embed_provider: self.embed_config.as_ref().map(|c| c.provider.clone()),
@@ -500,28 +542,49 @@ impl Engine {
 
     pub fn update_prometheus_metrics(&self) {
         let live_records = self.state.record_count() as f64;
-        let live_nodes   = self.state.node_count()   as f64;
-        let live_edges   = self.state.edge_count()   as f64;
+        let live_nodes = self.state.node_count() as f64;
+        let live_edges = self.state.edge_count() as f64;
 
-        metrics::gauge!("valori_records_live",     live_records);
+        metrics::gauge!("valori_records_live", live_records);
         metrics::gauge!("valori_records_capacity", self.max_records as f64);
-        metrics::gauge!("valori_record_fill_ratio",
-            if self.max_records > 0 { live_records / self.max_records as f64 } else { 0.0 });
+        metrics::gauge!(
+            "valori_record_fill_ratio",
+            if self.max_records > 0 {
+                live_records / self.max_records as f64
+            } else {
+                0.0
+            }
+        );
 
-        metrics::gauge!("valori_nodes_live",     live_nodes);
+        metrics::gauge!("valori_nodes_live", live_nodes);
         metrics::gauge!("valori_nodes_capacity", self.max_nodes as f64);
-        metrics::gauge!("valori_node_fill_ratio",
-            if self.max_nodes > 0 { live_nodes / self.max_nodes as f64 } else { 0.0 });
+        metrics::gauge!(
+            "valori_node_fill_ratio",
+            if self.max_nodes > 0 {
+                live_nodes / self.max_nodes as f64
+            } else {
+                0.0
+            }
+        );
 
-        metrics::gauge!("valori_edges_live",     live_edges);
+        metrics::gauge!("valori_edges_live", live_edges);
         metrics::gauge!("valori_edges_capacity", self.max_edges as f64);
-        metrics::gauge!("valori_edge_fill_ratio",
-            if self.max_edges > 0 { live_edges / self.max_edges as f64 } else { 0.0 });
+        metrics::gauge!(
+            "valori_edge_fill_ratio",
+            if self.max_edges > 0 {
+                live_edges / self.max_edges as f64
+            } else {
+                0.0
+            }
+        );
 
         metrics::gauge!("valori_dim", self.dim as f64);
 
         if let Some(c) = self.event_committer() {
-            metrics::gauge!("valori_event_log_height", c.journal().committed_height() as f64);
+            metrics::gauge!(
+                "valori_event_log_height",
+                c.journal().committed_height() as f64
+            );
         }
     }
 
@@ -531,7 +594,11 @@ impl Engine {
         self.insert_record_from_f32_ns(values, valori_kernel::types::id::DEFAULT_NS.0)
     }
 
-    pub fn insert_record_from_f32_ns(&mut self, values: &[f32], namespace_id: u16) -> Result<u32, EngineError> {
+    pub fn insert_record_from_f32_ns(
+        &mut self,
+        values: &[f32],
+        namespace_id: u16,
+    ) -> Result<u32, EngineError> {
         if self.state.record_count() >= self.max_records {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
@@ -539,7 +606,7 @@ impl Engine {
         for &v in values {
             if v > 32767.99 || v < -32768.0 {
                 return Err(EngineError::InvalidInput(
-                    "Vector values must be between -32768.0 and 32767.99".to_string()
+                    "Vector values must be between -32768.0 and 32767.99".to_string(),
                 ));
             }
             fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
@@ -547,7 +614,10 @@ impl Engine {
         let vector = FxpVector { data: fxp_data };
         let rid = self.state.next_record_id();
         let event = valori_kernel::event::KernelEvent::InsertRecord {
-            id: rid, vector, metadata: None, tag: 0,
+            id: rid,
+            vector,
+            metadata: None,
+            tag: 0,
         };
         self.commit_and_apply_ns(&event, namespace_id)?;
         self.auto_tier_check();
@@ -563,8 +633,14 @@ impl Engine {
         self.reranker.len()
     }
 
-    pub fn reranker_rerank(&self, query_text: &str, _query_vec: &[f32], candidates: &[(u32, f32)]) -> Vec<(u32, f32)> {
-        let u64_candidates: Vec<(u64, f32)> = candidates.iter().map(|&(id, s)| (id as u64, s)).collect();
+    pub fn reranker_rerank(
+        &self,
+        query_text: &str,
+        _query_vec: &[f32],
+        candidates: &[(u32, f32)],
+    ) -> Vec<(u32, f32)> {
+        let u64_candidates: Vec<(u64, f32)> =
+            candidates.iter().map(|&(id, s)| (id as u64, s)).collect();
         self.reranker
             .rerank(query_text, u64_candidates)
             .into_iter()
@@ -612,25 +688,40 @@ impl Engine {
 
     // ── Crypto-shredding ──────────────────────────────────────────────────────
 
-    pub fn insert_encrypted_ns(&mut self, plaintext: &[u8], tag: u64, namespace_id: u16, key_id: [u8; 16]) -> Result<u32, EngineError> {
+    pub fn insert_encrypted_ns(
+        &mut self,
+        plaintext: &[u8],
+        tag: u64,
+        namespace_id: u16,
+        key_id: [u8; 16],
+    ) -> Result<u32, EngineError> {
         if self.state.record_count() >= self.max_records {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
         if self.state.dim.is_none() {
-            return Err(EngineError::InvalidInput("VALORI_DIM must be set before encrypted insert".into()));
+            return Err(EngineError::InvalidInput(
+                "VALORI_DIM must be set before encrypted insert".into(),
+            ));
         }
-        let ciphertext = self.vault.encrypt(key_id, plaintext)
+        let ciphertext = self
+            .vault
+            .encrypt(key_id, plaintext)
             .map_err(|e| EngineError::InvalidInput(format!("Vault encrypt: {e:?}")))?;
         let rid = self.state.next_record_id();
         let event = valori_kernel::event::KernelEvent::InsertRecordEncrypted {
-            id: rid, key_id, ciphertext, metadata_ciphertext: None, tag,
+            id: rid,
+            key_id,
+            ciphertext,
+            metadata_ciphertext: None,
+            tag,
         };
         self.commit_and_apply_ns(&event, namespace_id)?;
         Ok(rid.0)
     }
 
     pub fn shred_key(&mut self, key_id: [u8; 16]) -> Result<(), EngineError> {
-        self.vault.shred(key_id)
+        self.vault
+            .shred(key_id)
             .map_err(|e| EngineError::InvalidInput(format!("Vault shred: {e:?}")))?;
         let event = valori_kernel::event::KernelEvent::ShredKey { key_id };
         self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
@@ -668,7 +759,9 @@ impl Engine {
         }
 
         let mut id_map: Vec<u32> = vec![0u32; batch.len()];
-        for (i, id) in &deduped { id_map[*i] = *id; }
+        for (i, id) in &deduped {
+            id_map[*i] = *id;
+        }
 
         let mut events = Vec::with_capacity(insert_indices.len());
         let start_id = self.state.next_record_id().0;
@@ -679,7 +772,7 @@ impl Engine {
             for &v in values {
                 if v > 32767.99 || v < -32768.0 {
                     return Err(EngineError::InvalidInput(
-                        "Vector values must be between -32768.0 and 32767.99".to_string()
+                        "Vector values must be between -32768.0 and 32767.99".to_string(),
                     ));
                 }
                 fxp_data.push(FxpScalar((v * SCALE as f32) as i32));
@@ -695,8 +788,7 @@ impl Engine {
             id_map[i] = id;
         }
 
-        self.persistence
-            .log_batch_ns(&events, namespace_id)?;
+        self.persistence.log_batch_ns(&events, namespace_id)?;
         for event in &events {
             self.apply_committed_event_ns(event, namespace_id)?;
         }
@@ -704,7 +796,9 @@ impl Engine {
 
         for &i in &insert_indices {
             if let Some(Some(rid)) = request_ids.and_then(|r| r.get(i)) {
-                if self.batch_seen.len() >= 65536 { self.batch_seen.clear(); }
+                if self.batch_seen.len() >= 65536 {
+                    self.batch_seen.clear();
+                }
                 self.batch_seen.insert(*rid, id_map[i]);
             }
         }
@@ -723,60 +817,12 @@ impl Engine {
         self.search_l2_ns(query, k, valori_kernel::types::id::DEFAULT_NS.0)
     }
 
-    pub fn search_l2_ns(&self, query: &[f32], k: usize, namespace_id: u16) -> Result<Vec<(u32, f32)>, EngineError> {
-        use valori_kernel::index::SearchResult;
-
-        if let Some(dim) = self.state.dim {
-            if query.len() != dim {
-                return Err(EngineError::Kernel(KernelError::DimensionMismatch {
-                    expected: dim,
-                    found: query.len(),
-                }));
-            }
-        }
-        for &v in query {
-            if v > 32767.99 || v < -32768.0 {
-                return Err(EngineError::InvalidInput(
-                    "Query vector values must be between -32768.0 and 32767.99".to_string()
-                ));
-            }
-        }
-
-        if self.effective_index_kind() != IndexKind::BruteForce {
-            let candidates = self.index.search(query, k);
-            let hits: Vec<(u32, f32)> = candidates
-                .into_iter()
-                .filter(|(id, _)| {
-                    self.state
-                        .get_record(RecordId(*id))
-                        .map_or(false, |r| r.namespace_id == namespace_id)
-                })
-                .take(k)
-                .collect();
-            return Ok(hits);
-        }
-
-        let fxp_data: Vec<FxpScalar> = query.iter()
-            .map(|&v| FxpScalar((v * SCALE as f32) as i32))
-            .collect();
-        let fxp_query = FxpVector { data: fxp_data };
-        let mut results = vec![SearchResult::default(); k];
-        let found = self.state.search_l2_ns(&fxp_query, &mut results, namespace_id);
-        Ok(results[..found].iter().map(|r| {
-            (r.id.0, r.score as f32 / (SCALE as f32 * SCALE as f32))
-        }).collect())
-    }
-
-    // ── Collections ───────────────────────────────────────────────────────────
-
-    /// Tag-filtered brute-force L2 search across all records.
-    ///
-    /// When `tag` is `Some(t)`, only records whose stored `tag` field equals `t` are scored.
-    /// `None` scores every active record (no tag restriction).
-    ///
-    /// Returns `(record_id, l2_distance_f32)` pairs in ascending distance order,
-    /// using the same f32 scale as `search_l2_ns`.
-    pub fn search_l2_filtered(&self, query: &[f32], k: usize, tag: Option<u64>) -> Result<Vec<(u32, f32)>, EngineError> {
+    pub fn search_l2_ns(
+        &self,
+        query: &[f32],
+        k: usize,
+        namespace_id: u16,
+    ) -> Result<Vec<(u32, f32)>, EngineError> {
         use valori_kernel::index::SearchResult;
 
         if let Some(dim) = self.state.dim {
@@ -795,21 +841,88 @@ impl Engine {
             }
         }
 
-        let fxp_data: Vec<FxpScalar> = query.iter()
+        if self.effective_index_kind() != IndexKind::BruteForce {
+            let candidates = self.index.search(query, k);
+            let hits: Vec<(u32, f32)> = candidates
+                .into_iter()
+                .filter(|(id, _)| {
+                    self.state
+                        .get_record(RecordId(*id))
+                        .map_or(false, |r| r.namespace_id == namespace_id)
+                })
+                .take(k)
+                .collect();
+            return Ok(hits);
+        }
+
+        let fxp_data: Vec<FxpScalar> = query
+            .iter()
+            .map(|&v| FxpScalar((v * SCALE as f32) as i32))
+            .collect();
+        let fxp_query = FxpVector { data: fxp_data };
+        let mut results = vec![SearchResult::default(); k];
+        let found = self
+            .state
+            .search_l2_ns(&fxp_query, &mut results, namespace_id);
+        Ok(results[..found]
+            .iter()
+            .map(|r| (r.id.0, r.score as f32 / (SCALE as f32 * SCALE as f32)))
+            .collect())
+    }
+
+    // ── Collections ───────────────────────────────────────────────────────────
+
+    /// Tag-filtered brute-force L2 search across all records.
+    ///
+    /// When `tag` is `Some(t)`, only records whose stored `tag` field equals `t` are scored.
+    /// `None` scores every active record (no tag restriction).
+    ///
+    /// Returns `(record_id, l2_distance_f32)` pairs in ascending distance order,
+    /// using the same f32 scale as `search_l2_ns`.
+    pub fn search_l2_filtered(
+        &self,
+        query: &[f32],
+        k: usize,
+        tag: Option<u64>,
+    ) -> Result<Vec<(u32, f32)>, EngineError> {
+        use valori_kernel::index::SearchResult;
+
+        if let Some(dim) = self.state.dim {
+            if query.len() != dim {
+                return Err(EngineError::Kernel(KernelError::DimensionMismatch {
+                    expected: dim,
+                    found: query.len(),
+                }));
+            }
+        }
+        for &v in query {
+            if v > 32767.99 || v < -32768.0 {
+                return Err(EngineError::InvalidInput(
+                    "Query vector values must be between -32768.0 and 32767.99".to_string(),
+                ));
+            }
+        }
+
+        let fxp_data: Vec<FxpScalar> = query
+            .iter()
             .map(|&v| FxpScalar((v * SCALE as f32) as i32))
             .collect();
         let fxp_query = FxpVector { data: fxp_data };
         let mut results = vec![SearchResult::default(); k];
         let found = self.state.search_l2(&fxp_query, &mut results, tag);
-        Ok(results[..found].iter().map(|r| {
-            (r.id.0, r.score as f32 / (SCALE as f32 * SCALE as f32))
-        }).collect())
+        Ok(results[..found]
+            .iter()
+            .map(|r| (r.id.0, r.score as f32 / (SCALE as f32 * SCALE as f32)))
+            .collect())
     }
 
     /// BLAKE3 hash of the current kernel state, as a lowercase hex string.
     pub fn state_hash_hex(&self) -> String {
         use valori_kernel::snapshot::blake3::hash_state_blake3;
-        hash_state_blake3(&self.state).iter().map(|b| format!("{:02x}", b)).collect()
+        hash_state_blake3(&self.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect()
     }
 
     pub fn resolve_collection(&self, name: Option<&str>) -> Result<u16, EngineError> {
@@ -824,11 +937,14 @@ impl Engine {
     pub fn create_collection(&mut self, name: &str) -> Result<u16, EngineError> {
         let id = self.namespaces.create(name).ok_or_else(|| {
             EngineError::InvalidInput(format!(
-                "namespace limit reached ({} max)", valori_kernel::types::id::MAX_NAMESPACES
+                "namespace limit reached ({} max)",
+                valori_kernel::types::id::MAX_NAMESPACES
             ))
         })?;
         self.state.apply_event_ns(
-            &valori_kernel::event::KernelEvent::AutoCreateNamespace { name: String::new() },
+            &valori_kernel::event::KernelEvent::AutoCreateNamespace {
+                name: String::new(),
+            },
             id,
         )?;
         self.flush_namespaces()?;
@@ -841,17 +957,24 @@ impl Engine {
                 "the 'default' collection cannot be dropped".into(),
             ));
         }
-        let id = self.namespaces.drop(name).ok_or_else(|| {
-            EngineError::InvalidInput(format!("collection '{name}' not found"))
-        })?;
-        let ns_record_ids: Vec<u64> = self.state.iter_records_in_ns(id)
+        let id = self
+            .namespaces
+            .drop(name)
+            .ok_or_else(|| EngineError::InvalidInput(format!("collection '{name}' not found")))?;
+        let ns_record_ids: Vec<u64> = self
+            .state
+            .iter_records_in_ns(id)
             .map(|r| r.id.0 as u64)
             .collect();
         self.state.apply_event_ns(
-            &valori_kernel::event::KernelEvent::DropNamespace { name: String::new() },
+            &valori_kernel::event::KernelEvent::DropNamespace {
+                name: String::new(),
+            },
             id,
         )?;
-        for rid in &ns_record_ids { self.index.delete(*rid as u32); }
+        for rid in &ns_record_ids {
+            self.index.delete(*rid as u32);
+        }
         self.reranker.remove_batch(&ns_record_ids);
         self.flush_namespaces()?;
         Ok(())
@@ -877,7 +1000,10 @@ impl Engine {
         buffer.extend_from_slice(&(m_buf.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&m_buf);
 
-        let i_buf = self.index.snapshot().map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let i_buf = self
+            .index
+            .snapshot()
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         buffer.extend_from_slice(&(i_buf.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&i_buf);
 
@@ -894,8 +1020,9 @@ impl Engine {
         buffer.extend_from_slice(&crts_buf);
 
         let (corpus, total_tokens) = self.reranker.snapshot_corpus();
-        let bcrp_buf = bincode::serde::encode_to_vec(&(corpus, total_tokens), bincode::config::standard())
-            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let bcrp_buf =
+            bincode::serde::encode_to_vec(&(corpus, total_tokens), bincode::config::standard())
+                .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         buffer.extend_from_slice(b"BCRP");
         buffer.extend_from_slice(&(bcrp_buf.len() as u32).to_le_bytes());
         buffer.extend_from_slice(&bcrp_buf);
@@ -904,8 +1031,11 @@ impl Engine {
     }
 
     pub fn save_snapshot(&self, path: Option<&Path>) -> Result<PathBuf, EngineError> {
-        let target = path.or(self.snapshot_path.as_deref())
-            .ok_or(EngineError::InvalidInput("No snapshot path configured".into()))?;
+        let target = path
+            .or(self.snapshot_path.as_deref())
+            .ok_or(EngineError::InvalidInput(
+                "No snapshot path configured".into(),
+            ))?;
         let data = self.snapshot()?;
         std::fs::write(target, data).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         tracing::info!("Snapshot saved to {:?}", target);
@@ -941,8 +1071,10 @@ impl Engine {
             offset += 4;
             let ns_len = read_u32(data, &mut offset, "ns_len")? as usize;
             let ns_json = slice_at(data, &mut offset, ns_len, "ns_data")?;
-            Some(serde_json::from_slice(ns_json)
-                .map_err(|e| EngineError::InvalidInput(format!("ns registry decode: {e}")))?)
+            Some(
+                serde_json::from_slice(ns_json)
+                    .map_err(|e| EngineError::InvalidInput(format!("ns registry decode: {e}")))?,
+            )
         } else {
             None
         };
@@ -966,7 +1098,12 @@ impl Engine {
         Ok(())
     }
 
-    pub fn update_record_metadata(&mut self, id: u32, metadata: Option<Vec<u8>>, namespace_id: u16) -> Result<(), EngineError> {
+    pub fn update_record_metadata(
+        &mut self,
+        id: u32,
+        metadata: Option<Vec<u8>>,
+        namespace_id: u16,
+    ) -> Result<(), EngineError> {
         let rid = RecordId(id);
         let event = valori_kernel::event::KernelEvent::UpdateRecordMetadata { id: rid, metadata };
         self.commit_and_apply_ns(&event, namespace_id)
@@ -997,20 +1134,30 @@ impl Engine {
         Ok(())
     }
 
-    pub fn create_node_for_record(&mut self, record_id: Option<u32>, kind: u8, namespace_id: u16) -> Result<u32, EngineError> {
+    pub fn create_node_for_record(
+        &mut self,
+        record_id: Option<u32>,
+        kind: u8,
+        namespace_id: u16,
+    ) -> Result<u32, EngineError> {
         if self.state.node_count() >= self.max_nodes {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
         let node_id = self.state.next_node_id();
         let kind = NodeKind::from_u8(kind).unwrap_or_default();
         let record = record_id.map(RecordId);
-        let event = valori_kernel::event::KernelEvent::CreateNode { id: node_id, kind, record };
+        let event = valori_kernel::event::KernelEvent::CreateNode {
+            id: node_id,
+            kind,
+            record,
+        };
         self.commit_and_apply_ns(&event, namespace_id)?;
         Ok(node_id.0)
     }
 
     pub fn nodes_in_ns(&self, namespace_id: u16) -> Vec<(u32, u8, Option<u32>)> {
-        self.state.iter_nodes()
+        self.state
+            .iter_nodes()
             .filter(|n| n.namespace_id == namespace_id)
             .map(|n| (n.id.0, n.kind as u8, n.record.map(|r| r.0)))
             .collect()
@@ -1020,11 +1167,14 @@ impl Engine {
         if self.state.edge_count() >= self.max_edges {
             return Err(EngineError::Kernel(KernelError::CapacityExceeded));
         }
-        use valori_kernel::types::id::{NodeId, EdgeId};
+        use valori_kernel::types::id::{EdgeId, NodeId};
         let kind = EdgeKind::from_u8(kind).unwrap_or_default();
         let edge_id = EdgeId(self.state.edge_count() as u32);
         let event = valori_kernel::event::KernelEvent::CreateEdge {
-            id: edge_id, kind, from: NodeId(from), to: NodeId(to),
+            id: edge_id,
+            kind,
+            from: NodeId(from),
+            to: NodeId(to),
         };
         self.commit_and_apply_ns(&event, valori_kernel::types::id::DEFAULT_NS.0)?;
         Ok(edge_id.0)
@@ -1043,11 +1193,16 @@ impl Engine {
 
     // ── Event application ─────────────────────────────────────────────────────
 
-    pub fn apply_committed_event(&mut self, event: &valori_kernel::event::KernelEvent) -> Result<(), EngineError> {
+    pub fn apply_committed_event(
+        &mut self,
+        event: &valori_kernel::event::KernelEvent,
+    ) -> Result<(), EngineError> {
         use valori_kernel::event::KernelEvent;
         if let KernelEvent::DeleteNode { id } = event {
             if let Some(node) = self.state.get_node(*id) {
-                if let Some(rid) = node.record { self.record_to_node.remove(&rid.0); }
+                if let Some(rid) = node.record {
+                    self.record_to_node.remove(&rid.0);
+                }
             }
         }
         self.state.apply_event(event)?;
@@ -1055,11 +1210,17 @@ impl Engine {
         Ok(())
     }
 
-    pub fn apply_committed_event_ns(&mut self, event: &valori_kernel::event::KernelEvent, namespace_id: u16) -> Result<(), EngineError> {
+    pub fn apply_committed_event_ns(
+        &mut self,
+        event: &valori_kernel::event::KernelEvent,
+        namespace_id: u16,
+    ) -> Result<(), EngineError> {
         use valori_kernel::event::KernelEvent;
         if let KernelEvent::DeleteNode { id } = event {
             if let Some(node) = self.state.get_node(*id) {
-                if let Some(rid) = node.record { self.record_to_node.remove(&rid.0); }
+                if let Some(rid) = node.record {
+                    self.record_to_node.remove(&rid.0);
+                }
             }
         }
         self.state.apply_event_ns(event, namespace_id)?;
@@ -1071,7 +1232,11 @@ impl Engine {
         use valori_kernel::event::KernelEvent;
         match event {
             KernelEvent::InsertRecord { id, vector, .. } => {
-                let vals: Vec<f32> = vector.data.iter().map(|fxp| fxp.0 as f32 / SCALE as f32).collect();
+                let vals: Vec<f32> = vector
+                    .data
+                    .iter()
+                    .map(|fxp| fxp.0 as f32 / SCALE as f32)
+                    .collect();
                 self.index.insert(id.0, &vals);
             }
             KernelEvent::DeleteRecord { id } | KernelEvent::SoftDeleteRecord { id } => {
@@ -1100,35 +1265,62 @@ impl Engine {
 
     // ── KernelState read accessors ────────────────────────────────────────────
 
-    pub fn record_count(&self) -> usize { self.state.record_count() }
+    pub fn record_count(&self) -> usize {
+        self.state.record_count()
+    }
 
-    pub fn apply_event_for_test(&mut self, evt: &valori_kernel::event::KernelEvent) -> Result<(), valori_kernel::error::KernelError> {
+    pub fn apply_event_for_test(
+        &mut self,
+        evt: &valori_kernel::event::KernelEvent,
+    ) -> Result<(), valori_kernel::error::KernelError> {
         self.state.apply_event(evt)
     }
 
-    pub fn clone_kernel_state(&self) -> KernelState { self.state.clone() }
+    pub fn clone_kernel_state(&self) -> KernelState {
+        self.state.clone()
+    }
 
-    pub fn kernel_state(&self) -> &KernelState { &self.state }
+    pub fn kernel_state(&self) -> &KernelState {
+        &self.state
+    }
 
-    pub fn node_count(&self) -> usize { self.state.node_count() }
+    pub fn node_count(&self) -> usize {
+        self.state.node_count()
+    }
 
-    pub fn edge_count(&self) -> usize { self.state.edge_count() }
+    pub fn edge_count(&self) -> usize {
+        self.state.edge_count()
+    }
 
-    pub fn kernel_dim(&self) -> Option<usize> { self.state.dim }
+    pub fn kernel_dim(&self) -> Option<usize> {
+        self.state.dim
+    }
 
-    pub fn get_node(&self, id: valori_kernel::types::id::NodeId) -> Option<&valori_kernel::graph::node::GraphNode> {
+    pub fn get_node(
+        &self,
+        id: valori_kernel::types::id::NodeId,
+    ) -> Option<&valori_kernel::graph::node::GraphNode> {
         self.state.get_node(id)
     }
 
-    pub fn outgoing_edges(&self, id: valori_kernel::types::id::NodeId) -> Option<impl Iterator<Item = &valori_kernel::graph::edge::GraphEdge>> {
+    pub fn outgoing_edges(
+        &self,
+        id: valori_kernel::types::id::NodeId,
+    ) -> Option<impl Iterator<Item = &valori_kernel::graph::edge::GraphEdge>> {
         self.state.outgoing_edges(id)
     }
 
-    pub fn get_record(&self, id: valori_kernel::types::id::RecordId) -> Option<&valori_kernel::storage::record::Record> {
+    pub fn get_record(
+        &self,
+        id: valori_kernel::types::id::RecordId,
+    ) -> Option<&valori_kernel::storage::record::Record> {
         self.state.get_record(id)
     }
 
-    pub fn get_edge(&self, id: valori_kernel::types::id::EdgeId) -> Option<&valori_kernel::graph::edge::GraphEdge> {
+    pub fn get_edge(
+        &self,
+        id: valori_kernel::types::id::EdgeId,
+    ) -> Option<&valori_kernel::graph::edge::GraphEdge> {
         self.state.get_edge(id)
     }
 
@@ -1137,13 +1329,17 @@ impl Engine {
         use valori_kernel::types::id::RecordId;
         let rec_a = self.state.get_record(RecordId(id_a))?;
         let rec_b = self.state.get_record(RecordId(id_b))?;
-        if !rec_a.is_searchable() || !rec_b.is_searchable() { return None; }
+        if !rec_a.is_searchable() || !rec_b.is_searchable() {
+            return None;
+        }
         let va: Vec<i32> = rec_a.vector.data.iter().map(|s| s.0).collect();
         let vb: Vec<i32> = rec_b.vector.data.iter().map(|s| s.0).collect();
         let dot = dot_product(&va, &vb) as f64;
         let mag_a = (dot_product(&va, &va) as f64).sqrt();
         let mag_b = (dot_product(&vb, &vb) as f64).sqrt();
-        if mag_a == 0.0 || mag_b == 0.0 { return None; }
+        if mag_a == 0.0 || mag_b == 0.0 {
+            return None;
+        }
         Some((dot / (mag_a * mag_b)) as f32)
     }
 
@@ -1154,8 +1350,13 @@ impl Engine {
         let mut records: Vec<(u32, Vec<f32>)> = Vec::with_capacity(total_slots);
         for i in 0..total_slots {
             if let Some(record) = self.state.get_record(RecordId(i as u32)) {
-                if !record.is_searchable() { continue; }
-                let vals: Vec<f32> = record.vector.data.iter()
+                if !record.is_searchable() {
+                    continue;
+                }
+                let vals: Vec<f32> = record
+                    .vector
+                    .data
+                    .iter()
                     .map(|fxp| fxp.0 as f32 / SCALE as f32)
                     .collect();
                 records.push((i as u32, vals));
@@ -1190,17 +1391,23 @@ impl Engine {
         match self.index_kind {
             IndexKind::Auto => {
                 let n = self.state.record_count();
-                if n >= AUTO_TIER_HNSW_MIN       { IndexKind::Hnsw }
-                else if n >= AUTO_TIER_BQ_MIN     { IndexKind::Bq }
-                else                              { IndexKind::BruteForce }
+                if n >= AUTO_TIER_HNSW_MIN {
+                    IndexKind::Hnsw
+                } else if n >= AUTO_TIER_BQ_MIN {
+                    IndexKind::Bq
+                } else {
+                    IndexKind::BruteForce
+                }
             }
             other => other,
         }
     }
 
     pub fn auto_tier_check(&mut self) {
-        if self.index_kind != IndexKind::Auto { return; }
-        let target  = self.effective_index_kind();
+        if self.index_kind != IndexKind::Auto {
+            return;
+        }
+        let target = self.effective_index_kind();
         let current = self.current_effective_kind;
         if target != current {
             tracing::info!(from = ?current, to = ?target,
@@ -1213,9 +1420,9 @@ impl Engine {
     // ── Crash recovery ────────────────────────────────────────────────────────
 
     pub fn try_recover(&mut self) -> RecoveryMode {
-        let log_info = self.event_committer().map(|c| {
-            (c.event_log().path().to_path_buf(), c.event_log().dim())
-        });
+        let log_info = self
+            .event_committer()
+            .map(|c| (c.event_log().path().to_path_buf(), c.event_log().dim()));
 
         if let Some((log_path, dim)) = log_info {
             if log_path.exists() {
@@ -1224,14 +1431,20 @@ impl Engine {
                         if count == 0 {
                             tracing::info!("Event log exists but is empty; trying snapshot");
                         } else {
-                            tracing::info!("Event-log recovery: replaying {} events from {:?}", count, log_path);
+                            tracing::info!(
+                                "Event-log recovery: replaying {} events from {:?}",
+                                count,
+                                log_path
+                            );
                             self.persistence = Persistence::Ephemeral;
                             match EventLogWriter::open(&log_path, Some(dim)) {
                                 Ok(log_writer) => {
                                     let state_for_committer = recovered_state.clone();
                                     self.state = recovered_state;
                                     self.persistence = Persistence::EventLog(EventCommitter::new(
-                                        log_writer, recovered_journal, state_for_committer,
+                                        log_writer,
+                                        recovered_journal,
+                                        state_for_committer,
                                     ));
                                     self.rebuild_index();
                                     self.auto_tier_check();
@@ -1242,7 +1455,10 @@ impl Engine {
                                     return RecoveryMode::EventLog(count);
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to reopen event log after recovery: {}", e);
+                                    tracing::error!(
+                                        "Failed to reopen event log after recovery: {}",
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -1263,7 +1479,9 @@ impl Engine {
                             tracing::info!("Snapshot recovery succeeded from {:?}", path);
                             snapshot_recovered = true;
                         }
-                        Err(e) => tracing::error!("Snapshot restore failed ({:?}); starting fresh", e),
+                        Err(e) => {
+                            tracing::error!("Snapshot restore failed ({:?}); starting fresh", e)
+                        }
                     },
                     Err(e) => tracing::error!("Failed to read snapshot file {:?}: {}", path, e),
                 }
@@ -1288,7 +1506,11 @@ impl Engine {
                 if wal_path.exists() {
                     match valori_state::bootstrap::replay_wal(&mut self.state, &wal_path) {
                         Ok((count, _hasher)) if count > 0 => {
-                            tracing::info!("WAL recovery: replayed {} commands from {:?}", count, wal_path);
+                            tracing::info!(
+                                "WAL recovery: replayed {} commands from {:?}",
+                                count,
+                                wal_path
+                            );
                             self.rebuild_index();
                             self.auto_tier_check();
                             self.rebuild_record_to_node();
@@ -1324,41 +1546,53 @@ impl Engine {
         ns_registry: Option<CollectionRegistry>,
     ) -> Result<(), EngineError> {
         self.state = decode_state(k_data)?;
-        if !m_data.is_empty() { self.metadata.restore(m_data); }
+        if !m_data.is_empty() {
+            self.metadata.restore(m_data);
+        }
         match i_data {
             Some(blob) if !blob.is_empty() => {
-                self.index.restore(blob).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+                self.index
+                    .restore(blob)
+                    .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
             }
             _ => self.rebuild_index(),
         }
         self.auto_tier_check();
         self.rebuild_record_to_node();
-        if let Some(reg) = ns_registry { self.namespaces = reg; }
+        if let Some(reg) = ns_registry {
+            self.namespaces = reg;
+        }
         Ok(())
     }
 
     fn restore_trailing_sections(&mut self, data: &[u8], mut offset: usize) {
         while offset + 8 <= data.len() {
             let tag = &data[offset..offset + 4];
-            let section_len = u32::from_le_bytes(
-                data[offset + 4..offset + 8].try_into().unwrap_or([0; 4])
-            ) as usize;
+            let section_len =
+                u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap_or([0; 4]))
+                    as usize;
             offset += 8;
-            if offset + section_len > data.len() { break; }
+            if offset + section_len > data.len() {
+                break;
+            }
             let section = &data[offset..offset + section_len];
             offset += section_len;
 
             if tag == b"CRTS" {
                 if let Ok((map, _)) = bincode::serde::decode_from_slice::<HashMap<u32, u64>, _>(
-                    section, bincode::config::standard()
+                    section,
+                    bincode::config::standard(),
                 ) {
                     self.created_at = map;
                 }
             } else if tag == b"BCRP" {
                 use std::collections::HashMap as StdMap;
-                if let Ok(((corpus, total_tokens), _)) = bincode::serde::decode_from_slice::<(StdMap<u64, Vec<String>>, usize), _>(
-                    section, bincode::config::standard()
-                ) {
+                if let Ok(((corpus, total_tokens), _)) =
+                    bincode::serde::decode_from_slice::<(StdMap<u64, Vec<String>>, usize), _>(
+                        section,
+                        bincode::config::standard(),
+                    )
+                {
                     self.reranker.restore_corpus(corpus, total_tokens);
                 }
             }
@@ -1380,17 +1614,29 @@ impl Drop for Engine {
 
 fn read_u32(data: &[u8], offset: &mut usize, field: &'static str) -> Result<u32, EngineError> {
     if *offset + 4 > data.len() {
-        return Err(EngineError::InvalidInput(format!("Truncated snapshot: missing {field}")));
+        return Err(EngineError::InvalidInput(format!(
+            "Truncated snapshot: missing {field}"
+        )));
     }
-    let val = u32::from_le_bytes(data[*offset..*offset + 4].try_into()
-        .map_err(|_| EngineError::InvalidInput(format!("Failed to read {field}")))?);
+    let val = u32::from_le_bytes(
+        data[*offset..*offset + 4]
+            .try_into()
+            .map_err(|_| EngineError::InvalidInput(format!("Failed to read {field}")))?,
+    );
     *offset += 4;
     Ok(val)
 }
 
-fn slice_at<'a>(data: &'a [u8], offset: &mut usize, len: usize, field: &'static str) -> Result<&'a [u8], EngineError> {
+fn slice_at<'a>(
+    data: &'a [u8],
+    offset: &mut usize,
+    len: usize,
+    field: &'static str,
+) -> Result<&'a [u8], EngineError> {
     if *offset + len > data.len() {
-        return Err(EngineError::InvalidInput(format!("Truncated snapshot: {field} out of bounds")));
+        return Err(EngineError::InvalidInput(format!(
+            "Truncated snapshot: {field} out of bounds"
+        )));
     }
     let s = &data[*offset..*offset + len];
     *offset += len;
@@ -1398,10 +1644,16 @@ fn slice_at<'a>(data: &'a [u8], offset: &mut usize, len: usize, field: &'static 
 }
 
 fn pct(used: usize, capacity: usize) -> f64 {
-    if capacity == 0 { 0.0 } else { used as f64 / capacity as f64 * 100.0 }
+    if capacity == 0 {
+        0.0
+    } else {
+        used as f64 / capacity as f64 * 100.0
+    }
 }
 
-fn round1(v: f64) -> f64 { (v * 10.0).round() / 10.0 }
+fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -1409,7 +1661,7 @@ fn round1(v: f64) -> f64 { (v * 10.0).round() / 10.0 }
 mod tests {
     use super::*;
     use crate::config::{EngineConfig, IndexKind, QuantizationKind};
-    use valori_kernel::crypto::{KeyVault, CryptoError};
+    use valori_kernel::crypto::{CryptoError, KeyVault};
 
     struct NoopVault;
     impl KeyVault for NoopVault {
@@ -1419,8 +1671,12 @@ mod tests {
         fn decrypt(&self, _key_id: [u8; 16], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
             Ok(ciphertext.to_vec())
         }
-        fn shred(&self, _key_id: [u8; 16]) -> Result<(), CryptoError> { Ok(()) }
-        fn key_exists(&self, _key_id: &[u8; 16]) -> bool { true }
+        fn shred(&self, _key_id: [u8; 16]) -> Result<(), CryptoError> {
+            Ok(())
+        }
+        fn key_exists(&self, _key_id: &[u8; 16]) -> bool {
+            true
+        }
     }
 
     fn tiny_cfg() -> EngineConfig {

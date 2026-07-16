@@ -19,9 +19,15 @@ async fn serve_node() -> (String, tokio::task::JoinHandle<()>) {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: String::new(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: String::new(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
@@ -59,7 +65,11 @@ async fn cli_status_and_health_against_a_live_node() {
     .await
     .unwrap();
     let stdout = String::from_utf8_lossy(&status_out.stdout);
-    assert!(status_out.status.success(), "stderr: {}", String::from_utf8_lossy(&status_out.stderr));
+    assert!(
+        status_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&status_out.stderr)
+    );
     assert!(stdout.contains("leader"), "{stdout}");
     assert!(stdout.contains("term"), "{stdout}");
 

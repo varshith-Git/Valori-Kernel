@@ -16,7 +16,10 @@ impl Extractor for MarkdownExtractor {
             id,
             source: source.unwrap_or("document.md").to_string(),
             mime_type: "text/markdown".to_string(),
-            metadata: DocumentMetadata { title, ..Default::default() },
+            metadata: DocumentMetadata {
+                title,
+                ..Default::default()
+            },
             content: text,
         })
     }

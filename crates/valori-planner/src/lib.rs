@@ -19,10 +19,15 @@ pub mod registry;
 // Top-level re-exports for the most commonly used types.
 pub use context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
 pub use error::{PlannerError, PlannerResult};
-pub use graph::{ExecutionGraph, ExecutionRetentionPolicy, GraphHash, TaskEdge, TaskId, TaskKind, TaskSpec};
+pub use graph::{
+    ExecutionGraph, ExecutionRetentionPolicy, GraphHash, TaskEdge, TaskId, TaskKind, TaskSpec,
+};
 pub use operation::{
     compute_operation_hash, ConsistencyLevel, ExecutionPolicy, Operation, OperationHash,
     OperationId, OperationInputs, OperationKind, ResourceBudget,
 };
 pub use planner::{plan_with_cache, IngestPlanner, NoOpPlanner, Planner};
-pub use registry::{CacheKey, ExecutionCache, ExecutionContext, ExecutionHandle, ExecutionRegistry, ExecutionStatus, TaskState};
+pub use registry::{
+    CacheKey, ExecutionCache, ExecutionContext, ExecutionHandle, ExecutionRegistry,
+    ExecutionStatus, TaskState,
+};

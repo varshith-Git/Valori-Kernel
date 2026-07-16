@@ -25,11 +25,11 @@ pub enum StageName {
 impl std::fmt::Display for StageName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StageName::Reader    => write!(f, "reader"),
+            StageName::Reader => write!(f, "reader"),
             StageName::Validator => write!(f, "validator"),
-            StageName::Chunker   => write!(f, "chunker"),
-            StageName::Embedder  => write!(f, "embedder"),
-            StageName::Writer    => write!(f, "writer"),
+            StageName::Chunker => write!(f, "chunker"),
+            StageName::Embedder => write!(f, "embedder"),
+            StageName::Writer => write!(f, "writer"),
         }
     }
 }
@@ -39,11 +39,11 @@ impl StageName {
     /// operation, never the implementation (no crate/struct names).
     pub fn label(&self) -> &'static str {
         match self {
-            StageName::Reader    => "Read document",
+            StageName::Reader => "Read document",
             StageName::Validator => "Validate document",
-            StageName::Chunker   => "Chunk document",
-            StageName::Embedder  => "Generate embeddings",
-            StageName::Writer    => "Write vectors",
+            StageName::Chunker => "Chunk document",
+            StageName::Embedder => "Generate embeddings",
+            StageName::Writer => "Write vectors",
         }
     }
 }
@@ -161,7 +161,8 @@ impl PipelineResult {
 
     /// Total warnings across all stages.
     pub fn all_warnings(&self) -> Vec<&str> {
-        self.stages.iter()
+        self.stages
+            .iter()
             .flat_map(|s| s.warnings.iter().map(|w| w.as_str()))
             .collect()
     }

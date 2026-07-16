@@ -58,7 +58,9 @@ impl LocalRuntime {
             return if pb.exists() {
                 Ok(pb)
             } else {
-                Err(DaemonError::NodeBinaryMissing(format!("VALORI_NODE_BIN={p} does not exist")))
+                Err(DaemonError::NodeBinaryMissing(format!(
+                    "VALORI_NODE_BIN={p} does not exist"
+                )))
             };
         }
         let root = std::env::var("VALORI_REPO_ROOT")
@@ -91,10 +93,23 @@ impl LocalRuntime {
         env.insert("VALORI_BIND".into(), format!("127.0.0.1:{port}"));
         env.insert("VALORI_DIM".into(), project.config.dim.to_string());
         env.insert("VALORI_INDEX".into(), project.config.index.clone());
-        env.insert("VALORI_EVENT_LOG_PATH".into(), project.event_log_path().display().to_string());
-        env.insert("VALORI_SNAPSHOT_PATH".into(), project.snapshot_path().display().to_string());
-        env.insert("RUST_LOG".into(), std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()));
-        LaunchSpec { program: self.binary.clone(), env, log_path: project.dir.join("node.log") }
+        env.insert(
+            "VALORI_EVENT_LOG_PATH".into(),
+            project.event_log_path().display().to_string(),
+        );
+        env.insert(
+            "VALORI_SNAPSHOT_PATH".into(),
+            project.snapshot_path().display().to_string(),
+        );
+        env.insert(
+            "RUST_LOG".into(),
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        );
+        LaunchSpec {
+            program: self.binary.clone(),
+            env,
+            log_path: project.dir.join("node.log"),
+        }
     }
 }
 
@@ -120,14 +135,21 @@ impl Runtime for LocalRuntime {
         let process = self.launcher.launch(&self.launch_spec(project, port))?;
         self.running.insert(
             name.clone(),
-            RunningNode { process, port, started: Instant::now(), state },
+            RunningNode {
+                process,
+                port,
+                started: Instant::now(),
+                state,
+            },
         );
 
         if let Err(e) = wait_health(port, std::time::Duration::from_secs(15)).await {
             if let Some(mut node) = self.running.remove(name) {
                 node.process.terminate();
             }
-            return Err(DaemonError::StartFailed(format!("node did not become healthy: {e}")));
+            return Err(DaemonError::StartFailed(format!(
+                "node did not become healthy: {e}"
+            )));
         }
 
         let node = self.running.get_mut(name).expect("just inserted");
@@ -184,7 +206,10 @@ impl Runtime for LocalRuntime {
         let mut dead = Vec::new();
         for (name, node) in self.running.iter_mut() {
             if let Some(reason) = node.process.has_exited() {
-                exits.push(crate::runtime::NodeExit { name: name.clone(), reason });
+                exits.push(crate::runtime::NodeExit {
+                    name: name.clone(),
+                    reason,
+                });
                 dead.push(name.clone());
             }
         }
@@ -229,7 +254,12 @@ async fn wait_health(port: u16, timeout: std::time::Duration) -> Result<(), Stri
     let client = reqwest::Client::new();
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(2)).send().await {
+        if let Ok(resp) = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+        {
             if resp.status().is_success() {
                 return Ok(());
             }

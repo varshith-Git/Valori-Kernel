@@ -22,6 +22,7 @@ pub trait NodeClient: Send + Sync {
     ) -> Result<Value>;
 
     /// `POST /v1/memory/search_vector`
+    #[allow(clippy::too_many_arguments)]
     async fn memory_search(
         &self,
         query_vector: Vec<f32>,
@@ -73,7 +74,11 @@ impl HttpBackend {
     pub fn new(base_url: impl Into<String>, auth_token: Option<String>) -> Self {
         let base_url = base_url.into();
         let base_url = base_url.trim_end_matches('/').to_string();
-        Self { base_url, auth_token, http: reqwest::Client::new() }
+        Self {
+            base_url,
+            auth_token,
+            http: reqwest::Client::new(),
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -136,6 +141,7 @@ impl NodeClient for HttpBackend {
         self.post_json("/v1/memory/upsert_vector", body).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn memory_search(
         &self,
         query_vector: Vec<f32>,
@@ -190,7 +196,10 @@ impl NodeClient for HttpBackend {
             return Ok(None);
         }
         let v: Value = resp.json().await.unwrap_or(json!({}));
-        let hash = v.get("event_log_hash").and_then(|h| h.as_str()).map(|s| s.to_string());
+        let hash = v
+            .get("event_log_hash")
+            .and_then(|h| h.as_str())
+            .map(|s| s.to_string());
         let height = v.get("committed_height").and_then(|h| h.as_u64());
         match (hash, height) {
             (Some(h), Some(n)) => Ok(Some((h, n))),
@@ -232,7 +241,8 @@ impl NodeClient for HttpBackend {
     }
 
     async fn crypto_shred(&self, key_id: String) -> Result<Value> {
-        self.delete_json(&format!("/v1/crypto/shred/{key_id}")).await
+        self.delete_json(&format!("/v1/crypto/shred/{key_id}"))
+            .await
     }
 
     async fn snapshot_save(&self) -> Result<Value> {

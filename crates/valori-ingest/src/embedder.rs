@@ -62,22 +62,27 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ModelProvider for ConstantProvider {
-        fn kind(&self) -> &'static str { "test" }
-        fn model_name(&self) -> &str { "constant" }
-        fn dim(&self) -> usize { self.0 }
+        fn kind(&self) -> &'static str {
+            "test"
+        }
+        fn model_name(&self) -> &str {
+            "constant"
+        }
+        fn dim(&self) -> usize {
+            self.0
+        }
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, ModelError> {
             Ok(texts.iter().map(|_| vec![1.0f32; self.0]).collect())
         }
-        async fn health(&self) -> Result<(), ModelError> { Ok(()) }
+        async fn health(&self) -> Result<(), ModelError> {
+            Ok(())
+        }
     }
 
     #[tokio::test]
     async fn produces_one_embedding_per_chunk() {
         let embedder = ModelProviderEmbedder::new(Box::new(ConstantProvider(4)));
-        let chunks = vec![
-            Chunk::new(0, "", "hello"),
-            Chunk::new(1, "", "world"),
-        ];
+        let chunks = vec![Chunk::new(0, "", "hello"), Chunk::new(1, "", "world")];
         let out = embedder.embed(&chunks).await.unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].values, vec![1.0; 4]);

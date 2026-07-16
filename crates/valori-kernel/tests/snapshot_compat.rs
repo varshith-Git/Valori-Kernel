@@ -14,7 +14,7 @@
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
+use valori_kernel::snapshot::encode::{encode_capacity_hint, encode_state};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::enums::{EdgeKind, NodeKind};
 use valori_kernel::types::id::{EdgeId, NodeId, RecordId};
@@ -47,15 +47,24 @@ fn state_single() -> KernelState {
     let mut s = KernelState::new();
     s.apply_event(&KernelEvent::InsertRecord {
         id: RecordId(0),
-        vector: FxpVector { data: vec![FxpScalar(1024), FxpScalar(-512), FxpScalar(256), FxpScalar(0)] },
+        vector: FxpVector {
+            data: vec![
+                FxpScalar(1024),
+                FxpScalar(-512),
+                FxpScalar(256),
+                FxpScalar(0),
+            ],
+        },
         metadata: Some(b"single-record-metadata".to_vec()),
         tag: 42,
-    }).unwrap();
+    })
+    .unwrap();
     s.apply_event(&KernelEvent::CreateNode {
         id: NodeId(0),
         kind: NodeKind::Document,
         record: Some(RecordId(0)),
-    }).unwrap();
+    })
+    .unwrap();
     s
 }
 
@@ -64,22 +73,38 @@ fn state_multi() -> KernelState {
 
     // 16 records across two namespaces (0 and 1)
     for i in 0u32..8 {
-        let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
-        s.apply_event_ns(&KernelEvent::InsertRecord {
-            id: RecordId(i),
-            vector: FxpVector { data },
-            metadata: if i % 3 == 0 { Some(format!("{{\"idx\":{i}}}").into_bytes()) } else { None },
-            tag: i as u64 % 5,
-        }, 0).unwrap();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+            .collect();
+        s.apply_event_ns(
+            &KernelEvent::InsertRecord {
+                id: RecordId(i),
+                vector: FxpVector { data },
+                metadata: if i % 3 == 0 {
+                    Some(format!("{{\"idx\":{i}}}").into_bytes())
+                } else {
+                    None
+                },
+                tag: i as u64 % 5,
+            },
+            0,
+        )
+        .unwrap();
     }
     for i in 8u32..16 {
-        let data = (0..4).map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000)).collect();
-        s.apply_event_ns(&KernelEvent::InsertRecord {
-            id: RecordId(i),
-            vector: FxpVector { data },
-            metadata: None,
-            tag: (i % 3) as u64,
-        }, 1).unwrap();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000))
+            .collect();
+        s.apply_event_ns(
+            &KernelEvent::InsertRecord {
+                id: RecordId(i),
+                vector: FxpVector { data },
+                metadata: None,
+                tag: (i % 3) as u64,
+            },
+            1,
+        )
+        .unwrap();
     }
 
     // Graph
@@ -88,7 +113,8 @@ fn state_multi() -> KernelState {
             id: NodeId(i),
             kind: NodeKind::Concept,
             record: Some(RecordId(i)),
-        }).unwrap();
+        })
+        .unwrap();
     }
     for i in 0u32..3 {
         s.apply_event(&KernelEvent::CreateEdge {
@@ -96,18 +122,21 @@ fn state_multi() -> KernelState {
             kind: EdgeKind::Relation,
             from: NodeId(i),
             to: NodeId(i + 1),
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     // Meta (V7)
     s.apply_event(&KernelEvent::SetMeta {
         key: "corpus:version".into(),
         value: "fixture-v1".into(),
-    }).unwrap();
+    })
+    .unwrap();
     s.apply_event(&KernelEvent::SetMeta {
         key: "corpus:dim".into(),
         value: "4".into(),
-    }).unwrap();
+    })
+    .unwrap();
 
     s
 }
@@ -167,24 +196,32 @@ fn snapshot_v7_multi_decodes_forever() {
 /// produce the same hash as if the full event sequence had been replayed.
 #[test]
 fn snapshot_v7_multi_can_continue_after_restore() {
-    let bytes = std::fs::read(fixture_path("snapshot_v7_multi.bin"))
-        .expect("committed fixture must exist");
+    let bytes =
+        std::fs::read(fixture_path("snapshot_v7_multi.bin")).expect("committed fixture must exist");
     let mut restored = decode_state(&bytes).expect("fixture must decode forever");
 
-    restored.apply_event(&KernelEvent::InsertRecord {
-        id: RecordId(16),
-        vector: FxpVector { data: vec![FxpScalar(100); 4] },
-        metadata: None,
-        tag: 0,
-    }).unwrap();
+    restored
+        .apply_event(&KernelEvent::InsertRecord {
+            id: RecordId(16),
+            vector: FxpVector {
+                data: vec![FxpScalar(100); 4],
+            },
+            metadata: None,
+            tag: 0,
+        })
+        .unwrap();
 
     let mut from_scratch = state_multi();
-    from_scratch.apply_event(&KernelEvent::InsertRecord {
-        id: RecordId(16),
-        vector: FxpVector { data: vec![FxpScalar(100); 4] },
-        metadata: None,
-        tag: 0,
-    }).unwrap();
+    from_scratch
+        .apply_event(&KernelEvent::InsertRecord {
+            id: RecordId(16),
+            vector: FxpVector {
+                data: vec![FxpScalar(100); 4],
+            },
+            metadata: None,
+            tag: 0,
+        })
+        .unwrap();
 
     assert_eq!(
         hash_state_blake3(&restored),
@@ -212,7 +249,7 @@ fn generate_snapshot_fixtures() {
         println!("{name}: {} bytes, hash {hash}", bytes.len());
     };
 
-    write_fixture("snapshot_v7_empty.bin",  &state_empty());
+    write_fixture("snapshot_v7_empty.bin", &state_empty());
     write_fixture("snapshot_v7_single.bin", &state_single());
-    write_fixture("snapshot_v7_multi.bin",  &state_multi());
+    write_fixture("snapshot_v7_multi.bin", &state_multi());
 }

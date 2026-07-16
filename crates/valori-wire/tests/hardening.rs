@@ -5,8 +5,8 @@
 //! OOM or infinite loops.
 
 use valori_wire::{
-    encode_header_v3, parse_header, WireError, MAX_DIM, MAX_ENTRY_DECODE_BYTES,
-    MAX_ENTRIES_PER_SEGMENT, METADATA_CAP,
+    encode_header_v3, parse_header, WireError, MAX_DIM, MAX_ENTRIES_PER_SEGMENT,
+    MAX_ENTRY_DECODE_BYTES, METADATA_CAP,
 };
 
 // ── Constants sanity ──────────────────────────────────────────────────────────
@@ -101,19 +101,21 @@ fn decode_limit_exceeded_error_is_displayable() {
 
 // ── V4 per-entry CRC32 ────────────────────────────────────────────────────────
 
-use valori_wire::{
-    chain_advance, decode_entry, encode_entry, encode_header_v4, parse_header as ph4,
-    LogEntry, VERSION_V4, CRC32_SUFFIX_LEN,
-};
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
+use valori_wire::{
+    chain_advance, decode_entry, encode_entry, encode_header_v4, parse_header as ph4, LogEntry,
+    CRC32_SUFFIX_LEN, VERSION_V4,
+};
 
 fn v4_entry() -> (LogEntry, Vec<u8>) {
     let entry = LogEntry::Event(KernelEvent::InsertRecord {
         id: RecordId(0),
-        vector: FxpVector { data: vec![FxpScalar(100), FxpScalar(200)] },
+        vector: FxpVector {
+            data: vec![FxpScalar(100), FxpScalar(200)],
+        },
         metadata: None,
         tag: 42,
     });
@@ -126,15 +128,25 @@ fn v4_entry() -> (LogEntry, Vec<u8>) {
 fn v4_roundtrip_clean() {
     let (_, bytes) = v4_entry();
     let (decoded, consumed) = decode_entry(VERSION_V4, &bytes).expect("clean V4 must decode");
-    assert_eq!(consumed, bytes.len(), "must consume all bytes including CRC suffix");
-    assert!(matches!(decoded.entry, LogEntry::Event(KernelEvent::InsertRecord { .. })));
+    assert_eq!(
+        consumed,
+        bytes.len(),
+        "must consume all bytes including CRC suffix"
+    );
+    assert!(matches!(
+        decoded.entry,
+        LogEntry::Event(KernelEvent::InsertRecord { .. })
+    ));
 }
 
 #[test]
 fn v4_crc_suffix_present() {
     let (_, bytes) = v4_entry();
     // Last 4 bytes are the CRC suffix; the rest is the bincode payload.
-    assert!(bytes.len() > CRC32_SUFFIX_LEN, "encoded V4 must be longer than just the CRC");
+    assert!(
+        bytes.len() > CRC32_SUFFIX_LEN,
+        "encoded V4 must be longer than just the CRC"
+    );
 }
 
 #[test]
@@ -144,9 +156,15 @@ fn v4_bit_flip_in_payload_is_caught() {
     let flip_pos = bytes.len() / 2;
     bytes[flip_pos] ^= 0x01;
     let result = decode_entry(VERSION_V4, &bytes);
-    assert!(result.is_err(), "a flipped payload byte must be caught by CRC check");
+    assert!(
+        result.is_err(),
+        "a flipped payload byte must be caught by CRC check"
+    );
     let err = format!("{:?}", result.unwrap_err());
-    assert!(err.contains("CRC32") || err.contains("Decode"), "error must mention CRC: {err}");
+    assert!(
+        err.contains("CRC32") || err.contains("Decode"),
+        "error must mention CRC: {err}"
+    );
 }
 
 #[test]
@@ -176,7 +194,9 @@ fn v4_chain_advance_matches_v3_formula() {
     // The chain hash for V4 must be identical to V3 (CRC is transport-only).
     let entry = LogEntry::Event(KernelEvent::InsertRecord {
         id: RecordId(1),
-        vector: FxpVector { data: vec![FxpScalar(1), FxpScalar(2)] },
+        vector: FxpVector {
+            data: vec![FxpScalar(1), FxpScalar(2)],
+        },
         metadata: None,
         tag: 0,
     });
@@ -202,7 +222,9 @@ fn metadata_cap_enforced_on_encode_not_decode() {
 
     let oversized = LogEntry::Event(KernelEvent::InsertRecord {
         id: RecordId(1),
-        vector: FxpVector { data: vec![FxpScalar(1)] },
+        vector: FxpVector {
+            data: vec![FxpScalar(1)],
+        },
         metadata: Some(vec![0u8; METADATA_CAP + 1]),
         tag: 0,
     });
@@ -214,12 +236,17 @@ fn metadata_cap_enforced_on_encode_not_decode() {
     // ...but at the cap it encodes and decodes fine.
     let at_cap = LogEntry::Event(KernelEvent::InsertRecord {
         id: RecordId(1),
-        vector: FxpVector { data: vec![FxpScalar(1)] },
+        vector: FxpVector {
+            data: vec![FxpScalar(1)],
+        },
         metadata: Some(vec![0u8; METADATA_CAP]),
         tag: 0,
     });
     let bytes = encode_entry(VERSION_V4, &[0u8; 32], 1_700_000_000, None, &at_cap).unwrap();
     let (decoded, n) = decode_entry(VERSION_V4, &bytes).unwrap();
     assert_eq!(n, bytes.len());
-    assert!(matches!(decoded.entry, LogEntry::Event(KernelEvent::InsertRecord { .. })));
+    assert!(matches!(
+        decoded.entry,
+        LogEntry::Event(KernelEvent::InsertRecord { .. })
+    ));
 }

@@ -10,19 +10,19 @@
 //! - Determinism: K-Means seeding and tie-breaking use FNV hashes + id ascending —
 //!   bit-identical results on x86/ARM/WASM.
 
-pub mod traits;
+pub mod bq;
 pub mod brute_force;
+pub mod deterministic;
 pub mod hnsw;
 pub mod ivf;
-pub mod bq;
 pub mod quant;
-pub mod deterministic;
+pub mod traits;
 
-pub use traits::VectorIndex;
+pub use bq::BqIndex;
 pub use brute_force::BruteForceIndex;
+pub use deterministic::kmeans::{deterministic_kmeans, f32_to_q16, l2_sq_q16};
 pub use hnsw::{HnswConfig, HnswIndex};
 pub use ivf::{IvfConfig, IvfIndex};
-pub use bq::BqIndex;
-pub use quant::{Quantizer, NoQuantizer, ScalarQuantizer};
 pub use quant::pq::{PqConfig, ProductQuantizer};
-pub use deterministic::kmeans::{deterministic_kmeans, f32_to_q16, l2_sq_q16};
+pub use quant::{NoQuantizer, Quantizer, ScalarQuantizer};
+pub use traits::VectorIndex;

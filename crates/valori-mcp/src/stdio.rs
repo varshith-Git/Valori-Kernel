@@ -22,7 +22,8 @@ pub async fn handle_line<C: NodeClient>(server: &McpServer<C>, line: &str) -> Op
         Ok(r) => r,
         Err(e) => {
             // Couldn't parse — we have no id, so reply with a null-id parse error.
-            let resp = Response::error(Value::Null, codes::PARSE_ERROR, format!("parse error: {e}"));
+            let resp =
+                Response::error(Value::Null, codes::PARSE_ERROR, format!("parse error: {e}"));
             return Some(serialize_line(&resp));
         }
     };
@@ -42,7 +43,10 @@ fn serialize_line(resp: &Response) -> String {
 pub async fn serve<C: NodeClient>(server: McpServer<C>) -> anyhow::Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
-    eprintln!("valori-mcp: ready on stdio (protocol {})", crate::mcp::PROTOCOL_VERSION);
+    eprintln!(
+        "valori-mcp: ready on stdio (protocol {})",
+        crate::mcp::PROTOCOL_VERSION
+    );
 
     while let Some(line) = lines.next_line().await? {
         if let Some(out) = handle_line(&server, &line).await {
@@ -65,21 +69,53 @@ mod tests {
 
     #[async_trait]
     impl NodeClient for OkNode {
-        async fn memory_upsert(&self, _: Vec<f32>, _: Option<String>, _: Option<Value>) -> Result<Value> {
+        async fn memory_upsert(
+            &self,
+            _: Vec<f32>,
+            _: Option<String>,
+            _: Option<Value>,
+        ) -> Result<Value> {
             Ok(json!({}))
         }
-        async fn memory_search(&self, _: Vec<f32>, _: usize, _: Option<String>, _: Option<u64>, _: Option<Value>, _: bool, _: Option<String>) -> Result<Value> {
+        async fn memory_search(
+            &self,
+            _: Vec<f32>,
+            _: usize,
+            _: Option<String>,
+            _: Option<u64>,
+            _: Option<Value>,
+            _: bool,
+            _: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({ "results": [] }))
         }
-        async fn proof_state(&self) -> Result<String> { Ok("aa".repeat(32)) }
-        async fn proof_event_log(&self) -> Result<Option<(String, u64)>> { Ok(None) }
-        async fn subgraph(&self, _: u32, _: u32) -> Result<Value> { Ok(json!({})) }
-        async fn graphrag(&self, _: Vec<f32>, _: usize, _: u32, _: Option<String>) -> Result<Value> {
+        async fn proof_state(&self) -> Result<String> {
+            Ok("aa".repeat(32))
+        }
+        async fn proof_event_log(&self) -> Result<Option<(String, u64)>> {
+            Ok(None)
+        }
+        async fn subgraph(&self, _: u32, _: u32) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn graphrag(
+            &self,
+            _: Vec<f32>,
+            _: usize,
+            _: u32,
+            _: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({ "hits": [], "subgraph": { "nodes": [], "edges": [] } }))
         }
-        async fn timeline(&self, _: Option<String>, _: Option<String>) -> Result<Value> { Ok(json!({})) }
-        async fn crypto_shred(&self, _: String) -> Result<Value> { Ok(json!({})) }
-        async fn snapshot_save(&self) -> Result<Value> { Ok(json!({})) }
+        async fn timeline(&self, _: Option<String>, _: Option<String>) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn crypto_shred(&self, _: String) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn snapshot_save(&self) -> Result<Value> {
+            Ok(json!({}))
+        }
     }
 
     #[tokio::test]

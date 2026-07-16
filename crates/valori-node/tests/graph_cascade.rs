@@ -12,10 +12,10 @@
 //!   4. Unrelated edges are never affected by a node deletion.
 //!   5. The reverse index survives a snapshot round-trip.
 
-use valori_node::config::{NodeConfig, IndexKind};
-use valori_node::EngineFromNodeConfig;
+use valori_kernel::types::id::{EdgeId, NodeId};
+use valori_node::config::{IndexKind, NodeConfig};
 use valori_node::engine::Engine;
-use valori_kernel::types::id::{NodeId, EdgeId};
+use valori_node::EngineFromNodeConfig;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,12 +23,12 @@ fn bare_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
     cfg.dim = 4;
     cfg.max_records = 64;
-    cfg.max_nodes   = 32;
-    cfg.max_edges   = 64;
-    cfg.index_kind  = IndexKind::BruteForce;
+    cfg.max_nodes = 32;
+    cfg.max_edges = 64;
+    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
-    cfg.wal_path       = None;
-    cfg.snapshot_path  = None;
+    cfg.wal_path = None;
+    cfg.snapshot_path = None;
     cfg
 }
 
@@ -44,17 +44,26 @@ fn edge_alive(engine: &Engine, eid: u32) -> bool {
 
 /// Return the `first_in_edge` head for a node, or None if the node is gone / empty.
 fn first_in(engine: &Engine, nid: u32) -> Option<u32> {
-    engine.kernel_state().get_node(NodeId(nid))?.first_in_edge.map(|e| e.0)
+    engine
+        .kernel_state()
+        .get_node(NodeId(nid))?
+        .first_in_edge
+        .map(|e| e.0)
 }
 
 /// Return the `first_out_edge` head for a node, or None.
 fn first_out(engine: &Engine, nid: u32) -> Option<u32> {
-    engine.kernel_state().get_node(NodeId(nid))?.first_out_edge.map(|e| e.0)
+    engine
+        .kernel_state()
+        .get_node(NodeId(nid))?
+        .first_out_edge
+        .map(|e| e.0)
 }
 
 /// Collect all outgoing edge IDs for a node by walking the linked list.
 fn outgoing(engine: &Engine, nid: u32) -> Vec<u32> {
-    engine.outgoing_edges(NodeId(nid))
+    engine
+        .outgoing_edges(NodeId(nid))
         .map(|it| it.map(|e| e.id.0).collect())
         .unwrap_or_default()
 }
@@ -93,7 +102,11 @@ fn test_reverse_index_chains_multiple_incoming() {
     let e2 = e.create_edge(b, c, 0).unwrap(); // B → C  (second; prepended → head)
 
     // Head is e2 (most recent), chain continues to e1.
-    assert_eq!(first_in(&e, c), Some(e2), "most-recent incoming edge is the list head");
+    assert_eq!(
+        first_in(&e, c),
+        Some(e2),
+        "most-recent incoming edge is the list head"
+    );
 
     // Walk the chain manually via `next_in`.
     let head_edge = e.kernel_state().get_edge(EdgeId(e2)).unwrap();
@@ -119,7 +132,10 @@ fn test_delete_source_node_removes_edge() {
 
     e.delete_node(a).unwrap();
 
-    assert!(!edge_alive(&e, eid), "edge must be removed when its source node is deleted");
+    assert!(
+        !edge_alive(&e, eid),
+        "edge must be removed when its source node is deleted"
+    );
     assert!(
         first_in(&e, b).is_none(),
         "B's first_in_edge must be None after the only incoming edge was deleted",
@@ -139,7 +155,10 @@ fn test_delete_destination_node_removes_edge() {
 
     e.delete_node(b).unwrap();
 
-    assert!(!edge_alive(&e, eid), "edge must be removed when its destination node is deleted");
+    assert!(
+        !edge_alive(&e, eid),
+        "edge must be removed when its destination node is deleted"
+    );
     assert!(
         first_out(&e, a).is_none(),
         "A's first_out_edge must be None after the only outgoing edge was deleted",
@@ -165,11 +184,17 @@ fn test_delete_middle_node_removes_both_edges() {
     assert!(!edge_alive(&e, e1), "A→B edge must be gone");
     assert!(!edge_alive(&e, e2), "B→C edge must be gone");
     assert!(first_out(&e, a).is_none(), "A has no more outgoing edges");
-    assert!(first_in(&e, c).is_none(),  "C has no more incoming edges");
+    assert!(first_in(&e, c).is_none(), "C has no more incoming edges");
 
     // A and C themselves must still exist.
-    assert!(e.kernel_state().get_node(NodeId(a)).is_some(), "A must survive");
-    assert!(e.kernel_state().get_node(NodeId(c)).is_some(), "C must survive");
+    assert!(
+        e.kernel_state().get_node(NodeId(a)).is_some(),
+        "A must survive"
+    );
+    assert!(
+        e.kernel_state().get_node(NodeId(c)).is_some(),
+        "C must survive"
+    );
 }
 
 // ── 5. DeleteNode — hub with many incoming edges ──────────────────────────────
@@ -184,8 +209,8 @@ fn test_delete_hub_clears_all_incoming_edges() {
     let mut e = Engine::new(&bare_cfg());
     let hub = add_node(&mut e);
 
-    let mut spoke_ids  = Vec::new();
-    let mut edge_ids   = Vec::new();
+    let mut spoke_ids = Vec::new();
+    let mut edge_ids = Vec::new();
 
     for _ in 0..SPOKES {
         let s = add_node(&mut e);
@@ -203,10 +228,15 @@ fn test_delete_hub_clears_all_incoming_edges() {
     }
     // All spoke nodes survive.
     for &s in &spoke_ids {
-        assert!(e.kernel_state().get_node(NodeId(s)).is_some(), "spoke {} must survive", s);
+        assert!(
+            e.kernel_state().get_node(NodeId(s)).is_some(),
+            "spoke {} must survive",
+            s
+        );
         assert!(
             first_out(&e, s).is_none(),
-            "spoke {} must have no outgoing edges after hub deleted", s,
+            "spoke {} must have no outgoing edges after hub deleted",
+            s,
         );
     }
 }
@@ -222,13 +252,13 @@ fn test_unrelated_edges_survive_node_deletion() {
     let c = add_node(&mut e);
     let d = add_node(&mut e);
 
-    let victim_edge   = e.create_edge(a, b, 0).unwrap(); // A → B  (will be deleted)
+    let victim_edge = e.create_edge(a, b, 0).unwrap(); // A → B  (will be deleted)
     let survivor_edge = e.create_edge(c, d, 0).unwrap(); // C → D  (must survive)
 
     e.delete_node(a).unwrap();
 
-    assert!(!edge_alive(&e, victim_edge),   "A→B must be gone");
-    assert!( edge_alive(&e, survivor_edge), "C→D must survive");
+    assert!(!edge_alive(&e, victim_edge), "A→B must be gone");
+    assert!(edge_alive(&e, survivor_edge), "C→D must survive");
     assert_eq!(
         first_in(&e, d),
         Some(survivor_edge),
@@ -259,14 +289,22 @@ fn test_delete_edge_unlinks_from_both_lists() {
     e.delete_edge(e2).unwrap();
 
     assert!(!edge_alive(&e, e2), "A→B must be gone");
-    assert!( edge_alive(&e, e1), "A→C must survive");
+    assert!(edge_alive(&e, e1), "A→C must survive");
 
     // A's outgoing list must contain only e1 now.
-    assert_eq!(outgoing(&e, a), vec![e1], "A's outgoing list must contain only A→C");
+    assert_eq!(
+        outgoing(&e, a),
+        vec![e1],
+        "A's outgoing list must contain only A→C"
+    );
 
     // B's incoming list must be empty; C's must still hold e1.
-    assert!(first_in(&e, b).is_none(),  "B has no more incoming edges");
-    assert_eq!(first_in(&e, c), Some(e1), "C still has incoming edge from A");
+    assert!(first_in(&e, b).is_none(), "B has no more incoming edges");
+    assert_eq!(
+        first_in(&e, c),
+        Some(e1),
+        "C still has incoming edge from A"
+    );
 }
 
 /// Deleting an edge from the middle of an incoming list must stitch the
@@ -289,12 +327,17 @@ fn test_delete_middle_incoming_edge_stitches_list() {
     e.delete_edge(e2).unwrap();
 
     assert!(!edge_alive(&e, e2), "b→hub must be gone");
-    assert!( edge_alive(&e, e1), "a→hub must survive");
-    assert!( edge_alive(&e, e3), "c→hub must survive");
+    assert!(edge_alive(&e, e1), "a→hub must survive");
+    assert!(edge_alive(&e, e3), "c→hub must survive");
 
     // Walk the surviving incoming chain: should be e3 → e1 → None.
     assert_eq!(first_in(&e, hub), Some(e3), "head must still be e3 (c→hub)");
-    let e3_next = e.kernel_state().get_edge(EdgeId(e3)).unwrap().next_in.map(|x| x.0);
+    let e3_next = e
+        .kernel_state()
+        .get_edge(EdgeId(e3))
+        .unwrap()
+        .next_in
+        .map(|x| x.0);
     assert_eq!(
         e3_next,
         Some(e1),
@@ -332,7 +375,12 @@ fn test_snapshot_preserves_reverse_index() {
         Some(e2),
         "after restore, C's first_in_edge must still point to e2",
     );
-    let e2_next = e2_restored.kernel_state().get_edge(EdgeId(e2)).unwrap().next_in.map(|x| x.0);
+    let e2_next = e2_restored
+        .kernel_state()
+        .get_edge(EdgeId(e2))
+        .unwrap()
+        .next_in
+        .map(|x| x.0);
     assert_eq!(
         e2_next,
         Some(e1),
@@ -341,8 +389,14 @@ fn test_snapshot_preserves_reverse_index() {
 
     // Cascade delete must still work on the restored engine.
     e2_restored.delete_node(c).unwrap();
-    assert!(!edge_alive(&e2_restored, e1), "a→c must be gone after cascade on restored engine");
-    assert!(!edge_alive(&e2_restored, e2), "b→c must be gone after cascade on restored engine");
+    assert!(
+        !edge_alive(&e2_restored, e1),
+        "a→c must be gone after cascade on restored engine"
+    );
+    assert!(
+        !edge_alive(&e2_restored, e2),
+        "b→c must be gone after cascade on restored engine"
+    );
 }
 
 // ── 9. Self-loop ──────────────────────────────────────────────────────────────

@@ -2,14 +2,14 @@
 //! Fuzz-style crash recovery tests.
 //!
 //! Exercises the event-log reader's resilience to truncated and corrupted data.
-use valori_node::events::event_log::{EventLogWriter, LogEntry};
-use valori_node::events::event_replay::recover_from_event_log;
+use std::fs::OpenOptions;
+use std::io::Write;
+use tempfile::tempdir;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
-use tempfile::tempdir;
-use std::fs::OpenOptions;
-use std::io::Write;
+use valori_node::events::event_log::{EventLogWriter, LogEntry};
+use valori_node::events::event_replay::recover_from_event_log;
 
 const DIM: usize = 16;
 

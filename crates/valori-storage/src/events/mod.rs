@@ -14,13 +14,13 @@
 //! - No partial commits
 //! - Deterministic across architectures
 
-pub mod event_log;
-pub mod event_journal;
-pub mod event_replay;
 pub mod event_commit;
+pub mod event_journal;
+pub mod event_log;
 pub mod event_proof;
+pub mod event_replay;
 
-pub use event_log::EventLogWriter;
-pub use event_journal::EventJournal;
-pub use event_replay::recover_from_event_log;
 pub use event_commit::{CommitResult, EventCommitter};
+pub use event_journal::EventJournal;
+pub use event_log::EventLogWriter;
+pub use event_replay::recover_from_event_log;

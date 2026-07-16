@@ -148,7 +148,10 @@ impl<'a> GarbageCollector<'a> {
             .collect();
 
         let reclaimable_bytes = unreferenced.iter().map(|u| u.reclaimable_bytes).sum();
-        GcReport { unreferenced, reclaimable_bytes }
+        GcReport {
+            unreferenced,
+            reclaimable_bytes,
+        }
     }
 
     /// Remove all unreferenced packages and return the bytes freed.
@@ -195,13 +198,24 @@ mod tests {
 
     fn remote_manifest(id: &str) -> ModelManifest {
         ModelManifest {
-            id: id.into(), name: id.into(), version: None,
-            provider: ProviderKind::OpenAI, family: None,
-            task: ModelTask::Embedding, dimensions: 1536,
-            quantization: None, format: ModelFormat::Remote, sha256: None,
-            size_bytes: 0, installed_at: None, path: None,
-            status: ManifestStatus::Available, min_ram_mb: 0,
-            license: None, homepage: None, download_url: None,
+            id: id.into(),
+            name: id.into(),
+            version: None,
+            provider: ProviderKind::OpenAI,
+            family: None,
+            task: ModelTask::Embedding,
+            dimensions: 1536,
+            quantization: None,
+            format: ModelFormat::Remote,
+            sha256: None,
+            size_bytes: 0,
+            installed_at: None,
+            path: None,
+            status: ManifestStatus::Available,
+            min_ram_mb: 0,
+            license: None,
+            homepage: None,
+            download_url: None,
         }
     }
 

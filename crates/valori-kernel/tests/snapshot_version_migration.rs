@@ -104,7 +104,11 @@ fn encode_legacy(
                 if schema_ver >= 3 {
                     out.extend_from_slice(&r.tag.to_le_bytes());
                 }
-                assert_eq!(r.vector.len(), dim as usize, "test bug: vector/dim mismatch");
+                assert_eq!(
+                    r.vector.len(),
+                    dim as usize,
+                    "test bug: vector/dim mismatch"
+                );
                 for v in &r.vector {
                     out.extend_from_slice(&v.to_le_bytes());
                 }
@@ -132,16 +136,25 @@ fn encode_legacy(
         out.extend_from_slice(&n.id.to_le_bytes());
         out.push(n.kind);
         match n.record {
-            Some(r) => { out.push(1); out.extend_from_slice(&r.to_le_bytes()); }
+            Some(r) => {
+                out.push(1);
+                out.extend_from_slice(&r.to_le_bytes());
+            }
             None => out.push(0),
         }
         match n.first_out {
-            Some(e) => { out.push(1); out.extend_from_slice(&e.to_le_bytes()); }
+            Some(e) => {
+                out.push(1);
+                out.extend_from_slice(&e.to_le_bytes());
+            }
             None => out.push(0),
         }
         if schema_ver >= 4 {
             match n.first_in {
-                Some(e) => { out.push(1); out.extend_from_slice(&e.to_le_bytes()); }
+                Some(e) => {
+                    out.push(1);
+                    out.extend_from_slice(&e.to_le_bytes());
+                }
                 None => out.push(0),
             }
         }
@@ -160,12 +173,18 @@ fn encode_legacy(
         out.extend_from_slice(&e.from.to_le_bytes());
         out.extend_from_slice(&e.to.to_le_bytes());
         match e.next_out {
-            Some(x) => { out.push(1); out.extend_from_slice(&x.to_le_bytes()); }
+            Some(x) => {
+                out.push(1);
+                out.extend_from_slice(&x.to_le_bytes());
+            }
             None => out.push(0),
         }
         if schema_ver >= 4 {
             match e.next_in {
-                Some(x) => { out.push(1); out.extend_from_slice(&x.to_le_bytes()); }
+                Some(x) => {
+                    out.push(1);
+                    out.extend_from_slice(&x.to_le_bytes());
+                }
                 None => out.push(0),
             }
         }
@@ -173,8 +192,12 @@ fn encode_legacy(
 
     // ── V6+: namespace head arrays ──────────────────────────────────────
     if schema_ver >= 6 {
-        for _ in 0..MAX_NAMESPACES { out.extend_from_slice(&NS_LIST_NIL.to_le_bytes()); }
-        for _ in 0..MAX_NAMESPACES { out.extend_from_slice(&NS_LIST_NIL.to_le_bytes()); }
+        for _ in 0..MAX_NAMESPACES {
+            out.extend_from_slice(&NS_LIST_NIL.to_le_bytes());
+        }
+        for _ in 0..MAX_NAMESPACES {
+            out.extend_from_slice(&NS_LIST_NIL.to_le_bytes());
+        }
     }
 
     // ── V7+: meta sidecar (empty — not under test here) ─────────────────
@@ -193,20 +216,51 @@ fn encode_legacy(
 
 fn scenario_a_records() -> Vec<Option<LegacyRecord>> {
     vec![
-        Some(LegacyRecord { id: 0, flags: 0, tag: 7, vector: vec![10, -20, 30, -40], metadata: Some(b"meta-a".to_vec()) }),
-        Some(LegacyRecord { id: 1, flags: 0, tag: 99, vector: vec![1, 2, 3, 4], metadata: None }),
+        Some(LegacyRecord {
+            id: 0,
+            flags: 0,
+            tag: 7,
+            vector: vec![10, -20, 30, -40],
+            metadata: Some(b"meta-a".to_vec()),
+        }),
+        Some(LegacyRecord {
+            id: 1,
+            flags: 0,
+            tag: 99,
+            vector: vec![1, 2, 3, 4],
+            metadata: None,
+        }),
     ]
 }
 
 fn scenario_a_nodes() -> Vec<LegacyNode> {
     vec![
-        LegacyNode { id: 0, kind: NodeKind::Document as u8, record: Some(0), first_out: Some(0), first_in: None },
-        LegacyNode { id: 1, kind: NodeKind::Concept as u8, record: Some(1), first_out: None, first_in: Some(0) },
+        LegacyNode {
+            id: 0,
+            kind: NodeKind::Document as u8,
+            record: Some(0),
+            first_out: Some(0),
+            first_in: None,
+        },
+        LegacyNode {
+            id: 1,
+            kind: NodeKind::Concept as u8,
+            record: Some(1),
+            first_out: None,
+            first_in: Some(0),
+        },
     ]
 }
 
 fn scenario_a_edges() -> Vec<LegacyEdge> {
-    vec![LegacyEdge { id: 0, kind: EdgeKind::Relation as u8, from: 0, to: 1, next_out: None, next_in: None }]
+    vec![LegacyEdge {
+        id: 0,
+        kind: EdgeKind::Relation as u8,
+        from: 0,
+        to: 1,
+        next_out: None,
+        next_in: None,
+    }]
 }
 
 /// The state a real VN encoder would have captured, built purely through
@@ -219,25 +273,58 @@ fn scenario_a_reference(tag_supported: bool, metadata_supported: bool) -> Kernel
     let mut s = KernelState::new();
     s.apply_event(&KernelEvent::InsertRecord {
         id: RecordId(0),
-        vector: FxpVector { data: vec![FxpScalar(10), FxpScalar(-20), FxpScalar(30), FxpScalar(-40)] },
-        metadata: if metadata_supported { Some(b"meta-a".to_vec()) } else { None },
+        vector: FxpVector {
+            data: vec![FxpScalar(10), FxpScalar(-20), FxpScalar(30), FxpScalar(-40)],
+        },
+        metadata: if metadata_supported {
+            Some(b"meta-a".to_vec())
+        } else {
+            None
+        },
         tag: if tag_supported { 7 } else { 0 },
-    }).unwrap();
+    })
+    .unwrap();
     s.apply_event(&KernelEvent::InsertRecord {
         id: RecordId(1),
-        vector: FxpVector { data: vec![FxpScalar(1), FxpScalar(2), FxpScalar(3), FxpScalar(4)] },
+        vector: FxpVector {
+            data: vec![FxpScalar(1), FxpScalar(2), FxpScalar(3), FxpScalar(4)],
+        },
         metadata: None,
         tag: if tag_supported { 99 } else { 0 },
-    }).unwrap();
-    s.apply_event(&KernelEvent::CreateNode { id: NodeId(0), kind: NodeKind::Document, record: Some(RecordId(0)) }).unwrap();
-    s.apply_event(&KernelEvent::CreateNode { id: NodeId(1), kind: NodeKind::Concept, record: Some(RecordId(1)) }).unwrap();
-    s.apply_event(&KernelEvent::CreateEdge { id: EdgeId(0), kind: EdgeKind::Relation, from: NodeId(0), to: NodeId(1) }).unwrap();
+    })
+    .unwrap();
+    s.apply_event(&KernelEvent::CreateNode {
+        id: NodeId(0),
+        kind: NodeKind::Document,
+        record: Some(RecordId(0)),
+    })
+    .unwrap();
+    s.apply_event(&KernelEvent::CreateNode {
+        id: NodeId(1),
+        kind: NodeKind::Concept,
+        record: Some(RecordId(1)),
+    })
+    .unwrap();
+    s.apply_event(&KernelEvent::CreateEdge {
+        id: EdgeId(0),
+        kind: EdgeKind::Relation,
+        from: NodeId(0),
+        to: NodeId(1),
+    })
+    .unwrap();
     s
 }
 
 fn encode_legacy_scenario_a(schema_ver: u32) -> Vec<u8> {
     let version_val = scenario_a_reference(schema_ver >= 3, schema_ver >= 2).version();
-    encode_legacy(schema_ver, version_val, DIM, &scenario_a_records(), &scenario_a_nodes(), &scenario_a_edges())
+    encode_legacy(
+        schema_ver,
+        version_val,
+        DIM,
+        &scenario_a_records(),
+        &scenario_a_nodes(),
+        &scenario_a_edges(),
+    )
 }
 
 /// Field-level assertions any decoded Scenario A state must satisfy, with
@@ -250,22 +337,47 @@ fn assert_scenario_a(state: &KernelState, schema_ver: u32) {
 
     let r0 = state.get_record(RecordId(0)).expect("record 0 must exist");
     let r1 = state.get_record(RecordId(1)).expect("record 1 must exist");
-    assert_eq!(r0.vector.data, vec![FxpScalar(10), FxpScalar(-20), FxpScalar(30), FxpScalar(-40)]);
-    assert_eq!(r1.vector.data, vec![FxpScalar(1), FxpScalar(2), FxpScalar(3), FxpScalar(4)]);
+    assert_eq!(
+        r0.vector.data,
+        vec![FxpScalar(10), FxpScalar(-20), FxpScalar(30), FxpScalar(-40)]
+    );
+    assert_eq!(
+        r1.vector.data,
+        vec![FxpScalar(1), FxpScalar(2), FxpScalar(3), FxpScalar(4)]
+    );
 
     if schema_ver >= 3 {
-        assert_eq!(r0.tag, 7, "schema_ver {schema_ver} has tag support — must round-trip exactly");
-        assert_eq!(r1.tag, 99, "schema_ver {schema_ver} has tag support — must round-trip exactly");
+        assert_eq!(
+            r0.tag, 7,
+            "schema_ver {schema_ver} has tag support — must round-trip exactly"
+        );
+        assert_eq!(
+            r1.tag, 99,
+            "schema_ver {schema_ver} has tag support — must round-trip exactly"
+        );
     } else {
-        assert_eq!(r0.tag, 0, "schema_ver {schema_ver} predates tag — must default to 0, never leak garbage");
-        assert_eq!(r1.tag, 0, "schema_ver {schema_ver} predates tag — must default to 0, never leak garbage");
+        assert_eq!(
+            r0.tag, 0,
+            "schema_ver {schema_ver} predates tag — must default to 0, never leak garbage"
+        );
+        assert_eq!(
+            r1.tag, 0,
+            "schema_ver {schema_ver} predates tag — must default to 0, never leak garbage"
+        );
     }
 
     if schema_ver >= 2 {
-        assert_eq!(r0.metadata.as_deref(), Some(&b"meta-a"[..]), "schema_ver {schema_ver}");
+        assert_eq!(
+            r0.metadata.as_deref(),
+            Some(&b"meta-a"[..]),
+            "schema_ver {schema_ver}"
+        );
         assert_eq!(r1.metadata, None, "schema_ver {schema_ver}");
     } else {
-        assert_eq!(r0.metadata, None, "schema_ver {schema_ver} predates metadata — must default to None");
+        assert_eq!(
+            r0.metadata, None,
+            "schema_ver {schema_ver} predates metadata — must default to None"
+        );
     }
 
     assert_eq!(r0.namespace_id, 0, "schema_ver {schema_ver}");
@@ -273,7 +385,11 @@ fn assert_scenario_a(state: &KernelState, schema_ver: u32) {
 
     let node0 = state.get_node(NodeId(0)).expect("node 0 must exist");
     let node1 = state.get_node(NodeId(1)).expect("node 1 must exist");
-    assert_eq!(node0.first_out_edge, Some(EdgeId(0)), "schema_ver {schema_ver}");
+    assert_eq!(
+        node0.first_out_edge,
+        Some(EdgeId(0)),
+        "schema_ver {schema_ver}"
+    );
     assert_eq!(
         node1.first_in_edge,
         Some(EdgeId(0)),
@@ -333,18 +449,43 @@ fn v6_decodes_correctly() {
 #[test]
 fn v1_hole_slot_decodes_as_absent_without_shifting_ids() {
     let records = vec![
-        Some(LegacyRecord { id: 0, flags: 0, tag: 0, vector: vec![5, 5, 5, 5], metadata: None }),
+        Some(LegacyRecord {
+            id: 0,
+            flags: 0,
+            tag: 0,
+            vector: vec![5, 5, 5, 5],
+            metadata: None,
+        }),
         None, // hole: is_present = 0
-        Some(LegacyRecord { id: 2, flags: 0, tag: 0, vector: vec![9, 9, 9, 9], metadata: None }),
+        Some(LegacyRecord {
+            id: 2,
+            flags: 0,
+            tag: 0,
+            vector: vec![9, 9, 9, 9],
+            metadata: None,
+        }),
     ];
     let buf = encode_legacy(1, 0, DIM, &records, &[], &[]);
     let state = decode_state(&buf).expect("V1 buffer with a hole must decode");
 
     assert_eq!(state.total_record_slots(), 3);
-    assert_eq!(state.record_count(), 2, "the hole slot must not count as a live record");
-    assert!(state.get_record(RecordId(1)).is_none(), "hole slot must decode to None");
-    assert_eq!(state.get_record(RecordId(0)).unwrap().vector.data, vec![FxpScalar(5); 4]);
-    assert_eq!(state.get_record(RecordId(2)).unwrap().vector.data, vec![FxpScalar(9); 4]);
+    assert_eq!(
+        state.record_count(),
+        2,
+        "the hole slot must not count as a live record"
+    );
+    assert!(
+        state.get_record(RecordId(1)).is_none(),
+        "hole slot must decode to None"
+    );
+    assert_eq!(
+        state.get_record(RecordId(0)).unwrap().vector.data,
+        vec![FxpScalar(5); 4]
+    );
+    assert_eq!(
+        state.get_record(RecordId(2)).unwrap().vector.data,
+        vec![FxpScalar(9); 4]
+    );
 }
 
 // ── Cross-version migration: decode → re-encode(current) → decode chain ────
@@ -386,8 +527,9 @@ fn cross_version_decode_reencode_chain_is_hash_stable() {
         // must never drift on repeated encode/decode once migrated.
         let mut buf_migrated_2 = Vec::with_capacity(encode_capacity_hint(&redecoded));
         encode_state(&redecoded, &mut buf_migrated_2).expect("second re-encode must succeed");
-        let redecoded_2 = decode_state(&buf_migrated_2)
-            .unwrap_or_else(|_| panic!("schema_ver {schema_ver}: twice-migrated buffer must decode"));
+        let redecoded_2 = decode_state(&buf_migrated_2).unwrap_or_else(|_| {
+            panic!("schema_ver {schema_ver}: twice-migrated buffer must decode")
+        });
         assert_eq!(
             hash_state_blake3(&redecoded_2),
             hash_state_blake3(&decoded_old),
@@ -415,5 +557,8 @@ fn v6_out_of_range_namespace_head_is_rejected() {
 #[test]
 fn schema_version_zero_is_rejected() {
     let buf = encode_legacy(0, 0, DIM, &scenario_a_records(), &[], &[]);
-    assert!(decode_state(&buf).is_err(), "schema_ver 0 is out of the valid 1..=7 range");
+    assert!(
+        decode_state(&buf).is_err(),
+        "schema_ver 0 is out of the valid 1..=7 range"
+    );
 }

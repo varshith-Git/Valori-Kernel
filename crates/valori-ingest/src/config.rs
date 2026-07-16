@@ -36,9 +36,18 @@ impl Default for PipelineConfig {
 }
 
 impl PipelineConfig {
-    pub fn with_batch_size(mut self, n: usize) -> Self { self.batch_size = n.max(1); self }
-    pub fn with_retry(mut self, r: RetryPolicy) -> Self { self.retry = r; self }
-    pub fn with_timeout_secs(mut self, secs: u64) -> Self { self.timeout_secs = Some(secs); self }
+    pub fn with_batch_size(mut self, n: usize) -> Self {
+        self.batch_size = n.max(1);
+        self
+    }
+    pub fn with_retry(mut self, r: RetryPolicy) -> Self {
+        self.retry = r;
+        self
+    }
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -57,7 +66,10 @@ mod tests {
     fn builder_methods() {
         let c = PipelineConfig::default()
             .with_batch_size(32)
-            .with_retry(RetryPolicy::Fixed { attempts: 3, delay_ms: 100 })
+            .with_retry(RetryPolicy::Fixed {
+                attempts: 3,
+                delay_ms: 100,
+            })
             .with_timeout_secs(60);
         assert_eq!(c.batch_size, 32);
         assert!(matches!(c.retry, RetryPolicy::Fixed { .. }));

@@ -8,12 +8,12 @@
 //! appended to by this writer. Delete or archive the v1 file before using this
 //! writer with the same path.
 
-use valori_kernel::event::KernelEvent;
 use crate::wal_reader::WalHeader;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, BufWriter};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use thiserror::Error;
+use valori_kernel::event::KernelEvent;
 
 pub const WAL_VERSION: u32 = 2;
 
@@ -78,7 +78,7 @@ impl WalWriter {
             WalHeader::SIZE as u64
         } else {
             return Err(WalError::Validation(
-                "Existing WAL file is too short to contain a valid header".into()
+                "Existing WAL file is too short to contain a valid header".into(),
             ));
         };
 
@@ -92,12 +92,9 @@ impl WalWriter {
     /// Append a `KernelEvent` targeting `namespace_id` to the WAL.
     pub fn append_event(&mut self, event: &KernelEvent, namespace_id: u16) -> WalResult<()> {
         let config = bincode::config::standard();
-        let len = bincode::serde::encode_into_std_write(
-            &(event, namespace_id),
-            &mut self.file,
-            config,
-        )
-        .map_err(|e| WalError::Serialization(e.to_string()))?;
+        let len =
+            bincode::serde::encode_into_std_write(&(event, namespace_id), &mut self.file, config)
+                .map_err(|e| WalError::Serialization(e.to_string()))?;
         self.bytes_written += len as u64;
         self.file.flush()?;
         Ok(())
@@ -117,9 +114,9 @@ impl WalWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use tempfile::tempdir;
 
     #[test]
     fn test_wal_header_written() {

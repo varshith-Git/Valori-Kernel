@@ -59,7 +59,7 @@ jobs:
           leaks=$(grep -rnE "^\s*use std::" \
                crates/valori-kernel/src/ \
                crates/valori-core/src/ 2>/dev/null \
-             | grep -Ev "valori-kernel/src/adapters/")
+             | grep -Ev "valori-kernel/src/adapters/" || true)
           if [ -n "$leaks" ]; then
             echo "$leaks"
             echo ""

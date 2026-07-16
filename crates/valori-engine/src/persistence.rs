@@ -12,9 +12,9 @@
 //! enum keeps static dispatch and offers typed accessors instead.
 
 use crate::error::CommitError;
+use valori_kernel::event::KernelEvent;
 use valori_storage::events::event_commit::{CommitError as EventCommitError, EventCommitter};
 use valori_storage::wal_writer::WalWriter;
-use valori_kernel::event::KernelEvent;
 
 /// The standalone durability backend. Exactly one is active per engine.
 pub enum Persistence {
@@ -30,18 +30,28 @@ impl Persistence {
     /// Concrete access for observability call sites (proof, timeline,
     /// receipts, replication streaming). `None` unless event-log backed.
     pub fn event_committer(&self) -> Option<&EventCommitter> {
-        match self { Persistence::EventLog(c) => Some(c), _ => None }
+        match self {
+            Persistence::EventLog(c) => Some(c),
+            _ => None,
+        }
     }
 
     pub fn event_committer_mut(&mut self) -> Option<&mut EventCommitter> {
-        match self { Persistence::EventLog(c) => Some(c), _ => None }
+        match self {
+            Persistence::EventLog(c) => Some(c),
+            _ => None,
+        }
     }
 
     /// Durably log one namespace-scoped event.
     ///
     /// Does NOT apply the event to engine state — the caller
     /// (`Engine::commit_and_apply_ns`) does that exactly once afterwards.
-    pub fn log_event_ns(&mut self, event: &KernelEvent, namespace_id: u16) -> Result<(), CommitError> {
+    pub fn log_event_ns(
+        &mut self,
+        event: &KernelEvent,
+        namespace_id: u16,
+    ) -> Result<(), CommitError> {
         match self {
             Persistence::EventLog(c) => c
                 .commit_event_ns(event.clone(), namespace_id)
@@ -56,7 +66,11 @@ impl Persistence {
 
     /// Durably log a batch of namespace-scoped events atomically (event log)
     /// or sequentially (WAL).
-    pub fn log_batch_ns(&mut self, events: &[KernelEvent], namespace_id: u16) -> Result<(), CommitError> {
+    pub fn log_batch_ns(
+        &mut self,
+        events: &[KernelEvent],
+        namespace_id: u16,
+    ) -> Result<(), CommitError> {
         match self {
             Persistence::EventLog(c) => c
                 .commit_batch_ns(events.to_vec(), namespace_id)
@@ -76,7 +90,9 @@ impl Persistence {
 
 fn translate(e: EventCommitError) -> CommitError {
     match e {
-        EventCommitError::LiveApply(ke) | EventCommitError::ShadowApply(ke) => CommitError::Apply(ke),
+        EventCommitError::LiveApply(ke) | EventCommitError::ShadowApply(ke) => {
+            CommitError::Apply(ke)
+        }
         EventCommitError::EventLog(_) | EventCommitError::VerificationFailed => {
             CommitError::Io(e.to_string())
         }

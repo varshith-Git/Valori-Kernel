@@ -1,15 +1,18 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Integration tests for Phase 3.6 — Crypto-shredding (GDPR erasure).
 
-use axum::{body::Body, http::{Request, StatusCode}};
-use tower::ServiceExt;
-use serde_json::{json, Value};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use base64::Engine as _;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 
-use valori_node::{config::NodeConfig, engine::Engine, server::build_router};
 use valori_node::EngineFromNodeConfig;
+use valori_node::{config::NodeConfig, engine::Engine, server::build_router};
 
 fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -33,7 +36,9 @@ async fn post_json(app: &axum::Router, path: &str, body: Value) -> (StatusCode, 
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
 }
@@ -46,7 +51,9 @@ async fn delete_json(app: &axum::Router, path: &str) -> (StatusCode, Value) {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
 }
@@ -59,7 +66,9 @@ async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, Value) {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
 }
@@ -77,12 +86,27 @@ async fn test_insert_encrypted_returns_key_id() {
     prime_dim(&app).await;
 
     let payload = base64::engine::general_purpose::STANDARD.encode(b"PII: john.doe@example.com");
-    let (status, body) = post_json(&app, "/v1/records/encrypted", json!({ "payload": payload, "tag": 1 })).await;
+    let (status, body) = post_json(
+        &app,
+        "/v1/records/encrypted",
+        json!({ "payload": payload, "tag": 1 }),
+    )
+    .await;
 
-    assert_eq!(status, StatusCode::CREATED, "encrypted insert should return 201, got: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "encrypted insert should return 201, got: {body}"
+    );
     assert!(body["id"].as_u64().is_some(), "response must contain id");
-    let key_id = body["key_id"].as_str().expect("response must contain key_id");
-    assert_eq!(key_id.len(), 32, "key_id must be 32 hex chars, got: {key_id}");
+    let key_id = body["key_id"]
+        .as_str()
+        .expect("response must contain key_id");
+    assert_eq!(
+        key_id.len(),
+        32,
+        "key_id must be 32 hex chars, got: {key_id}"
+    );
 }
 
 #[tokio::test]
@@ -91,14 +115,22 @@ async fn test_shred_key_makes_status_return_false() {
     prime_dim(&app).await;
 
     let payload = base64::engine::general_purpose::STANDARD.encode(b"secret data");
-    let (ins_status, ins_body) = post_json(&app, "/v1/records/encrypted", json!({ "payload": payload })).await;
-    assert_eq!(ins_status, StatusCode::CREATED, "insert_encrypted: {ins_body}");
+    let (ins_status, ins_body) =
+        post_json(&app, "/v1/records/encrypted", json!({ "payload": payload })).await;
+    assert_eq!(
+        ins_status,
+        StatusCode::CREATED,
+        "insert_encrypted: {ins_body}"
+    );
     let key_id = ins_body["key_id"].as_str().unwrap().to_owned();
 
     // Key should exist before shredding
     let (s, b) = get_json(&app, &format!("/v1/crypto/status/{key_id}")).await;
     assert_eq!(s, StatusCode::OK);
-    assert!(b["exists"].as_bool().unwrap_or(false), "key should exist before shred");
+    assert!(
+        b["exists"].as_bool().unwrap_or(false),
+        "key should exist before shred"
+    );
 
     // Shred the key
     let (shred_status, shred_body) = delete_json(&app, &format!("/v1/crypto/shred/{key_id}")).await;
@@ -108,7 +140,10 @@ async fn test_shred_key_makes_status_return_false() {
     // Key should no longer exist
     let (s2, b2) = get_json(&app, &format!("/v1/crypto/status/{key_id}")).await;
     assert_eq!(s2, StatusCode::OK);
-    assert!(!b2["exists"].as_bool().unwrap_or(true), "key should be gone after shred, got: {b2}");
+    assert!(
+        !b2["exists"].as_bool().unwrap_or(true),
+        "key should be gone after shred, got: {b2}"
+    );
 }
 
 #[tokio::test]
@@ -116,7 +151,8 @@ async fn test_encrypted_record_not_in_search_results() {
     let app = make_app();
 
     // Insert a searchable record at [1,0,0,0]
-    let (_, plain_body) = post_json(&app, "/records", json!({"values": [1.0, 0.0, 0.0, 0.0]})).await;
+    let (_, plain_body) =
+        post_json(&app, "/records", json!({"values": [1.0, 0.0, 0.0, 0.0]})).await;
     let plain_id = plain_body["id"].as_u64().unwrap_or(99);
 
     // Insert an encrypted record (stored as zero vector internally)
@@ -124,12 +160,20 @@ async fn test_encrypted_record_not_in_search_results() {
     post_json(&app, "/v1/records/encrypted", json!({ "payload": payload })).await;
 
     // Search with k=5 — zero vector (encrypted record) must not rank #1
-    let (s, results) = post_json(&app, "/search", json!({"query": [1.0, 0.0, 0.0, 0.0], "k": 5})).await;
+    let (s, results) = post_json(
+        &app,
+        "/search",
+        json!({"query": [1.0, 0.0, 0.0, 0.0], "k": 5}),
+    )
+    .await;
     assert_eq!(s, StatusCode::OK);
-    let hits = results["results"].as_array().expect("results must be array");
+    let hits = results["results"]
+        .as_array()
+        .expect("results must be array");
     assert!(!hits.is_empty(), "search returned no hits");
     assert_eq!(
-        hits[0]["id"].as_u64().unwrap_or(99), plain_id,
+        hits[0]["id"].as_u64().unwrap_or(99),
+        plain_id,
         "non-encrypted record must rank first, got: {hits:?}"
     );
 }
@@ -149,11 +193,21 @@ async fn test_encrypt_two_records_under_same_key_then_shred() {
     let key_id = "aabbccddeeff00112233445566778899";
     let payload = base64::engine::general_purpose::STANDARD.encode(b"grouped PII");
 
-    let (r1_s, r1_b) = post_json(&app, "/v1/records/encrypted", json!({ "payload": payload, "key_id": key_id })).await;
+    let (r1_s, r1_b) = post_json(
+        &app,
+        "/v1/records/encrypted",
+        json!({ "payload": payload, "key_id": key_id }),
+    )
+    .await;
     assert_eq!(r1_s, StatusCode::CREATED, "r1: {r1_b}");
     assert_eq!(r1_b["key_id"].as_str().unwrap(), key_id);
 
-    let (r2_s, r2_b) = post_json(&app, "/v1/records/encrypted", json!({ "payload": payload, "key_id": key_id })).await;
+    let (r2_s, r2_b) = post_json(
+        &app,
+        "/v1/records/encrypted",
+        json!({ "payload": payload, "key_id": key_id }),
+    )
+    .await;
     assert_eq!(r2_s, StatusCode::CREATED, "r2: {r2_b}");
 
     // Shred the shared key

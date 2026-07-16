@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! `VoyageProvider` — embeds via Voyage AI.
 
-use crate::error::{ModelError, ModelResult};
 use super::ModelProvider;
+use crate::error::{ModelError, ModelResult};
 
 const VOYAGE_BASE: &str = "https://api.voyageai.com/v1";
 
@@ -15,19 +15,30 @@ pub struct VoyageProvider {
 
 impl VoyageProvider {
     pub fn new(model: impl Into<String>, api_key: impl Into<String>, dim: usize) -> Self {
-        Self { model: model.into(), api_key: api_key.into(), dim, client: reqwest::Client::new() }
+        Self {
+            model: model.into(),
+            api_key: api_key.into(),
+            dim,
+            client: reqwest::Client::new(),
+        }
     }
-
 }
 
 #[async_trait::async_trait]
 impl ModelProvider for VoyageProvider {
-    fn kind(&self) -> &'static str { "voyage" }
-    fn model_name(&self) -> &str { &self.model }
-    fn dim(&self) -> usize { self.dim }
+    fn kind(&self) -> &'static str {
+        "voyage"
+    }
+    fn model_name(&self) -> &str {
+        &self.model
+    }
+    fn dim(&self) -> usize {
+        self.dim
+    }
 
     async fn embed(&self, texts: &[String]) -> ModelResult<Vec<Vec<f32>>> {
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{VOYAGE_BASE}/embeddings"))
             .bearer_auth(&self.api_key)
             .json(&serde_json::json!({ "model": self.model, "input": texts }))
@@ -41,17 +52,24 @@ impl ModelProvider for VoyageProvider {
             return Err(ModelError::Provider(format!("voyage HTTP {code}: {body}")));
         }
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| ModelError::Provider(format!("voyage parse: {e}")))?;
-        let data = body["data"].as_array()
+        let data = body["data"]
+            .as_array()
             .ok_or_else(|| ModelError::Provider("voyage: missing 'data'".into()))?;
         data.iter()
             .map(|item| {
-                item["embedding"].as_array()
+                item["embedding"]
+                    .as_array()
                     .ok_or_else(|| ModelError::Provider("voyage: missing 'embedding'".into()))?
                     .iter()
-                    .map(|x| x.as_f64().map(|f| f as f32)
-                        .ok_or_else(|| ModelError::Provider("non-float".into())))
+                    .map(|x| {
+                        x.as_f64()
+                            .map(|f| f as f32)
+                            .ok_or_else(|| ModelError::Provider("non-float".into()))
+                    })
                     .collect::<ModelResult<Vec<f32>>>()
             })
             .collect()

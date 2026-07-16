@@ -29,8 +29,8 @@ use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
-use valori_storage::events::{EventLogWriter, recover_from_event_log};
 use valori_storage::events::event_log::LogEntry;
+use valori_storage::events::{recover_from_event_log, EventLogWriter};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -45,10 +45,10 @@ fn hex32(b: &[u8; 32]) -> String {
 /// Parsed fixture manifest.
 #[derive(Debug)]
 struct Manifest {
-    event_count:  u64,
+    event_count: u64,
     record_count: usize,
-    chain_head:   String,
-    state_hash:   String,
+    chain_head: String,
+    state_hash: String,
 }
 
 fn load_manifest(name: &str) -> Manifest {
@@ -56,10 +56,10 @@ fn load_manifest(name: &str) -> Manifest {
         .unwrap_or_else(|_| panic!("manifest {name} must exist"));
     let doc: toml::Value = raw.parse().expect("manifest must be valid TOML");
     Manifest {
-        event_count:  doc["event_count"].as_integer().expect("event_count") as u64,
+        event_count: doc["event_count"].as_integer().expect("event_count") as u64,
         record_count: doc["record_count"].as_integer().expect("record_count") as usize,
-        chain_head:   doc["chain_head"].as_str().expect("chain_head").to_owned(),
-        state_hash:   doc["state_hash"].as_str().expect("state_hash").to_owned(),
+        chain_head: doc["chain_head"].as_str().expect("chain_head").to_owned(),
+        state_hash: doc["state_hash"].as_str().expect("state_hash").to_owned(),
     }
 }
 
@@ -69,15 +69,25 @@ fn load_manifest(name: &str) -> Manifest {
 fn write_fixture_inserts(path: &Path) -> [u8; 32] {
     let mut w = EventLogWriter::open(path, Some(4)).expect("open event log");
     for i in 0u32..24 {
-        let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+            .collect();
         let event = KernelEvent::InsertRecord {
             id: RecordId(i),
             vector: FxpVector { data },
-            metadata: if i % 4 == 0 { Some(format!("{{\"n\":{i}}}").into_bytes()) } else { None },
+            metadata: if i % 4 == 0 {
+                Some(format!("{{\"n\":{i}}}").into_bytes())
+            } else {
+                None
+            },
             tag: i as u64 % 5,
         };
         let ns = 0u16;
-        w.append(&LogEntry::EventNs { event, namespace_id: ns }).expect("append");
+        w.append(&LogEntry::EventNs {
+            event,
+            namespace_id: ns,
+        })
+        .expect("append");
     }
     w.flush().expect("flush");
     *w.chain_head()
@@ -88,7 +98,9 @@ fn write_fixture_namespace(path: &Path) -> [u8; 32] {
     let mut w = EventLogWriter::open(path, Some(4)).expect("open event log");
     // ns 0: 12 records
     for i in 0u32..12 {
-        let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+            .collect();
         w.append(&LogEntry::EventNs {
             event: KernelEvent::InsertRecord {
                 id: RecordId(i),
@@ -97,11 +109,14 @@ fn write_fixture_namespace(path: &Path) -> [u8; 32] {
                 tag: 0,
             },
             namespace_id: 0,
-        }).expect("append ns0");
+        })
+        .expect("append ns0");
     }
     // ns 1: 8 records
     for i in 12u32..20 {
-        let data = (0..4).map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000)).collect();
+        let data = (0..4)
+            .map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000))
+            .collect();
         w.append(&LogEntry::EventNs {
             event: KernelEvent::InsertRecord {
                 id: RecordId(i),
@@ -110,7 +125,8 @@ fn write_fixture_namespace(path: &Path) -> [u8; 32] {
                 tag: 1,
             },
             namespace_id: 1,
-        }).expect("append ns1");
+        })
+        .expect("append ns1");
     }
     w.flush().expect("flush");
     *w.chain_head()
@@ -127,22 +143,31 @@ fn event_log_inserts_verifies_forever() {
     let (state, _journal, event_count) =
         recover_from_event_log(&log_path).expect("fixture must recover");
 
-    assert_eq!(event_count, m.event_count,
-        "event_count changed — log was truncated or entries were dropped");
-    assert_eq!(state.record_count(), m.record_count,
-        "record_count changed — replay logic or soft-delete handling changed");
     assert_eq!(
-        hex32(&hash_state_blake3(&state)), m.state_hash,
+        event_count, m.event_count,
+        "event_count changed — log was truncated or entries were dropped"
+    );
+    assert_eq!(
+        state.record_count(),
+        m.record_count,
+        "record_count changed — replay logic or soft-delete handling changed"
+    );
+    assert_eq!(
+        hex32(&hash_state_blake3(&state)),
+        m.state_hash,
         "state_hash changed — hash domain or apply_event_ns semantics changed"
     );
 
     // Path 2: end-to-end audit (same path as valori-verify binary / FFI)
     let report = valori_verify::verify_log_file(&log_path, Some(&m.state_hash))
         .expect("verify_log_file must succeed");
-    assert_eq!(report["verdict"], "verified",
-        "verify_log_file verdict not 'verified': {report}");
     assert_eq!(
-        report["replay"]["chain_head"].as_str().unwrap(), m.chain_head,
+        report["verdict"], "verified",
+        "verify_log_file verdict not 'verified': {report}"
+    );
+    assert_eq!(
+        report["replay"]["chain_head"].as_str().unwrap(),
+        m.chain_head,
         "chain_head changed — BLAKE3 chain formula or wire encoding changed"
     );
 }
@@ -155,21 +180,23 @@ fn event_log_namespace_verifies_forever() {
     let (state, _journal, event_count) =
         recover_from_event_log(&log_path).expect("fixture must recover");
 
-    assert_eq!(event_count, m.event_count,
-        "event_count changed");
-    assert_eq!(state.record_count(), m.record_count,
-        "record_count changed");
+    assert_eq!(event_count, m.event_count, "event_count changed");
+    assert_eq!(state.record_count(), m.record_count, "record_count changed");
     assert_eq!(
-        hex32(&hash_state_blake3(&state)), m.state_hash,
+        hex32(&hash_state_blake3(&state)),
+        m.state_hash,
         "state_hash changed"
     );
 
     let report = valori_verify::verify_log_file(&log_path, Some(&m.state_hash))
         .expect("verify_log_file must succeed");
-    assert_eq!(report["verdict"], "verified",
-        "verify_log_file verdict not 'verified': {report}");
     assert_eq!(
-        report["replay"]["chain_head"].as_str().unwrap(), m.chain_head,
+        report["verdict"], "verified",
+        "verify_log_file verdict not 'verified': {report}"
+    );
+    assert_eq!(
+        report["replay"]["chain_head"].as_str().unwrap(),
+        m.chain_head,
         "chain_head changed"
     );
 }
@@ -180,7 +207,10 @@ fn event_log_namespace_verifies_forever() {
 fn bad_magic_returns_err_not_panic() {
     let path = fixture_path("bad_magic.log");
     let result = valori_verify::verify_log_file(&path, None);
-    assert!(result.is_err(), "bad magic must return Err, not Ok or panic");
+    assert!(
+        result.is_err(),
+        "bad magic must return Err, not Ok or panic"
+    );
 }
 
 #[test]
@@ -202,9 +232,15 @@ fn chain_tampered_log_is_detected() {
     let report = valori_verify::verify_log_file(&path, None)
         .expect("tampered log must produce a report, not Err");
     let verdict = report["verdict"].as_str().unwrap_or("(missing)");
-    assert_ne!(verdict, "verified", "tampered log must not verify: {report}");
+    assert_ne!(
+        verdict, "verified",
+        "tampered log must not verify: {report}"
+    );
     assert!(
-        matches!(verdict, "tampered_chain" | "tampered_structural" | "tampered_semantic" | "tampered_content"),
+        matches!(
+            verdict,
+            "tampered_chain" | "tampered_structural" | "tampered_semantic" | "tampered_content"
+        ),
         "verdict must be a known tampered variant: {report}"
     );
 }
@@ -240,8 +276,11 @@ fn generate_event_log_fixtures() {
             hex32(&chain_head),
         );
         fs::write(dir.join("event_log_inserts.toml"), &manifest).unwrap();
-        println!("event_log_inserts: {count} events, {} records, chain_head {}, state_hash {state_hash}",
-            state.record_count(), hex32(&chain_head));
+        println!(
+            "event_log_inserts: {count} events, {} records, chain_head {}, state_hash {state_hash}",
+            state.record_count(),
+            hex32(&chain_head)
+        );
     }
 
     // ── Fixture 2: two namespaces ─────────────────────────────────────────────
@@ -282,7 +321,11 @@ fn generate_event_log_fixtures() {
 
     // truncated: first 8 bytes only (header magic + partial version field)
     {
-        fs::write(dir.join("truncated.log"), &good_bytes[..8.min(good_bytes.len())]).unwrap();
+        fs::write(
+            dir.join("truncated.log"),
+            &good_bytes[..8.min(good_bytes.len())],
+        )
+        .unwrap();
         println!("truncated.log: 8 bytes");
     }
 
@@ -293,7 +336,10 @@ fn generate_event_log_fixtures() {
             bytes[200] ^= 0x01;
         }
         fs::write(dir.join("chain_tampered.log"), &bytes).unwrap();
-        println!("chain_tampered.log: {} bytes (byte 200 flipped)", bytes.len());
+        println!(
+            "chain_tampered.log: {} bytes (byte 200 flipped)",
+            bytes.len()
+        );
     }
 
     println!("\nAll fixtures written to {:?}", dir);

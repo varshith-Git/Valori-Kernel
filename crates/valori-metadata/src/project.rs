@@ -23,10 +23,10 @@ impl std::fmt::Display for IndexKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             IndexKind::Brute => write!(f, "brute"),
-            IndexKind::Hnsw  => write!(f, "hnsw"),
-            IndexKind::Ivf   => write!(f, "ivf"),
-            IndexKind::Bq    => write!(f, "bq"),
-            IndexKind::Auto  => write!(f, "auto"),
+            IndexKind::Hnsw => write!(f, "hnsw"),
+            IndexKind::Ivf => write!(f, "ivf"),
+            IndexKind::Bq => write!(f, "bq"),
+            IndexKind::Auto => write!(f, "auto"),
         }
     }
 }
@@ -36,10 +36,10 @@ impl std::str::FromStr for IndexKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "brute" | "bruteforce" => Ok(IndexKind::Brute),
-            "hnsw"                 => Ok(IndexKind::Hnsw),
-            "ivf"                  => Ok(IndexKind::Ivf),
-            "bq"                   => Ok(IndexKind::Bq),
-            "auto" | "mstg"        => Ok(IndexKind::Auto),
+            "hnsw" => Ok(IndexKind::Hnsw),
+            "ivf" => Ok(IndexKind::Ivf),
+            "bq" => Ok(IndexKind::Bq),
+            "auto" | "mstg" => Ok(IndexKind::Auto),
             other => Err(format!("Unknown index kind: {}", other)),
         }
     }

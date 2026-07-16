@@ -1,2 +1,2 @@
-pub mod sift_batch;
 pub mod ivecs;
+pub mod sift_batch;

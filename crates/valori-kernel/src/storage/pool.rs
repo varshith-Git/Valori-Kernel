@@ -1,10 +1,10 @@
 //! Static Record Pool.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::error::{KernelError, Result};
 use crate::storage::record::{Record, FLAG_ENCRYPTED, FLAG_SHREDDED, FLAG_SOFT_DELETED};
 use crate::types::id::RecordId;
 use crate::types::vector::FxpVector;
-use crate::error::{Result, KernelError};
 
 #[derive(Clone)]
 pub struct RecordPool {
@@ -32,9 +32,16 @@ impl RecordPool {
     /// Returns the RecordId (which corresponds to the index).
     /// `namespace_id` is stored on the record; linked-list pointers are managed
     /// by `KernelState.apply()` after the pool returns the allocated ID.
-    pub fn insert(&mut self, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64, namespace_id: u16) -> Result<RecordId> {
+    pub fn insert(
+        &mut self,
+        vector: FxpVector,
+        metadata: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
+        namespace_id: u16,
+    ) -> Result<RecordId> {
         let id = RecordId(self.records.len() as u32);
-        self.records.push(Some(Record::new(id, vector, metadata, tag, namespace_id)));
+        self.records
+            .push(Some(Record::new(id, vector, metadata, tag, namespace_id)));
         Ok(id)
     }
 
@@ -42,9 +49,9 @@ impl RecordPool {
     pub fn delete(&mut self, id: RecordId) -> Result<()> {
         let idx = id.0 as usize;
         if idx >= self.records.len() {
-            return Err(KernelError::NotFound); 
+            return Err(KernelError::NotFound);
         }
-        
+
         if self.records[idx].is_some() {
             self.records[idx] = None;
             Ok(())
@@ -54,10 +61,17 @@ impl RecordPool {
     }
 
     /// Updates the metadata bytes on an existing record in-place.
-    pub fn update_metadata(&mut self, id: RecordId, metadata: Option<alloc::vec::Vec<u8>>) -> Result<()> {
+    pub fn update_metadata(
+        &mut self,
+        id: RecordId,
+        metadata: Option<alloc::vec::Vec<u8>>,
+    ) -> Result<()> {
         let idx = id.0 as usize;
         match self.records.get_mut(idx).and_then(|s| s.as_mut()) {
-            Some(rec) => { rec.metadata = metadata; Ok(()) }
+            Some(rec) => {
+                rec.metadata = metadata;
+                Ok(())
+            }
             None => Err(KernelError::NotFound),
         }
     }
@@ -93,7 +107,10 @@ impl RecordPool {
     pub fn mark_encrypted(&mut self, id: RecordId) -> crate::error::Result<()> {
         let idx = id.0 as usize;
         match self.records.get_mut(idx).and_then(|o| o.as_mut()) {
-            Some(r) => { r.flags |= FLAG_ENCRYPTED; Ok(()) }
+            Some(r) => {
+                r.flags |= FLAG_ENCRYPTED;
+                Ok(())
+            }
             None => Err(crate::error::KernelError::NotFound),
         }
     }

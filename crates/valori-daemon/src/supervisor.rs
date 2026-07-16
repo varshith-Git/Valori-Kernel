@@ -51,7 +51,9 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new() -> Self {
-        Self { nodes: HashMap::new() }
+        Self {
+            nodes: HashMap::new(),
+        }
     }
 
     /// Record that a node was started (operator action) with its policy.
@@ -75,7 +77,9 @@ impl Supervisor {
 
     /// Record a detected crash. Returns whether a restart should be scheduled.
     pub fn on_crash(&mut self, name: &str, reason: String) -> bool {
-        let Some(node) = self.nodes.get_mut(name) else { return false };
+        let Some(node) = self.nodes.get_mut(name) else {
+            return false;
+        };
         node.state = RuntimeState::Failed;
         node.last_crash = Some(reason);
         if node.policy.should_restart(false) {

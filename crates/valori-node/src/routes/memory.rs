@@ -70,23 +70,43 @@ pub trait MemoryOps: Send + Sync {
     /// Ensure read consistency for the given namespace before performing a search.
     /// In standalone mode, this is a no-op (always Ok(())).
     /// In cluster mode, if `consistency` != Some("local"), invokes `ensure_read_consistency`.
-    async fn ensure_read_consistency(&self, ns: u16, consistency: Option<&str>) -> Result<(), Response>;
+    async fn ensure_read_consistency(
+        &self,
+        ns: u16,
+        consistency: Option<&str>,
+    ) -> Result<(), Response>;
 
     /// Commit memory upsert vector: inserts vector record, creates doc/chunk nodes,
     /// links them with ParentOf edge, and sets optional metadata.
-    async fn upsert_vector(&self, ns: u16, req: &MemoryUpsertVectorRequest) -> Result<UpsertedMemory, Response>;
+    async fn upsert_vector(
+        &self,
+        ns: u16,
+        req: &MemoryUpsertVectorRequest,
+    ) -> Result<UpsertedMemory, Response>;
 
     /// Perform vector search with optional recency decay and k candidates.
     /// Returns matching hits with metadata attached.
-    async fn search_vector(&self, ns: u16, req: &MemorySearchVectorRequest) -> Result<Vec<MemorySearchHit>, Response>;
+    async fn search_vector(
+        &self,
+        ns: u16,
+        req: &MemorySearchVectorRequest,
+    ) -> Result<Vec<MemorySearchHit>, Response>;
 
     /// Consolidate memory: soft-deletes old record, inserts new vector record,
     /// creates nodes, links with Supersedes edge, and sets optional metadata.
-    async fn consolidate(&self, ns: u16, req: &MemoryConsolidateRequest) -> Result<ConsolidatedMemory, Response>;
+    async fn consolidate(
+        &self,
+        ns: u16,
+        req: &MemoryConsolidateRequest,
+    ) -> Result<ConsolidatedMemory, Response>;
 
     /// Contradict memory: checks similarity between record A and B.
     /// If similarity >= threshold, commits a Contradicts edge between node A and B.
-    async fn contradict(&self, ns: u16, req: &MemoryContradictRequest) -> Result<ContradictedMemory, Response>;
+    async fn contradict(
+        &self,
+        ns: u16,
+        req: &MemoryContradictRequest,
+    ) -> Result<ContradictedMemory, Response>;
 }
 
 async fn resolve<O: MemoryOps>(ops: &O, collection: Option<&str>) -> Result<u16, Response> {
@@ -143,7 +163,8 @@ pub async fn memory_search<O: MemoryOps>(
     req: MemorySearchVectorRequest,
 ) -> Result<Json<MemorySearchResponse>, Response> {
     let ns = resolve(ops, req.collection.as_deref()).await?;
-    ops.ensure_read_consistency(ns, req.consistency.as_deref()).await?;
+    ops.ensure_read_consistency(ns, req.consistency.as_deref())
+        .await?;
     let results = ops.search_vector(ns, &req).await?;
     Ok(Json(MemorySearchResponse { results }))
 }

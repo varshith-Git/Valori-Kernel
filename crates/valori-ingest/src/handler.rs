@@ -4,9 +4,9 @@
 //! Chunking only — no embedding, no engine state. Compiles into both the
 //! standalone (`server.rs`) and cluster (`cluster_server.rs`) routers unchanged.
 
-use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::chunker::{chunk_document, IngestChunk, MAX_INGEST_TEXT_BYTES};
@@ -47,16 +47,17 @@ pub struct IngestDocumentResponse {
 /// `POST /v1/ingest/document` — chunk a document server-side, no embedding.
 ///
 /// Stateless: no `State<>` parameter — compiles into both routers unchanged.
-pub async fn ingest_document(
-    Json(payload): Json<IngestDocumentRequest>,
-) -> Response {
+pub async fn ingest_document(Json(payload): Json<IngestDocumentRequest>) -> Response {
     if payload.text.len() > MAX_INGEST_TEXT_BYTES {
         let body = serde_json::json!({
             "error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")
         });
         return (StatusCode::PAYLOAD_TOO_LARGE, Json(body)).into_response();
     }
-    let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
+    let collection = payload
+        .collection
+        .clone()
+        .unwrap_or_else(|| "default".into());
     let strategy_hint = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size = payload.chunk_size.unwrap_or(1000);
     let chunk_overlap = payload.chunk_overlap.unwrap_or(200);

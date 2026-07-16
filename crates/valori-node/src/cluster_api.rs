@@ -64,7 +64,11 @@ pub fn cluster_router(
         .route("/v1/cluster/add-node", post(add_node))
         .route("/v1/cluster/remove-node", post(remove_node))
         .route("/v1/cluster/snapshot", post(trigger_snapshot))
-        .with_state(ClusterApiState { raft, shards, audit })
+        .with_state(ClusterApiState {
+            raft,
+            shards,
+            audit,
+        })
 }
 
 /// Record an admin action in the chained audit log. Failures are logged,
@@ -271,7 +275,11 @@ async fn add_node(
 
     // Step 1: add as learner — it catches up on the log (or receives a
     // snapshot, Phase 2.7) without affecting quorum.
-    if let Err(e) = state.raft.add_learner(req.node_id, node.clone(), true).await {
+    if let Err(e) = state
+        .raft
+        .add_learner(req.node_id, node.clone(), true)
+        .await
+    {
         return leadership_error(e);
     }
 

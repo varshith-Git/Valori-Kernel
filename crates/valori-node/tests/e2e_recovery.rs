@@ -8,10 +8,10 @@
 //! All correctness is checked via `engine.get_proof().final_state_hash` — the
 //! BLAKE3 state hash that drives the deterministic proof system.
 
-use valori_node::config::{NodeConfig, IndexKind};
-use valori_node::EngineFromNodeConfig;
-use valori_node::engine::{Engine, RecoveryMode};
 use tempfile::tempdir;
+use valori_node::config::{IndexKind, NodeConfig};
+use valori_node::engine::{Engine, RecoveryMode};
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg(dir: &std::path::Path, dim: usize) -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -40,7 +40,11 @@ fn test_event_log_recovery_basic() {
     // ── Phase 1: create engine and insert records ──────────────────────────
     {
         let mut engine = Engine::new(&cfg);
-        assert_eq!(engine.try_recover(), RecoveryMode::Fresh, "should start fresh");
+        assert_eq!(
+            engine.try_recover(),
+            RecoveryMode::Fresh,
+            "should start fresh"
+        );
 
         for i in 0..n_inserted {
             let v: Vec<f32> = (0..4).map(|j| (i * 10 + j) as f32 * 0.01).collect();
@@ -65,8 +69,11 @@ fn test_event_log_recovery_basic() {
             mode
         );
 
-        assert_eq!(engine2.record_count(), n_inserted,
-            "record count must match after recovery");
+        assert_eq!(
+            engine2.record_count(),
+            n_inserted,
+            "record count must match after recovery"
+        );
 
         let post_recovery_hash = engine2.get_proof().final_state_hash;
         assert_eq!(
@@ -112,11 +119,17 @@ fn test_snapshot_fallback_recovery() {
         let mut engine2 = Engine::new(&cfg);
         let mode = engine2.try_recover();
 
-        assert_eq!(mode, RecoveryMode::Snapshot,
-            "should recover from snapshot when no event log");
+        assert_eq!(
+            mode,
+            RecoveryMode::Snapshot,
+            "should recover from snapshot when no event log"
+        );
         assert_eq!(engine2.record_count(), 20);
-        assert_eq!(pre_crash_hash, engine2.get_proof().final_state_hash,
-            "state hash must match after snapshot recovery");
+        assert_eq!(
+            pre_crash_hash,
+            engine2.get_proof().final_state_hash,
+            "state hash must match after snapshot recovery"
+        );
     }
 }
 
@@ -157,12 +170,19 @@ fn test_event_log_wins_over_snapshot() {
 
         assert!(
             matches!(mode, RecoveryMode::EventLog(30)),
-            "event log must win over snapshot; got {:?}", mode
+            "event log must win over snapshot; got {:?}",
+            mode
         );
-        assert_eq!(engine2.record_count(), 30,
-            "should have 30 records (10 post-snapshot events replayed)");
-        assert_eq!(hash_after_30, engine2.get_proof().final_state_hash,
-            "post-snapshot events must be in recovered state");
+        assert_eq!(
+            engine2.record_count(),
+            30,
+            "should have 30 records (10 post-snapshot events replayed)"
+        );
+        assert_eq!(
+            hash_after_30,
+            engine2.get_proof().final_state_hash,
+            "post-snapshot events must be in recovered state"
+        );
     }
 }
 
@@ -197,11 +217,18 @@ fn test_metadata_persists_through_event_log_recovery() {
         let mut engine = Engine::new(&cfg);
         engine.try_recover();
 
-        let rid = engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
+        let rid = engine
+            .insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
 
         let key = format!("record_{}", rid);
-        engine.metadata.set(key.clone(), serde_json::json!({ "label": "cat", "score": 0.95 }));
-        engine.flush_metadata().expect("flush_metadata must succeed");
+        engine.metadata.set(
+            key.clone(),
+            serde_json::json!({ "label": "cat", "score": 0.95 }),
+        );
+        engine
+            .flush_metadata()
+            .expect("flush_metadata must succeed");
         // Drop → event log flushed to disk, sidecar already written.
     }
 
@@ -212,15 +239,24 @@ fn test_metadata_persists_through_event_log_recovery() {
 
         assert!(
             matches!(mode, RecoveryMode::EventLog(1)),
-            "expected EventLog(1), got {:?}", mode
+            "expected EventLog(1), got {:?}",
+            mode
         );
 
-        let val = engine2.metadata.get("record_0")
+        let val = engine2
+            .metadata
+            .get("record_0")
             .expect("metadata must survive recovery");
-        assert_eq!(val["label"], serde_json::json!("cat"),
-            "label must round-trip through sidecar");
-        assert_eq!(val["score"], serde_json::json!(0.95),
-            "score must round-trip through sidecar");
+        assert_eq!(
+            val["label"],
+            serde_json::json!("cat"),
+            "label must round-trip through sidecar"
+        );
+        assert_eq!(
+            val["score"],
+            serde_json::json!(0.95),
+            "score must round-trip through sidecar"
+        );
     }
 }
 
@@ -243,11 +279,14 @@ fn test_collections_persist_through_event_log_recovery() {
         engine.try_recover();
 
         let id_a = engine.create_collection("proj--docs").expect("create docs");
-        let _id_b = engine.create_collection("proj--notes").expect("create notes");
+        let _id_b = engine
+            .create_collection("proj--notes")
+            .expect("create notes");
 
         // Put a record in one collection so the event log is non-empty and the
         // recovery path is EventLog (not Fresh).
-        engine.insert_record_from_f32_ns(&[1.0, 0.0, 0.0, 0.0], id_a)
+        engine
+            .insert_record_from_f32_ns(&[1.0, 0.0, 0.0, 0.0], id_a)
             .expect("insert into collection");
         // Drop → event log flushed; namespace sidecar already written.
     }
@@ -258,19 +297,31 @@ fn test_collections_persist_through_event_log_recovery() {
         let mode = engine2.try_recover();
         assert!(
             matches!(mode, RecoveryMode::EventLog(_)),
-            "expected EventLog recovery, got {:?}", mode
+            "expected EventLog recovery, got {:?}",
+            mode
         );
 
-        let names: Vec<String> = engine2.list_collections()
-            .into_iter().map(|(n, _)| n).collect();
-        assert!(names.contains(&"proj--docs".to_string()),
-            "collection 'proj--docs' must survive restart, got {:?}", names);
-        assert!(names.contains(&"proj--notes".to_string()),
-            "collection 'proj--notes' must survive restart, got {:?}", names);
+        let names: Vec<String> = engine2
+            .list_collections()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(
+            names.contains(&"proj--docs".to_string()),
+            "collection 'proj--docs' must survive restart, got {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"proj--notes".to_string()),
+            "collection 'proj--notes' must survive restart, got {:?}",
+            names
+        );
 
         // Names must still resolve to the same ids (so existing records map back).
-        assert!(engine2.namespaces.resolve(Some("proj--docs")).is_some(),
-            "'proj--docs' must resolve after recovery");
+        assert!(
+            engine2.namespaces.resolve(Some("proj--docs")).is_some(),
+            "'proj--docs' must resolve after recovery"
+        );
     }
 }
 
@@ -297,7 +348,11 @@ fn test_wal_recovery_basic() {
 
     {
         let mut engine = Engine::new(&cfg);
-        assert_eq!(engine.try_recover(), RecoveryMode::Fresh, "should start fresh");
+        assert_eq!(
+            engine.try_recover(),
+            RecoveryMode::Fresh,
+            "should start fresh"
+        );
 
         for i in 0..n_inserted {
             let v: Vec<f32> = (0..4).map(|j| (i * 10 + j) as f32 * 0.01).collect();
@@ -316,7 +371,11 @@ fn test_wal_recovery_basic() {
             matches!(mode, RecoveryMode::Wal(n) if n == n_inserted),
             "expected Wal({n_inserted}) recovery, got {mode:?}"
         );
-        assert_eq!(engine2.record_count(), n_inserted, "record count must match after WAL recovery");
+        assert_eq!(
+            engine2.record_count(),
+            n_inserted,
+            "record count must match after WAL recovery"
+        );
         assert_eq!(
             pre_crash_hash,
             engine2.get_proof().final_state_hash,
@@ -326,7 +385,10 @@ fn test_wal_recovery_basic() {
         // Search index must have been rebuilt too (WAL replay bypasses the
         // normal insert path's incremental index update).
         let hits = engine2.search_l2(&[0.0, 0.01, 0.02, 0.03], 1).unwrap();
-        assert!(!hits.is_empty(), "search index must be rebuilt after WAL recovery");
+        assert!(
+            !hits.is_empty(),
+            "search index must be rebuilt after WAL recovery"
+        );
     }
 }
 
@@ -397,19 +459,35 @@ fn test_search_index_rebuilt_after_recovery() {
     {
         let mut engine = Engine::new(&cfg);
         engine.try_recover();
-        engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).unwrap();
-        engine.insert_record_from_f32(&[0.0, 1.0, 0.0, 0.0]).unwrap();
-        engine.insert_record_from_f32(&[0.0, 0.0, 1.0, 0.0]).unwrap();
+        engine
+            .insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+        engine
+            .insert_record_from_f32(&[0.0, 1.0, 0.0, 0.0])
+            .unwrap();
+        engine
+            .insert_record_from_f32(&[0.0, 0.0, 1.0, 0.0])
+            .unwrap();
     }
 
     // Phase 2: recover and search
     {
         let mut engine2 = Engine::new(&cfg);
         let mode = engine2.try_recover();
-        assert!(matches!(mode, RecoveryMode::EventLog(3)), "expected EventLog(3), got {:?}", mode);
+        assert!(
+            matches!(mode, RecoveryMode::EventLog(3)),
+            "expected EventLog(3), got {:?}",
+            mode
+        );
 
         let hits = engine2.search_l2(&[1.0, 0.0, 0.0, 0.0], 1).unwrap();
-        assert!(!hits.is_empty(), "search index must be rebuilt after recovery");
-        assert_eq!(hits[0].0, 0, "nearest neighbor of [1,0,0,0] must be record 0");
+        assert!(
+            !hits.is_empty(),
+            "search index must be rebuilt after recovery"
+        );
+        assert_eq!(
+            hits[0].0, 0,
+            "nearest neighbor of [1,0,0,0] must be record 0"
+        );
     }
 }

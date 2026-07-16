@@ -148,13 +148,27 @@ async fn blake3_chain_consistent_across_partition_and_heal() {
 
     for sm in &sms {
         let count = sm.with_state(|s| s.record_count()).await;
-        assert_eq!(count, 6, "all 6 records must be present on every replica after heal");
+        assert_eq!(
+            count, 6,
+            "all 6 records must be present on every replica after heal"
+        );
     }
 
     let final_hash = sms[0].state_hash().await;
-    assert_eq!(sms[1].state_hash().await, final_hash, "node 2 BLAKE3 hash must match node 1");
-    assert_eq!(sms[2].state_hash().await, final_hash, "node 3 BLAKE3 hash must match node 1");
-    assert_ne!(final_hash, pre_partition_hash, "hash must have advanced from the 3 new writes");
+    assert_eq!(
+        sms[1].state_hash().await,
+        final_hash,
+        "node 2 BLAKE3 hash must match node 1"
+    );
+    assert_eq!(
+        sms[2].state_hash().await,
+        final_hash,
+        "node 3 BLAKE3 hash must match node 1"
+    );
+    assert_ne!(
+        final_hash, pre_partition_hash,
+        "hash must have advanced from the 3 new writes"
+    );
     assert_ne!(final_hash, [0u8; 32]);
 }
 
@@ -207,11 +221,15 @@ async fn isolated_node_hash_frozen_then_converges() {
         assert_eq!(
             sm.with_state(|s| s.record_count()).await,
             5,
-            "node {} must have all 5 records", i + 1
+            "node {} must have all 5 records",
+            i + 1
         );
     }
     let h0 = sms[0].state_hash().await;
     assert_eq!(sms[1].state_hash().await, h0);
     assert_eq!(sms[2].state_hash().await, h0);
-    assert_ne!(h0, frozen_hash, "hash must have advanced after the 3 new writes");
+    assert_ne!(
+        h0, frozen_hash,
+        "hash must have advanced after the 3 new writes"
+    );
 }

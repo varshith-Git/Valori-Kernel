@@ -52,7 +52,11 @@ async fn shard0_partitioned_shard1_unaffected() {
 
     // Shard 1 is unpartitioned — writes must succeed.
     for i in 0..5i32 {
-        insert_shard_vector(&shards[1][s1_leader_idx].raft, v(i * 100, i * 100 + 1, i * 100 + 2)).await;
+        insert_shard_vector(
+            &shards[1][s1_leader_idx].raft,
+            v(i * 100, i * 100 + 1, i * 100 + 2),
+        )
+        .await;
     }
     wait_for_shard_convergence(&shards[1]).await;
 
@@ -62,13 +66,19 @@ async fn shard0_partitioned_shard1_unaffected() {
 
     for pair in &shards[1] {
         let count = pair.sm.with_state(|s| s.record_count()).await;
-        assert_eq!(count, 6, "shard 1: all 6 records (1 pre + 5 during partition)");
+        assert_eq!(
+            count, 6,
+            "shard 1: all 6 records (1 pre + 5 during partition)"
+        );
     }
 
     // Shard 0's isolated leader should still be frozen at pre-partition state.
     let isolated_idx = (s0_leader_id - 1) as usize;
     let s0_isolated_hash = shards[0][isolated_idx].sm.state_hash().await;
-    assert_eq!(s0_isolated_hash, s0_pre_hash, "shard 0 isolated node must be frozen");
+    assert_eq!(
+        s0_isolated_hash, s0_pre_hash,
+        "shard 0 isolated node must be frozen"
+    );
 
     // Shard 0's surviving majority should have elected a new leader.
     // Write through the new shard 0 majority.
@@ -84,13 +94,21 @@ async fn shard0_partitioned_shard1_unaffected() {
         let mut found = None;
         for (i, pair) in shards[0].iter().enumerate() {
             let m = pair.raft.metrics().borrow().clone();
-            if m.id != s0_leader_id && m.current_leader.is_some() && m.current_leader != Some(s0_leader_id) {
+            if m.id != s0_leader_id
+                && m.current_leader.is_some()
+                && m.current_leader != Some(s0_leader_id)
+            {
                 found = Some(i);
                 break;
             }
         }
         if let Some(idx) = found {
-            let leader_id = shards[0][idx].raft.metrics().borrow().current_leader.unwrap();
+            let leader_id = shards[0][idx]
+                .raft
+                .metrics()
+                .borrow()
+                .current_leader
+                .unwrap();
             break &shards[0][(leader_id - 1) as usize];
         }
         if tokio::time::Instant::now() >= deadline {
@@ -116,12 +134,25 @@ async fn shard0_partitioned_shard1_unaffected() {
 
     // BLAKE3 per-shard consistency.
     let mut h0 = Vec::new();
-    for p in &shards[0] { h0.push(p.sm.state_hash().await); }
+    for p in &shards[0] {
+        h0.push(p.sm.state_hash().await);
+    }
     let mut h1 = Vec::new();
-    for p in &shards[1] { h1.push(p.sm.state_hash().await); }
-    assert!(h0.windows(2).all(|w| w[0] == w[1]), "shard 0 replicas diverged after heal");
-    assert!(h1.windows(2).all(|w| w[0] == w[1]), "shard 1 replicas diverged after heal");
-    assert_ne!(h0[0], h1[0], "shards must have different hashes (different event sets)");
+    for p in &shards[1] {
+        h1.push(p.sm.state_hash().await);
+    }
+    assert!(
+        h0.windows(2).all(|w| w[0] == w[1]),
+        "shard 0 replicas diverged after heal"
+    );
+    assert!(
+        h1.windows(2).all(|w| w[0] == w[1]),
+        "shard 1 replicas diverged after heal"
+    );
+    assert_ne!(
+        h0[0], h1[0],
+        "shards must have different hashes (different event sets)"
+    );
 }
 
 /// Both shards partitioned simultaneously but differently — shard 0 loses
@@ -184,8 +215,8 @@ async fn blake3_chain_per_shard_independent() {
 
     // 3 writes per shard, converge.
     for i in 0..3i32 {
-        insert_shard_vector(&shards[0][s0_li].raft, v(i, i+1, i+2)).await;
-        insert_shard_vector(&shards[1][s1_li].raft, v(i*10, i*10+1, i*10+2)).await;
+        insert_shard_vector(&shards[0][s0_li].raft, v(i, i + 1, i + 2)).await;
+        insert_shard_vector(&shards[1][s1_li].raft, v(i * 10, i * 10 + 1, i * 10 + 2)).await;
     }
     wait_for_shard_convergence(&shards[0]).await;
     wait_for_shard_convergence(&shards[1]).await;
@@ -204,7 +235,7 @@ async fn blake3_chain_per_shard_independent() {
 
     // Write to shard 1 (unpartitioned) — its chain advances.
     for i in 0..3i32 {
-        insert_shard_vector(&shards[1][s1_li].raft, v(i*100, i*100+1, i*100+2)).await;
+        insert_shard_vector(&shards[1][s1_li].raft, v(i * 100, i * 100 + 1, i * 100 + 2)).await;
     }
     wait_for_shard_convergence(&shards[1]).await;
 
@@ -222,11 +253,21 @@ async fn blake3_chain_per_shard_independent() {
 
     // Final check: both shards' chains are internally consistent.
     let mut h0 = Vec::new();
-    for p in &shards[0] { h0.push(p.sm.state_hash().await); }
+    for p in &shards[0] {
+        h0.push(p.sm.state_hash().await);
+    }
     let mut h1 = Vec::new();
-    for p in &shards[1] { h1.push(p.sm.state_hash().await); }
-    assert!(h0.windows(2).all(|w| w[0] == w[1]), "shard 0 chain diverged");
-    assert!(h1.windows(2).all(|w| w[0] == w[1]), "shard 1 chain diverged");
+    for p in &shards[1] {
+        h1.push(p.sm.state_hash().await);
+    }
+    assert!(
+        h0.windows(2).all(|w| w[0] == w[1]),
+        "shard 0 chain diverged"
+    );
+    assert!(
+        h1.windows(2).all(|w| w[0] == w[1]),
+        "shard 1 chain diverged"
+    );
 }
 
 /// Helper: find a leader in the shard, excluding a specific node ID.

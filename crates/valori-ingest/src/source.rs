@@ -4,8 +4,8 @@
 //! Replaces the bare `&str` / `String` that readers currently receive as
 //! `input`. Callers construct a `DocumentSource`, pipeline stages read from it.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Where a document comes from.
 ///
@@ -29,19 +29,16 @@ pub enum DocumentSource {
         file: String,
     },
     /// An object in an S3-compatible bucket.
-    S3 {
-        bucket: String,
-        key: String,
-    },
+    S3 { bucket: String, key: String },
 }
 
 impl DocumentSource {
     /// Human-readable provenance string — used as `Document.source`.
     pub fn as_source_str(&self) -> String {
         match self {
-            DocumentSource::File(p)          => p.display().to_string(),
-            DocumentSource::Url(u)           => u.clone(),
-            DocumentSource::Memory           => "memory".to_string(),
+            DocumentSource::File(p) => p.display().to_string(),
+            DocumentSource::Url(u) => u.clone(),
+            DocumentSource::Memory => "memory".to_string(),
             DocumentSource::GitHub { repo, branch, file } => {
                 format!("github:{repo}@{branch}/{file}")
             }
@@ -58,7 +55,9 @@ impl DocumentSource {
 }
 
 impl From<PathBuf> for DocumentSource {
-    fn from(p: PathBuf) -> Self { DocumentSource::File(p) }
+    fn from(p: PathBuf) -> Self {
+        DocumentSource::File(p)
+    }
 }
 
 impl From<&str> for DocumentSource {
@@ -106,7 +105,10 @@ mod tests {
 
     #[test]
     fn s3_source_str() {
-        let s = DocumentSource::S3 { bucket: "my-bucket".into(), key: "docs/file.pdf".into() };
+        let s = DocumentSource::S3 {
+            bucket: "my-bucket".into(),
+            key: "docs/file.pdf".into(),
+        };
         assert_eq!(s.as_source_str(), "s3://my-bucket/docs/file.pdf");
     }
 
@@ -125,7 +127,9 @@ mod tests {
     #[test]
     fn serialise_round_trip() {
         let original = DocumentSource::GitHub {
-            repo: "a/b".into(), branch: "main".into(), file: "x.md".into(),
+            repo: "a/b".into(),
+            branch: "main".into(),
+            file: "x.md".into(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let back: DocumentSource = serde_json::from_str(&json).unwrap();

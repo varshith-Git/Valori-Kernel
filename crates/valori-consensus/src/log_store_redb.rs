@@ -28,7 +28,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use openraft::storage::{LogFlushed, LogState, RaftLogStorage};
-use openraft::{AnyError, ErrorSubject, ErrorVerb, LogId, RaftLogReader, StorageError, StorageIOError, Vote};
+use openraft::{
+    AnyError, ErrorSubject, ErrorVerb, LogId, RaftLogReader, StorageError, StorageIOError, Vote,
+};
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 
 use crate::types::{Entry, NodeId, TypeConfig};
@@ -187,7 +189,9 @@ impl RaftLogStorage<TypeConfig> for RedbLogStore {
     }
 
     async fn read_committed(&mut self) -> Result<Option<LogId<NodeId>>, StorageError<NodeId>> {
-        Ok(self.read_meta::<Option<LogId<NodeId>>>(KEY_COMMITTED)?.flatten())
+        Ok(self
+            .read_meta::<Option<LogId<NodeId>>>(KEY_COMMITTED)?
+            .flatten())
     }
 
     async fn append<I>(
@@ -204,7 +208,9 @@ impl RaftLogStorage<TypeConfig> for RedbLogStore {
             let mut table = txn.open_table(LOGS).map_err(io_err)?;
             for entry in entries {
                 let bytes = encode(&entry)?;
-                table.insert(entry.log_id.index, bytes.as_slice()).map_err(io_err)?;
+                table
+                    .insert(entry.log_id.index, bytes.as_slice())
+                    .map_err(io_err)?;
             }
         }
         txn.commit().map_err(io_err)?;
@@ -237,7 +243,8 @@ impl RaftLogStorage<TypeConfig> for RedbLogStore {
         let txn = self.db.begin_write().map_err(io_err)?;
         {
             let mut meta = txn.open_table(META).map_err(io_err)?;
-            meta.insert(KEY_LAST_PURGED, floor_bytes.as_slice()).map_err(io_err)?;
+            meta.insert(KEY_LAST_PURGED, floor_bytes.as_slice())
+                .map_err(io_err)?;
             let mut table = txn.open_table(LOGS).map_err(io_err)?;
             table.retain(|k, _| k > log_id.index).map_err(io_err)?;
         }

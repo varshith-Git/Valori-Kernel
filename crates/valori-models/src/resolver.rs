@@ -137,7 +137,10 @@ mod tests {
     fn resolves_by_task_no_dim() {
         let m = installed("openai/ada", ModelTask::Embedding, 1536);
         let r = Resolver::new(std::slice::from_ref(&m));
-        assert_eq!(r.resolve(ModelTask::Embedding, None).unwrap().id, "openai/ada");
+        assert_eq!(
+            r.resolve(ModelTask::Embedding, None).unwrap().id,
+            "openai/ada"
+        );
     }
 
     #[test]
@@ -147,7 +150,10 @@ mod tests {
             installed("m/b", ModelTask::Embedding, 768),
         ];
         let r = Resolver::new(&manifests);
-        assert_eq!(r.resolve(ModelTask::Embedding, Some(768)).unwrap().id, "m/b");
+        assert_eq!(
+            r.resolve(ModelTask::Embedding, Some(768)).unwrap().id,
+            "m/b"
+        );
     }
 
     #[test]
@@ -160,9 +166,7 @@ mod tests {
 
     #[test]
     fn available_models_excluded() {
-        let manifests = vec![
-            available("m/available", ModelTask::Embedding, 1536),
-        ];
+        let manifests = vec![available("m/available", ModelTask::Embedding, 1536)];
         let r = Resolver::new(&manifests);
         assert!(r.resolve(ModelTask::Embedding, None).is_err());
     }

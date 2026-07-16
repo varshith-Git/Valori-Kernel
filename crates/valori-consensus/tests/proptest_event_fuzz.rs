@@ -79,12 +79,10 @@ async fn run_ops(ops: Vec<Op>) {
                 let id = inserted_ids[idx];
                 leader
                     .client_write(ClientRequest {
-                        event: KernelEvent::SoftDeleteRecord {
-                            id: RecordId(id),
-                        },
+                        event: KernelEvent::SoftDeleteRecord { id: RecordId(id) },
                         request_id: None,
                         schema_version: 0,
-                    namespace_id: 0,
+                        namespace_id: 0,
                     })
                     .await
                     .ok(); // ignore not-found — id may be already deleted
@@ -97,12 +95,10 @@ async fn run_ops(ops: Vec<Op>) {
                 let id = inserted_ids.remove(idx);
                 leader
                     .client_write(ClientRequest {
-                        event: KernelEvent::DeleteRecord {
-                            id: RecordId(id),
-                        },
+                        event: KernelEvent::DeleteRecord { id: RecordId(id) },
                         request_id: None,
                         schema_version: 0,
-                    namespace_id: 0,
+                        namespace_id: 0,
                     })
                     .await
                     .ok();

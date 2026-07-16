@@ -34,6 +34,9 @@ impl Writer for NoopWriter {
         _embedding: Embedding,
         _doc: &Document,
     ) -> Result<WriteResult, IngestError> {
-        Ok(WriteResult { record_id: format!("noop-{}", chunk.index), chunk_node_id: None })
+        Ok(WriteResult {
+            record_id: format!("noop-{}", chunk.index),
+            chunk_node_id: None,
+        })
     }
 }

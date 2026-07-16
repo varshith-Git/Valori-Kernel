@@ -30,7 +30,12 @@ pub use capability::{
     Capability, CapabilityRegistry, EmbedCapability, HttpCapability, KernelCapability,
     LlmCapability, NoOpKernelCapability, ProofCapability, SchedulerCapability, StorageCapability,
 };
-pub use effect::{Effect, EffectDurability, EffectId, EffectPayload, KernelCommand, ReceiptFragment};
+pub use effect::{
+    Effect, EffectDurability, EffectId, EffectPayload, KernelCommand, ReceiptFragment,
+};
 pub use error::{EffectError, EffectResult};
-pub use receipt::{Receipt, ReceiptAssembler, ReceiptEnvelope, ReceiptHash, ReceiptStore, StateHash, verify_receipt};
+pub use receipt::{
+    verify_receipt, Receipt, ReceiptAssembler, ReceiptEnvelope, ReceiptHash, ReceiptStore,
+    StateHash,
+};
 pub use task::{NoOpTask, Task, TaskContext, TaskOutput};

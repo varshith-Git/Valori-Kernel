@@ -7,10 +7,10 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use valori_node::api_keys::KeyStore;
-use valori_node::EngineFromNodeConfig;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router_with_keys;
+use valori_node::EngineFromNodeConfig;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -78,11 +78,7 @@ async fn create_key(
         .unwrap()
 }
 
-async fn list_keys(
-    client: &reqwest::Client,
-    base: &str,
-    bearer: &str,
-) -> serde_json::Value {
+async fn list_keys(client: &reqwest::Client, base: &str, bearer: &str) -> serde_json::Value {
     client
         .get(format!("{base}/v1/keys"))
         .bearer_auth(bearer)
@@ -94,12 +90,7 @@ async fn list_keys(
         .unwrap()
 }
 
-async fn revoke_key(
-    client: &reqwest::Client,
-    base: &str,
-    bearer: &str,
-    id: &str,
-) -> u16 {
+async fn revoke_key(client: &reqwest::Client, base: &str, bearer: &str, id: &str) -> u16 {
     client
         .delete(format!("{base}/v1/keys/{id}"))
         .bearer_auth(bearer)
@@ -128,9 +119,18 @@ async fn legacy_token_accept_and_reject() {
     // No token → 401.
     assert_eq!(insert(&client, &base, None).await.status().as_u16(), 401);
     // Wrong token → 401.
-    assert_eq!(insert(&client, &base, Some("wrong")).await.status().as_u16(), 401);
+    assert_eq!(
+        insert(&client, &base, Some("wrong"))
+            .await
+            .status()
+            .as_u16(),
+        401
+    );
     // Correct token → 200.
-    assert!(insert(&client, &base, Some("super-secret")).await.status().is_success());
+    assert!(insert(&client, &base, Some("super-secret"))
+        .await
+        .status()
+        .is_success());
 }
 
 /// Create a key via the API, then use it for reads and writes.
@@ -145,9 +145,15 @@ async fn create_key_and_use_it() {
     assert!(token.starts_with("vk_"), "token must start with vk_ prefix");
 
     // The new key can insert records.
-    assert!(insert(&client, &base, Some(&token)).await.status().is_success());
+    assert!(insert(&client, &base, Some(&token))
+        .await
+        .status()
+        .is_success());
     // The new key can search.
-    assert!(search(&client, &base, Some(&token)).await.status().is_success());
+    assert!(search(&client, &base, Some(&token))
+        .await
+        .status()
+        .is_success());
 
     // The key appears in the list.
     let list = list_keys(&client, &base, "admin").await;
@@ -182,16 +188,28 @@ async fn read_only_key_cannot_write() {
     let (client, base) = spawn_node(Some("admin"), Arc::new(KeyStore::new(None))).await;
 
     // Pre-insert a record with admin token.
-    assert!(insert(&client, &base, Some("admin")).await.status().is_success());
+    assert!(insert(&client, &base, Some("admin"))
+        .await
+        .status()
+        .is_success());
 
     // Create a read_only key.
     let body = create_key(&client, &base, "admin", "read_only").await;
     let ro_token = body["token"].as_str().unwrap().to_string();
 
     // read_only can search.
-    assert!(search(&client, &base, Some(&ro_token)).await.status().is_success());
+    assert!(search(&client, &base, Some(&ro_token))
+        .await
+        .status()
+        .is_success());
     // read_only cannot insert.
-    assert_eq!(insert(&client, &base, Some(&ro_token)).await.status().as_u16(), 403);
+    assert_eq!(
+        insert(&client, &base, Some(&ro_token))
+            .await
+            .status()
+            .as_u16(),
+        403
+    );
 }
 
 /// Revoke a key — it must be rejected afterward.
@@ -204,20 +222,29 @@ async fn revoke_key_stops_access() {
     let id = body["id"].as_str().unwrap().to_string();
 
     // Key works before revocation.
-    assert!(insert(&client, &base, Some(&token)).await.status().is_success());
+    assert!(insert(&client, &base, Some(&token))
+        .await
+        .status()
+        .is_success());
 
     // Revoke the key.
     assert_eq!(revoke_key(&client, &base, "admin", &id).await, 204);
 
     // Key is rejected after revocation.
-    assert_eq!(insert(&client, &base, Some(&token)).await.status().as_u16(), 401);
+    assert_eq!(
+        insert(&client, &base, Some(&token)).await.status().as_u16(),
+        401
+    );
 }
 
 /// Revoking a non-existent key returns 404.
 #[tokio::test]
 async fn revoke_nonexistent_key_returns_404() {
     let (client, base) = spawn_node(Some("admin"), Arc::new(KeyStore::new(None))).await;
-    assert_eq!(revoke_key(&client, &base, "admin", "key_doesnotexist").await, 404);
+    assert_eq!(
+        revoke_key(&client, &base, "admin", "key_doesnotexist").await,
+        404
+    );
 }
 
 /// health and metrics are always public — even when auth is configured.

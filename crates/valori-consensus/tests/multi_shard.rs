@@ -98,7 +98,7 @@ fn insert(id: u32) -> ClientRequest {
         },
         request_id: None,
         schema_version: 0,
-    namespace_id: 0,
+        namespace_id: 0,
     }
 }
 
@@ -139,17 +139,36 @@ async fn two_shard_cluster() -> Vec<ShardedNode> {
 }
 
 fn leader_for<'a>(nodes: &'a [ShardedNode], shard: ShardId) -> &'a ShardedNode {
-    let leader_id = nodes[0].shards[&shard].raft.metrics().borrow().current_leader.unwrap();
+    let leader_id = nodes[0].shards[&shard]
+        .raft
+        .metrics()
+        .borrow()
+        .current_leader
+        .unwrap();
     &nodes[(leader_id - 1) as usize]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn each_shard_elects_its_own_leader_independently() {
     let nodes = two_shard_cluster().await;
-    let leader0 = nodes[0].shards[&SHARD0].raft.metrics().borrow().current_leader;
-    let leader1 = nodes[0].shards[&SHARD1].raft.metrics().borrow().current_leader;
-    assert!(leader0.is_some(), "shard 0 must elect a leader over the shared listener");
-    assert!(leader1.is_some(), "shard 1 must elect a leader over the shared listener");
+    let leader0 = nodes[0].shards[&SHARD0]
+        .raft
+        .metrics()
+        .borrow()
+        .current_leader;
+    let leader1 = nodes[0].shards[&SHARD1]
+        .raft
+        .metrics()
+        .borrow()
+        .current_leader;
+    assert!(
+        leader0.is_some(),
+        "shard 0 must elect a leader over the shared listener"
+    );
+    assert!(
+        leader1.is_some(),
+        "shard 1 must elect a leader over the shared listener"
+    );
     // Deliberately not asserting leader0 != leader1 or leader0 == leader1 —
     // either is a valid outcome; only independent convergence is asserted.
 }
@@ -161,7 +180,11 @@ async fn write_to_shard_0_does_not_appear_in_shard_1() {
 
     let empty_hash = nodes[0].shards[&SHARD1].sm.state_hash().await;
 
-    let resp = leader0.shards[&SHARD0].raft.client_write(insert(0)).await.unwrap();
+    let resp = leader0.shards[&SHARD0]
+        .raft
+        .client_write(insert(0))
+        .await
+        .unwrap();
     for node in &nodes {
         node.shards[&SHARD0]
             .raft
@@ -172,7 +195,13 @@ async fn write_to_shard_0_does_not_appear_in_shard_1() {
     }
 
     // Shard 0 saw the write...
-    assert_eq!(nodes[0].shards[&SHARD0].sm.with_state(|s| s.record_count()).await, 1);
+    assert_eq!(
+        nodes[0].shards[&SHARD0]
+            .sm
+            .with_state(|s| s.record_count())
+            .await,
+        1
+    );
     // ...shard 1, on every node, did not — still the empty-state hash.
     for node in &nodes {
         assert_eq!(
@@ -180,7 +209,13 @@ async fn write_to_shard_0_does_not_appear_in_shard_1() {
             empty_hash,
             "shard 1 must be untouched by a shard 0 write"
         );
-        assert_eq!(node.shards[&SHARD1].sm.with_state(|s| s.record_count()).await, 0);
+        assert_eq!(
+            node.shards[&SHARD1]
+                .sm
+                .with_state(|s| s.record_count())
+                .await,
+            0
+        );
     }
 }
 
@@ -193,12 +228,24 @@ async fn each_shard_converges_independently_and_hashes_differ() {
     let leader0 = leader_for(&nodes, SHARD0);
     let mut last0 = 0;
     for i in 0..5u32 {
-        last0 = leader0.shards[&SHARD0].raft.client_write(insert(i)).await.unwrap().data.log_index;
+        last0 = leader0.shards[&SHARD0]
+            .raft
+            .client_write(insert(i))
+            .await
+            .unwrap()
+            .data
+            .log_index;
     }
     let leader1 = leader_for(&nodes, SHARD1);
     let mut last1 = 0;
     for i in 0..3u32 {
-        last1 = leader1.shards[&SHARD1].raft.client_write(insert(i)).await.unwrap().data.log_index;
+        last1 = leader1.shards[&SHARD1]
+            .raft
+            .client_write(insert(i))
+            .await
+            .unwrap()
+            .data
+            .log_index;
     }
 
     for node in &nodes {
@@ -225,8 +272,14 @@ async fn each_shard_converges_independently_and_hashes_differ() {
         shard1_hashes.push(node.shards[&SHARD1].sm.state_hash().await);
     }
 
-    assert!(shard0_hashes.windows(2).all(|w| w[0] == w[1]), "shard 0 replicas diverged");
-    assert!(shard1_hashes.windows(2).all(|w| w[0] == w[1]), "shard 1 replicas diverged");
+    assert!(
+        shard0_hashes.windows(2).all(|w| w[0] == w[1]),
+        "shard 0 replicas diverged"
+    );
+    assert!(
+        shard1_hashes.windows(2).all(|w| w[0] == w[1]),
+        "shard 1 replicas diverged"
+    );
     assert_ne!(
         shard0_hashes[0], shard1_hashes[0],
         "shard 0 and shard 1 applied different events — equal hashes would mean cross-shard contamination"
@@ -236,7 +289,12 @@ async fn each_shard_converges_independently_and_hashes_differ() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn shard_0_leader_failure_does_not_affect_shard_1_liveness() {
     let nodes = two_shard_cluster().await;
-    let leader1_before = nodes[0].shards[&SHARD1].raft.metrics().borrow().current_leader.unwrap();
+    let leader1_before = nodes[0].shards[&SHARD1]
+        .raft
+        .metrics()
+        .borrow()
+        .current_leader
+        .unwrap();
 
     // Hard-fail shard 0's leader Raft core only — its shard 1 Raft core and
     // the shared gRPC listener on that node stay up, exactly like one Raft
@@ -249,12 +307,19 @@ async fn shard_0_leader_failure_does_not_affect_shard_1_liveness() {
     // Shard 1 must be unaffected: still writable, same or a legitimately
     // re-elected leader, no disruption from shard 0's failure.
     let leader1 = leader_for(&nodes, SHARD1);
-    let resp = leader1.shards[&SHARD1].raft.client_write(insert(99)).await.unwrap();
+    let resp = leader1.shards[&SHARD1]
+        .raft
+        .client_write(insert(99))
+        .await
+        .unwrap();
     for node in &nodes {
         node.shards[&SHARD1]
             .raft
             .wait(Some(Duration::from_secs(10)))
-            .applied_index_at_least(Some(resp.data.log_index), "shard 1 unaffected by shard 0 failure")
+            .applied_index_at_least(
+                Some(resp.data.log_index),
+                "shard 1 unaffected by shard 0 failure",
+            )
             .await
             .unwrap();
     }

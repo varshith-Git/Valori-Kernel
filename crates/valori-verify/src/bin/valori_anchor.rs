@@ -105,25 +105,40 @@ enum Cmd {
 fn cmd_keygen(out_dir: &Path) -> ExitCode {
     match generate_keypair(out_dir) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => { eprintln!("error: {e}"); ExitCode::from(1) }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(1)
+        }
     }
 }
 
 fn cmd_create(log: &Path, key_path: &Path, note: Option<&str>) -> ExitCode {
     let signing_key = match load_signing_key(key_path) {
         Ok(k) => k,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     println!("replaying log…");
     let summary = match replay_log(log) {
         Ok(s) => s,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
     // M-1: warn about trailing bytes — likely a partial write at the tail.
     if summary.trailing_bytes > 0 {
-        eprintln!("warning: {} trailing byte(s) could not be decoded (partial write?).", summary.trailing_bytes);
-        eprintln!("         anchor covers events #1..#{} only.", summary.event_count);
+        eprintln!(
+            "warning: {} trailing byte(s) could not be decoded (partial write?).",
+            summary.trailing_bytes
+        );
+        eprintln!(
+            "         anchor covers events #1..#{} only.",
+            summary.event_count
+        );
         eprintln!("         A subsequent verify after node repair may show a DIFFERENT hash.");
     }
 
@@ -149,7 +164,10 @@ fn cmd_create(log: &Path, key_path: &Path, note: Option<&str>) -> ExitCode {
                 return ExitCode::from(1);
             }
         }
-        Err(e) => { eprintln!("error: serialisation failed: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: serialisation failed: {e}");
+            return ExitCode::from(1);
+        }
     }
 
     println!("✅  anchor written → {}", out_path.display());
@@ -158,33 +176,53 @@ fn cmd_create(log: &Path, key_path: &Path, note: Option<&str>) -> ExitCode {
     println!("  chain head: {}", hex(&summary.chain_head));
     println!("  state hash: {}", hex(&summary.state_hash));
     println!("  signed at:  {} (unix {})", format_utc(now), now);
-    println!("  public key: {}", hex(signing_key.verifying_key().as_bytes()));
+    println!(
+        "  public key: {}",
+        hex(signing_key.verifying_key().as_bytes())
+    );
     println!();
     println!("Share verify.pub with auditors so they can run:");
-    println!("  valori-anchor verify {} --anchor {}", log.display(), out_path.display());
+    println!(
+        "  valori-anchor verify {} --anchor {}",
+        log.display(),
+        out_path.display()
+    );
 
     ExitCode::SUCCESS
 }
 
-fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, trust_embedded: bool) -> ExitCode {
+fn cmd_verify(
+    log: &Path,
+    anchor_path: &Path,
+    trusted_key_path: Option<&Path>,
+    trust_embedded: bool,
+) -> ExitCode {
     // H-2: require either --trusted-key or explicit --trust-embedded.
     if trusted_key_path.is_none() && !trust_embedded {
         eprintln!("error: --trusted-key <verify.pub> is required.");
         eprintln!("       Without it the anchor is self-validating — an attacker who rewrites the");
         eprintln!("       log can re-sign with their own key and this command would still say OK.");
         eprintln!("       Pass --trusted-key <path> to your out-of-band verify.pub, or use");
-        eprintln!("       --trust-embedded if you understand the trust-model implication (dev only).");
+        eprintln!(
+            "       --trust-embedded if you understand the trust-model implication (dev only)."
+        );
         return ExitCode::from(2);
     }
 
     // Load and verify the anchor signature.
     let anchor_text = match std::fs::read_to_string(anchor_path) {
         Ok(t) => t,
-        Err(e) => { eprintln!("error: cannot read anchor file: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: cannot read anchor file: {e}");
+            return ExitCode::from(1);
+        }
     };
     let anchor_json: serde_json::Value = match serde_json::from_str(&anchor_text) {
         Ok(v) => v,
-        Err(e) => { eprintln!("error: anchor file is not valid JSON: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: anchor file is not valid JSON: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     let (anchor_payload, verifying_key) = match AnchorPayload::verify_json(&anchor_json) {
@@ -201,7 +239,10 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
     if let Some(tk_path) = trusted_key_path {
         let trusted = match load_verifying_key(tk_path) {
             Ok(k) => k,
-            Err(e) => { eprintln!("error: cannot load trusted key: {e}"); return ExitCode::from(1); }
+            Err(e) => {
+                eprintln!("error: cannot load trusted key: {e}");
+                return ExitCode::from(1);
+            }
         };
         if trusted.as_bytes() != verifying_key.as_bytes() {
             println!();
@@ -209,7 +250,9 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
             println!("    trusted key:  {}", hex(trusted.as_bytes()));
             println!("    anchor's key: {}", hex(verifying_key.as_bytes()));
             println!("    The anchor was not signed by the key you trust. Either the anchor was");
-            println!("    re-signed after a log rewrite, or the wrong trusted-key file was supplied.");
+            println!(
+                "    re-signed after a log rewrite, or the wrong trusted-key file was supplied."
+            );
             return ExitCode::from(1);
         }
         println!("trusted key match: ✓ anchor signed by the expected key");
@@ -221,14 +264,20 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
 
     println!("anchor signature: ✓ valid");
     println!("  signed by:  {}", hex(verifying_key.as_bytes()));
-    println!("  anchored:   {}", format_utc(anchor_payload.anchored_at_unix));
+    println!(
+        "  anchored:   {}",
+        format_utc(anchor_payload.anchored_at_unix)
+    );
     println!();
 
     // Replay the log and compare.
     println!("replaying log…");
     let summary = match replay_log(log) {
         Ok(s) => s,
-        Err(e) => { eprintln!("error: {e}"); return ExitCode::from(1); }
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(1);
+        }
     };
 
     let mut ok = true;
@@ -263,12 +312,18 @@ fn cmd_verify(log: &Path, anchor_path: &Path, trusted_key_path: Option<&Path>, t
     println!();
     if ok {
         println!("✅  ANCHOR VERIFIED");
-        println!("    The log is identical to what was anchored at {}.", format_utc(anchor_payload.anchored_at_unix));
+        println!(
+            "    The log is identical to what was anchored at {}.",
+            format_utc(anchor_payload.anchored_at_unix)
+        );
         println!("    Any alteration after that time would be detected here.");
         ExitCode::SUCCESS
     } else {
         println!("❌  LOG HAS CHANGED SINCE ANCHORING");
-        println!("    Run valori-verify {} for a detailed tamper report.", log.display());
+        println!(
+            "    Run valori-verify {} for a detailed tamper report.",
+            log.display()
+        );
         ExitCode::from(1)
     }
 }
@@ -278,8 +333,11 @@ fn main() -> ExitCode {
     match cli.command {
         Cmd::Keygen { out_dir } => cmd_keygen(&out_dir),
         Cmd::Create { log, key, note } => cmd_create(&log, &key, note.as_deref()),
-        Cmd::Verify { log, anchor, trusted_key, trust_embedded } => {
-            cmd_verify(&log, &anchor, trusted_key.as_deref(), trust_embedded)
-        }
+        Cmd::Verify {
+            log,
+            anchor,
+            trusted_key,
+            trust_embedded,
+        } => cmd_verify(&log, &anchor, trusted_key.as_deref(), trust_embedded),
     }
 }

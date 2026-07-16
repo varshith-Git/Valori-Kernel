@@ -11,8 +11,7 @@ use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::id::RecordId;
 
 const TEST_KEY_ID: KeyId = [
-    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
-    0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+    0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
 ];
 
 // ── KeyId type ────────────────────────────────────────────────────────────────
@@ -67,7 +66,9 @@ fn insert_record_encrypted_variant_serializes() {
 
 #[test]
 fn shred_key_variant_serializes() {
-    let evt = KernelEvent::ShredKey { key_id: TEST_KEY_ID };
+    let evt = KernelEvent::ShredKey {
+        key_id: TEST_KEY_ID,
+    };
     let bytes = bincode::serde::encode_to_vec(&evt, bincode::config::standard()).unwrap();
     let (decoded, _): (KernelEvent, _) =
         bincode::serde::decode_from_slice(&bytes, bincode::config::standard()).unwrap();
@@ -88,12 +89,25 @@ fn insert_record_encrypted_applies_and_sets_flag() {
         metadata_ciphertext: None,
         tag: 42,
     };
-    state.apply_event(&evt).expect("InsertRecordEncrypted must succeed");
+    state
+        .apply_event(&evt)
+        .expect("InsertRecordEncrypted must succeed");
 
-    let rec = state.get_record(RecordId(0)).expect("record must be allocated");
-    assert!(rec.flags & FLAG_ENCRYPTED != 0, "FLAG_ENCRYPTED must be set");
-    assert!(rec.flags & FLAG_SHREDDED == 0, "FLAG_SHREDDED must NOT be set yet");
-    assert!(rec.vector.data.iter().all(|fxp| fxp.0 == 0), "vector must be zeroed");
+    let rec = state
+        .get_record(RecordId(0))
+        .expect("record must be allocated");
+    assert!(
+        rec.flags & FLAG_ENCRYPTED != 0,
+        "FLAG_ENCRYPTED must be set"
+    );
+    assert!(
+        rec.flags & FLAG_SHREDDED == 0,
+        "FLAG_SHREDDED must NOT be set yet"
+    );
+    assert!(
+        rec.vector.data.iter().all(|fxp| fxp.0 == 0),
+        "vector must be zeroed"
+    );
 }
 
 #[test]
@@ -116,13 +130,21 @@ fn shred_key_sets_shredded_flag_on_all_matching_records() {
     }
 
     // Shred
-    let shred = KernelEvent::ShredKey { key_id: TEST_KEY_ID };
+    let shred = KernelEvent::ShredKey {
+        key_id: TEST_KEY_ID,
+    };
     state.apply_event(&shred).expect("ShredKey must succeed");
 
     for i in 0u32..2 {
         let rec = state.get_record(RecordId(i)).expect("slot must be present");
-        assert!(rec.flags & FLAG_SHREDDED != 0, "record {i} must have FLAG_SHREDDED");
-        assert!(rec.metadata.is_none(), "ciphertext must be wiped from memory");
+        assert!(
+            rec.flags & FLAG_SHREDDED != 0,
+            "record {i} must have FLAG_SHREDDED"
+        );
+        assert!(
+            rec.metadata.is_none(),
+            "ciphertext must be wiped from memory"
+        );
     }
 }
 
@@ -133,7 +155,10 @@ fn crypto_error_display_names_the_key() {
     let err = CryptoError::KeyNotFound(TEST_KEY_ID);
     let msg = err.to_string();
     assert!(msg.contains("key not found"), "unexpected: {msg}");
-    assert!(msg.contains("0123456789abcdef"), "should hex the key: {msg}");
+    assert!(
+        msg.contains("0123456789abcdef"),
+        "should hex the key: {msg}"
+    );
 }
 
 // ── Trait object safety ───────────────────────────────────────────────────────

@@ -60,7 +60,10 @@ pub use package_store::{InstallLock, PackageManifest, PackageStore};
 // M6 — Integrity + GC + health
 pub use gc::{GarbageCollector, GcReport, RefCounter, UnreferencedPackage};
 pub use health::{system_health, PackageHealth, PackageHealthStatus, SystemHealth};
-pub use integrity::{repair as repair_package, IntegrityManager, IntegrityReport, IntegrityStatus, RepairAction, RepairResult};
+pub use integrity::{
+    repair as repair_package, IntegrityManager, IntegrityReport, IntegrityStatus, RepairAction,
+    RepairResult,
+};
 
 // ── ModelManager ──────────────────────────────────────────────────────────────
 
@@ -73,7 +76,7 @@ use std::path::{Path, PathBuf};
 pub struct ModelManager {
     pub(crate) store: Box<dyn ModelStore>,
     pub(crate) models_dir: PathBuf,
-    pub(crate) catalog: Vec<ModelManifest>,     // built-in registry
+    pub(crate) catalog: Vec<ModelManifest>, // built-in registry
     pub(crate) providers: ProviderRegistry,
 }
 
@@ -127,8 +130,11 @@ impl ModelManager {
         let installed = self.store.list();
         let installed_ids: std::collections::HashSet<_> =
             installed.iter().map(|m| m.id.clone()).collect();
-        let available: Vec<&ModelManifest> =
-            self.catalog.iter().filter(|m| !installed_ids.contains(&m.id)).collect();
+        let available: Vec<&ModelManifest> = self
+            .catalog
+            .iter()
+            .filter(|m| !installed_ids.contains(&m.id))
+            .collect();
         let disk_bytes = self.disk_usage_bytes();
         serde_json::json!({ "installed": installed, "available": available, "disk_bytes": disk_bytes })
     }
@@ -205,8 +211,12 @@ impl ModelManager {
                 let dir = self.models_dir.join(sanitize(id));
                 std::fs::create_dir_all(&dir)?;
                 let dest = dir.join("model.bin");
-                let (size, hash) =
-                    downloader::download_and_verify(url, spec.sha256.as_deref().unwrap_or(""), &dest).await?;
+                let (size, hash) = downloader::download_and_verify(
+                    url,
+                    spec.sha256.as_deref().unwrap_or(""),
+                    &dest,
+                )
+                .await?;
                 (Some(dest.display().to_string()), size, Some(hash))
             }
         };
@@ -246,7 +256,13 @@ impl ModelManager {
 /// Filesystem-safe directory name from a model id (`a/b` → `a_b`).
 pub(crate) fn sanitize(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -272,7 +288,10 @@ mod tests {
     fn catalog_json_has_installed_and_available() {
         let m = make_manager();
         let c = m.catalog_json();
-        assert!(c["available"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(c["available"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 
     #[test]
@@ -284,12 +303,17 @@ mod tests {
     #[test]
     fn provider_from_config_dummy() {
         let m = make_manager();
-        let p = m.provider_from_config("dummy", "dummy", None, None, 4).unwrap();
+        let p = m
+            .provider_from_config("dummy", "dummy", None, None, 4)
+            .unwrap();
         assert_eq!(p.dim(), 4);
     }
 
     #[test]
     fn sanitize_id() {
-        assert_eq!(sanitize("openai/text-embedding-3-small"), "openai_text-embedding-3-small");
+        assert_eq!(
+            sanitize("openai/text-embedding-3-small"),
+            "openai_text-embedding-3-small"
+        );
     }
 }

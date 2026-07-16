@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use crate::document::IngestError;
 use crate::reader::Reader;
-use crate::readers::{DocxReader, HtmlReader, MarkdownReader, PdfReader};
 use crate::reader::TextReader;
+use crate::readers::{DocxReader, HtmlReader, MarkdownReader, PdfReader};
 
 /// Maps file extensions to [`Reader`] implementations.
 ///
@@ -39,14 +39,16 @@ impl ReaderRegistry {
     ///
     /// Accepts any type that converts to a `std::path::Path` — `&str`, `&Path`,
     /// `PathBuf`, etc.
-    pub fn reader_for_path(path: impl AsRef<std::path::Path>) -> Result<Arc<dyn Reader>, IngestError> {
+    pub fn reader_for_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Arc<dyn Reader>, IngestError> {
         let path = path.as_ref();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or_else(|| IngestError::Reader(format!(
-                "cannot determine extension for '{}'", path.display()
-            )))?;
+        let ext = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+            IngestError::Reader(format!(
+                "cannot determine extension for '{}'",
+                path.display()
+            ))
+        })?;
         Self::reader_for_extension(ext)
     }
 }

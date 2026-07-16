@@ -21,18 +21,18 @@
 
 use std::sync::Arc;
 
-use axum::extract::{State, Query};
+use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use tower_http::cors::{CorsLayer, Any};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{Any, CorsLayer};
 
+use crate::cluster::ShardHandle;
 use axum::extract::Path;
 use valori_consensus::types::{Raft, ShardId, CURRENT_SCHEMA_VERSION};
 use valori_consensus::{ClientRequest, ValoriStateMachine};
-use crate::cluster::ShardHandle;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::fxp::qformat::SCALE;
 use valori_kernel::index::SearchResult as KernelSearchResult;
@@ -41,18 +41,18 @@ use valori_kernel::types::id::{NodeId, RecordId};
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
 
-use crate::api_keys::{ApiScope, AuthState, KeyStore, required_scope};
-use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
-use valori_kernel::crypto::KeyVault;
+use crate::api_keys::{required_scope, ApiScope, AuthState, KeyStore};
 use crate::cluster::ClusterHandle;
 use crate::cluster_api::cluster_router;
+use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
 use crate::events::event_log::EventLogWriter;
+use axum::body::Body;
 use axum::extract::Extension;
-use axum::middleware::Next;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderValue;
-use axum::body::Body;
+use axum::middleware::Next;
+use valori_kernel::crypto::KeyVault;
 
 /// Startup readiness gate (fixes the partial-state-on-restart bug, B13).
 ///
@@ -129,7 +129,8 @@ struct DataPlaneState {
     /// Phase I5: node-local tree cache keyed by BLAKE3(text). Derived from
     /// build requests; not replicated via Raft (trees are deterministic from
     /// their source text, so any peer can rebuild them locally).
-    tree_cache: Arc<tokio::sync::RwLock<std::collections::HashMap<String, valori_rag::tree::TreeIndex>>>,
+    tree_cache:
+        Arc<tokio::sync::RwLock<std::collections::HashMap<String, valori_rag::tree::TreeIndex>>>,
     /// Phase I6: last community detection result on this node.
     /// Node-local (not Raft-replicated) — communities are derived from the
     /// graph which IS replicated, so any peer can re-derive an identical store.
@@ -193,10 +194,7 @@ pub async fn serve_cluster_api(
 ) -> Result<(std::net::SocketAddr, tokio::task::JoinHandle<()>), std::io::Error> {
     let router = build_cluster_router(handle, audit);
     let listener = tokio::net::TcpListener::bind(api_bind).await.map_err(|e| {
-        std::io::Error::new(
-            e.kind(),
-            format!("cannot bind API to {api_bind}: {e}"),
-        )
+        std::io::Error::new(e.kind(), format!("cannot bind API to {api_bind}: {e}"))
     })?;
     let addr = listener.local_addr()?;
     let task = tokio::spawn(async move {
@@ -271,7 +269,14 @@ pub fn build_cluster_router(
     audit: Option<Arc<std::sync::Mutex<EventLogWriter>>>,
 ) -> Router {
     let cfg = crate::config::NodeConfig::default();
-    build_cluster_router_with_keys(handle, audit, cfg.auth_token.clone(), Arc::new(KeyStore::new(None)), &cfg, Arc::new(valori_effect::ReceiptStore::new(256)))
+    build_cluster_router_with_keys(
+        handle,
+        audit,
+        cfg.auth_token.clone(),
+        Arc::new(KeyStore::new(None)),
+        &cfg,
+        Arc::new(valori_effect::ReceiptStore::new(256)),
+    )
 }
 
 /// Cluster router with Phase 3.5 key store and optional legacy token.
@@ -328,89 +333,119 @@ pub fn build_cluster_router_with_keys(
         ),
     };
 
-    let auth = Arc::new(AuthState { key_store, legacy_token: auth_token });
+    let auth = Arc::new(AuthState {
+        key_store,
+        legacy_token: auth_token,
+    });
 
     // ── Public routes (no auth) ───────────────────────────────────────────────
     let public = Router::new()
-        .route("/health",  get(health))
+        .route("/health", get(health))
         .route("/metrics", get(metrics))
         .with_state(state.clone());
 
     // ── Canonical v1 routes ───────────────────────────────────────────────────
     let v1 = Router::new()
-        .route("/v1/records",                   post(insert_record))
-        .route("/v1/records/:id",               axum::routing::get(get_record_by_id))
-        .route("/v1/records/:id/metadata",      axum::routing::patch(update_record_metadata))
-        .route("/v1/search",                    post(search))
-        .route("/v1/delete",                    post(delete_record))
-        .route("/v1/soft-delete",               post(soft_delete_record))
-        .route("/v1/vectors/batch-insert",      post(batch_insert))
-        .route("/v1/namespaces",                post(create_collection_handler).get(list_collections_handler))
-        .route("/v1/namespaces/:name",          delete(drop_collection_handler))
-        .route("/v1/proof/state",               get(state_proof))
-        .route("/v1/proof/event-log",           get(event_log_proof))
-        .route("/v1/cluster/proof",             get(cluster_proof))
-        .route("/v1/proof/receipt",             get(cluster_get_latest_receipt))
-        .route("/v1/proof/receipt/:id",         get(cluster_get_receipt_by_id))
-        .route("/v1/graph/node",                post(create_graph_node))
-        .route("/v1/graph/node/:id",            get(get_graph_node).delete(delete_graph_node))
-        .route("/v1/graph/edge",                post(create_graph_edge))
-        .route("/v1/graph/edges/:id",           get(get_graph_edges))
-        .route("/v1/graph/subgraph",            get(get_graph_subgraph))
-        .route("/v1/graphrag",                  post(cluster_graphrag))
-        .route("/v1/keys",                      post(cluster_create_key).get(cluster_list_keys))
-        .route("/v1/keys/:id",                  delete(cluster_revoke_key))
-        .route("/v1/records/encrypted",         post(cluster_insert_encrypted))
-        .route("/v1/crypto/shred/:key_id",      delete(cluster_shred_key))
-        .route("/v1/crypto/status/:key_id",     get(cluster_crypto_status))
-        .route("/v1/index/config",              axum::routing::get(cluster_index_config))
-        .route("/v1/index/rebuild",             post(cluster_index_rebuild))
-        .route("/v1/shard/routing",             axum::routing::get(cluster_shard_routing))
-        .route("/v1/ingest/document",           post(valori_ingest::ingest_document))
-        .route("/v1/ingest",                    post(cluster_ingest))
-        .route("/v1/ingest/status/:job_id",     get(crate::ingest::get_ingest_status))
-        .route("/v1/ingest/update",             post(cluster_ingest_update))
-        .route("/v1/ingest/extract-entities",   post(cluster_extract_entities))
-        .route("/v1/tree/build",                post(cluster_tree_build))
-        .route("/v1/tree/query",                post(cluster_tree_query))
-        .route("/v1/tree/hybrid",               post(cluster_tree_hybrid))
-        .route("/v1/tree/verify",               post(valori_rag::tree::tree_verify))
-        .route("/v1/tree/chain-verify",         post(valori_rag::tree::tree_chain_verify))
-        .route("/v1/community/detect",          post(cluster_community_detect))
-        .route("/v1/community/search",          post(cluster_community_search))
-        .route("/v1/community/overview",        get(cluster_community_overview))
-        .route("/v1/memory/consolidate",        post(cluster_memory_consolidate))
-        .route("/v1/memory/contradict",         post(cluster_memory_contradict))
-        .route("/v1/memory/upsert",             post(cluster_memory_upsert))
-        .route("/v1/memory/upsert_vector",      post(cluster_memory_upsert))
-        .route("/v1/memory/search",             post(cluster_memory_search))
-        .route("/v1/memory/search_vector",      post(cluster_memory_search))
-        .route("/v1/memory/meta/set",           post(cluster_meta_set))
-        .route("/v1/memory/meta/get",           axum::routing::get(cluster_meta_get))
-        .route("/v1/graph/nodes",               get(cluster_list_nodes))
-        .route("/v1/models/health",             get(cluster_models_health))
-        .route("/v1/version",                   get(cluster_version))
-        .route("/v1/timeline",                  get(cluster_timeline))
-        .route("/v1/operations",                get(cluster_get_operations))
-        .route("/v1/operations/:id",            get(cluster_get_operation_by_id))
-        .route("/v1/operations/:id/execution",  get(crate::server::get_operation_execution))
-        .route("/v1/snapshot/save",             post(cluster_snapshot_save))
-        .route("/v1/snapshot/restore",          post(cluster_snapshot_restore))
-        .route("/v1/snapshot/download",         get(cluster_snapshot_download));
+        .route("/v1/records", post(insert_record))
+        .route("/v1/records/:id", axum::routing::get(get_record_by_id))
+        .route(
+            "/v1/records/:id/metadata",
+            axum::routing::patch(update_record_metadata),
+        )
+        .route("/v1/search", post(search))
+        .route("/v1/delete", post(delete_record))
+        .route("/v1/soft-delete", post(soft_delete_record))
+        .route("/v1/vectors/batch-insert", post(batch_insert))
+        .route(
+            "/v1/namespaces",
+            post(create_collection_handler).get(list_collections_handler),
+        )
+        .route("/v1/namespaces/:name", delete(drop_collection_handler))
+        .route("/v1/proof/state", get(state_proof))
+        .route("/v1/proof/event-log", get(event_log_proof))
+        .route("/v1/cluster/proof", get(cluster_proof))
+        .route("/v1/proof/receipt", get(cluster_get_latest_receipt))
+        .route("/v1/proof/receipt/:id", get(cluster_get_receipt_by_id))
+        .route("/v1/graph/node", post(create_graph_node))
+        .route(
+            "/v1/graph/node/:id",
+            get(get_graph_node).delete(delete_graph_node),
+        )
+        .route("/v1/graph/edge", post(create_graph_edge))
+        .route("/v1/graph/edges/:id", get(get_graph_edges))
+        .route("/v1/graph/subgraph", get(get_graph_subgraph))
+        .route("/v1/graphrag", post(cluster_graphrag))
+        .route("/v1/keys", post(cluster_create_key).get(cluster_list_keys))
+        .route("/v1/keys/:id", delete(cluster_revoke_key))
+        .route("/v1/records/encrypted", post(cluster_insert_encrypted))
+        .route("/v1/crypto/shred/:key_id", delete(cluster_shred_key))
+        .route("/v1/crypto/status/:key_id", get(cluster_crypto_status))
+        .route("/v1/index/config", axum::routing::get(cluster_index_config))
+        .route("/v1/index/rebuild", post(cluster_index_rebuild))
+        .route(
+            "/v1/shard/routing",
+            axum::routing::get(cluster_shard_routing),
+        )
+        .route("/v1/ingest/document", post(valori_ingest::ingest_document))
+        .route("/v1/ingest", post(cluster_ingest))
+        .route(
+            "/v1/ingest/status/:job_id",
+            get(crate::ingest::get_ingest_status),
+        )
+        .route("/v1/ingest/update", post(cluster_ingest_update))
+        .route(
+            "/v1/ingest/extract-entities",
+            post(cluster_extract_entities),
+        )
+        .route("/v1/tree/build", post(cluster_tree_build))
+        .route("/v1/tree/query", post(cluster_tree_query))
+        .route("/v1/tree/hybrid", post(cluster_tree_hybrid))
+        .route("/v1/tree/verify", post(valori_rag::tree::tree_verify))
+        .route(
+            "/v1/tree/chain-verify",
+            post(valori_rag::tree::tree_chain_verify),
+        )
+        .route("/v1/community/detect", post(cluster_community_detect))
+        .route("/v1/community/search", post(cluster_community_search))
+        .route("/v1/community/overview", get(cluster_community_overview))
+        .route("/v1/memory/consolidate", post(cluster_memory_consolidate))
+        .route("/v1/memory/contradict", post(cluster_memory_contradict))
+        .route("/v1/memory/upsert", post(cluster_memory_upsert))
+        .route("/v1/memory/upsert_vector", post(cluster_memory_upsert))
+        .route("/v1/memory/search", post(cluster_memory_search))
+        .route("/v1/memory/search_vector", post(cluster_memory_search))
+        .route("/v1/memory/meta/set", post(cluster_meta_set))
+        .route("/v1/memory/meta/get", axum::routing::get(cluster_meta_get))
+        .route("/v1/graph/nodes", get(cluster_list_nodes))
+        .route("/v1/models/health", get(cluster_models_health))
+        .route("/v1/version", get(cluster_version))
+        .route("/v1/timeline", get(cluster_timeline))
+        .route("/v1/operations", get(cluster_get_operations))
+        .route("/v1/operations/:id", get(cluster_get_operation_by_id))
+        .route(
+            "/v1/operations/:id/execution",
+            get(crate::server::get_operation_execution),
+        )
+        .route("/v1/snapshot/save", post(cluster_snapshot_save))
+        .route("/v1/snapshot/restore", post(cluster_snapshot_restore))
+        .route("/v1/snapshot/download", get(cluster_snapshot_download));
 
     // ── Deprecated legacy routes ──────────────────────────────────────────────
     let legacy = Router::new()
-        .route("/records",          post(insert_record))
-        .route("/search",           post(search))
-        .route("/operations",       get(cluster_get_operations))
-        .route("/operations/:id",   get(cluster_get_operation_by_id))
-        .route("/graph/node",       post(create_graph_node))
-        .route("/graph/node/:id",   get(get_graph_node).delete(delete_graph_node))
-        .route("/graph/edge",       post(create_graph_edge))
-        .route("/graph/edges/:id",  get(get_graph_edges))
-        .route("/graph/subgraph",   get(get_graph_subgraph))
+        .route("/records", post(insert_record))
+        .route("/search", post(search))
+        .route("/operations", get(cluster_get_operations))
+        .route("/operations/:id", get(cluster_get_operation_by_id))
+        .route("/graph/node", post(create_graph_node))
+        .route(
+            "/graph/node/:id",
+            get(get_graph_node).delete(delete_graph_node),
+        )
+        .route("/graph/edge", post(create_graph_edge))
+        .route("/graph/edges/:id", get(get_graph_edges))
+        .route("/graph/subgraph", get(get_graph_subgraph))
         // snake_case alias kept for backward compat
-        .route("/v1/vectors/batch_insert",  post(batch_insert))
+        .route("/v1/vectors/batch_insert", post(batch_insert))
         .layer(axum::middleware::from_fn(deprecation_warning));
 
     // Phase S6: shard-aware read-index needs every shard's raft handle,
@@ -423,8 +458,8 @@ pub fn build_cluster_router_with_keys(
 
     use crate::capabilities::CapabilityRegistryBuilder;
     use crate::runner::TaskRegistry;
-    let capability_registry: Arc<valori_effect::capability::CapabilityRegistry> = Arc::new(
-        CapabilityRegistryBuilder::build_cluster(
+    let capability_registry: Arc<valori_effect::capability::CapabilityRegistry> =
+        Arc::new(CapabilityRegistryBuilder::build_cluster(
             state.shards.clone(),
             state.sm.clone(),
             state.shard_count as u8,
@@ -432,8 +467,7 @@ pub fn build_cluster_router_with_keys(
             state.http.clone(),
             state.tree_cache.clone(),
             state.community_store.clone(),
-        )
-    );
+        ));
     let task_registry: Arc<TaskRegistry> = Arc::new(TaskRegistry::default_registry());
     let execution_registry: Arc<crate::execution_registry::ExecutionRegistry> =
         Arc::new(crate::execution_registry::ExecutionRegistry::default());
@@ -453,9 +487,7 @@ pub fn build_cluster_router_with_keys(
         .layer(Extension(task_registry))
         .layer(Extension(execution_registry));
 
-    let mut router = Router::new()
-        .merge(public)
-        .merge(protected);
+    let mut router = Router::new().merge(public).merge(protected);
     if let Some(cors) = make_cors_layer() {
         router = router.layer(cors);
     }
@@ -473,9 +505,7 @@ async fn deprecation_warning(req: AxumRequest<Body>, next: Next) -> Response {
     h.insert("Deprecation", HeaderValue::from_static("true"));
     h.insert(
         "Link",
-        HeaderValue::from_static(
-            "<https://docs.valori.ai/api/v1>; rel=\"successor-version\"",
-        ),
+        HeaderValue::from_static("<https://docs.valori.ai/api/v1>; rel=\"successor-version\""),
     );
     resp
 }
@@ -513,7 +543,9 @@ impl crate::routes::collections::CollectionOps for DataPlaneState {
         let resp = raft_write_data(
             &self.raft,
             ClientRequest {
-                event: KernelEvent::AutoCreateNamespace { name: name.to_string() },
+                event: KernelEvent::AutoCreateNamespace {
+                    name: name.to_string(),
+                },
                 request_id: None,
                 schema_version: CURRENT_SCHEMA_VERSION,
                 namespace_id: 0,
@@ -530,7 +562,9 @@ impl crate::routes::collections::CollectionOps for DataPlaneState {
         raft_write_data(
             &self.raft,
             ClientRequest {
-                event: KernelEvent::DropNamespace { name: name.to_string() },
+                event: KernelEvent::DropNamespace {
+                    name: name.to_string(),
+                },
                 request_id: None,
                 schema_version: CURRENT_SCHEMA_VERSION,
                 namespace_id: 0,
@@ -604,11 +638,7 @@ async fn health(State(state): State<DataPlaneState>) -> Response {
 
 /// Submit a `ClientRequest` to the Raft leader and map the response.
 /// Handles the ForwardToLeader redirect and generic Raft errors uniformly.
-async fn raft_write<F>(
-    raft: &Raft,
-    req: ClientRequest,
-    on_ok: F,
-) -> Response
+async fn raft_write<F>(raft: &Raft, req: ClientRequest, on_ok: F) -> Response
 where
     F: FnOnce(valori_consensus::ClientResponse) -> Response,
 {
@@ -648,7 +678,8 @@ async fn raft_write_data(
                 return Err((
                     StatusCode::UNPROCESSABLE_ENTITY,
                     Json(serde_json::json!({ "error": reason })),
-                ).into_response());
+                )
+                    .into_response());
             }
             Ok(resp.data)
         }
@@ -658,7 +689,8 @@ async fn raft_write_data(
         Err(e) => Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": format!("raft write failed: {e}") })),
-        ).into_response()),
+        )
+            .into_response()),
     }
 }
 
@@ -723,13 +755,19 @@ async fn insert_record(
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(req): Json<InsertRequest>,
 ) -> Response {
-    let fxp_values: Vec<i32> = req.values.iter()
+    let fxp_values: Vec<i32> = req
+        .values
+        .iter()
         .map(|&f| valori_kernel::fxp::ops::from_f32(f).0)
         .collect();
     let vector = match to_fxp(&req.values) {
         Ok(v) => v,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response();
         }
     };
 
@@ -738,9 +776,13 @@ async fn insert_record(
     let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
         Some(id) => id,
         None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("unknown collection: {:?}", req.collection)
+                })),
+            )
+                .into_response();
         }
     };
     let shard = state.shard_for(ns_id);
@@ -763,9 +805,12 @@ async fn insert_record(
                 tag: req.tag,
             },
             request_id: req.request_id,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns_id,
         },
-    ).await {
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => return e,
     };
@@ -779,25 +824,44 @@ async fn insert_record(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     {
-        use valori_planner::operation::{OperationKind, OperationInputs};
+        use valori_planner::operation::{OperationInputs, OperationKind};
         let inputs = OperationInputs::Ingest {
             strategy: "direct".into(),
             collection: req.collection.clone().unwrap_or_else(|| "default".into()),
             shard_id,
             embed_enabled: false,
         };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::Ingest, &inputs, ns_id, shard_id, sequence, true, state_before, state_after);
+        crate::receipt_bridge::emit_write(
+            &receipts,
+            OperationKind::Ingest,
+            &inputs,
+            ns_id,
+            shard_id,
+            sequence,
+            true,
+            state_before,
+            state_after,
+        );
     }
 
     let receipt = valori_kernel::proof::InsertReceipt::build(
-        record_id, old_root, &fxp_values, new_root, sequence, timestamp,
+        record_id,
+        old_root,
+        &fxp_values,
+        new_root,
+        sequence,
+        timestamp,
     );
-    (StatusCode::OK, Json(InsertResponse {
-        id: record_id,
-        log_index: sequence,
-        deduplicated: resp.deduplicated,
-        receipt: receipt.into(),
-    })).into_response()
+    (
+        StatusCode::OK,
+        Json(InsertResponse {
+            id: record_id,
+            log_index: sequence,
+            deduplicated: resp.deduplicated,
+            receipt: receipt.into(),
+        }),
+    )
+        .into_response()
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -843,7 +907,9 @@ struct SearchRequest {
     collection: Option<String>,
 }
 
-fn default_rerank() -> bool { true }
+fn default_rerank() -> bool {
+    true
+}
 
 fn default_k() -> usize {
     10
@@ -875,9 +941,13 @@ async fn search(
     let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
         Some(id) => id,
         None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("unknown collection: {:?}", req.collection)
+                })),
+            )
+                .into_response();
         }
     };
     let shard = state.shard_for(ns_id);
@@ -887,27 +957,41 @@ async fn search(
     // An empty store (dim == None) accepts any query length.
     if let Some(locked) = shard_sm.locked_dim().await {
         if req.query.len() != locked {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": format!(
-                    "Query vector has {} elements but this store is locked to dim={}. \
-                     Check GET /health for the current dim.",
-                    req.query.len(), locked
-                )
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Query vector has {} elements but this store is locked to dim={}. \
+                         Check GET /health for the current dim.",
+                        req.query.len(), locked
+                    )
+                })),
+            )
+                .into_response();
         }
     }
 
     let query = match to_fxp(&req.query) {
         Ok(v) => v,
         Err(e) => {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response();
         }
     };
 
     // Linearizable reads (the default) establish a read index first, so the
     // local scan below reflects every write committed before this read began.
     if req.consistency == Consistency::Linearizable {
-        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
+        if let Err(resp) = ensure_read_consistency(
+            shard_for_namespace(ns_id, state.shard_count),
+            &shard.raft,
+            &state.http,
+        )
+        .await
+        {
             return resp;
         }
     }
@@ -940,7 +1024,10 @@ async fn search(
                 let n = s.search_l2(&query, &mut buf, None);
                 buf[..n]
                     .iter()
-                    .map(|r| SearchHit { id: r.id.0, score: r.score as f32 / (SCALE as f32 * SCALE as f32) })
+                    .map(|r| SearchHit {
+                        id: r.id.0,
+                        score: r.score as f32 / (SCALE as f32 * SCALE as f32),
+                    })
                     .collect()
             })
             .await;
@@ -948,38 +1035,50 @@ async fn search(
         // the replicated KernelState.meta map (set via SetMeta) so every
         // replica filters identically, not a per-node sidecar.
         let filtered: Vec<SearchHit> = if let Some(ref f) = mf {
-            shard_sm.with_state(|s| {
-                raw.into_iter()
-                    .filter(|h| {
-                        let key = format!("rec:{}", h.id);
-                        match s.meta.get(&key).and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()) {
-                            Some(meta) => valori_search::matches_metadata_filter(&meta, f),
-                            None => false,
-                        }
-                    })
-                    .collect()
-            }).await
+            shard_sm
+                .with_state(|s| {
+                    raw.into_iter()
+                        .filter(|h| {
+                            let key = format!("rec:{}", h.id);
+                            match s
+                                .meta
+                                .get(&key)
+                                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                            {
+                                Some(meta) => valori_search::matches_metadata_filter(&meta, f),
+                                None => false,
+                            }
+                        })
+                        .collect()
+                })
+                .await
         } else {
             raw
         };
         if use_rerank && !filtered.is_empty() {
-            let candidates: Vec<(u64, f32)> = filtered.iter()
-                .map(|h| (h.id as u64, h.score))
-                .collect();
+            let candidates: Vec<(u64, f32)> =
+                filtered.iter().map(|h| (h.id as u64, h.score)).collect();
             let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
-            shard_sm.with_text_corpus(|corpus| {
-                // build a reranker seeded with only the candidate texts
-                let mut reranker = valori_search::ValoriReranker::new();
-                for id in &candidate_ids {
-                    if let Some(text) = corpus.get(id) {
-                        reranker.insert(*id, text);
+            shard_sm
+                .with_text_corpus(|corpus| {
+                    // build a reranker seeded with only the candidate texts
+                    let mut reranker = valori_search::ValoriReranker::new();
+                    for id in &candidate_ids {
+                        if let Some(text) = corpus.get(id) {
+                            reranker.insert(*id, text);
+                        }
                     }
-                }
-                reranker.rerank(&query_text_owned, candidates)
-                    .into_iter().take(k)
-                    .map(|(id, score)| SearchHit { id: id as u32, score })
-                    .collect()
-            }).await
+                    reranker
+                        .rerank(&query_text_owned, candidates)
+                        .into_iter()
+                        .take(k)
+                        .map(|(id, score)| SearchHit {
+                            id: id as u32,
+                            score,
+                        })
+                        .collect()
+                })
+                .await
         } else {
             filtered.into_iter().take(k).collect()
         }
@@ -987,7 +1086,8 @@ async fn search(
         let pool = base_k.saturating_mul(4).max(50).min(5000);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs()).unwrap_or(0);
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
         let decayed: Vec<valori_search::DecayedHit> = shard_sm
             .with_state_and_timestamps(|s, created_at| {
                 let mut buf = vec![KernelSearchResult::default(); pool];
@@ -1004,23 +1104,37 @@ async fn search(
             })
             .await;
         if let Some(ref f) = mf {
-            shard_sm.with_state(|s| {
-                decayed.into_iter()
-                    .filter(|h| {
-                        let key = format!("rec:{}", h.id);
-                        match s.meta.get(&key).and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok()) {
-                            Some(meta) => valori_search::matches_metadata_filter(&meta, f),
-                            None => false,
-                        }
-                    })
-                    .take(k)
-                    .map(|h| SearchHit { id: h.id, score: h.distance })
-                    .collect::<Vec<_>>()
-            }).await
+            shard_sm
+                .with_state(|s| {
+                    decayed
+                        .into_iter()
+                        .filter(|h| {
+                            let key = format!("rec:{}", h.id);
+                            match s
+                                .meta
+                                .get(&key)
+                                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                            {
+                                Some(meta) => valori_search::matches_metadata_filter(&meta, f),
+                                None => false,
+                            }
+                        })
+                        .take(k)
+                        .map(|h| SearchHit {
+                            id: h.id,
+                            score: h.distance,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
         } else {
-            decayed.into_iter()
+            decayed
+                .into_iter()
                 .take(k)
-                .map(|h| SearchHit { id: h.id, score: h.distance })
+                .map(|h| SearchHit {
+                    id: h.id,
+                    score: h.distance,
+                })
                 .collect::<Vec<_>>()
         }
     };
@@ -1031,7 +1145,9 @@ async fn search(
     };
     let shard_id = shard_for_namespace(ns_id, state.shard_count).0 as u8;
     {
-        use valori_planner::operation::{OperationKind, OperationInputs, ConsistencyLevel as PlannerConsistency};
+        use valori_planner::operation::{
+            ConsistencyLevel as PlannerConsistency, OperationInputs, OperationKind,
+        };
         let inputs = OperationInputs::Search {
             k: req.k as u32,
             collection: req.collection.clone().unwrap_or_else(|| "default".into()),
@@ -1045,16 +1161,33 @@ async fn search(
                 PlannerConsistency::Local
             },
         };
-        crate::receipt_bridge::emit_read(&receipts, OperationKind::Search, &inputs, ns_id, shard_id, 0, true, state_hash);
+        crate::receipt_bridge::emit_read(
+            &receipts,
+            OperationKind::Search,
+            &inputs,
+            ns_id,
+            shard_id,
+            0,
+            true,
+            state_hash,
+        );
     }
 
-    (StatusCode::OK, Json(serde_json::json!({ "results": results }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "results": results })),
+    )
+        .into_response()
 }
 
 // ── Read consistency (read-index protocol) ──────────────────────────────────────
 
 fn read_unavailable(msg: String) -> Response {
-    (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": msg }))).into_response()
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
 }
 
 /// Block until this node may serve a linearizable read.
@@ -1065,7 +1198,11 @@ fn read_unavailable(msg: String) -> Response {
 ///   then wait until this node's applied index catches up before returning.
 ///
 /// On success the caller may scan local state and the result is linearizable.
-async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest::Client) -> Result<(), Response> {
+async fn ensure_read_consistency(
+    shard_id: ShardId,
+    raft: &Raft,
+    http: &reqwest::Client,
+) -> Result<(), Response> {
     // Snapshot the metrics into owned values so no watch borrow is held across
     // an await point.
     let m = raft.metrics().borrow().clone();
@@ -1104,7 +1241,10 @@ async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest:
         }
     };
 
-    let url = format!("http://{leader_api}/v1/cluster/read-index?shard={}", shard_id.0);
+    let url = format!(
+        "http://{leader_api}/v1/cluster/read-index?shard={}",
+        shard_id.0
+    );
     let read_index = match http
         .get(&url)
         .timeout(std::time::Duration::from_secs(5))
@@ -1113,7 +1253,11 @@ async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest:
     {
         Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
             Ok(v) => v.get("read_index").and_then(|x| x.as_u64()).unwrap_or(0),
-            Err(e) => return Err(read_unavailable(format!("bad read-index reply from leader: {e}"))),
+            Err(e) => {
+                return Err(read_unavailable(format!(
+                    "bad read-index reply from leader: {e}"
+                )))
+            }
         },
         Ok(r) => {
             return Err(read_unavailable(format!(
@@ -1121,7 +1265,11 @@ async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest:
                 r.status()
             )))
         }
-        Err(e) => return Err(read_unavailable(format!("cannot reach leader for read-index: {e}"))),
+        Err(e) => {
+            return Err(read_unavailable(format!(
+                "cannot reach leader for read-index: {e}"
+            )))
+        }
     };
 
     // Wait until our local apply has reached the leader's read index.
@@ -1129,7 +1277,11 @@ async fn ensure_read_consistency(shard_id: ShardId, raft: &Raft, http: &reqwest:
         .applied_index_at_least(Some(read_index), "linearizable-read")
         .await
         .map(|_| ())
-        .map_err(|e| read_unavailable(format!("timed out catching up to read index {read_index}: {e}")))
+        .map_err(|e| {
+            read_unavailable(format!(
+                "timed out catching up to read index {read_index}: {e}"
+            ))
+        })
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
@@ -1164,14 +1316,21 @@ impl crate::routes::records::RecordOps for DataPlaneState {
         } else {
             KernelEvent::DeleteRecord { id: RecordId(id) }
         };
-        let resp = raft_write_data(&shard.raft, ClientRequest {
-            event,
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            namespace_id: ns,
-        })
+        let resp = raft_write_data(
+            &shard.raft,
+            ClientRequest {
+                event,
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
         .await?;
-        let state_after: String = resp.state_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let state_after: String = resp
+            .state_hash
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
         Ok(crate::routes::records::DeletedRecord {
             log_index: Some(resp.log_index),
             shard_id,
@@ -1205,28 +1364,44 @@ async fn get_record_by_id(
 ) -> Result<Json<serde_json::Value>, Response> {
     let ns = match state.sm.resolve_namespace(q.collection.as_deref()).await {
         Some(ns) => ns,
-        None => return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "collection not found"}))).into_response()),
+        None => {
+            return Err((
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": "collection not found"})),
+            )
+                .into_response())
+        }
     };
     let rec_id = valori_kernel::types::id::RecordId(id);
-    let result = state.sm.with_state(|s| {
-        s.get_record(rec_id)
-            .filter(|r| r.namespace_id == ns)
-            .map(|rec| {
-                let vector: Vec<f32> = rec.vector.data.iter()
-                    .map(|s| valori_kernel::fxp::ops::to_f32(*s))
-                    .collect();
-                serde_json::json!({
-                    "id": id,
-                    "vector": vector,
-                    "metadata": rec.metadata.as_ref()
-                        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()),
-                    "tag": rec.tag,
+    let result = state
+        .sm
+        .with_state(|s| {
+            s.get_record(rec_id)
+                .filter(|r| r.namespace_id == ns)
+                .map(|rec| {
+                    let vector: Vec<f32> = rec
+                        .vector
+                        .data
+                        .iter()
+                        .map(|s| valori_kernel::fxp::ops::to_f32(*s))
+                        .collect();
+                    serde_json::json!({
+                        "id": id,
+                        "vector": vector,
+                        "metadata": rec.metadata.as_ref()
+                            .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok()),
+                        "tag": rec.tag,
+                    })
                 })
-            })
-    }).await;
+        })
+        .await;
     match result {
         Some(v) => Ok(Json(v)),
-        None => Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response()),
+        None => Err((
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "record not found"})),
+        )
+            .into_response()),
     }
 }
 
@@ -1238,21 +1413,45 @@ async fn update_record_metadata(
 ) -> Result<Json<serde_json::Value>, Response> {
     let ns = match state.sm.resolve_namespace(q.collection.as_deref()).await {
         Some(ns) => ns,
-        None => return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "collection not found"}))).into_response()),
+        None => {
+            return Err((
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": "collection not found"})),
+            )
+                .into_response())
+        }
     };
     let rec_id = valori_kernel::types::id::RecordId(id);
-    let exists = state.sm.with_state(|s| s.get_record(rec_id).filter(|r| r.namespace_id == ns).is_some()).await;
+    let exists = state
+        .sm
+        .with_state(|s| {
+            s.get_record(rec_id)
+                .filter(|r| r.namespace_id == ns)
+                .is_some()
+        })
+        .await;
     if !exists {
-        return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response());
+        return Err((
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "record not found"})),
+        )
+            .into_response());
     }
     let metadata_bytes = serde_json::to_vec(&body).ok();
     let shard = state.shard_for(ns);
-    raft_write_data(&shard.raft, ClientRequest {
-        event: KernelEvent::UpdateRecordMetadata { id: rec_id, metadata: metadata_bytes },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION,
-        namespace_id: ns,
-    }).await?;
+    raft_write_data(
+        &shard.raft,
+        ClientRequest {
+            event: KernelEvent::UpdateRecordMetadata {
+                id: rec_id,
+                metadata: metadata_bytes,
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
+        },
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "ok": true, "id": id })))
 }
 
@@ -1288,15 +1487,22 @@ async fn batch_insert(
     let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
         Some(id) => id,
         None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("unknown collection: {:?}", req.collection)
+                })),
+            )
+                .into_response();
         }
     };
     let shard = state.shard_for(ns_id);
     let shard_raft = &shard.raft;
     let shard_id = shard_for_namespace(ns_id, state.shard_count).0 as u8;
-    let state_before: String = { let raw = state.sm.state_hash().await; raw.iter().map(|b| format!("{:02x}", b)).collect() };
+    let state_before: String = {
+        let raw = state.sm.state_hash().await;
+        raw.iter().map(|b| format!("{:02x}", b)).collect()
+    };
 
     let mut ids = Vec::with_capacity(req.batch.len());
 
@@ -1304,7 +1510,10 @@ async fn batch_insert(
         let vector = match to_fxp(&values) {
             Ok(v) => v,
             Err(e) => {
-                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e })))
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": e })),
+                )
                     .into_response();
             }
         };
@@ -1312,12 +1521,15 @@ async fn batch_insert(
         // metadata field takes priority; fall back to texts[i] so the state
         // machine's text_corpus is populated for BM25 reranking (same semantics
         // as the standalone path that calls engine.reranker_insert from texts).
-        let meta_bytes = req.metadata.as_ref()
+        let meta_bytes = req
+            .metadata
+            .as_ref()
             .and_then(|m| m.get(ids.len()))
             .and_then(|s| s.as_ref())
             .map(|s| s.as_bytes().to_vec())
             .or_else(|| {
-                req.texts.as_ref()
+                req.texts
+                    .as_ref()
                     .and_then(|t| t.get(ids.len()))
                     .and_then(|s| s.as_ref())
                     .map(|t| t.as_bytes().to_vec())
@@ -1325,15 +1537,23 @@ async fn batch_insert(
 
         match shard_raft
             .client_write(ClientRequest {
-                event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: 0 },
+                event: KernelEvent::AutoInsertRecord {
+                    vector,
+                    metadata: meta_bytes,
+                    tag: 0,
+                },
                 request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns_id,
             })
             .await
         {
             Ok(resp) => {
                 if let Some(reason) = &resp.data.rejected {
-                    return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": reason })))
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({ "error": reason })),
+                    )
                         .into_response();
                 }
                 ids.push(resp.data.allocated_record_id.unwrap_or(0));
@@ -1351,15 +1571,28 @@ async fn batch_insert(
         }
     }
 
-    let state_after: String = { let raw = shard.state_machine.state_hash().await; raw.iter().map(|b| format!("{:02x}", b)).collect() };
+    let state_after: String = {
+        let raw = shard.state_machine.state_hash().await;
+        raw.iter().map(|b| format!("{:02x}", b)).collect()
+    };
     {
-        use valori_planner::operation::{OperationKind, OperationInputs};
+        use valori_planner::operation::{OperationInputs, OperationKind};
         let inputs = OperationInputs::BatchInsert {
             count: ids.len() as u32,
             collection: req.collection.clone().unwrap_or_else(|| "default".into()),
             shard_id,
         };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::BatchInsert, &inputs, ns_id, shard_id, 0, true, state_before, state_after);
+        crate::receipt_bridge::emit_write(
+            &receipts,
+            OperationKind::BatchInsert,
+            &inputs,
+            ns_id,
+            shard_id,
+            0,
+            true,
+            state_before,
+            state_after,
+        );
     }
     (StatusCode::OK, Json(serde_json::json!({ "ids": ids }))).into_response()
 }
@@ -1371,7 +1604,11 @@ async fn batch_insert(
 async fn state_proof(State(state): State<DataPlaneState>) -> Response {
     let hash = state.sm.state_hash().await;
     let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-    (StatusCode::OK, Json(serde_json::json!({ "final_state_hash": hex }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "final_state_hash": hex })),
+    )
+        .into_response()
 }
 
 // ── Cluster proof — the demo/verification endpoint ────────────────────────────
@@ -1413,15 +1650,24 @@ async fn event_log_proof(State(state): State<DataPlaneState>) -> Response {
         match crate::events::event_proof::compute_event_log_hash(path) {
             Ok(bytes) => {
                 let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-                shards.insert(shard_id.0.to_string(), serde_json::json!({ "event_log_hash": hex }));
+                shards.insert(
+                    shard_id.0.to_string(),
+                    serde_json::json!({ "event_log_hash": hex }),
+                );
             }
             Err(e) => {
-                shards.insert(shard_id.0.to_string(), serde_json::json!({ "error": format!("cannot hash event log: {e}") }));
+                shards.insert(
+                    shard_id.0.to_string(),
+                    serde_json::json!({ "error": format!("cannot hash event log: {e}") }),
+                );
             }
         }
     }
     // Top-level `event_log_hash` = shard 0 for backward compat with single-shard clients.
-    let top_hash = shards.get("0").and_then(|v| v.get("event_log_hash")).cloned();
+    let top_hash = shards
+        .get("0")
+        .and_then(|v| v.get("event_log_hash"))
+        .cloned();
     let mut body = serde_json::Map::new();
     if let Some(h) = top_hash {
         body.insert("event_log_hash".into(), h);
@@ -1455,7 +1701,10 @@ impl crate::routes::graph::GraphOps for DataPlaneState {
         let resp = raft_write_data(
             &self.shard_for(ns).raft,
             ClientRequest {
-                event: KernelEvent::AutoCreateNode { kind, record: record_id.map(RecordId) },
+                event: KernelEvent::AutoCreateNode {
+                    kind,
+                    record: record_id.map(RecordId),
+                },
                 request_id: None,
                 schema_version: CURRENT_SCHEMA_VERSION,
                 namespace_id: ns,
@@ -1478,7 +1727,11 @@ impl crate::routes::graph::GraphOps for DataPlaneState {
         let resp = raft_write_data(
             &self.shard_for(ns).raft,
             ClientRequest {
-                event: KernelEvent::AutoCreateEdge { from: NodeId(from), to: NodeId(to), kind },
+                event: KernelEvent::AutoCreateEdge {
+                    from: NodeId(from),
+                    to: NodeId(to),
+                    kind,
+                },
                 request_id: None,
                 schema_version: CURRENT_SCHEMA_VERSION,
                 namespace_id: ns,
@@ -1577,7 +1830,10 @@ impl crate::routes::graph::GraphOps for DataPlaneState {
             .state_machine
             .with_state(move |s| {
                 let (nodes, edges) = valori_rag::graph::expand_subgraph(s, &[root], depth);
-                (serde_json::Value::Array(nodes), serde_json::Value::Array(edges))
+                (
+                    serde_json::Value::Array(nodes),
+                    serde_json::Value::Array(edges),
+                )
             })
             .await)
     }
@@ -1634,7 +1890,9 @@ async fn get_graph_edges(
 
 // ── Graph — BFS subgraph ──────────────────────────────────────────────────────
 
-fn default_subgraph_depth() -> u32 { 2 }
+fn default_subgraph_depth() -> u32 {
+    2
+}
 
 async fn get_graph_subgraph(
     State(state): State<DataPlaneState>,
@@ -1665,11 +1923,15 @@ async fn cluster_graphrag(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(req): Json<ClusterGraphRagRequest>,
 ) -> Response {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     if let Err(resp) = state.readiness.check(&state.raft) {
         return resp;
@@ -1678,9 +1940,13 @@ async fn cluster_graphrag(
     let ns_id = match state.sm.resolve_namespace(req.collection.as_deref()).await {
         Some(id) => id,
         None => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("unknown collection: {:?}", req.collection)
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("unknown collection: {:?}", req.collection)
+                })),
+            )
+                .into_response();
         }
     };
     let shard = state.shard_for(ns_id);
@@ -1688,20 +1954,30 @@ async fn cluster_graphrag(
 
     if let Some(locked) = shard_sm.locked_dim().await {
         if req.query_vector.len() != locked {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                "error": format!(
-                    "Query vector has {} elements but this store is locked to dim={}. \
-                     Check GET /health for the current dim.",
-                    req.query_vector.len(), locked
-                )
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "Query vector has {} elements but this store is locked to dim={}. \
+                         Check GET /health for the current dim.",
+                        req.query_vector.len(), locked
+                    )
+                })),
+            )
+                .into_response();
         }
     }
 
     // Linearizable by default: establish a read index so the local snapshot
     // reflects every write committed before this GraphRAG read began.
     if req.consistency == Consistency::Linearizable {
-        if let Err(resp) = ensure_read_consistency(shard_for_namespace(ns_id, state.shard_count), &shard.raft, &state.http).await {
+        if let Err(resp) = ensure_read_consistency(
+            shard_for_namespace(ns_id, state.shard_count),
+            &shard.raft,
+            &state.http,
+        )
+        .await
+        {
             return resp;
         }
     }
@@ -1717,19 +1993,44 @@ async fn cluster_graphrag(
         "vector": req.query_vector,
         "k": k,
         "depth": depth,
-    }).to_string();
+    })
+    .to_string();
 
-    let op_hash = compute_operation_hash(OperationKind::GraphRag, &OperationInputs::GraphRag {
-        k: k as u32, depth, collection: req.collection.clone().unwrap_or_else(|| "default".into()), shard_id,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::GraphRag,
+        &OperationInputs::GraphRag {
+            k: k as u32,
+            depth,
+            collection: req.collection.clone().unwrap_or_else(|| "default".into()),
+            shard_id,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::GraphRag, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::GraphRag,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -1754,13 +2055,17 @@ struct ClusterCreateKeyRequest {
     description: Option<String>,
 }
 
-fn default_cluster_scope() -> ApiScope { ApiScope::ReadWrite }
+fn default_cluster_scope() -> ApiScope {
+    ApiScope::ReadWrite
+}
 
 async fn cluster_create_key(
     Extension(auth): Extension<Arc<AuthState>>,
     Json(req): Json<ClusterCreateKeyRequest>,
 ) -> impl axum::response::IntoResponse {
-    let created = auth.key_store.create(req.scope, req.collection, req.description);
+    let created = auth
+        .key_store
+        .create(req.scope, req.collection, req.description);
     (StatusCode::CREATED, Json(created))
 }
 
@@ -1806,13 +2111,25 @@ async fn cluster_insert_encrypted(
     use base64::Engine as _;
     let plaintext = match base64::engine::general_purpose::STANDARD.decode(&req.payload) {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        }
     };
 
     let key_id: [u8; 16] = if let Some(ref hex) = req.key_id {
         match hex_to_key_id(hex) {
             Some(k) => k,
-            None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "key_id must be 32 hex chars"})),
+                )
+                    .into_response()
+            }
         }
     } else {
         new_key_id()
@@ -1821,13 +2138,25 @@ async fn cluster_insert_encrypted(
     // Encrypt on this node's vault BEFORE submitting to Raft.
     let ciphertext = match state.vault.encrypt(key_id, &plaintext) {
         Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:?}")}))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("{e:?}")})),
+            )
+                .into_response()
+        }
     };
 
     let ns = if let Some(ref coll) = req.collection {
         match state.sm.resolve_namespace(Some(coll.as_str())).await {
             Some(id) => id,
-            None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Collection not found"}))).into_response(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Collection not found"})),
+                )
+                    .into_response()
+            }
         }
     } else {
         valori_kernel::types::id::DEFAULT_NS.0
@@ -1849,14 +2178,19 @@ async fn cluster_insert_encrypted(
                 tag: req.tag.unwrap_or(0),
             },
             request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
         },
         move |resp| {
-            (StatusCode::CREATED, Json(ClusterInsertEncryptedResponse {
-                id: resp.allocated_record_id.unwrap_or(0),
-                key_id: key_id_to_hex(&key_id),
-                log_index: resp.log_index,
-            })).into_response()
+            (
+                StatusCode::CREATED,
+                Json(ClusterInsertEncryptedResponse {
+                    id: resp.allocated_record_id.unwrap_or(0),
+                    key_id: key_id_to_hex(&key_id),
+                    log_index: resp.log_index,
+                }),
+            )
+                .into_response()
         },
     )
     .await
@@ -1868,14 +2202,24 @@ async fn cluster_shred_key(
 ) -> Response {
     let key_id = match hex_to_key_id(&key_id_hex) {
         Some(k) => k,
-        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "key_id must be 32 hex chars"})),
+            )
+                .into_response()
+        }
     };
 
     // Shred the vault key locally FIRST — the compliance-critical,
     // irreversible step: this node's ciphertext-decryption capability for
     // key_id is destroyed unconditionally, regardless of what follows.
     if let Err(e) = state.vault.shred(key_id) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("{e:?}")}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e:?}")})),
+        )
+            .into_response();
     }
 
     // Phase S5: propagate FLAG_SHREDDED to EVERY shard, not just shard 0 —
@@ -1896,42 +2240,59 @@ async fn cluster_shred_key(
     let mut all_shredded = true;
     for (shard_id, handle) in state.shards.iter() {
         let key = format!("shard_{}", shard_id.0);
-        match handle.raft.client_write(ClientRequest {
-            event: KernelEvent::ShredKey { key_id },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-        }).await {
-            Ok(_) => { shard_status.insert(key, serde_json::json!({ "status": "shredded" })); }
+        match handle
+            .raft
+            .client_write(ClientRequest {
+                event: KernelEvent::ShredKey { key_id },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            })
+            .await
+        {
+            Ok(_) => {
+                shard_status.insert(key, serde_json::json!({ "status": "shredded" }));
+            }
             Err(openraft::error::RaftError::APIError(
                 openraft::error::ClientWriteError::ForwardToLeader(fwd),
             )) => {
                 all_shredded = false;
-                shard_status.insert(key, serde_json::json!({
-                    "status": "not-leader",
-                    "leader_api_addr": fwd.leader_node.map(|n| n.api_addr.clone()),
-                }));
+                shard_status.insert(
+                    key,
+                    serde_json::json!({
+                        "status": "not-leader",
+                        "leader_api_addr": fwd.leader_node.map(|n| n.api_addr.clone()),
+                    }),
+                );
             }
             Err(e) => {
                 all_shredded = false;
-                shard_status.insert(key, serde_json::json!({ "status": "error", "detail": e.to_string() }));
+                shard_status.insert(
+                    key,
+                    serde_json::json!({ "status": "error", "detail": e.to_string() }),
+                );
             }
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "key_id": key_id_hex,
-        "shredded": all_shredded,
-        "shards": shard_status,
-        "note": if all_shredded {
-            serde_json::Value::Null
-        } else {
-            serde_json::Value::String(
-                "vault key destroyed on this node; FLAG_SHREDDED did not reach every shard \
-                 because this node doesn't lead them all — retry this call (idempotent) to \
-                 complete propagation".into()
-            )
-        },
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "key_id": key_id_hex,
+            "shredded": all_shredded,
+            "shards": shard_status,
+            "note": if all_shredded {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::String(
+                    "vault key destroyed on this node; FLAG_SHREDDED did not reach every shard \
+                     because this node doesn't lead them all — retry this call (idempotent) to \
+                     complete propagation".into()
+                )
+            },
+        })),
+    )
+        .into_response()
 }
 
 async fn cluster_crypto_status(
@@ -1940,10 +2301,20 @@ async fn cluster_crypto_status(
 ) -> Response {
     let key_id = match hex_to_key_id(&key_id_hex) {
         Some(k) => k,
-        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "key_id must be 32 hex chars"}))).into_response(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "key_id must be 32 hex chars"})),
+            )
+                .into_response()
+        }
     };
     let exists = state.vault.key_exists(&key_id);
-    (StatusCode::OK, Json(serde_json::json!({"key_id": key_id_hex, "exists": exists}))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({"key_id": key_id_hex, "exists": exists})),
+    )
+        .into_response()
 }
 
 // ── Phase 3.13: index config ──────────────────────────────────────────────────
@@ -1951,20 +2322,28 @@ async fn cluster_crypto_status(
 async fn cluster_index_config() -> Response {
     // In cluster mode the data plane always uses KernelState's brute-force
     // search path for consistency. HNSW is a standalone-node feature.
-    (StatusCode::OK, Json(serde_json::json!({
-        "index_type": "brute_force",
-        "hnsw": null,
-        "note": "cluster mode uses kernel brute-force search for linearizable consistency",
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "index_type": "brute_force",
+            "hnsw": null,
+            "note": "cluster mode uses kernel brute-force search for linearizable consistency",
+        })),
+    )
+        .into_response()
 }
 
 async fn cluster_index_rebuild() -> Response {
     // Cluster mode uses the kernel's built-in brute-force path for linearizable
     // consistency — the standalone engine index is not used here.
-    (StatusCode::OK, Json(serde_json::json!({
-        "ok": true,
-        "note": "cluster mode uses kernel brute-force; index switching is not applicable",
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "note": "cluster mode uses kernel brute-force; index switching is not applicable",
+        })),
+    )
+        .into_response()
 }
 
 // ── C4.2 & C4.3: Cluster memory domain implementation ────────────────────────
@@ -1974,13 +2353,17 @@ fn cosine_similarity_from_records(
     rec_b: &valori_kernel::storage::record::Record,
 ) -> Option<f32> {
     use valori_kernel::math::dot::dot_i32 as dot_product;
-    if !rec_a.is_searchable() || !rec_b.is_searchable() { return None; }
+    if !rec_a.is_searchable() || !rec_b.is_searchable() {
+        return None;
+    }
     let va: Vec<i32> = rec_a.vector.data.iter().map(|x| x.0).collect();
     let vb: Vec<i32> = rec_b.vector.data.iter().map(|x| x.0).collect();
     let dot = dot_product(&va, &vb) as f64;
     let mag_a = (dot_product(&va, &va) as f64).sqrt();
     let mag_b = (dot_product(&vb, &vb) as f64).sqrt();
-    if mag_a == 0.0 || mag_b == 0.0 { return None; }
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return None;
+    }
     Some((dot / (mag_a * mag_b)) as f32)
 }
 
@@ -1991,10 +2374,19 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         self.sm.resolve_namespace(name).await
     }
 
-    async fn ensure_read_consistency(&self, ns: u16, consistency: Option<&str>) -> Result<(), Response> {
+    async fn ensure_read_consistency(
+        &self,
+        ns: u16,
+        consistency: Option<&str>,
+    ) -> Result<(), Response> {
         if consistency != Some("local") {
             let shard = self.shard_for(ns);
-            ensure_read_consistency(shard_for_namespace(ns, self.shard_count), &shard.raft, &self.http).await?;
+            ensure_read_consistency(
+                shard_for_namespace(ns, self.shard_count),
+                &shard.raft,
+                &self.http,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -2004,8 +2396,13 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         ns: u16,
         req: &crate::api::MemoryUpsertVectorRequest,
     ) -> Result<crate::routes::memory::UpsertedMemory, Response> {
-        let vector = to_fxp(&req.vector)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+        let vector = to_fxp(&req.vector).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        })?;
 
         let shard = self.shard_for(ns);
         let shard_raft = &shard.raft;
@@ -2016,47 +2413,90 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         };
 
         // 1. Insert vector record.
-        let resp_rec = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoInsertRecord { vector, metadata: None, tag: 0 },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_rec = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoInsertRecord {
+                    vector,
+                    metadata: None,
+                    tag: 0,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let record_id = resp_rec.allocated_record_id.unwrap_or(0);
 
         // 2. Create or reuse document node.
         let doc_node_id = if let Some(existing) = req.attach_to_document_node {
             existing
         } else {
-            let resp_doc = raft_write_data(shard_raft, ClientRequest {
-                event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await?;
+            let resp_doc = raft_write_data(
+                shard_raft,
+                ClientRequest {
+                    event: KernelEvent::AutoCreateNode {
+                        kind: NodeKind::Document,
+                        record: None,
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                },
+            )
+            .await?;
             resp_doc.allocated_node_id.unwrap_or(0)
         };
 
         // 3. Create chunk node linked to the record.
-        let resp_chunk = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(record_id)) },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_chunk = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNode {
+                    kind: NodeKind::Chunk,
+                    record: Some(RecordId(record_id)),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let chunk_node_id = resp_chunk.allocated_node_id.unwrap_or(0);
 
         // 4. Connect document -> chunk.
-        let resp_edge = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateEdge {
-                from: NodeId(doc_node_id),
-                to: NodeId(chunk_node_id),
-                kind: EdgeKind::ParentOf,
+        let resp_edge = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateEdge {
+                    from: NodeId(doc_node_id),
+                    to: NodeId(chunk_node_id),
+                    kind: EdgeKind::ParentOf,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
             },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        )
+        .await?;
         let mut log_index = resp_edge.log_index;
 
         let memory_id = format!("rec:{}", record_id);
         if let Some(meta) = &req.metadata {
-            let resp_meta = raft_write_data(shard_raft, ClientRequest {
-                event: KernelEvent::SetMeta { key: memory_id.clone(), value: meta.to_string() },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await?;
+            let resp_meta = raft_write_data(
+                shard_raft,
+                ClientRequest {
+                    event: KernelEvent::SetMeta {
+                        key: memory_id.clone(),
+                        value: meta.to_string(),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                },
+            )
+            .await?;
             log_index = resp_meta.log_index;
         }
 
@@ -2085,17 +2525,26 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
     ) -> Result<Vec<crate::api::MemorySearchHit>, Response> {
         if let Some(locked) = self.sm.locked_dim().await {
             if req.query_vector.len() != locked {
-                return Err((StatusCode::BAD_REQUEST, Json(serde_json::json!({
-                    "error": format!(
-                        "Query vector has {} elements but this store is locked to dim={}.",
-                        req.query_vector.len(), locked
-                    )
-                }))).into_response());
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "Query vector has {} elements but this store is locked to dim={}.",
+                            req.query_vector.len(), locked
+                        )
+                    })),
+                )
+                    .into_response());
             }
         }
 
-        let query = to_fxp(&req.query_vector)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+        let query = to_fxp(&req.query_vector).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        })?;
 
         let shard = self.shard_for(ns);
         let shard_sm = &shard.state_machine;
@@ -2118,21 +2567,26 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         let query_text_owned = req.query_text.clone().unwrap_or_default();
 
         let results = if half_life == 0 {
-            let raw: Vec<crate::api::MemorySearchHit> = shard_sm.with_state(|s| {
-                let mut buf = vec![KernelSearchResult::default(); fetch_k];
-                let n = s.search_l2_ns(&query, &mut buf, ns);
-                buf[..n].iter().map(|r| {
-                    let memory_id = format!("rec:{}", r.id.0);
-                    crate::api::MemorySearchHit {
-                        memory_id,
-                        record_id: r.id.0,
-                        score: r.score as f32 / (SCALE as f32 * SCALE as f32),
-                        metadata: None,
-                        decay_factor: None,
-                        age_secs: None,
-                    }
-                }).collect::<Vec<_>>()
-            }).await;
+            let raw: Vec<crate::api::MemorySearchHit> = shard_sm
+                .with_state(|s| {
+                    let mut buf = vec![KernelSearchResult::default(); fetch_k];
+                    let n = s.search_l2_ns(&query, &mut buf, ns);
+                    buf[..n]
+                        .iter()
+                        .map(|r| {
+                            let memory_id = format!("rec:{}", r.id.0);
+                            crate::api::MemorySearchHit {
+                                memory_id,
+                                record_id: r.id.0,
+                                score: r.score as f32 / (SCALE as f32 * SCALE as f32),
+                                metadata: None,
+                                decay_factor: None,
+                                age_secs: None,
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
 
             // Populate metadata before filtering so the filter predicate has data.
             let mut after_meta = raw;
@@ -2141,10 +2595,14 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             }
             // Apply metadata filter (filter → rerank → top-k, in that order).
             let filtered: Vec<crate::api::MemorySearchHit> = if let Some(ref f) = mf {
-                after_meta.into_iter()
-                    .filter(|h| h.metadata.as_ref()
-                        .map(|m| valori_search::matches_metadata_filter(m, f))
-                        .unwrap_or(false))
+                after_meta
+                    .into_iter()
+                    .filter(|h| {
+                        h.metadata
+                            .as_ref()
+                            .map(|m| valori_search::matches_metadata_filter(m, f))
+                            .unwrap_or(false)
+                    })
                     .collect()
             } else {
                 after_meta
@@ -2153,24 +2611,33 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             // BM25 reranking: build an ephemeral reranker from the text corpus
             // stored in the state machine (populated via AutoInsertRecord metadata).
             if use_rerank && !filtered.is_empty() {
-                let candidates: Vec<(u64, f32)> = filtered.iter()
+                let candidates: Vec<(u64, f32)> = filtered
+                    .iter()
                     .map(|h| (h.record_id as u64, h.score))
                     .collect();
                 let candidate_ids: Vec<u64> = candidates.iter().map(|(id, _)| *id).collect();
-                let reranked_ids: Vec<(u64, f32)> = shard_sm.with_text_corpus(|corpus| {
-                    let mut reranker = valori_search::ValoriReranker::new();
-                    for id in &candidate_ids {
-                        if let Some(text) = corpus.get(id) {
-                            reranker.insert(*id, text);
+                let reranked_ids: Vec<(u64, f32)> = shard_sm
+                    .with_text_corpus(|corpus| {
+                        let mut reranker = valori_search::ValoriReranker::new();
+                        for id in &candidate_ids {
+                            if let Some(text) = corpus.get(id) {
+                                reranker.insert(*id, text);
+                            }
                         }
-                    }
-                    reranker.rerank(&query_text_owned, candidates)
-                        .into_iter().take(k).collect()
-                }).await;
+                        reranker
+                            .rerank(&query_text_owned, candidates)
+                            .into_iter()
+                            .take(k)
+                            .collect()
+                    })
+                    .await;
                 // Re-attach metadata from the pre-rerank filtered set.
-                let meta_map: std::collections::HashMap<u64, Option<serde_json::Value>> =
-                    filtered.into_iter().map(|h| (h.record_id as u64, h.metadata)).collect();
-                reranked_ids.into_iter()
+                let meta_map: std::collections::HashMap<u64, Option<serde_json::Value>> = filtered
+                    .into_iter()
+                    .map(|h| (h.record_id as u64, h.metadata))
+                    .collect();
+                reranked_ids
+                    .into_iter()
                     .map(|(id, score)| crate::api::MemorySearchHit {
                         memory_id: format!("rec:{id}"),
                         record_id: id as u32,
@@ -2187,12 +2654,14 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             let pool = base_k.saturating_mul(4).max(50).min(1000);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs()).unwrap_or(0);
-            let mut decay_results: Vec<crate::api::MemorySearchHit> =
-                shard_sm.with_state_and_timestamps(|s, created_at| {
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut decay_results: Vec<crate::api::MemorySearchHit> = shard_sm
+                .with_state_and_timestamps(|s, created_at| {
                     let mut buf = vec![KernelSearchResult::default(); pool];
                     let n = s.search_l2_ns(&query, &mut buf, ns);
-                    let candidates: Vec<valori_search::DecayHit> = buf[..n].iter()
+                    let candidates: Vec<valori_search::DecayHit> = buf[..n]
+                        .iter()
                         .map(|r| valori_search::DecayHit {
                             id: r.id.0,
                             distance: r.score as f32,
@@ -2210,13 +2679,15 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
                             age_secs: h.age_secs,
                         })
                         .collect::<Vec<_>>()
-                }).await;
+                })
+                .await;
             for hit in &mut decay_results {
                 hit.metadata = shard_sm.get_meta_json(&hit.memory_id).await;
             }
             if let Some(ref f) = mf {
                 decay_results.retain(|h| {
-                    h.metadata.as_ref()
+                    h.metadata
+                        .as_ref()
                         .map(|m| valori_search::matches_metadata_filter(m, f))
                         .unwrap_or(false)
                 });
@@ -2233,8 +2704,13 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         ns: u16,
         req: &crate::api::MemoryConsolidateRequest,
     ) -> Result<crate::routes::memory::ConsolidatedMemory, Response> {
-        let new_vector = to_fxp(&req.new_vector)
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))).into_response())?;
+        let new_vector = to_fxp(&req.new_vector).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response()
+        })?;
 
         let shard = self.shard_for(ns);
         let shard_raft = &shard.raft;
@@ -2244,42 +2720,97 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
             raw.iter().map(|b| format!("{:02x}", b)).collect()
         };
 
-        raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::SoftDeleteRecord { id: RecordId(req.old_record_id) },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::SoftDeleteRecord {
+                    id: RecordId(req.old_record_id),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
 
-        let resp_rec = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoInsertRecord { vector: new_vector, metadata: None, tag: 0 },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_rec = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoInsertRecord {
+                    vector: new_vector,
+                    metadata: None,
+                    tag: 0,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let new_record_id = resp_rec.allocated_record_id.unwrap_or(0);
 
-        let resp_new_node = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(new_record_id)) },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_new_node = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNode {
+                    kind: NodeKind::Chunk,
+                    record: Some(RecordId(new_record_id)),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let new_node = NodeId(resp_new_node.allocated_node_id.unwrap_or(0));
 
-        let resp_old_node = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.old_record_id)) },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_old_node = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNode {
+                    kind: NodeKind::Chunk,
+                    record: Some(RecordId(req.old_record_id)),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let old_node = NodeId(resp_old_node.allocated_node_id.unwrap_or(0));
 
-        let resp_edge = raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateEdge { from: new_node, to: old_node, kind: EdgeKind::Supersedes },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await?;
+        let resp_edge = raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateEdge {
+                    from: new_node,
+                    to: old_node,
+                    kind: EdgeKind::Supersedes,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            },
+        )
+        .await?;
         let mut log_index = resp_edge.log_index;
         let edge_id = resp_edge.allocated_edge_id.unwrap_or(0);
 
         if let Some(meta) = &req.metadata {
             let memory_id = format!("rec:{}", new_record_id);
-            let resp_meta = raft_write_data(shard_raft, ClientRequest {
-                event: KernelEvent::SetMeta { key: memory_id, value: meta.to_string() },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await?;
+            let resp_meta = raft_write_data(
+                shard_raft,
+                ClientRequest {
+                    event: KernelEvent::SetMeta {
+                        key: memory_id,
+                        value: meta.to_string(),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                },
+            )
+            .await?;
             log_index = resp_meta.log_index;
         }
 
@@ -2312,11 +2843,14 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         let ra = req.record_a;
         let rb = req.record_b;
 
-        let similarity: Option<f32> = self.sm.with_state(move |s| {
-            let rec_a = s.get_record(RecordId(ra))?;
-            let rec_b = s.get_record(RecordId(rb))?;
-            cosine_similarity_from_records(rec_a, rec_b)
-        }).await;
+        let similarity: Option<f32> = self
+            .sm
+            .with_state(move |s| {
+                let rec_a = s.get_record(RecordId(ra))?;
+                let rec_b = s.get_record(RecordId(rb))?;
+                cosine_similarity_from_records(rec_a, rec_b)
+            })
+            .await;
 
         let similarity = match similarity {
             Some(s) => s,
@@ -2333,22 +2867,50 @@ impl crate::routes::memory::MemoryOps for DataPlaneState {
         };
 
         let (edge_id, log_index, state_after) = if contradicts {
-            let resp_a = raft_write_data(&self.raft, ClientRequest {
-                event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_a)) },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-            }).await?;
+            let resp_a = raft_write_data(
+                &self.raft,
+                ClientRequest {
+                    event: KernelEvent::AutoCreateNode {
+                        kind: NodeKind::Chunk,
+                        record: Some(RecordId(req.record_a)),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: 0,
+                },
+            )
+            .await?;
             let node_a = NodeId(resp_a.allocated_node_id.unwrap_or(0));
 
-            let resp_b = raft_write_data(&self.raft, ClientRequest {
-                event: KernelEvent::AutoCreateNode { kind: NodeKind::Chunk, record: Some(RecordId(req.record_b)) },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-            }).await?;
+            let resp_b = raft_write_data(
+                &self.raft,
+                ClientRequest {
+                    event: KernelEvent::AutoCreateNode {
+                        kind: NodeKind::Chunk,
+                        record: Some(RecordId(req.record_b)),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: 0,
+                },
+            )
+            .await?;
             let node_b = NodeId(resp_b.allocated_node_id.unwrap_or(0));
 
-            let resp_edge = raft_write_data(&self.raft, ClientRequest {
-                event: KernelEvent::AutoCreateEdge { from: node_a, to: node_b, kind: EdgeKind::Contradicts },
-                request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-            }).await?;
+            let resp_edge = raft_write_data(
+                &self.raft,
+                ClientRequest {
+                    event: KernelEvent::AutoCreateEdge {
+                        from: node_a,
+                        to: node_b,
+                        kind: EdgeKind::Contradicts,
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: 0,
+                },
+            )
+            .await?;
             let eid = resp_edge.allocated_edge_id.unwrap_or(0);
             let idx = resp_edge.log_index;
             let hash: String = {
@@ -2408,12 +2970,18 @@ impl crate::routes::meta::MetaOps for DataPlaneState {
         target_id: String,
         metadata: serde_json::Value,
     ) -> Result<(), Response> {
-        raft_write_data(&self.raft, ClientRequest {
-            event: KernelEvent::SetMeta { key: target_id, value: metadata.to_string() },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
-            namespace_id: 0,
-        })
+        raft_write_data(
+            &self.raft,
+            ClientRequest {
+                event: KernelEvent::SetMeta {
+                    key: target_id,
+                    value: metadata.to_string(),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            },
+        )
         .await
         .map(|_| ())
     }
@@ -2422,7 +2990,9 @@ impl crate::routes::meta::MetaOps for DataPlaneState {
         let key = target_id.to_string();
         self.sm
             .with_state(move |k| {
-                k.meta.get(&key).and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                k.meta
+                    .get(&key)
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             })
             .await
     }
@@ -2455,14 +3025,17 @@ async fn cluster_ingest(
 ) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use valori_kernel::types::id::{RecordId, NodeId};
+    use valori_kernel::types::id::{NodeId, RecordId};
 
-    let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
-    let source     = payload.source.clone().unwrap_or_else(|| "unknown".into());
-    let strategy   = payload.strategy.as_deref().unwrap_or("auto");
+    let collection = payload
+        .collection
+        .clone()
+        .unwrap_or_else(|| "default".into());
+    let source = payload.source.clone().unwrap_or_else(|| "unknown".into());
+    let strategy = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size = payload.chunk_size.unwrap_or(1000);
-    let overlap    = payload.chunk_overlap.unwrap_or(200);
-    let is_async   = query.r#async.or(payload.r#async).unwrap_or(false);
+    let overlap = payload.chunk_overlap.unwrap_or(200);
+    let is_async = query.r#async.or(payload.r#async).unwrap_or(false);
 
     // 1. Embed config
     let embed_cfg = match state.embed_config.clone() {
@@ -2478,8 +3051,11 @@ async fn cluster_ingest(
     let (chunks, strategy_used) =
         valori_ingest::chunk_document(&payload.text, strategy, chunk_size, overlap);
     if chunks.is_empty() {
-        return (StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "no chunks produced" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no chunks produced" })),
+        )
+            .into_response();
     }
 
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
@@ -2488,13 +3064,16 @@ async fn cluster_ingest(
         let job_id = format!("job_{}", valori_core::id::ExecutionId::new_random());
         {
             let mut jobs_map = tasks.jobs.write().await;
-            jobs_map.insert(job_id.clone(), serde_json::json!({
-                "status": "processing",
-                "job_id": job_id,
-                "chunk_count": chunks.len(),
-                "collection": collection,
-                "strategy_used": strategy_used,
-            }));
+            jobs_map.insert(
+                job_id.clone(),
+                serde_json::json!({
+                    "status": "processing",
+                    "job_id": job_id,
+                    "chunk_count": chunks.len(),
+                    "collection": collection,
+                    "strategy_used": strategy_used,
+                }),
+            );
         }
         let resp = serde_json::json!({
             "ok": true,
@@ -2517,18 +3096,32 @@ async fn cluster_ingest(
         let chunks_clone = chunks.clone();
 
         tokio::spawn(async move {
-            match valori_ingest::embed_batch(&texts_clone, &embed_cfg_clone, &state_clone.http).await {
+            match valori_ingest::embed_batch(&texts_clone, &embed_cfg_clone, &state_clone.http)
+                .await
+            {
                 Ok(vectors) if !vectors.is_empty() && !vectors[0].is_empty() => {
                     let ns: u16 = if collection_clone == "default" {
                         0
-                    } else if let Some(id) = state_clone.sm.resolve_namespace(Some(&collection_clone)).await {
+                    } else if let Some(id) = state_clone
+                        .sm
+                        .resolve_namespace(Some(&collection_clone))
+                        .await
+                    {
                         id
                     } else {
-                        match raft_write_data(&state_clone.raft, ClientRequest {
-                            event: KernelEvent::AutoCreateNamespace { name: collection_clone.clone() },
-                            request_id: None,
-                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-                        }).await {
+                        match raft_write_data(
+                            &state_clone.raft,
+                            ClientRequest {
+                                event: KernelEvent::AutoCreateNamespace {
+                                    name: collection_clone.clone(),
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION,
+                                namespace_id: 0,
+                            },
+                        )
+                        .await
+                        {
                             Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
                             Err(_) => 0,
                         }
@@ -2551,20 +3144,35 @@ async fn cluster_ingest(
                             serde_json::json!({ "doc": &source_clone, "n": i, "total": chunks_clone.len(), "text": &chunks_clone[i].text })
                                 .to_string().into_bytes()
                         );
-                        if let Ok(resp) = shard_raft.client_write(ClientRequest {
-                            event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
-                            request_id: None,
-                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                        }).await {
+                        if let Ok(resp) = shard_raft
+                            .client_write(ClientRequest {
+                                event: KernelEvent::AutoInsertRecord {
+                                    vector,
+                                    metadata: meta_bytes,
+                                    tag: ns as u64,
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION,
+                                namespace_id: ns,
+                            })
+                            .await
+                        {
                             record_ids.push(resp.data.allocated_record_id.unwrap_or(0));
                         }
                     }
 
-                    let doc_node_id: u32 = match shard_raft.client_write(ClientRequest {
-                        event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
-                        request_id: None,
-                        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                    }).await {
+                    let doc_node_id: u32 = match shard_raft
+                        .client_write(ClientRequest {
+                            event: KernelEvent::AutoCreateNode {
+                                kind: NodeKind::Document,
+                                record: None,
+                            },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION,
+                            namespace_id: ns,
+                        })
+                        .await
+                    {
                         Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
                         Err(_) => 0,
                     };
@@ -2574,29 +3182,37 @@ async fn cluster_ingest(
                         .map(|d| d.as_secs().to_string())
                         .unwrap_or_else(|_| "0".into());
 
-                    for (i, (chunk, &rid)) in chunks_clone.iter().zip(record_ids.iter()).enumerate() {
-                        let chunk_node_id = match shard_raft.client_write(ClientRequest {
-                            event: KernelEvent::AutoCreateNode {
-                                kind: NodeKind::Chunk,
-                                record: Some(RecordId(rid)),
-                            },
-                            request_id: None,
-                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                        }).await {
+                    for (i, (chunk, &rid)) in chunks_clone.iter().zip(record_ids.iter()).enumerate()
+                    {
+                        let chunk_node_id = match shard_raft
+                            .client_write(ClientRequest {
+                                event: KernelEvent::AutoCreateNode {
+                                    kind: NodeKind::Chunk,
+                                    record: Some(RecordId(rid)),
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION,
+                                namespace_id: ns,
+                            })
+                            .await
+                        {
                             Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
                             Err(_) => 0,
                         };
 
                         if doc_node_id > 0 && chunk_node_id > 0 {
-                            let _ = shard_raft.client_write(ClientRequest {
-                                event: KernelEvent::AutoCreateEdge {
-                                    from: NodeId(doc_node_id),
-                                    to:   NodeId(chunk_node_id),
-                                    kind: EdgeKind::ParentOf,
-                                },
-                                request_id: None,
-                                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                            }).await;
+                            let _ = shard_raft
+                                .client_write(ClientRequest {
+                                    event: KernelEvent::AutoCreateEdge {
+                                        from: NodeId(doc_node_id),
+                                        to: NodeId(chunk_node_id),
+                                        kind: EdgeKind::ParentOf,
+                                    },
+                                    request_id: None,
+                                    schema_version: CURRENT_SCHEMA_VERSION,
+                                    namespace_id: ns,
+                                })
+                                .await;
                         }
 
                         let chunk_meta = serde_json::json!({
@@ -2613,14 +3229,17 @@ async fn cluster_ingest(
                             "embed_model":      &embed_cfg_clone.model,
                             "embed_provider":   &embed_cfg_clone.provider,
                         });
-                        let _ = shard_raft.client_write(ClientRequest {
-                            event: KernelEvent::SetMeta {
-                                key:   format!("record:{rid}"),
-                                value: chunk_meta.to_string(),
-                            },
-                            request_id: None,
-                            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                        }).await;
+                        let _ = shard_raft
+                            .client_write(ClientRequest {
+                                event: KernelEvent::SetMeta {
+                                    key: format!("record:{rid}"),
+                                    value: chunk_meta.to_string(),
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION,
+                                namespace_id: ns,
+                            })
+                            .await;
                     }
 
                     let doc_meta = serde_json::json!({
@@ -2631,14 +3250,17 @@ async fn cluster_ingest(
                         "embed_model":  &embed_cfg_clone.model,
                         "ingested_at":  &now,
                     });
-                    let _ = shard_raft.client_write(ClientRequest {
-                        event: KernelEvent::SetMeta {
-                            key:   format!("document:{doc_node_id}"),
-                            value: doc_meta.to_string(),
-                        },
-                        request_id: None,
-                        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                    }).await;
+                    let _ = shard_raft
+                        .client_write(ClientRequest {
+                            event: KernelEvent::SetMeta {
+                                key: format!("document:{doc_node_id}"),
+                                value: doc_meta.to_string(),
+                            },
+                            request_id: None,
+                            schema_version: CURRENT_SCHEMA_VERSION,
+                            namespace_id: ns,
+                        })
+                        .await;
 
                     let state_after: String = {
                         let raw = state_clone.shard_for(ns).state_machine.state_hash().await;
@@ -2666,31 +3288,40 @@ async fn cluster_ingest(
                     }
 
                     let mut jobs_map = jobs_clone.write().await;
-                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
-                        "status": "completed",
-                        "job_id": job_id_clone,
-                        "document_node_id": doc_node_id,
-                        "chunk_count": record_ids.len(),
-                        "record_ids": record_ids,
-                        "collection": collection_clone,
-                        "strategy_used": strategy_used_clone,
-                    }));
+                    jobs_map.insert(
+                        job_id_clone.clone(),
+                        serde_json::json!({
+                            "status": "completed",
+                            "job_id": job_id_clone,
+                            "document_node_id": doc_node_id,
+                            "chunk_count": record_ids.len(),
+                            "record_ids": record_ids,
+                            "collection": collection_clone,
+                            "strategy_used": strategy_used_clone,
+                        }),
+                    );
                 }
                 Ok(_) => {
                     let mut jobs_map = jobs_clone.write().await;
-                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
-                        "status": "failed",
-                        "job_id": job_id_clone,
-                        "error": "embed provider returned empty vectors",
-                    }));
+                    jobs_map.insert(
+                        job_id_clone.clone(),
+                        serde_json::json!({
+                            "status": "failed",
+                            "job_id": job_id_clone,
+                            "error": "embed provider returned empty vectors",
+                        }),
+                    );
                 }
                 Err(e) => {
                     let mut jobs_map = jobs_clone.write().await;
-                    jobs_map.insert(job_id_clone.clone(), serde_json::json!({
-                        "status": "failed",
-                        "job_id": job_id_clone,
-                        "error": e.to_string(),
-                    }));
+                    jobs_map.insert(
+                        job_id_clone.clone(),
+                        serde_json::json!({
+                            "status": "failed",
+                            "job_id": job_id_clone,
+                            "error": e.to_string(),
+                        }),
+                    );
                 }
             }
         });
@@ -2701,12 +3332,20 @@ async fn cluster_ingest(
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
     let vectors = match valori_ingest::embed_batch(&texts, &embed_cfg, &state.http).await {
         Ok(v) => v,
-        Err(e) => return (StatusCode::BAD_GATEWAY,
-                          Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
     if vectors.is_empty() || vectors[0].is_empty() {
-        return (StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": "embed provider returned empty vectors" }))).into_response();
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": "embed provider returned empty vectors" })),
+        )
+            .into_response();
     }
 
     // 4. Resolve or auto-create the namespace via Raft (S2: replicated, not
@@ -2720,11 +3359,19 @@ async fn cluster_ingest(
     } else if let Some(id) = state.sm.resolve_namespace(Some(&collection)).await {
         id
     } else {
-        match raft_write_data(&state.raft, ClientRequest {
-            event: KernelEvent::AutoCreateNamespace { name: collection.clone() },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-        }).await {
+        match raft_write_data(
+            &state.raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNamespace {
+                    name: collection.clone(),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            },
+        )
+        .await
+        {
             Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
             Err(resp) => return resp,
         }
@@ -2744,40 +3391,68 @@ async fn cluster_ingest(
     for (i, vec_f32) in vectors.iter().enumerate() {
         let vector = match to_fxp(vec_f32) {
             Ok(v) => v,
-            Err(e) => return (StatusCode::BAD_REQUEST,
-                               Json(serde_json::json!({ "error": e }))).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": e })),
+                )
+                    .into_response()
+            }
         };
         // Encode text in metadata bytes so all replicas can rerank
         let meta_bytes = Some(
             serde_json::json!({ "doc": &source, "n": i, "total": chunks.len(), "text": &chunks[i].text })
                 .to_string().into_bytes()
         );
-        match shard_raft.client_write(ClientRequest {
-            event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await {
+        match shard_raft
+            .client_write(ClientRequest {
+                event: KernelEvent::AutoInsertRecord {
+                    vector,
+                    metadata: meta_bytes,
+                    tag: ns as u64,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            })
+            .await
+        {
             Ok(resp) => {
                 if let Some(reason) = &resp.data.rejected {
-                    return (StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(serde_json::json!({ "error": reason }))).into_response();
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({ "error": reason })),
+                    )
+                        .into_response();
                 }
                 record_ids.push(resp.data.allocated_record_id.unwrap_or(0));
             }
             Err(openraft::error::RaftError::APIError(
                 openraft::error::ClientWriteError::ForwardToLeader(fwd),
             )) => return not_leader_response(fwd.leader_node.as_ref()),
-            Err(e) => return (StatusCode::SERVICE_UNAVAILABLE,
-                              Json(serde_json::json!({ "error": format!("raft write: {e}") }))).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": format!("raft write: {e}") })),
+                )
+                    .into_response()
+            }
         }
     }
 
     // 6. Document graph node via Raft
-    let doc_node_id: u32 = match shard_raft.client_write(ClientRequest {
-        event: KernelEvent::AutoCreateNode { kind: NodeKind::Document, record: None },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-    }).await {
+    let doc_node_id: u32 = match shard_raft
+        .client_write(ClientRequest {
+            event: KernelEvent::AutoCreateNode {
+                kind: NodeKind::Document,
+                record: None,
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
+        })
+        .await
+    {
         Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
         Err(_) => 0,
     };
@@ -2789,28 +3464,35 @@ async fn cluster_ingest(
         .unwrap_or_else(|_| "0".into());
 
     for (i, (chunk, &rid)) in chunks.iter().zip(record_ids.iter()).enumerate() {
-        let chunk_node_id = match shard_raft.client_write(ClientRequest {
-            event: KernelEvent::AutoCreateNode {
-                kind: NodeKind::Chunk,
-                record: Some(RecordId(rid)),
-            },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await {
+        let chunk_node_id = match shard_raft
+            .client_write(ClientRequest {
+                event: KernelEvent::AutoCreateNode {
+                    kind: NodeKind::Chunk,
+                    record: Some(RecordId(rid)),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            })
+            .await
+        {
             Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
             Err(_) => 0,
         };
 
         if doc_node_id > 0 && chunk_node_id > 0 {
-            let _ = shard_raft.client_write(ClientRequest {
-                event: KernelEvent::AutoCreateEdge {
-                    from: NodeId(doc_node_id),
-                    to:   NodeId(chunk_node_id),
-                    kind: EdgeKind::ParentOf,
-                },
-                request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await;
+            let _ = shard_raft
+                .client_write(ClientRequest {
+                    event: KernelEvent::AutoCreateEdge {
+                        from: NodeId(doc_node_id),
+                        to: NodeId(chunk_node_id),
+                        kind: EdgeKind::ParentOf,
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                })
+                .await;
         }
 
         let chunk_meta = serde_json::json!({
@@ -2827,14 +3509,17 @@ async fn cluster_ingest(
             "embed_model":      &embed_cfg.model,
             "embed_provider":   &embed_cfg.provider,
         });
-        let _ = shard_raft.client_write(ClientRequest {
-            event: KernelEvent::SetMeta {
-                key:   format!("record:{rid}"),
-                value: chunk_meta.to_string(),
-            },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await;
+        let _ = shard_raft
+            .client_write(ClientRequest {
+                event: KernelEvent::SetMeta {
+                    key: format!("record:{rid}"),
+                    value: chunk_meta.to_string(),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            })
+            .await;
     }
 
     let doc_meta = serde_json::json!({
@@ -2845,14 +3530,17 @@ async fn cluster_ingest(
         "embed_model":  &embed_cfg.model,
         "ingested_at":  &now,
     });
-    let _ = shard_raft.client_write(ClientRequest {
-        event: KernelEvent::SetMeta {
-            key:   format!("document:{doc_node_id}"),
-            value: doc_meta.to_string(),
-        },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-    }).await;
+    let _ = shard_raft
+        .client_write(ClientRequest {
+            event: KernelEvent::SetMeta {
+                key: format!("document:{doc_node_id}"),
+                value: doc_meta.to_string(),
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
+        })
+        .await;
 
     let state_after: String = {
         let raw = state.shard_for(ns).state_machine.state_hash().await;
@@ -2895,7 +3583,8 @@ async fn cluster_ingest(
         record_ids,
         collection,
         operation_id,
-    }).into_response()
+    })
+    .into_response()
 }
 
 // ── Document Update (cluster path) ───────────────────────────────────────────
@@ -2911,21 +3600,28 @@ async fn cluster_ingest_update(
 ) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-    use valori_kernel::types::id::{RecordId, NodeId};
+    use valori_kernel::types::id::{NodeId, RecordId};
 
-    let collection = payload.collection.clone().unwrap_or_else(|| "default".into());
-    let source     = payload.source.clone().unwrap_or_else(|| "unknown".into());
-    let strategy   = payload.strategy.as_deref().unwrap_or("auto");
+    let collection = payload
+        .collection
+        .clone()
+        .unwrap_or_else(|| "default".into());
+    let source = payload.source.clone().unwrap_or_else(|| "unknown".into());
+    let strategy = payload.strategy.as_deref().unwrap_or("auto");
     let chunk_size = payload.chunk_size.unwrap_or(1000);
-    let overlap    = payload.chunk_overlap.unwrap_or(200);
+    let overlap = payload.chunk_overlap.unwrap_or(200);
     let doc_node_id = payload.document_node_id;
 
     // 1. Embed config
     let embed_cfg = match state.embed_config.clone() {
         Some(c) => c,
         None => {
-            return (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error":
-                "on-node embedding not configured — set VALORI_EMBED_PROVIDER" }))).into_response();
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error":
+                "on-node embedding not configured — set VALORI_EMBED_PROVIDER" })),
+            )
+                .into_response();
         }
     };
 
@@ -2933,12 +3629,16 @@ async fn cluster_ingest_update(
     let (new_chunks, strategy_used) =
         valori_ingest::chunk_document(&payload.text, strategy, chunk_size, overlap);
     if new_chunks.is_empty() {
-        return (StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "no chunks produced" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "no chunks produced" })),
+        )
+            .into_response();
     }
 
     // 3. Content-hash every new chunk
-    let new_hashes: Vec<[u8; 32]> = new_chunks.iter()
+    let new_hashes: Vec<[u8; 32]> = new_chunks
+        .iter()
         .map(|c| valori_ingest::chunk_content_hash(&c.text))
         .collect();
 
@@ -2948,11 +3648,19 @@ async fn cluster_ingest_update(
     } else if let Some(id) = state.sm.resolve_namespace(Some(&collection)).await {
         id
     } else {
-        match raft_write_data(&state.raft, ClientRequest {
-            event: KernelEvent::AutoCreateNamespace { name: collection.clone() },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: 0,
-        }).await {
+        match raft_write_data(
+            &state.raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNamespace {
+                    name: collection.clone(),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: 0,
+            },
+        )
+        .await
+        {
             Ok(resp) => resp.allocated_namespace_id.unwrap_or(0),
             Err(resp) => return resp,
         }
@@ -2965,32 +3673,47 @@ async fn cluster_ingest_update(
         raw.iter().map(|b| format!("{:02x}", b)).collect()
     };
     let shard_raft = &shard.raft;
-    let shard_sm   = &shard.state_machine;
+    let shard_sm = &shard.state_machine;
 
     // 5. Collect old chunks from the document node's outgoing ParentOf edges
-    let old_chunks: Vec<(u32, u32, [u8; 32])> = shard_sm.with_state(|s| {
-        use valori_kernel::types::enums::EdgeKind;
-        let mut result = Vec::new();
-        let Some(edges) = s.outgoing_edges(NodeId(doc_node_id)) else { return result };
-        for edge in edges {
-            if edge.kind != EdgeKind::ParentOf { continue; }
-            let chunk_node_id = edge.to.0;
-            let Some(chunk_node) = s.get_node(edge.to) else { continue };
-            let Some(record_id) = chunk_node.record else { continue };
-            let rid = record_id.0;
-
-            let text: Option<String> = s.meta.get(&format!("record:{rid}"))
-                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
-                .and_then(|v| v.get("text").and_then(|t| t.as_str().map(|s| s.to_string())));
-
-            let hash = match text {
-                Some(ref t) => valori_ingest::chunk_content_hash(t),
-                None => [0u8; 32],
+    let old_chunks: Vec<(u32, u32, [u8; 32])> = shard_sm
+        .with_state(|s| {
+            use valori_kernel::types::enums::EdgeKind;
+            let mut result = Vec::new();
+            let Some(edges) = s.outgoing_edges(NodeId(doc_node_id)) else {
+                return result;
             };
-            result.push((rid, chunk_node_id, hash));
-        }
-        result
-    }).await;
+            for edge in edges {
+                if edge.kind != EdgeKind::ParentOf {
+                    continue;
+                }
+                let chunk_node_id = edge.to.0;
+                let Some(chunk_node) = s.get_node(edge.to) else {
+                    continue;
+                };
+                let Some(record_id) = chunk_node.record else {
+                    continue;
+                };
+                let rid = record_id.0;
+
+                let text: Option<String> = s
+                    .meta
+                    .get(&format!("record:{rid}"))
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                    .and_then(|v| {
+                        v.get("text")
+                            .and_then(|t| t.as_str().map(|s| s.to_string()))
+                    });
+
+                let hash = match text {
+                    Some(ref t) => valori_ingest::chunk_content_hash(t),
+                    None => [0u8; 32],
+                };
+                result.push((rid, chunk_node_id, hash));
+            }
+            result
+        })
+        .await;
 
     // 6. Diff
     use std::collections::HashMap;
@@ -3005,7 +3728,11 @@ async fn cluster_ingest_update(
 
     for (rid, cnid, old_hash) in &old_chunks {
         if let Some(indices) = new_hash_to_idx.get_mut(old_hash) {
-            if let Some(idx) = indices.iter().find(|i| !kept_new_indices.contains(i)).copied() {
+            if let Some(idx) = indices
+                .iter()
+                .find(|i| !kept_new_indices.contains(i))
+                .copied()
+            {
                 kept_new_indices.insert(idx);
                 kept_records.insert(idx, *rid);
             } else {
@@ -3022,82 +3749,121 @@ async fn cluster_ingest_update(
 
     // 7. Remove old chunks via Raft
     for (rid, _cnid) in &to_remove {
-        let _ = shard_raft.client_write(ClientRequest {
-            event: KernelEvent::SoftDeleteRecord { id: RecordId(*rid) },
-            request_id: None,
-            schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-        }).await;
+        let _ = shard_raft
+            .client_write(ClientRequest {
+                event: KernelEvent::SoftDeleteRecord { id: RecordId(*rid) },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns,
+            })
+            .await;
     }
 
     // 8. Embed only new/changed chunks
     let mut added_record_ids: HashMap<usize, u32> = HashMap::new();
     if !to_add.is_empty() {
-        let texts_to_embed: Vec<String> = to_add.iter()
-            .map(|&i| new_chunks[i].text.clone())
-            .collect();
-        let vectors = match valori_ingest::embed_batch(&texts_to_embed, &embed_cfg, &state.http).await {
-            Ok(v) => v,
-            Err(e) => return (StatusCode::BAD_GATEWAY,
-                              Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
-        };
+        let texts_to_embed: Vec<String> =
+            to_add.iter().map(|&i| new_chunks[i].text.clone()).collect();
+        let vectors =
+            match valori_ingest::embed_batch(&texts_to_embed, &embed_cfg, &state.http).await {
+                Ok(v) => v,
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(serde_json::json!({ "error": e.to_string() })),
+                    )
+                        .into_response()
+                }
+            };
         if vectors.is_empty() || vectors[0].is_empty() {
-            return (StatusCode::BAD_GATEWAY,
-                    Json(serde_json::json!({ "error": "embed provider returned empty vectors" }))).into_response();
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": "embed provider returned empty vectors" })),
+            )
+                .into_response();
         }
 
         for (vec_idx, &chunk_idx) in to_add.iter().enumerate() {
             let vector = match to_fxp(&vectors[vec_idx]) {
                 Ok(v) => v,
-                Err(e) => return (StatusCode::BAD_REQUEST,
-                                   Json(serde_json::json!({ "error": e }))).into_response(),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({ "error": e })),
+                    )
+                        .into_response()
+                }
             };
             let meta_bytes = Some(
                 serde_json::json!({ "doc": &source, "n": chunk_idx, "total": new_chunks.len(), "text": &new_chunks[chunk_idx].text })
                     .to_string().into_bytes()
             );
-            let rid = match shard_raft.client_write(ClientRequest {
-                event: KernelEvent::AutoInsertRecord { vector, metadata: meta_bytes, tag: ns as u64 },
-                request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await {
+            let rid = match shard_raft
+                .client_write(ClientRequest {
+                    event: KernelEvent::AutoInsertRecord {
+                        vector,
+                        metadata: meta_bytes,
+                        tag: ns as u64,
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                })
+                .await
+            {
                 Ok(resp) => {
                     if let Some(reason) = &resp.data.rejected {
-                        return (StatusCode::UNPROCESSABLE_ENTITY,
-                                Json(serde_json::json!({ "error": reason }))).into_response();
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(serde_json::json!({ "error": reason })),
+                        )
+                            .into_response();
                     }
                     resp.data.allocated_record_id.unwrap_or(0)
                 }
                 Err(openraft::error::RaftError::APIError(
                     openraft::error::ClientWriteError::ForwardToLeader(fwd),
                 )) => return not_leader_response(fwd.leader_node.as_ref()),
-                Err(e) => return (StatusCode::SERVICE_UNAVAILABLE,
-                                  Json(serde_json::json!({ "error": format!("raft write: {e}") }))).into_response(),
+                Err(e) => {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(serde_json::json!({ "error": format!("raft write: {e}") })),
+                    )
+                        .into_response()
+                }
             };
 
             // Create Chunk node
-            let chunk_node_id = match shard_raft.client_write(ClientRequest {
-                event: KernelEvent::AutoCreateNode {
-                    kind: NodeKind::Chunk,
-                    record: Some(RecordId(rid)),
-                },
-                request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await {
+            let chunk_node_id = match shard_raft
+                .client_write(ClientRequest {
+                    event: KernelEvent::AutoCreateNode {
+                        kind: NodeKind::Chunk,
+                        record: Some(RecordId(rid)),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                })
+                .await
+            {
                 Ok(resp) => resp.data.allocated_node_id.unwrap_or(0),
                 Err(_) => 0,
             };
 
             // ParentOf edge
             if doc_node_id > 0 && chunk_node_id > 0 {
-                let _ = shard_raft.client_write(ClientRequest {
-                    event: KernelEvent::AutoCreateEdge {
-                        from: NodeId(doc_node_id),
-                        to:   NodeId(chunk_node_id),
-                        kind: EdgeKind::ParentOf,
-                    },
-                    request_id: None,
-                    schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-                }).await;
+                let _ = shard_raft
+                    .client_write(ClientRequest {
+                        event: KernelEvent::AutoCreateEdge {
+                            from: NodeId(doc_node_id),
+                            to: NodeId(chunk_node_id),
+                            kind: EdgeKind::ParentOf,
+                        },
+                        request_id: None,
+                        schema_version: CURRENT_SCHEMA_VERSION,
+                        namespace_id: ns,
+                    })
+                    .await;
             }
 
             // Chunk metadata
@@ -3120,14 +3886,17 @@ async fn cluster_ingest_update(
                 "embed_provider":   &embed_cfg.provider,
                 "content_hash":     new_hashes[chunk_idx].iter().map(|b| format!("{b:02x}")).collect::<String>(),
             });
-            let _ = shard_raft.client_write(ClientRequest {
-                event: KernelEvent::SetMeta {
-                    key:   format!("record:{rid}"),
-                    value: chunk_meta.to_string(),
-                },
-                request_id: None,
-                schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-            }).await;
+            let _ = shard_raft
+                .client_write(ClientRequest {
+                    event: KernelEvent::SetMeta {
+                        key: format!("record:{rid}"),
+                        value: chunk_meta.to_string(),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns,
+                })
+                .await;
 
             added_record_ids.insert(chunk_idx, rid);
         }
@@ -3138,21 +3907,25 @@ async fn cluster_ingest_update(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs().to_string())
         .unwrap_or_else(|_| "0".into());
-    let _ = shard_raft.client_write(ClientRequest {
-        event: KernelEvent::SetMeta {
-            key:   format!("document:{doc_node_id}"),
-            value: serde_json::json!({
-                "source":       source,
-                "total_chunks": new_chunks.len(),
-                "collection":   collection,
-                "strategy":     strategy_used,
-                "embed_model":  &embed_cfg.model,
-                "updated_at":   &now,
-            }).to_string(),
-        },
-        request_id: None,
-        schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns,
-    }).await;
+    let _ = shard_raft
+        .client_write(ClientRequest {
+            event: KernelEvent::SetMeta {
+                key: format!("document:{doc_node_id}"),
+                value: serde_json::json!({
+                    "source":       source,
+                    "total_chunks": new_chunks.len(),
+                    "collection":   collection,
+                    "strategy":     strategy_used,
+                    "embed_model":  &embed_cfg.model,
+                    "updated_at":   &now,
+                })
+                .to_string(),
+            },
+            request_id: None,
+            schema_version: CURRENT_SCHEMA_VERSION,
+            namespace_id: ns,
+        })
+        .await;
 
     let state_after: String = {
         let raw = state.shard_for(ns).state_machine.state_hash().await;
@@ -3199,7 +3972,8 @@ async fn cluster_ingest_update(
         added_count: to_add.len(),
         record_ids,
         collection,
-    }).into_response()
+    })
+    .into_response()
 }
 
 // ── Phase I5: Tree-RAG stateful handlers (cluster path) ───────────────────────
@@ -3210,40 +3984,74 @@ async fn cluster_tree_build(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::BuildRequest>,
 ) -> Json<valori_rag::tree::BuildResponse> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
-    let doc_name = payload.doc_name.clone().unwrap_or_else(|| "document".into());
+    let doc_name = payload
+        .doc_name
+        .clone()
+        .unwrap_or_else(|| "document".into());
     let shard_count = s.shard_count as u8;
 
     let inputs_json = serde_json::json!({ "text": payload.text, "doc_name": doc_name }).to_string();
 
-    let op_hash = compute_operation_hash(OperationKind::TreeBuild, &OperationInputs::TreeBuild { shard_id: 0 }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::TreeBuild,
+        &OperationInputs::TreeBuild { shard_id: 0 },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeBuild, inputs_json, shard_id: None, topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeBuild,
+            inputs_json,
+            shard_id: None,
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
     let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
-        .await.ok()
+        .await
+        .ok()
         .and_then(|o| o.into_iter().next().flatten())
         .map(|o| o.json)
         .unwrap_or(serde_json::json!({}));
 
-    let tree: valori_rag::tree::TreeIndex = result.get("tree")
+    let tree: valori_rag::tree::TreeIndex = result
+        .get("tree")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
         .unwrap_or_else(|| valori_rag::tree::TreeIndex::from_markdown(&payload.text, &doc_name));
-    let cache_key = result.get("cache_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cache_key = result
+        .get("cache_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     Json(valori_rag::tree::BuildResponse {
         cache_key,
@@ -3260,11 +4068,15 @@ async fn cluster_tree_query(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::QueryRequest>,
 ) -> Result<Json<valori_rag::tree::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let k = payload.k.max(1);
     let shard_count = s.shard_count as u8;
@@ -3279,32 +4091,75 @@ async fn cluster_tree_query(
                 "cache_key": key
             }))))?
     } else {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": "provide 'tree' or 'cache_key'" }))));
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "provide 'tree' or 'cache_key'" })),
+        ));
     };
 
     let inputs_json = serde_json::json!({
         "tree": tree_val, "query": payload.query, "k": k, "prev_hash": payload.prev_hash,
-    }).to_string();
+    })
+    .to_string();
 
-    let op_hash = compute_operation_hash(OperationKind::TreeQuery, &OperationInputs::TreeQuery { k: k as u32, shard_id: 0 }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::TreeQuery,
+        &OperationInputs::TreeQuery {
+            k: k as u32,
+            shard_id: 0,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeQuery, inputs_json, shard_id: None, topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeQuery,
+            inputs_json,
+            shard_id: None,
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
-    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default()).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let out_val = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Null);
-    let answer: valori_rag::tree::AnswerResult = serde_json::from_value(out_val)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let out_val = result
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::Value::Null);
+    let answer: valori_rag::tree::AnswerResult = serde_json::from_value(out_val).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
 
     Ok(Json(answer))
 }
@@ -3315,18 +4170,25 @@ async fn cluster_tree_hybrid(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::HybridRequest>,
 ) -> Result<Json<valori_rag::tree::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
     use valori_rag::tree::{HybridResponse, TreeIndex, GENESIS};
 
     let shard_count = s.shard_count as u8;
 
     // ── Resolve tree (inline, cache_key, or text) ─────────────────────────────
     let (tree_json, cache_key_opt) = if let Some(t) = payload.tree {
-        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
+        (
+            Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)),
+            None,
+        )
     } else if let Some(ref key) = payload.cache_key {
         (None, Some(key.clone()))
     } else if let Some(ref text) = payload.text {
@@ -3334,11 +4196,17 @@ async fn cluster_tree_hybrid(
         let t = TreeIndex::from_markdown(text, doc_name);
         let key = valori_rag::tree::hash_text(text);
         s.tree_cache.write().await.insert(key, t.clone());
-        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
+        (
+            Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)),
+            None,
+        )
     } else {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
-            "error": "provide 'text', 'tree', or 'cache_key'"
-        }))));
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "provide 'text', 'tree', or 'cache_key'"
+            })),
+        ));
     };
 
     // Resolve namespace and optionally embed the query for vector fusion.
@@ -3349,8 +4217,11 @@ async fn cluster_tree_hybrid(
 
     let mut query_vec: Option<Vec<f32>> = None;
     if let Some(ref ecfg) = embed_cfg {
-        if let Ok(vecs) = valori_ingest::embed_batch(&[payload.query.clone()], ecfg, &s.http).await {
-            if !vecs.is_empty() { query_vec = Some(vecs.into_iter().next().unwrap()); }
+        if let Ok(vecs) = valori_ingest::embed_batch(&[payload.query.clone()], ecfg, &s.http).await
+        {
+            if !vecs.is_empty() {
+                query_vec = Some(vecs.into_iter().next().unwrap());
+            }
         }
     }
 
@@ -3358,9 +4229,15 @@ async fn cluster_tree_hybrid(
         "tree_weight": payload.tree_weight,
         "prev_hash": payload.prev_hash.as_deref().unwrap_or(GENESIS),
     });
-    if let Some(tj) = tree_json { params["tree"] = tj; }
-    if let Some(ref ck) = cache_key_opt { params["cache_key"] = serde_json::Value::String(ck.clone()); }
-    if let Some(ref qv) = query_vec { params["vector"] = serde_json::json!(qv); }
+    if let Some(tj) = tree_json {
+        params["tree"] = tj;
+    }
+    if let Some(ref ck) = cache_key_opt {
+        params["cache_key"] = serde_json::Value::String(ck.clone());
+    }
+    if let Some(ref qv) = query_vec {
+        params["vector"] = serde_json::json!(qv);
+    }
 
     let inputs_json = serde_json::json!({
         "shard_id": shard_id,
@@ -3368,34 +4245,74 @@ async fn cluster_tree_hybrid(
         "query": payload.query,
         "k": payload.k,
         "params": params,
-    }).to_string();
+    })
+    .to_string();
 
     let op_hash = compute_operation_hash(
         OperationKind::TreeHybrid,
-        &OperationInputs::TreeHybrid { k: payload.k as u32, shard_id, embed_enabled: embed_cfg.is_some() },
+        &OperationInputs::TreeHybrid {
+            k: payload.k as u32,
+            shard_id,
+            embed_enabled: embed_cfg.is_some(),
+        },
         &ExecutionPolicy::default(),
     );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: embed_cfg.is_some(), llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: embed_cfg.is_some(),
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeHybrid, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeHybrid,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
-    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default()).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let output_val = outputs.into_iter().next().flatten()
+    let output_val = outputs
+        .into_iter()
+        .next()
+        .flatten()
         .map(|o| o.json)
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "tree_hybrid produced no output"}))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "tree_hybrid produced no output"})),
+            )
+        })?;
 
-    let response: HybridResponse = serde_json::from_value(output_val)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("tree_hybrid decode: {e}")}))))?;
+    let response: HybridResponse = serde_json::from_value(output_val).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("tree_hybrid decode: {e}")})),
+        )
+    })?;
 
     Ok(Json(response))
 }
@@ -3408,13 +4325,19 @@ async fn cluster_community_detect(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::community::DetectRequest>,
 ) -> Result<Json<valori_rag::community::DetectResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
-    let max_iter = payload.max_iter.unwrap_or(valori_rag::community::DEFAULT_MAX_ITER);
+    let max_iter = payload
+        .max_iter
+        .unwrap_or(valori_rag::community::DEFAULT_MAX_ITER);
     let shard_count = s.shard_count as u8;
 
     // Phase S8: namespace→shard routing preserved — see previous comment.
@@ -3429,34 +4352,75 @@ async fn cluster_community_detect(
         "shard_id": shard_id,
         "namespace_id": ns_id_u16,
         "max_iter": max_iter,
-    }).to_string();
+    })
+    .to_string();
 
-    let op_hash = compute_operation_hash(OperationKind::CommunityDetect, &OperationInputs::CommunityDetect {
-        collection: payload.namespace.clone().unwrap_or_else(|| "default".into()),
-        shard_id, max_iter,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::CommunityDetect,
+        &OperationInputs::CommunityDetect {
+            collection: payload
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".into()),
+            shard_id,
+            max_iter,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunityDetect, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::CommunityDetect,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
     let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let out = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::json!({}));
+    let out = result
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({}));
     Ok(Json(valori_rag::community::DetectResponse {
         community_count: out["community_count"].as_u64().unwrap_or(0) as usize,
         node_count: out["node_count"].as_u64().unwrap_or(0) as usize,
-        communities: out["communities"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        communities: out["communities"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect()
+            })
             .unwrap_or_default(),
         receipt: out["receipt"].as_str().unwrap_or("").to_string(),
     }))
@@ -3468,11 +4432,15 @@ async fn cluster_community_search(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::community::SearchRequest>,
 ) -> Result<Json<valori_rag::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let shard_count = s.shard_count as u8;
 
@@ -3483,7 +4451,10 @@ async fn cluster_community_search(
         None => 0,
     };
     let shard_id = shard_for_namespace(ns_id, s.shard_count).0 as u8;
-    let collection = payload.namespace.clone().unwrap_or_else(|| "default".into());
+    let collection = payload
+        .namespace
+        .clone()
+        .unwrap_or_else(|| "default".into());
 
     let inputs_json = serde_json::json!({
         "shard_id": shard_id,
@@ -3492,33 +4463,78 @@ async fn cluster_community_search(
         "k": payload.k,
         "depth": payload.depth,
         "drill_in": payload.drill_in,
-    }).to_string();
+    })
+    .to_string();
 
-    let op_hash = compute_operation_hash(OperationKind::CommunitySearch, &OperationInputs::CommunitySearch {
-        k: payload.k as u32, depth: payload.depth, drill_in: payload.drill_in, collection, shard_id,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::CommunitySearch,
+        &OperationInputs::CommunitySearch {
+            k: payload.k as u32,
+            depth: payload.depth,
+            drill_in: payload.drill_in,
+            collection,
+            shard_id,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: true,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: true,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunitySearch, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::CommunitySearch,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
-    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default()).await
-        .map_err(|e| (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::PRECONDITION_FAILED,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let out = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::json!({}));
-    let communities: Vec<valori_rag::community::CommunityHit> = out["communities"].as_array()
-        .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+    let out = result
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({}));
+    let communities: Vec<valori_rag::community::CommunityHit> = out["communities"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
         .unwrap_or_default();
     let total = out["total_communities_searched"].as_u64().unwrap_or(0) as usize;
 
-    Ok(Json(valori_rag::community::SearchResponse { communities, total_communities_searched: total }))
+    Ok(Json(valori_rag::community::SearchResponse {
+        communities,
+        total_communities_searched: total,
+    }))
 }
 
 async fn cluster_community_overview(
@@ -3526,12 +4542,17 @@ async fn cluster_community_overview(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let store_guard = s.community_store.read().await;
     let store = store_guard.as_ref().ok_or_else(|| {
-        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
-            "error": "community index not built — call POST /v1/community/detect first"
-        })))
+        (
+            StatusCode::PRECONDITION_FAILED,
+            Json(serde_json::json!({
+                "error": "community index not built — call POST /v1/community/detect first"
+            })),
+        )
     })?;
 
-    let mut communities: Vec<serde_json::Value> = store.members.iter()
+    let mut communities: Vec<serde_json::Value> = store
+        .members
+        .iter()
         .map(|(&cid, members)| {
             let centroid = store.centroids.get(&cid).cloned().unwrap_or_default();
             serde_json::json!({
@@ -3560,7 +4581,10 @@ async fn cluster_community_overview(
 async fn cluster_extract_entities(
     State(s): State<DataPlaneState>,
     Json(payload): Json<valori_rag::community::ExtractEntitiesRequest>,
-) -> Result<Json<valori_rag::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<
+    Json<valori_rag::community::ExtractEntitiesResponse>,
+    (StatusCode, Json<serde_json::Value>),
+> {
     let embed_cfg = s.embed_config.clone().ok_or_else(|| {
         (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
             "error": "VALORI_EMBED_PROVIDER not configured — entity extraction requires an LLM provider"
@@ -3579,33 +4603,54 @@ async fn cluster_extract_entities(
         &llm_cfg,
         payload.model.as_deref(),
         &s.http,
-    ).await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))))?;
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e})),
+        )
+    })?;
 
     // Embed entity descriptions.
-    let descriptions: Vec<String> = extracted.entities.iter().map(|e| e.description.clone()).collect();
+    let descriptions: Vec<String> = extracted
+        .entities
+        .iter()
+        .map(|e| e.description.clone())
+        .collect();
     let vecs = valori_ingest::embed_batch(&descriptions, &embed_cfg, &s.http)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": e.0})),
+            )
+        })?;
 
     // Insert records + nodes via Raft.
-    let ns_id: u16 = s.sm.resolve_namespace(payload.namespace.as_deref()).await.unwrap_or(0);
+    let ns_id: u16 =
+        s.sm.resolve_namespace(payload.namespace.as_deref())
+            .await
+            .unwrap_or(0);
     // Phase S4: route to the shard that owns this namespace's data.
     let shard_raft = &s.shard_for(ns_id).raft;
 
     use valori_kernel::fxp::qformat::SCALE;
+    use valori_kernel::types::enums::{EdgeKind, NodeKind};
     use valori_kernel::types::scalar::FxpScalar;
-    use valori_kernel::types::enums::{NodeKind, EdgeKind};
 
-    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     let mut inserted_entities: Vec<valori_rag::community::InsertedEntity> = Vec::new();
 
-    use valori_kernel::event::KernelEvent;
-    use valori_kernel::types::vector::FxpVector;
-    use valori_kernel::types::id::{RecordId, NodeId};
     use valori_consensus::types::ClientRequest;
+    use valori_kernel::event::KernelEvent;
+    use valori_kernel::types::id::{NodeId, RecordId};
+    use valori_kernel::types::vector::FxpVector;
 
     for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {
-        let fxp_data: Vec<FxpScalar> = vec.iter()
+        let fxp_data: Vec<FxpScalar> = vec
+            .iter()
             .map(|&v| FxpScalar((v * SCALE as f32) as i32))
             .collect();
         let fxp_vec = FxpVector { data: fxp_data };
@@ -3614,17 +4659,38 @@ async fn cluster_extract_entities(
         // guess, which would race a concurrent writer AND (now that writes
         // are shard-routed) would guess against the wrong shard's counter
         // entirely if read from the flat shard-0 state machine.
-        let record_id = match raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoInsertRecord { vector: fxp_vec, metadata: None, tag: 0 },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-        }).await {
+        let record_id = match raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoInsertRecord {
+                    vector: fxp_vec,
+                    metadata: None,
+                    tag: 0,
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns_id,
+            },
+        )
+        .await
+        {
             Ok(resp) => resp.allocated_record_id.unwrap_or(0),
             Err(_) => continue,
         };
-        let node_id = match raft_write_data(shard_raft, ClientRequest {
-            event: KernelEvent::AutoCreateNode { kind: NodeKind::Concept, record: Some(RecordId(record_id)) },
-            request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-        }).await {
+        let node_id = match raft_write_data(
+            shard_raft,
+            ClientRequest {
+                event: KernelEvent::AutoCreateNode {
+                    kind: NodeKind::Concept,
+                    record: Some(RecordId(record_id)),
+                },
+                request_id: None,
+                schema_version: CURRENT_SCHEMA_VERSION,
+                namespace_id: ns_id,
+            },
+        )
+        .await
+        {
             Ok(resp) => resp.allocated_node_id.unwrap_or(0),
             Err(_) => continue,
         };
@@ -3644,26 +4710,41 @@ async fn cluster_extract_entities(
     let mut skipped = 0usize;
 
     for rel in &extracted.relationships {
-        match (entity_name_to_node_id.get(&rel.source), entity_name_to_node_id.get(&rel.target)) {
+        match (
+            entity_name_to_node_id.get(&rel.source),
+            entity_name_to_node_id.get(&rel.target),
+        ) {
             (Some(&from_id), Some(&to_id)) => {
                 let ev = KernelEvent::AutoCreateEdge {
                     from: NodeId(from_id),
                     to: NodeId(to_id),
                     kind: EdgeKind::Relation,
                 };
-                match raft_write_data(shard_raft, ClientRequest {
-                    event: ev, request_id: None, schema_version: CURRENT_SCHEMA_VERSION, namespace_id: ns_id,
-                }).await {
+                match raft_write_data(
+                    shard_raft,
+                    ClientRequest {
+                        event: ev,
+                        request_id: None,
+                        schema_version: CURRENT_SCHEMA_VERSION,
+                        namespace_id: ns_id,
+                    },
+                )
+                .await
+                {
                     Ok(resp) => inserted_rels.push(valori_rag::community::InsertedRelationship {
                         source_name: rel.source.clone(),
                         target_name: rel.target.clone(),
                         description: rel.description.clone(),
                         edge_id: resp.allocated_edge_id.unwrap_or(0),
                     }),
-                    Err(_) => { skipped += 1; }
+                    Err(_) => {
+                        skipped += 1;
+                    }
                 }
             }
-            _ => { skipped += 1; }
+            _ => {
+                skipped += 1;
+            }
         }
     }
 
@@ -3726,8 +4807,8 @@ fn collect_cluster_timeline(
     from_unix: Option<u64>,
     to_unix: Option<u64>,
 ) -> Vec<crate::api::TimelineEntry> {
-    use valori_wire::{parse_header, decode_entry, LogEntry as WireLogEntry};
     use valori_kernel::event::KernelEvent;
+    use valori_wire::{decode_entry, parse_header, LogEntry as WireLogEntry};
 
     let parse_log = |path: &std::path::Path, shard_id: u32| -> Vec<crate::api::TimelineEntry> {
         let bytes = match std::fs::read(path) {
@@ -3746,8 +4827,18 @@ fn collect_cluster_timeline(
                 Ok((decoded, consumed)) => {
                     offset += consumed;
                     let ts = decoded.wall_time_secs;
-                    if let Some(from) = from_unix { if ts < from { log_index += 1; continue; } }
-                    if let Some(to)   = to_unix   { if ts > to   { log_index += 1; continue; } }
+                    if let Some(from) = from_unix {
+                        if ts < from {
+                            log_index += 1;
+                            continue;
+                        }
+                    }
+                    if let Some(to) = to_unix {
+                        if ts > to {
+                            log_index += 1;
+                            continue;
+                        }
+                    }
                     let inner_ev = match &decoded.entry {
                         WireLogEntry::Event(ev) => Some(ev),
                         WireLogEntry::EventNs { event, .. } => Some(event),
@@ -3755,23 +4846,53 @@ fn collect_cluster_timeline(
                     };
                     if let Some(ev) = inner_ev {
                         let (event_type, record_id, node_id, edge_id) = match ev {
-                            KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",             Some(id.0), None,       None),
-                            KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",          None,       None,       None),
-                            KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted",    Some(id.0), None,       None),
-                            KernelEvent::DeleteRecord { id }              => ("DeleteRecord",              Some(id.0), None,       None),
-                            KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",         Some(id.0), None,       None),
-                            KernelEvent::ShredKey { .. }                  => ("ShredKey",                 None,       None,       None),
-                            KernelEvent::CreateNode { id, .. }            => ("CreateNode",               None,       Some(id.0), None),
-                            KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",           None,       None,       None),
-                            KernelEvent::DeleteNode { id }                => ("DeleteNode",               None,       Some(id.0), None),
-                            KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",               None,       None,       Some(id.0)),
-                            KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",           None,       None,       None),
-                            KernelEvent::DeleteEdge { id }                => ("DeleteEdge",               None,       None,       Some(id.0)),
-                            KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted",None,       None,       None),
-                            KernelEvent::SetMeta { .. }                   => ("SetMeta",                  None,       None,       None),
-                            KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",      None,       None,       None),
-                            KernelEvent::DropNamespace { .. }             => ("DropNamespace",            None,       None,       None),
-                            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",      Some(id.0), None,       None),
+                            KernelEvent::InsertRecord { id, .. } => {
+                                ("InsertRecord", Some(id.0), None, None)
+                            }
+                            KernelEvent::AutoInsertRecord { .. } => {
+                                ("AutoInsertRecord", None, None, None)
+                            }
+                            KernelEvent::InsertRecordEncrypted { id, .. } => {
+                                ("InsertRecordEncrypted", Some(id.0), None, None)
+                            }
+                            KernelEvent::DeleteRecord { id } => {
+                                ("DeleteRecord", Some(id.0), None, None)
+                            }
+                            KernelEvent::SoftDeleteRecord { id } => {
+                                ("SoftDeleteRecord", Some(id.0), None, None)
+                            }
+                            KernelEvent::ShredKey { .. } => ("ShredKey", None, None, None),
+                            KernelEvent::CreateNode { id, .. } => {
+                                ("CreateNode", None, Some(id.0), None)
+                            }
+                            KernelEvent::AutoCreateNode { .. } => {
+                                ("AutoCreateNode", None, None, None)
+                            }
+                            KernelEvent::DeleteNode { id } => {
+                                ("DeleteNode", None, Some(id.0), None)
+                            }
+                            KernelEvent::CreateEdge { id, .. } => {
+                                ("CreateEdge", None, None, Some(id.0))
+                            }
+                            KernelEvent::AutoCreateEdge { .. } => {
+                                ("AutoCreateEdge", None, None, None)
+                            }
+                            KernelEvent::DeleteEdge { id } => {
+                                ("DeleteEdge", None, None, Some(id.0))
+                            }
+                            KernelEvent::AutoInsertRecordEncrypted { .. } => {
+                                ("AutoInsertRecordEncrypted", None, None, None)
+                            }
+                            KernelEvent::SetMeta { .. } => ("SetMeta", None, None, None),
+                            KernelEvent::AutoCreateNamespace { .. } => {
+                                ("AutoCreateNamespace", None, None, None)
+                            }
+                            KernelEvent::DropNamespace { .. } => {
+                                ("DropNamespace", None, None, None)
+                            }
+                            KernelEvent::UpdateRecordMetadata { id, .. } => {
+                                ("UpdateRecordMetadata", Some(id.0), None, None)
+                            }
                         };
                         entries.push(crate::api::TimelineEntry {
                             log_index,
@@ -3806,13 +4927,17 @@ async fn cluster_timeline(
     Query(q): Query<ClusterTimelineQuery>,
 ) -> Response {
     if state.shard_event_log_paths.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "error": "Event log not enabled on this node (set VALORI_EVENT_LOG_PATH)"
-        }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Event log not enabled on this node (set VALORI_EVENT_LOG_PATH)"
+            })),
+        )
+            .into_response();
     }
 
     let from_unix = q.from.as_deref().and_then(crate::server::parse_iso8601);
-    let to_unix   = q.to.as_deref().and_then(crate::server::parse_iso8601);
+    let to_unix = q.to.as_deref().and_then(crate::server::parse_iso8601);
     let entries = collect_cluster_timeline(&state, from_unix, to_unix);
 
     {
@@ -3824,12 +4949,16 @@ async fn cluster_timeline(
                         "Cross-shard timeline ordering violation: shard {} log_index {} appeared after {}",
                         e.shard_id, e.log_index, prev
                     );
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                        "error": format!(
-                            "shard {} ordering violation: log_index {} after {}",
-                            e.shard_id, e.log_index, prev
-                        )
-                    }))).into_response();
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "shard {} ordering violation: log_index {} after {}",
+                                e.shard_id, e.log_index, prev
+                            )
+                        })),
+                    )
+                        .into_response();
                 }
             }
             shard_last.insert(e.shard_id, e.log_index);
@@ -3837,42 +4966,58 @@ async fn cluster_timeline(
     }
 
     let total = entries.len();
-    (StatusCode::OK, Json(crate::api::TimelineResponse {
-        events: entries,
-        total,
-        from_unix,
-        to_unix,
-    })).into_response()
+    (
+        StatusCode::OK,
+        Json(crate::api::TimelineResponse {
+            events: entries,
+            total,
+            from_unix,
+            to_unix,
+        }),
+    )
+        .into_response()
 }
 
-async fn cluster_get_operations(
-    State(state): State<DataPlaneState>,
-) -> Response {
+async fn cluster_get_operations(State(state): State<DataPlaneState>) -> Response {
     if state.shard_event_log_paths.is_empty() {
-        return (StatusCode::OK, Json(crate::api::OperationsListResponse { operations: vec![], total: 0 })).into_response();
+        return (
+            StatusCode::OK,
+            Json(crate::api::OperationsListResponse {
+                operations: vec![],
+                total: 0,
+            }),
+        )
+            .into_response();
     }
     let entries = collect_cluster_timeline(&state, None, None);
-    let mut operations: Vec<crate::api::OperationSummary> = entries.into_iter().map(|e| {
-        let details = serde_json::json!({
-            "log_index": e.log_index,
-            "shard_id": e.shard_id,
-            "record_id": e.record_id,
-            "node_id": e.node_id,
-            "edge_id": e.edge_id,
-        });
-        crate::api::OperationSummary {
-            id: format!("op-{}-{}", e.shard_id, e.log_index),
-            op_type: e.event_type.to_string(),
-            status: "completed".to_string(),
-            timing: e.timestamp_iso,
-            timestamp_unix: e.timestamp_unix,
-            collection: "default".to_string(),
-            details,
-        }
-    }).collect();
+    let mut operations: Vec<crate::api::OperationSummary> = entries
+        .into_iter()
+        .map(|e| {
+            let details = serde_json::json!({
+                "log_index": e.log_index,
+                "shard_id": e.shard_id,
+                "record_id": e.record_id,
+                "node_id": e.node_id,
+                "edge_id": e.edge_id,
+            });
+            crate::api::OperationSummary {
+                id: format!("op-{}-{}", e.shard_id, e.log_index),
+                op_type: e.event_type.to_string(),
+                status: "completed".to_string(),
+                timing: e.timestamp_iso,
+                timestamp_unix: e.timestamp_unix,
+                collection: "default".to_string(),
+                details,
+            }
+        })
+        .collect();
     operations.reverse();
     let total = operations.len();
-    (StatusCode::OK, Json(crate::api::OperationsListResponse { operations, total })).into_response()
+    (
+        StatusCode::OK,
+        Json(crate::api::OperationsListResponse { operations, total }),
+    )
+        .into_response()
 }
 
 async fn cluster_get_operation_by_id(
@@ -3881,14 +5026,24 @@ async fn cluster_get_operation_by_id(
     axum::Extension(receipt_store): axum::Extension<Arc<valori_effect::ReceiptStore>>,
 ) -> Response {
     if state.shard_event_log_paths.is_empty() {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Event log not enabled"}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Event log not enabled"})),
+        )
+            .into_response();
     }
     let entries = collect_cluster_timeline(&state, None, None);
     let op = entries.iter().find(|e| {
-        format!("op-{}-{}", e.shard_id, e.log_index) == id || format!("op-{}", e.log_index) == id || id == format!("{}", e.log_index)
+        format!("op-{}-{}", e.shard_id, e.log_index) == id
+            || format!("op-{}", e.log_index) == id
+            || id == format!("{}", e.log_index)
     });
     let Some(e) = op else {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("operation '{}' not found", id)}))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("operation '{}' not found", id)})),
+        )
+            .into_response();
     };
 
     let op_id = format!("op-{}-{}", e.shard_id, e.log_index);
@@ -3911,7 +5066,11 @@ async fn cluster_get_operation_by_id(
         "edges_affected": if e.edge_id.is_some() { 1 } else { 0 },
         "message": format!("Operation {} successfully completed and replicated across cluster.", e.event_type)
     });
-    let proof = if let Some(r) = receipt_store.get(&id).or_else(|| receipt_store.get(&op_id)).or_else(|| receipt_store.latest()) {
+    let proof = if let Some(r) = receipt_store
+        .get(&id)
+        .or_else(|| receipt_store.get(&op_id))
+        .or_else(|| receipt_store.latest())
+    {
         serde_json::to_value(&r).unwrap_or(serde_json::json!({}))
     } else {
         serde_json::json!({
@@ -3929,29 +5088,34 @@ async fn cluster_get_operation_by_id(
         "status": "replicated"
     });
 
-    (StatusCode::OK, Json(crate::api::OperationDetailResponse {
-        id: op_id,
-        op_type: e.event_type.to_string(),
-        status: "completed".to_string(),
-        timing: e.timestamp_iso.clone(),
-        timestamp_unix: e.timestamp_unix,
-        collection: "default".to_string(),
-        overview,
-        results,
-        proof,
-        metrics,
-    })).into_response()
+    (
+        StatusCode::OK,
+        Json(crate::api::OperationDetailResponse {
+            id: op_id,
+            op_type: e.event_type.to_string(),
+            status: "completed".to_string(),
+            timing: e.timestamp_iso.clone(),
+            timestamp_unix: e.timestamp_unix,
+            collection: "default".to_string(),
+            overview,
+            results,
+            proof,
+            metrics,
+        }),
+    )
+        .into_response()
 }
 
 // ── Cluster snapshot save/restore/download ────────────────────────────────────
 // In cluster mode snapshots are driven by openraft's own mechanism, but we
 // expose save/restore/download for operational tooling (same surface as standalone).
 
-fn encode_cluster_snapshot(state: &valori_kernel::state::kernel::KernelState) -> Result<Vec<u8>, String> {
+fn encode_cluster_snapshot(
+    state: &valori_kernel::state::kernel::KernelState,
+) -> Result<Vec<u8>, String> {
     let hint = valori_kernel::snapshot::encode::encode_capacity_hint(state);
     let mut buf = Vec::with_capacity(hint);
-    valori_kernel::snapshot::encode::encode_state(state, &mut buf)
-        .map_err(|e| format!("{e:?}"))?;
+    valori_kernel::snapshot::encode::encode_state(state, &mut buf).map_err(|e| format!("{e:?}"))?;
     Ok(buf)
 }
 
@@ -3960,11 +5124,15 @@ async fn cluster_snapshot_save(
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
 ) -> Response {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let shard_count = state.shard_count as u8;
 
@@ -3973,38 +5141,84 @@ async fn cluster_snapshot_save(
     for shard_id in 0..shard_count {
         let inputs_json = serde_json::json!({ "shard_id": shard_id, "path": null }).to_string();
 
-        let op_hash = compute_operation_hash(OperationKind::Snapshot, &OperationInputs::Snapshot { shard_id }, &ExecutionPolicy::default());
+        let op_hash = compute_operation_hash(
+            OperationKind::Snapshot,
+            &OperationInputs::Snapshot { shard_id },
+            &ExecutionPolicy::default(),
+        );
         let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
         let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-            capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: true, shard_count },
-            schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: true,
+            capability_set: CapabilitySet {
+                embed: false,
+                llm: false,
+                object_store: false,
+                cluster: true,
+                shard_count,
+            },
+            schema_version: 1,
+            shard_count,
+            cluster_epoch: 0,
+            cluster_mode: true,
         });
         let graph = Arc::new(ExecutionGraph::build(
-            op_hash, fp, ctx_hash,
-            vec![TaskSpec { id: TaskId(0), kind: TaskKind::SnapshotArtifact, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+            op_hash,
+            fp,
+            ctx_hash,
+            vec![TaskSpec {
+                id: TaskId(0),
+                kind: TaskKind::SnapshotArtifact,
+                inputs_json,
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            }],
             vec![],
             ExecutionRetentionPolicy::default(),
         ));
 
-        match run_graph_inline(graph, caps.clone(), task_reg.clone(), ExecutionPolicy::default()).await {
+        match run_graph_inline(
+            graph,
+            caps.clone(),
+            task_reg.clone(),
+            ExecutionPolicy::default(),
+        )
+        .await
+        {
             Ok(outputs) => {
                 // Task emits { "state_hash": "..." } — use the correct field name.
-                let hash = outputs.into_iter().next().flatten()
-                    .and_then(|o| o.json.get("state_hash").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                let hash = outputs
+                    .into_iter()
+                    .next()
+                    .flatten()
+                    .and_then(|o| {
+                        o.json
+                            .get("state_hash")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_default();
                 shard_hashes.push(serde_json::json!({ "shard_id": shard_id, "state_hash": hash }));
             }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": format!("snapshot shard {shard_id} failed: {e}")
-            }))).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("snapshot shard {shard_id} failed: {e}")
+                    })),
+                )
+                    .into_response()
+            }
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "success": true,
-        "shards": shard_hashes,
-        "note": "Cluster snapshots are persisted automatically by Raft."
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "shards": shard_hashes,
+            "note": "Cluster snapshots are persisted automatically by Raft."
+        })),
+    )
+        .into_response()
 }
 
 async fn cluster_snapshot_restore() -> Response {
@@ -4014,21 +5228,27 @@ async fn cluster_snapshot_restore() -> Response {
     }))).into_response()
 }
 
-async fn cluster_snapshot_download(
-    State(state): State<DataPlaneState>,
-) -> Response {
+async fn cluster_snapshot_download(State(state): State<DataPlaneState>) -> Response {
     match state.sm.with_state(encode_cluster_snapshot).await {
         Ok(bytes) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE.as_str(), "application/octet-stream"),
-                (header::CONTENT_DISPOSITION.as_str(), "attachment; filename=\"cluster-snapshot.snap\""),
+                (
+                    header::CONTENT_DISPOSITION.as_str(),
+                    "attachment; filename=\"cluster-snapshot.snap\"",
+                ),
             ],
             bytes,
-        ).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-            "error": format!("snapshot encode failed: {e}")
-        }))).into_response(),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("snapshot encode failed: {e}")
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -4037,19 +5257,24 @@ async fn cluster_snapshot_download(
 ///
 /// In cluster mode, also shows the shard count and which shard each namespace
 /// maps to via `namespace_id % shard_count`.
-async fn cluster_shard_routing(
-    State(state): State<DataPlaneState>,
-) -> Response {
+async fn cluster_shard_routing(State(state): State<DataPlaneState>) -> Response {
     let shard_count = state.shard_count as usize;
 
     // Read namespace registry from shard 0's state machine.
     let shard0 = match state.shards.values().next() {
         Some(s) => s,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "no shard 0"}))).into_response(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "no shard 0"})),
+            )
+                .into_response()
+        }
     };
-    let collections: Vec<(String, u16)> = shard0.state_machine.with_state(|_ks| {
-        vec![("default".to_string(), 0u16)]
-    }).await;
+    let collections: Vec<(String, u16)> = shard0
+        .state_machine
+        .with_state(|_ks| vec![("default".to_string(), 0u16)])
+        .await;
 
     // Build per-shard collection buckets
     let mut shard_map: Vec<Vec<String>> = vec![Vec::new(); shard_count.max(1)];
@@ -4060,15 +5285,21 @@ async fn cluster_shard_routing(
         }
     }
 
-    let shards: Vec<serde_json::Value> = shard_map.into_iter().enumerate().map(|(i, cols)| {
-        serde_json::json!({ "shard": i, "collections": cols })
-    }).collect();
+    let shards: Vec<serde_json::Value> = shard_map
+        .into_iter()
+        .enumerate()
+        .map(|(i, cols)| serde_json::json!({ "shard": i, "collections": cols }))
+        .collect();
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "mode": "cluster",
-        "shard_count": shard_count,
-        "shards": shards,
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "mode": "cluster",
+            "shard_count": shard_count,
+            "shards": shards,
+        })),
+    )
+        .into_response()
 }
 
 // ── Receipt endpoints (Phase A8) ──────────────────────────────────────────────
@@ -4078,7 +5309,11 @@ async fn cluster_get_latest_receipt(
 ) -> Response {
     match store.latest() {
         Some(r) => Json(serde_json::json!({"ok": true, "receipt": r})).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "no receipt available yet"}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "no receipt available yet"})),
+        )
+            .into_response(),
     }
 }
 
@@ -4088,17 +5323,20 @@ async fn cluster_get_receipt_by_id(
 ) -> Response {
     match store.get(&id) {
         Some(r) => Json(serde_json::json!({"ok": true, "receipt": r})).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("receipt '{}' not found", id)}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("receipt '{}' not found", id)})),
+        )
+            .into_response(),
     }
 }
 
 /// `GET /v1/models/health`
 async fn cluster_models_health() -> axum::Json<serde_json::Value> {
-    let models_dir = std::env::var("VALORI_MODELS_DIR").ok()
+    let models_dir = std::env::var("VALORI_MODELS_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            dirs::home_dir().map(|h| h.join(".valori").join("models"))
-        });
+        .or_else(|| dirs::home_dir().map(|h| h.join(".valori").join("models")));
 
     let Some(dir) = models_dir else {
         return axum::Json(serde_json::json!({ "error": "models directory not configured" }));
@@ -4122,7 +5360,10 @@ mod tests {
     #[test]
     fn gate_target_zero_is_immediately_ready() {
         let gate = ReadinessGate::new(0);
-        assert!(gate.check_applied(0).is_ok(), "target=0 should be ready at apply=0");
+        assert!(
+            gate.check_applied(0).is_ok(),
+            "target=0 should be ready at apply=0"
+        );
         assert!(gate.check_applied(5).is_ok(), "target=0 should stay ready");
     }
 
@@ -4130,15 +5371,24 @@ mod tests {
     #[test]
     fn gate_blocks_below_target() {
         let gate = ReadinessGate::new(10);
-        assert!(gate.check_applied(0).is_err(),  "apply=0  < target=10 → not ready");
-        assert!(gate.check_applied(9).is_err(),  "apply=9  < target=10 → not ready");
+        assert!(
+            gate.check_applied(0).is_err(),
+            "apply=0  < target=10 → not ready"
+        );
+        assert!(
+            gate.check_applied(9).is_err(),
+            "apply=9  < target=10 → not ready"
+        );
     }
 
     /// Exactly at the target the gate must flip open and return Ok.
     #[test]
     fn gate_opens_at_target() {
         let gate = ReadinessGate::new(10);
-        assert!(gate.check_applied(10).is_ok(), "apply=10 == target=10 → ready");
+        assert!(
+            gate.check_applied(10).is_ok(),
+            "apply=10 == target=10 → ready"
+        );
     }
 
     /// After the gate has latched open once, all subsequent calls return Ok
@@ -4160,8 +5410,11 @@ mod tests {
     fn gate_fast_path_after_latch() {
         let gate = ReadinessGate::new(3);
         gate.check_applied(3).ok(); // open latch
-        // Second call must hit the fast-path (ready == true) and return Ok.
-        assert!(gate.check_applied(0).is_ok(), "fast-path must bypass target check");
+                                    // Second call must hit the fast-path (ready == true) and return Ok.
+        assert!(
+            gate.check_applied(0).is_ok(),
+            "fast-path must bypass target check"
+        );
     }
 
     // ── Phase S3: shard_for_namespace ────────────────────────────────────────

@@ -25,16 +25,15 @@ pub enum ValidationError {
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::Empty =>
-                write!(f, "document is empty"),
-            ValidationError::TooLarge { size, limit } =>
-                write!(f, "document is {size} bytes, exceeds limit of {limit}"),
-            ValidationError::TooManyPages { count, limit } =>
-                write!(f, "document has {count} pages, exceeds limit of {limit}"),
-            ValidationError::MalformedUtf8 =>
-                write!(f, "document contains invalid UTF-8"),
-            ValidationError::ProtectedDocument =>
-                write!(f, "document is password-protected"),
+            ValidationError::Empty => write!(f, "document is empty"),
+            ValidationError::TooLarge { size, limit } => {
+                write!(f, "document is {size} bytes, exceeds limit of {limit}")
+            }
+            ValidationError::TooManyPages { count, limit } => {
+                write!(f, "document has {count} pages, exceeds limit of {limit}")
+            }
+            ValidationError::MalformedUtf8 => write!(f, "document contains invalid UTF-8"),
+            ValidationError::ProtectedDocument => write!(f, "document is password-protected"),
         }
     }
 }
@@ -53,15 +52,26 @@ pub struct DocumentValidator {
 
 impl Default for DocumentValidator {
     fn default() -> Self {
-        Self { max_bytes: 50 * 1024 * 1024, max_pages: None }
+        Self {
+            max_bytes: 50 * 1024 * 1024,
+            max_pages: None,
+        }
     }
 }
 
 impl DocumentValidator {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
-    pub fn with_max_bytes(mut self, n: usize) -> Self { self.max_bytes = n; self }
-    pub fn with_max_pages(mut self, n: usize) -> Self { self.max_pages = Some(n); self }
+    pub fn with_max_bytes(mut self, n: usize) -> Self {
+        self.max_bytes = n;
+        self
+    }
+    pub fn with_max_pages(mut self, n: usize) -> Self {
+        self.max_pages = Some(n);
+        self
+    }
 
     /// Run all checks against `doc`. Returns `Ok(())` or the first failing check.
     pub fn validate(&self, doc: &Document) -> Result<(), ValidationError> {
@@ -137,7 +147,9 @@ mod tests {
     #[test]
     fn oversized_content_rejected() {
         let v = DocumentValidator::new().with_max_bytes(10);
-        let err = v.validate(&doc("This is longer than ten bytes")).unwrap_err();
+        let err = v
+            .validate(&doc("This is longer than ten bytes"))
+            .unwrap_err();
         assert!(matches!(err, ValidationError::TooLarge { .. }));
     }
 
@@ -153,7 +165,13 @@ mod tests {
         let mut d = doc("some text");
         d.metadata.page_count = Some(10);
         let err = v.validate(&d).unwrap_err();
-        assert!(matches!(err, ValidationError::TooManyPages { count: 10, limit: 5 }));
+        assert!(matches!(
+            err,
+            ValidationError::TooManyPages {
+                count: 10,
+                limit: 5
+            }
+        ));
     }
 
     #[test]
@@ -167,7 +185,10 @@ mod tests {
     #[test]
     fn validate_utf8_rejects_invalid_bytes() {
         let bad: &[u8] = &[0xFF, 0xFE];
-        assert_eq!(validate_utf8(bad).unwrap_err(), ValidationError::MalformedUtf8);
+        assert_eq!(
+            validate_utf8(bad).unwrap_err(),
+            ValidationError::MalformedUtf8
+        );
     }
 
     #[test]

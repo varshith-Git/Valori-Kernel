@@ -159,7 +159,11 @@ impl MetadataDb {
 
     // ── PlannerCache ──────────────────────────────────────────────────────────
 
-    pub fn cache_put(&self, key: &PlannerCacheKey, entry: &PlannerCacheEntry) -> MetadataResult<()> {
+    pub fn cache_put(
+        &self,
+        key: &PlannerCacheKey,
+        entry: &PlannerCacheEntry,
+    ) -> MetadataResult<()> {
         let db_key = key.to_db_key();
         let json = serde_json::to_vec(entry)?;
         let tx = self.db.begin_write()?;
@@ -279,7 +283,8 @@ mod tests {
                 project: "proj".to_string(),
                 namespace_id: ns_id,
                 created_at: 0,
-            }).unwrap();
+            })
+            .unwrap();
         }
 
         let reg = db.load_collection_registry("proj").unwrap();
@@ -312,5 +317,4 @@ mod tests {
         assert!(db.cache_invalidate(&key).unwrap());
         assert!(db.cache_get(&key).unwrap().is_none());
     }
-
 }

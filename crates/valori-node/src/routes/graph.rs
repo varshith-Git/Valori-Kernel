@@ -147,7 +147,10 @@ pub async fn create_node<O: GraphOps>(
     })?;
     let ns = resolve(ops, req.collection.as_deref()).await?;
     let w = ops.create_node(ns, kind, req.record_id).await?;
-    Ok(Json(CreateNodeResponse { node_id: w.id, log_index: w.log_index }))
+    Ok(Json(CreateNodeResponse {
+        node_id: w.id,
+        log_index: w.log_index,
+    }))
 }
 
 pub async fn create_edge<O: GraphOps>(
@@ -163,7 +166,10 @@ pub async fn create_edge<O: GraphOps>(
     })?;
     let ns = resolve(ops, req.collection.as_deref()).await?;
     let w = ops.create_edge(ns, req.from, req.to, kind).await?;
-    Ok(Json(CreateEdgeResponse { edge_id: w.id, log_index: w.log_index }))
+    Ok(Json(CreateEdgeResponse {
+        edge_id: w.id,
+        log_index: w.log_index,
+    }))
 }
 
 pub async fn get_node<O: GraphOps>(
@@ -188,7 +194,10 @@ pub async fn delete_node<O: GraphOps>(
         return Err(node_not_found(id));
     }
     let log_index = ops.delete_node(ns, id).await?;
-    Ok(Json(DeleteNodeResponse { success: true, log_index }))
+    Ok(Json(DeleteNodeResponse {
+        success: true,
+        log_index,
+    }))
 }
 
 pub async fn list_nodes<O: GraphOps>(

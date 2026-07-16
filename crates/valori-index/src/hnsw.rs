@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::traits::VectorIndex;
+use rustc_hash::FxHashSet;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::sync::RwLock;
-use serde::{Serialize, Deserialize};
-use rustc_hash::FxHashSet;
 
 /// Hierarchical Navigable Small World (HNSW) Index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,15 +39,21 @@ struct Candidate {
 }
 
 impl PartialEq for Candidate {
-    fn eq(&self, other: &Self) -> bool { self.dist == other.dist && self.id == other.id }
+    fn eq(&self, other: &Self) -> bool {
+        self.dist == other.dist && self.id == other.id
+    }
 }
 impl Eq for Candidate {}
 impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.dist.partial_cmp(&other.dist).unwrap_or(Ordering::Equal)
+        self.dist
+            .partial_cmp(&other.dist)
+            .unwrap_or(Ordering::Equal)
             .then_with(|| self.id.cmp(&other.id))
     }
 }
@@ -79,10 +85,10 @@ unsafe fn dist_neon(v1: &[f32], v2: &[f32]) -> f32 {
 
     let chunks16 = len / 16;
     for _ in 0..chunks16 {
-        let d0 = vsubq_f32(vld1q_f32(p1),       vld1q_f32(p2));
+        let d0 = vsubq_f32(vld1q_f32(p1), vld1q_f32(p2));
         let d1 = vsubq_f32(vld1q_f32(p1.add(4)), vld1q_f32(p2.add(4)));
         let d2 = vsubq_f32(vld1q_f32(p1.add(8)), vld1q_f32(p2.add(8)));
-        let d3 = vsubq_f32(vld1q_f32(p1.add(12)),vld1q_f32(p2.add(12)));
+        let d3 = vsubq_f32(vld1q_f32(p1.add(12)), vld1q_f32(p2.add(12)));
         acc0 = vfmaq_f32(acc0, d0, d0);
         acc1 = vfmaq_f32(acc1, d1, d1);
         acc2 = vfmaq_f32(acc2, d2, d2);
@@ -128,7 +134,9 @@ fn ensure_node_slot(nodes: &mut Vec<Option<Node>>, idx: usize) {
 }
 
 impl HnswIndex {
-    pub fn new() -> Self { Self::new_with_config(HnswConfig::default()) }
+    pub fn new() -> Self {
+        Self::new_with_config(HnswConfig::default())
+    }
 
     pub fn new_with_config(config: HnswConfig) -> Self {
         Self {
@@ -139,7 +147,9 @@ impl HnswIndex {
         }
     }
 
-    pub fn config(&self) -> &HnswConfig { &self.config }
+    pub fn config(&self) -> &HnswConfig {
+        &self.config
+    }
 
     #[inline]
     pub(crate) fn dist(v1: &[f32], v2: &[f32]) -> f32 {
@@ -178,8 +188,8 @@ impl HnswIndex {
         let mut visited = FxHashSet::with_capacity_and_hasher(ef * 2, Default::default());
         visited.insert(entry);
 
-        use std::collections::BinaryHeap;
         use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
 
         let mut c = BinaryHeap::with_capacity(ef);
         c.push(Reverse(Candidate { id: entry, dist }));
@@ -189,24 +199,35 @@ impl HnswIndex {
 
         while let Some(Reverse(curr)) = c.pop() {
             if let Some(worst) = w.peek() {
-                if curr.dist > worst.dist { break; }
+                if curr.dist > worst.dist {
+                    break;
+                }
             }
 
             let curr_node = match nodes.get(curr.id as usize).and_then(|n| n.as_ref()) {
                 Some(n) => n,
                 None => continue,
             };
-            let neighbors = curr_node.neighbors.get(level).map(|v| v.as_slice()).unwrap_or(&[]);
+            let neighbors = curr_node
+                .neighbors
+                .get(level)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
 
             for &neighbor_id in neighbors {
-                if !visited.insert(neighbor_id) { continue; }
+                if !visited.insert(neighbor_id) {
+                    continue;
+                }
 
                 let neighbor_node = match nodes.get(neighbor_id as usize).and_then(|n| n.as_ref()) {
                     Some(n) => n,
                     None => continue,
                 };
                 let d = Self::dist(query, &neighbor_node.vector);
-                let cand = Candidate { id: neighbor_id, dist: d };
+                let cand = Candidate {
+                    id: neighbor_id,
+                    dist: d,
+                };
 
                 let mut added = false;
                 if w.len() < ef {
@@ -219,12 +240,20 @@ impl HnswIndex {
                         added = true;
                     }
                 }
-                if added { c.push(Reverse(cand)); }
+                if added {
+                    c.push(Reverse(cand));
+                }
             }
         }
 
         let sorted = w.into_sorted_vec();
-        tracing::debug!(level, visited = visited.len(), found = sorted.len(), ef, "search_layer done");
+        tracing::debug!(
+            level,
+            visited = visited.len(),
+            found = sorted.len(),
+            ef,
+            "search_layer done"
+        );
         sorted
     }
 
@@ -240,7 +269,9 @@ impl HnswIndex {
         let mut discarded: Vec<Candidate> = Vec::with_capacity(candidates.len());
 
         'outer: for &e in candidates {
-            if result.len() >= m { break; }
+            if result.len() >= m {
+                break;
+            }
             let e_vec = match nodes.get(e.id as usize).and_then(|n| n.as_ref()) {
                 Some(n) => &n.vector,
                 None => continue,
@@ -257,7 +288,9 @@ impl HnswIndex {
 
         if keep_pruned {
             for e in discarded {
-                if result.len() >= m { break; }
+                if result.len() >= m {
+                    break;
+                }
                 result.push(e);
             }
         }
@@ -269,12 +302,16 @@ impl HnswIndex {
 }
 
 impl Default for HnswIndex {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorIndex for HnswIndex {
     fn build(&mut self, records: &[(u32, Vec<f32>)]) {
-        for (id, vec) in records { self.insert(*id, vec); }
+        for (id, vec) in records {
+            self.insert(*id, vec);
+        }
     }
 
     fn insert(&mut self, id: u32, vector: &[f32]) {
@@ -286,7 +323,15 @@ impl VectorIndex for HnswIndex {
             ensure_node_slot(&mut nodes, id as usize);
             nodes[id as usize] = Some(Node {
                 vector: vector.to_vec().into_boxed_slice(),
-                neighbors: (0..=level).map(|l| Vec::with_capacity(if l == 0 { self.config.m_max0 } else { self.config.m })).collect(),
+                neighbors: (0..=level)
+                    .map(|l| {
+                        Vec::with_capacity(if l == 0 {
+                            self.config.m_max0
+                        } else {
+                            self.config.m
+                        })
+                    })
+                    .collect(),
             });
             *self.max_level.write().unwrap() = level;
             *self.entry_point.write().unwrap() = Some(id);
@@ -298,7 +343,15 @@ impl VectorIndex for HnswIndex {
             ensure_node_slot(&mut nodes, id as usize);
             nodes[id as usize] = Some(Node {
                 vector: vector.to_vec().into_boxed_slice(),
-                neighbors: (0..=level).map(|l| Vec::with_capacity(if l == 0 { self.config.m_max0 } else { self.config.m })).collect(),
+                neighbors: (0..=level)
+                    .map(|l| {
+                        Vec::with_capacity(if l == 0 {
+                            self.config.m_max0
+                        } else {
+                            self.config.m
+                        })
+                    })
+                    .collect(),
             });
         }
 
@@ -322,25 +375,44 @@ impl VectorIndex for HnswIndex {
                     None => break,
                 };
                 let curr_dist = Self::dist(vector, &curr_node.vector);
-                let neighbors = curr_node.neighbors.get(l).map(|v| v.as_slice()).unwrap_or(&[]);
+                let neighbors = curr_node
+                    .neighbors
+                    .get(l)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
 
                 let mut best = curr_entry_id;
                 let mut best_dist = curr_dist;
                 for &nb in neighbors {
                     if let Some(Some(nb_node)) = nodes.get(nb as usize) {
                         let d = Self::dist(vector, &nb_node.vector);
-                        if d < best_dist { best_dist = d; best = nb; }
+                        if d < best_dist {
+                            best_dist = d;
+                            best = nb;
+                        }
                     }
                 }
-                if best == curr_entry_id { break; }
+                if best == curr_entry_id {
+                    break;
+                }
                 curr_entry_id = best;
             }
         }
 
         for l in (0..=level).rev() {
-            let m = if l == 0 { self.config.m_max0 } else { self.config.m };
+            let m = if l == 0 {
+                self.config.m_max0
+            } else {
+                self.config.m
+            };
 
-            let candidates = self.search_layer(curr_entry_id, vector, self.config.ef_construction, l, &*nodes);
+            let candidates = self.search_layer(
+                curr_entry_id,
+                vector,
+                self.config.ef_construction,
+                l,
+                &*nodes,
+            );
             let neighbors = self.select_neighbors_heuristic(vector, &candidates, m, &*nodes, true);
 
             if let Some(Some(node)) = nodes.get_mut(id as usize) {
@@ -359,12 +431,16 @@ impl VectorIndex for HnswIndex {
                             let nb_vec: Box<[f32]> = nb_node.vector.clone();
                             let mut ranked: Vec<Candidate> = Vec::with_capacity(edge_ids.len());
                             ranked.extend(edge_ids.iter().filter_map(|&nid| {
-                                nodes.get(nid as usize)
-                                    .and_then(|n| n.as_ref())
-                                    .map(|n| Candidate { id: nid, dist: Self::dist(&nb_vec, &n.vector) })
+                                nodes.get(nid as usize).and_then(|n| n.as_ref()).map(|n| {
+                                    Candidate {
+                                        id: nid,
+                                        dist: Self::dist(&nb_vec, &n.vector),
+                                    }
+                                })
                             }));
                             ranked.sort();
-                            let pruned = self.select_neighbors_heuristic(&nb_vec, &ranked, m, &**nodes, true);
+                            let pruned = self
+                                .select_neighbors_heuristic(&nb_vec, &ranked, m, &**nodes, true);
                             if let Some(Some(nb2)) = nodes.get_mut(nb_uid) {
                                 if let Some(e) = nb2.neighbors.get_mut(l) {
                                     e.clear();
@@ -376,7 +452,9 @@ impl VectorIndex for HnswIndex {
                 }
             }
 
-            if !candidates.is_empty() { curr_entry_id = candidates[0].id; }
+            if !candidates.is_empty() {
+                curr_entry_id = candidates[0].id;
+            }
         }
     }
 
@@ -398,8 +476,11 @@ impl VectorIndex for HnswIndex {
         let is_entry = *self.entry_point.read().unwrap() == Some(id);
         if is_entry {
             let nodes = self.nodes.read().unwrap();
-            let new_ep = nodes.iter().enumerate()
-                .find_map(|(i, n)| if n.is_some() { Some(i as u32) } else { None });
+            let new_ep =
+                nodes
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, n)| if n.is_some() { Some(i as u32) } else { None });
             drop(nodes);
             *self.entry_point.write().unwrap() = new_ep;
         }
@@ -421,24 +502,37 @@ impl VectorIndex for HnswIndex {
                     None => break,
                 };
                 let curr_dist = Self::dist(query, &curr_node.vector);
-                let neighbors = curr_node.neighbors.get(l).map(|v| v.as_slice()).unwrap_or(&[]);
+                let neighbors = curr_node
+                    .neighbors
+                    .get(l)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
 
                 let mut best = curr_entry;
                 let mut best_dist = curr_dist;
                 for &nb in neighbors {
                     if let Some(Some(nb_node)) = nodes.get(nb as usize) {
                         let d = Self::dist(query, &nb_node.vector);
-                        if d < best_dist { best_dist = d; best = nb; }
+                        if d < best_dist {
+                            best_dist = d;
+                            best = nb;
+                        }
                     }
                 }
-                if best == curr_entry { break; }
+                if best == curr_entry {
+                    break;
+                }
                 curr_entry = best;
             }
         }
 
         let ef = k.max(self.config.ef_search);
         let results = self.search_layer(curr_entry, query, ef, 0, &nodes);
-        results.into_iter().take(k).map(|c| (c.id, c.dist)).collect()
+        results
+            .into_iter()
+            .take(k)
+            .map(|c| (c.id, c.dist))
+            .collect()
     }
 
     fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
@@ -460,17 +554,29 @@ impl VectorIndex for HnswIndex {
         let nodes_guard = self.nodes.read().unwrap();
         let max_level = *self.max_level.read().unwrap();
 
-        let mut node_dumps: Vec<NodeDump> = nodes_guard.iter().enumerate()
-            .filter_map(|(i, slot)| slot.as_ref().map(|n| NodeDump {
-                id: i as u32,
-                vector: &n.vector,
-                neighbors: &n.neighbors,
-            }))
+        let mut node_dumps: Vec<NodeDump> = nodes_guard
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| {
+                slot.as_ref().map(|n| NodeDump {
+                    id: i as u32,
+                    vector: &n.vector,
+                    neighbors: &n.neighbors,
+                })
+            })
             .collect();
         node_dumps.sort_by_key(|n| n.id);
 
-        let dump = HnswDump { config: &self.config, entry_point, max_level, nodes: node_dumps };
-        Ok(bincode::serde::encode_to_vec(&dump, bincode::config::standard())?)
+        let dump = HnswDump {
+            config: &self.config,
+            entry_point,
+            max_level,
+            nodes: node_dumps,
+        };
+        Ok(bincode::serde::encode_to_vec(
+            &dump,
+            bincode::config::standard(),
+        )?)
     }
 
     fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -488,14 +594,17 @@ impl VectorIndex for HnswIndex {
             nodes: Vec<NodeLoad>,
         }
 
-        let dump: HnswLoad = bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
+        let dump: HnswLoad =
+            bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
         self.config = dump.config;
 
         let mut nodes = self.nodes.write().unwrap();
         nodes.clear();
         for n in dump.nodes {
             let idx = n.id as usize;
-            if idx >= nodes.len() { nodes.resize_with(idx + 1, || None); }
+            if idx >= nodes.len() {
+                nodes.resize_with(idx + 1, || None);
+            }
             nodes[idx] = Some(Node {
                 vector: n.vector.into_boxed_slice(),
                 neighbors: n.neighbors,
@@ -539,7 +648,9 @@ mod tests {
     #[test]
     fn graph_navigable_after_entry_point_deleted() {
         let mut idx = HnswIndex::new();
-        for i in 0..8u32 { idx.insert(i, &[i as f32, 0.0]); }
+        for i in 0..8u32 {
+            idx.insert(i, &[i as f32, 0.0]);
+        }
         let ep = *idx.entry_point.read().unwrap();
         if let Some(ep_id) = ep {
             idx.delete(ep_id);
@@ -560,7 +671,9 @@ mod tests {
         idx2.restore(&snap).unwrap();
         let r1 = idx.search(&[0.0, 0.0, 0.0, 0.0], 3);
         let r2 = idx2.search(&[0.0, 0.0, 0.0, 0.0], 3);
-        assert_eq!(r1.iter().map(|(id,_)| *id).collect::<Vec<_>>(),
-                   r2.iter().map(|(id,_)| *id).collect::<Vec<_>>());
+        assert_eq!(
+            r1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            r2.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+        );
     }
 }

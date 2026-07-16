@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Tests for fxp/ops.rs — fixed-point arithmetic (Q16.16).
 
-use valori_kernel::fxp::ops::{fxp_add, fxp_sub, fxp_mul, from_f32, to_f32};
+use valori_kernel::fxp::ops::{from_f32, fxp_add, fxp_mul, fxp_sub, to_f32};
 use valori_kernel::types::scalar::FxpScalar;
 
-const ONE: FxpScalar = FxpScalar(65536);   // 1.0 in Q16.16
-const HALF: FxpScalar = FxpScalar(32768);  // 0.5
+const ONE: FxpScalar = FxpScalar(65536); // 1.0 in Q16.16
+const HALF: FxpScalar = FxpScalar(32768); // 0.5
 const NEG_ONE: FxpScalar = FxpScalar(-65536);
 const ZERO: FxpScalar = FxpScalar(0);
 

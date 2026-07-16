@@ -270,11 +270,26 @@ mod tests {
 
     fn make_reranker() -> ValoriReranker {
         let mut r = ValoriReranker::new();
-        r.insert(1, "The optimizer used is AdamW with weight decay during continued pretraining");
-        r.insert(2, "Reinforcement learning uses Adam optimizer in the single epoch regime");
-        r.insert(3, "Context Parallelism replaced Tensor Parallelism for long context scaling");
-        r.insert(4, "Agent behavior includes penalties for leaving to-do lists unfinished");
-        r.insert(5, "Public benchmarks like SWE-bench measure software engineering performance");
+        r.insert(
+            1,
+            "The optimizer used is AdamW with weight decay during continued pretraining",
+        );
+        r.insert(
+            2,
+            "Reinforcement learning uses Adam optimizer in the single epoch regime",
+        );
+        r.insert(
+            3,
+            "Context Parallelism replaced Tensor Parallelism for long context scaling",
+        );
+        r.insert(
+            4,
+            "Agent behavior includes penalties for leaving to-do lists unfinished",
+        );
+        r.insert(
+            5,
+            "Public benchmarks like SWE-bench measure software engineering performance",
+        );
         r
     }
 
@@ -316,7 +331,10 @@ mod tests {
         // record 1 contains "adamw". After remove it must not appear in doc_freq.
         r.remove(1);
         assert_eq!(r.len(), 4);
-        assert!(!r.doc_freq.contains_key("adamw"), "doc_freq must be cleaned up");
+        assert!(
+            !r.doc_freq.contains_key("adamw"),
+            "doc_freq must be cleaned up"
+        );
 
         // Reranking must not panic with the removed record.
         let candidates = vec![(1, 1.0), (2, 1.5)];
@@ -331,7 +349,10 @@ mod tests {
         assert_eq!(*r.doc_freq.get("hello").unwrap(), 1);
         // Overwrite with different text.
         r.insert(1, "goodbye world");
-        assert!(!r.doc_freq.contains_key("hello"), "old term must be removed");
+        assert!(
+            !r.doc_freq.contains_key("hello"),
+            "old term must be removed"
+        );
         assert_eq!(*r.doc_freq.get("goodbye").unwrap(), 1);
         assert_eq!(*r.doc_freq.get("world").unwrap(), 1);
         assert_eq!(r.len(), 1);
@@ -339,16 +360,18 @@ mod tests {
 
     #[test]
     fn restore_corpus_rebuilds_doc_freq() {
-        let mut r = make_reranker();
+        let r = make_reranker();
         let (corpus, total) = r.snapshot_corpus();
         let corpus_clone: HashMap<u64, Vec<String>> = corpus.clone();
-        let total = total;
 
         let mut r2 = ValoriReranker::new();
         r2.restore_corpus(corpus_clone, total);
 
         // After restore, doc_freq must be populated.
-        assert!(r2.doc_freq.contains_key("adamw"), "doc_freq rebuilt from corpus");
+        assert!(
+            r2.doc_freq.contains_key("adamw"),
+            "doc_freq rebuilt from corpus"
+        );
         assert_eq!(r2.len(), r.len());
     }
 

@@ -103,7 +103,11 @@ pub struct PartitionNetworkFactory {
 
 impl PartitionNetworkFactory {
     pub fn new(source: NodeId, partition: PartitionTable, registry: RaftRegistry) -> Self {
-        Self { source, partition, registry }
+        Self {
+            source,
+            partition,
+            registry,
+        }
     }
 }
 
@@ -137,9 +141,7 @@ impl std::fmt::Display for PartitionedError {
 impl std::error::Error for PartitionedError {}
 
 impl PartitionNetwork {
-    fn check_partition<E: std::error::Error>(
-        &self,
-    ) -> Result<(), RPCError<NodeId, ValoriNode, E>> {
+    fn check_partition<E: std::error::Error>(&self) -> Result<(), RPCError<NodeId, ValoriNode, E>> {
         if self.partition.is_blocked(self.source, self.target) {
             Err(RPCError::Network(NetworkError::new(&PartitionedError)))
         } else {
@@ -206,9 +208,7 @@ impl RaftNetwork<TypeConfig> for PartitionNetwork {
 
 /// Spin up `n` in-process Raft nodes wired through the partition transport.
 /// Node IDs are 1..=n. Node 1 calls `initialize` to bootstrap the cluster.
-pub async fn make_cluster(
-    n: usize,
-) -> (Vec<Raft>, Vec<ValoriStateMachine>, PartitionTable) {
+pub async fn make_cluster(n: usize) -> (Vec<Raft>, Vec<ValoriStateMachine>, PartitionTable) {
     let partition = PartitionTable::default();
     let registry = RaftRegistry::default();
 
@@ -240,9 +240,15 @@ pub async fn make_cluster(
     for i in 1..=(n as NodeId) {
         let sm = ValoriStateMachine::new(Box::new(MemoryAuditSink::new()), 0);
         let factory = PartitionNetworkFactory::new(i, partition.clone(), registry.clone());
-        let raft = Raft::new(i, config.clone(), factory, ValoriLogStore::new(), sm.clone())
-            .await
-            .unwrap();
+        let raft = Raft::new(
+            i,
+            config.clone(),
+            factory,
+            ValoriLogStore::new(),
+            sm.clone(),
+        )
+        .await
+        .unwrap();
         registry.register(i, raft.clone()).await;
         rafts.push(raft);
         sms.push(sm);
@@ -319,7 +325,9 @@ pub async fn insert_vector(
         })
         .await
         .expect("client_write failed");
-    resp.data.allocated_record_id.expect("no allocated_record_id in response")
+    resp.data
+        .allocated_record_id
+        .expect("no allocated_record_id in response")
 }
 
 // ── Sharded partition harness ─────────────────────────────────────────────────
@@ -352,7 +360,10 @@ impl ShardPartitionTable {
     }
 
     fn as_plain(&self, shard: ShardId) -> ShardPartitionView {
-        ShardPartitionView { inner: self.clone(), shard }
+        ShardPartitionView {
+            inner: self.clone(),
+            shard,
+        }
     }
 }
 
@@ -395,9 +406,7 @@ pub struct ShardPartitionNetwork {
 }
 
 impl ShardPartitionNetwork {
-    fn check_partition<E: std::error::Error>(
-        &self,
-    ) -> Result<(), RPCError<NodeId, ValoriNode, E>> {
+    fn check_partition<E: std::error::Error>(&self) -> Result<(), RPCError<NodeId, ValoriNode, E>> {
         if self.view.is_blocked(self.source, self.target) {
             Err(RPCError::Network(NetworkError::new(&PartitionedError)))
         } else {
@@ -513,9 +522,15 @@ pub async fn make_sharded_cluster(
                 view: partition.as_plain(shard_id),
                 registry: registry.clone(),
             };
-            let raft = Raft::new(i, config.clone(), factory, ValoriLogStore::new(), sm.clone())
-                .await
-                .unwrap();
+            let raft = Raft::new(
+                i,
+                config.clone(),
+                factory,
+                ValoriLogStore::new(),
+                sm.clone(),
+            )
+            .await
+            .unwrap();
             registry.register(i, raft.clone()).await;
             pairs.push(ShardRaftPair { raft, sm });
         }
@@ -580,7 +595,9 @@ pub async fn insert_shard_vector(
         })
         .await
         .expect("client_write failed");
-    resp.data.allocated_record_id.expect("no allocated_record_id in response")
+    resp.data
+        .allocated_record_id
+        .expect("no allocated_record_id in response")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -612,8 +629,12 @@ mod tests {
         // All 3 replicas must have both records.
         for sm in &sms {
             sm.with_state(|s| {
-                assert!(s.get_record(valori_kernel::types::id::RecordId(0)).is_some());
-                assert!(s.get_record(valori_kernel::types::id::RecordId(1)).is_some());
+                assert!(s
+                    .get_record(valori_kernel::types::id::RecordId(0))
+                    .is_some());
+                assert!(s
+                    .get_record(valori_kernel::types::id::RecordId(1))
+                    .is_some());
             })
             .await;
         }
@@ -696,10 +717,16 @@ mod tests {
         // Both records must be present everywhere.
         for sm in &sms {
             sm.with_state(|s| {
-                assert!(s.get_record(valori_kernel::types::id::RecordId(0)).is_some(),
-                    "record 0 missing after heal");
-                assert!(s.get_record(valori_kernel::types::id::RecordId(1)).is_some(),
-                    "record 1 missing after heal");
+                assert!(
+                    s.get_record(valori_kernel::types::id::RecordId(0))
+                        .is_some(),
+                    "record 0 missing after heal"
+                );
+                assert!(
+                    s.get_record(valori_kernel::types::id::RecordId(1))
+                        .is_some(),
+                    "record 1 missing after heal"
+                );
             })
             .await;
         }
@@ -732,9 +759,15 @@ mod tests {
         // Give the cluster a moment to ensure no stray replication sneaks through.
         tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
         let isolated_has_record = sms[isolated_idx]
-            .with_state(|s| s.get_record(valori_kernel::types::id::RecordId(0)).is_some())
+            .with_state(|s| {
+                s.get_record(valori_kernel::types::id::RecordId(0))
+                    .is_some()
+            })
             .await;
-        assert!(!isolated_has_record, "isolated minority should not have committed the entry");
+        assert!(
+            !isolated_has_record,
+            "isolated minority should not have committed the entry"
+        );
 
         partition.clear();
     }

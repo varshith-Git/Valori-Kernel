@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::deterministic::kmeans::{deterministic_kmeans, l2_sq_q16, f32_to_q16};
 use super::Quantizer;
-use serde::{Serialize, Deserialize};
+use crate::deterministic::kmeans::{deterministic_kmeans, f32_to_q16, l2_sq_q16};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct PqConfig {
@@ -11,7 +11,10 @@ pub struct PqConfig {
 
 impl Default for PqConfig {
     fn default() -> Self {
-        Self { n_subvectors: 4, n_centroids: 256 }
+        Self {
+            n_subvectors: 4,
+            n_centroids: 256,
+        }
     }
 }
 
@@ -25,17 +28,29 @@ pub struct ProductQuantizer {
 
 impl ProductQuantizer {
     pub fn new(config: PqConfig, dim: usize) -> Self {
-        let sub_dim = if dim == 0 { 0 } else { dim / config.n_subvectors };
-        Self { config, dim, sub_dim, codebooks: Vec::new() }
+        let sub_dim = if dim == 0 {
+            0
+        } else {
+            dim / config.n_subvectors
+        };
+        Self {
+            config,
+            dim,
+            sub_dim,
+            codebooks: Vec::new(),
+        }
     }
 
     pub fn build(&mut self, records: &[(u32, Vec<f32>)]) {
-        if records.is_empty() { return; }
+        if records.is_empty() {
+            return;
+        }
         self.codebooks.clear();
         for m in 0..self.config.n_subvectors {
             let start = m * self.sub_dim;
             let end = start + self.sub_dim;
-            let mut sub_records: Vec<(u32, Vec<f32>)> = records.iter()
+            let mut sub_records: Vec<(u32, Vec<f32>)> = records
+                .iter()
                 .map(|(id, vec)| (*id, vec[start..end].to_vec()))
                 .collect();
             sub_records.sort_by_key(|(id, _)| *id);
@@ -51,8 +66,15 @@ impl ProductQuantizer {
             dim: usize,
             codebooks: &'a Vec<Vec<Vec<i32>>>,
         }
-        let dump = PqDump { config: &self.config, dim: self.dim, codebooks: &self.codebooks };
-        Ok(bincode::serde::encode_to_vec(&dump, bincode::config::standard())?)
+        let dump = PqDump {
+            config: &self.config,
+            dim: self.dim,
+            codebooks: &self.codebooks,
+        };
+        Ok(bincode::serde::encode_to_vec(
+            &dump,
+            bincode::config::standard(),
+        )?)
     }
 
     pub fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -65,7 +87,11 @@ impl ProductQuantizer {
         let dump: PqLoad = bincode::serde::decode_from_slice(data, bincode::config::standard())?.0;
         self.config = dump.config;
         self.dim = dump.dim;
-        self.sub_dim = if self.dim == 0 { 0 } else { self.dim / self.config.n_subvectors };
+        self.sub_dim = if self.dim == 0 {
+            0
+        } else {
+            self.dim / self.config.n_subvectors
+        };
         self.codebooks = dump.codebooks;
         Ok(())
     }
@@ -77,7 +103,9 @@ impl Quantizer for ProductQuantizer {
         for m in 0..self.config.n_subvectors {
             let start = m * self.sub_dim;
             let sub_vec: Vec<i32> = vec[start..start + self.sub_dim]
-                .iter().map(|&v| f32_to_q16(v)).collect();
+                .iter()
+                .map(|&v| f32_to_q16(v))
+                .collect();
             let mut best_idx = 0usize;
             let mut best_dist = i64::MAX;
             if m < self.codebooks.len() {

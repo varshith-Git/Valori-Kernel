@@ -33,7 +33,9 @@ const ALLOWED_COLLISIONS: &[&str] = &["lib.rs"];
 
 /// Recursively collect all `.rs` paths under `dir`, relative to `dir`.
 fn collect_rs(dir: &Path, prefix: &Path, out: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let rel = prefix.join(entry.file_name());
@@ -61,8 +63,7 @@ fn no_duplicate_source_files_across_extracted_crates() {
         node_files.len()
     );
 
-    let allowed: BTreeSet<PathBuf> =
-        ALLOWED_COLLISIONS.iter().map(PathBuf::from).collect();
+    let allowed: BTreeSet<PathBuf> = ALLOWED_COLLISIONS.iter().map(PathBuf::from).collect();
 
     let mut collisions = Vec::new();
     for krate in EXTRACTED_CRATES {
@@ -76,7 +77,10 @@ fn no_duplicate_source_files_across_extracted_crates() {
 
         for path in node_files.intersection(&other_files) {
             if !allowed.contains(path) {
-                collisions.push(format!("{} exists in both valori-node and {krate}", path.display()));
+                collisions.push(format!(
+                    "{} exists in both valori-node and {krate}",
+                    path.display()
+                ));
             }
         }
     }

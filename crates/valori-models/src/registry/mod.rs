@@ -43,7 +43,6 @@ pub fn built_in() -> Vec<ModelManifest> {
             Some("MIT"),
             Some("https://platform.openai.com/docs/guides/embeddings"),
         ),
-
         // ── Ollama remote ─────────────────────────────────────────────────────
         remote(
             "ollama/nomic-embed-text",
@@ -72,7 +71,6 @@ pub fn built_in() -> Vec<ModelManifest> {
             Some("MIT"),
             Some("https://ollama.com/library/bge-m3"),
         ),
-
         // ── Voyage remote ─────────────────────────────────────────────────────
         remote(
             "voyage/voyage-3",
@@ -92,7 +90,6 @@ pub fn built_in() -> Vec<ModelManifest> {
             None,
             Some("https://www.voyageai.com/"),
         ),
-
         // ── Local ONNX models ─────────────────────────────────────────────────
         // SHA-256 and size are populated once local inference ships (E1-full).
         local_onnx(
@@ -230,15 +227,29 @@ mod tests {
 
     #[test]
     fn remote_models_have_no_download_url() {
-        for m in built_in().iter().filter(|m| m.format == ModelFormat::Remote) {
-            assert!(m.download_url.is_none(), "'{}' is Remote but has download_url", m.id);
+        for m in built_in()
+            .iter()
+            .filter(|m| m.format == ModelFormat::Remote)
+        {
+            assert!(
+                m.download_url.is_none(),
+                "'{}' is Remote but has download_url",
+                m.id
+            );
         }
     }
 
     #[test]
     fn local_models_have_download_url() {
-        for m in built_in().iter().filter(|m| m.format != ModelFormat::Remote) {
-            assert!(m.download_url.is_some(), "'{}' is local but missing download_url", m.id);
+        for m in built_in()
+            .iter()
+            .filter(|m| m.format != ModelFormat::Remote)
+        {
+            assert!(
+                m.download_url.is_some(),
+                "'{}' is local but missing download_url",
+                m.id
+            );
         }
     }
 

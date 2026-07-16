@@ -16,10 +16,10 @@
 //! No Valori-specific credential management is needed — just attach the right
 //! IAM role in production and set env vars in dev/CI.
 
+use bytes::Bytes;
+use opendal::Operator;
 use std::path::Path;
 use std::sync::Arc;
-use opendal::Operator;
-use bytes::Bytes;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -94,7 +94,10 @@ impl ObjectStoreBackend {
     pub fn from_url(url: &str) -> Result<Self, ObjectStoreError> {
         if let Some(rest) = url.strip_prefix("s3://") {
             let (bucket, prefix) = if let Some(slash) = rest.find('/') {
-                (&rest[..slash], rest[slash + 1..].trim_end_matches('/').to_string())
+                (
+                    &rest[..slash],
+                    rest[slash + 1..].trim_end_matches('/').to_string(),
+                )
             } else {
                 (rest, String::new())
             };
@@ -123,8 +126,7 @@ impl ObjectStoreBackend {
                 builder = builder.access_key_id(&key).secret_access_key(&secret);
             }
 
-            let op = Operator::new(builder)
-                .map_err(|e| ObjectStoreError::Build(e.to_string()))?;
+            let op = Operator::new(builder).map_err(|e| ObjectStoreError::Build(e.to_string()))?;
             Ok(Self { op, prefix })
         } else if let Some(root) = url.strip_prefix("file://") {
             std::fs::create_dir_all(root)
@@ -132,9 +134,11 @@ impl ObjectStoreBackend {
 
             let builder = opendal::services::Fs::default().root(root);
 
-            let op = Operator::new(builder)
-                .map_err(|e| ObjectStoreError::Build(e.to_string()))?;
-            Ok(Self { op, prefix: String::new() })
+            let op = Operator::new(builder).map_err(|e| ObjectStoreError::Build(e.to_string()))?;
+            Ok(Self {
+                op,
+                prefix: String::new(),
+            })
         } else {
             Err(ObjectStoreError::Build(format!(
                 "unsupported object-store URL (want s3:// or file://): {url}"
@@ -185,12 +189,20 @@ impl ObjectStoreBackend {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let hash_tag = if state_hash.len() >= 8 { &state_hash[..8] } else { state_hash };
+        let hash_tag = if state_hash.len() >= 8 {
+            &state_hash[..8]
+        } else {
+            state_hash
+        };
         let snap_key = self.full_key("snapshots", &format!("{epoch:020}_{hash_tag}.snap"));
         let hash_key = snap_key.replace(".snap", ".hash");
 
-        self.op.write(&snap_key, Bytes::copy_from_slice(data)).await?;
-        self.op.write(&hash_key, Bytes::copy_from_slice(state_hash.as_bytes())).await?;
+        self.op
+            .write(&snap_key, Bytes::copy_from_slice(data))
+            .await?;
+        self.op
+            .write(&hash_key, Bytes::copy_from_slice(state_hash.as_bytes()))
+            .await?;
 
         tracing::info!(key = %snap_key, bytes = data.len(), "snapshot uploaded to object store");
         Ok(snap_key)
@@ -211,16 +223,24 @@ impl ObjectStoreBackend {
             if !path.ends_with(".snap") {
                 continue;
             }
-            let size_bytes = self.op.stat(path).await
+            let size_bytes = self
+                .op
+                .stat(path)
+                .await
                 .map(|m| m.content_length())
                 .unwrap_or(0);
             let hash_key = path.replace(".snap", ".hash");
-            let state_hash = self.op.read(&hash_key).await
+            let state_hash = self
+                .op
+                .read(&hash_key)
+                .await
                 .map(|b| String::from_utf8_lossy(&b.to_vec()).trim().to_string())
                 .unwrap_or_default();
             // Key name: `{prefix}/snapshots/{epoch:020}_{hash8}.snap`
             let fname = path.rsplit('/').next().unwrap_or(path);
-            let epoch_secs = fname.split('_').next()
+            let epoch_secs = fname
+                .split('_')
+                .next()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
             snaps.push(SnapshotEntry {
@@ -263,10 +283,7 @@ impl ObjectStoreBackend {
     ///
     /// The segment is read from disk and uploaded to `wal/{filename}`.
     /// Returns the object key.
-    pub async fn archive_wal_segment(
-        &self,
-        local_path: &Path,
-    ) -> Result<String, ObjectStoreError> {
+    pub async fn archive_wal_segment(&self, local_path: &Path) -> Result<String, ObjectStoreError> {
         let name = local_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -291,10 +308,16 @@ impl ObjectStoreBackend {
         let mut result: Vec<WalEntry> = Vec::new();
         for entry in &entries {
             let path = entry.path();
-            let size_bytes = self.op.stat(path).await
+            let size_bytes = self
+                .op
+                .stat(path)
+                .await
                 .map(|m| m.content_length())
                 .unwrap_or(0);
-            result.push(WalEntry { key: path.to_string(), size_bytes });
+            result.push(WalEntry {
+                key: path.to_string(),
+                size_bytes,
+            });
         }
         result.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(result)

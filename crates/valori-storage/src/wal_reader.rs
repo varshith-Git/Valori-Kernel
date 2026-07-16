@@ -1,12 +1,12 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! WAL Reader — supports both v1 (legacy Command) and v2 (KernelEvent + ns) formats.
 
-use valori_kernel::event::KernelEvent;
-use crate::wal_compat::{LegacyWalCommand, legacy_to_event};
+use crate::wal_compat::{legacy_to_event, LegacyWalCommand};
 use std::fs::File;
-use std::io::{Read, BufReader, BufRead};
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use thiserror::Error;
+use valori_kernel::event::KernelEvent;
 
 /// 16-byte header at the start of every WAL file.
 /// Layout: [Version:u32 LE][EncodingVersion:u32 LE][Dim:u32 LE][ChecksumLen:u32 LE]
@@ -29,10 +29,10 @@ impl WalHeader {
         }
         Ok((
             Self {
-                version:          u32::from_le_bytes([buf[0],  buf[1],  buf[2],  buf[3]]),
-                encoding_version: u32::from_le_bytes([buf[4],  buf[5],  buf[6],  buf[7]]),
-                dim:              u32::from_le_bytes([buf[8],  buf[9],  buf[10], buf[11]]),
-                checksum_len:     u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
+                version: u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+                encoding_version: u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]),
+                dim: u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
+                checksum_len: u32::from_le_bytes([buf[12], buf[13], buf[14], buf[15]]),
             },
             &buf[Self::SIZE..],
         ))
@@ -96,15 +96,17 @@ impl WalReader {
             .map_err(|_| WalReaderError::Header("Invalid header".into()))?;
 
         if header.version != 1 && header.version != 2 {
-            return Err(WalReaderError::Header(
-                format!("Unsupported WAL version {}", header.version)
-            ));
+            return Err(WalReaderError::Header(format!(
+                "Unsupported WAL version {}",
+                header.version
+            )));
         }
 
         if let Some(expected) = self.expected_dim {
             if header.dim != 0 && header.dim != expected {
                 return Err(WalReaderError::Header(format!(
-                    "Dimension mismatch: file={}, expected={}", header.dim, expected
+                    "Dimension mismatch: file={}, expected={}",
+                    header.dim, expected
                 )));
             }
         }
@@ -130,7 +132,8 @@ impl WalReader {
         match self.version {
             1 => {
                 match bincode::serde::decode_from_std_read::<LegacyWalCommand, _, _>(
-                    &mut self.reader, config,
+                    &mut self.reader,
+                    config,
                 ) {
                     Ok(cmd) => Ok(Some(legacy_to_event(cmd))),
                     Err(e) if is_clean_eof(&e) => Ok(None),
@@ -139,14 +142,18 @@ impl WalReader {
             }
             2 => {
                 match bincode::serde::decode_from_std_read::<(KernelEvent, u16), _, _>(
-                    &mut self.reader, config,
+                    &mut self.reader,
+                    config,
                 ) {
                     Ok(pair) => Ok(Some(pair)),
                     Err(e) if is_clean_eof(&e) => Ok(None),
                     Err(e) => Err(WalReaderError::Deserialization(e.to_string())),
                 }
             }
-            _ => Err(WalReaderError::Header(format!("Unsupported version {}", self.version))),
+            _ => Err(WalReaderError::Header(format!(
+                "Unsupported version {}",
+                self.version
+            ))),
         }
     }
 
@@ -191,9 +198,9 @@ impl IntoIterator for WalReader {
 mod tests {
     use super::*;
     use crate::wal_writer::WalWriter;
+    use tempfile::tempdir;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use tempfile::tempdir;
 
     #[test]
     fn test_wal_roundtrip_v2() {

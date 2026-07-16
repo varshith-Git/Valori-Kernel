@@ -34,7 +34,10 @@ fn make_assembler(
     let op_hash = compute_operation_hash(kind, inputs, &ExecutionPolicy::default()).to_hex();
     let nanos = now_nanos();
     ReceiptAssembler::new(
-        ExecutionId { hi: nanos, lo: ns_id as u64 },
+        ExecutionId {
+            hi: nanos,
+            lo: ns_id as u64,
+        },
         op_hash,
         "bridge-v0".into(), // graph_hash — full planner graph hash arrives in A12
         "bridge-v0".into(), // fp_hash   — full planner fp hash arrives in A12
@@ -69,7 +72,14 @@ pub fn emit_write(
     state_before: String,
     state_after: String,
 ) -> Receipt {
-    let asm = make_assembler(kind, inputs, ns_id, shard_id, committed_height, cluster_mode);
+    let asm = make_assembler(
+        kind,
+        inputs,
+        ns_id,
+        shard_id,
+        committed_height,
+        cluster_mode,
+    );
     asm.push(ReceiptFragment {
         task_index: 0,
         state_hash_before: state_before,
@@ -93,7 +103,14 @@ pub fn emit_read(
     cluster_mode: bool,
     state_hash: String,
 ) {
-    let asm = make_assembler(kind, inputs, ns_id, shard_id, committed_height, cluster_mode);
+    let asm = make_assembler(
+        kind,
+        inputs,
+        ns_id,
+        shard_id,
+        committed_height,
+        cluster_mode,
+    );
     asm.push(ReceiptFragment::read_only(0, state_hash));
     store.insert(asm.assemble());
 }

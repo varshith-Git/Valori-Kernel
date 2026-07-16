@@ -39,23 +39,25 @@ pub mod writer;
 pub use document::{Chunk, Document, Embedding, IngestError, WriteResult};
 pub use metadata::DocumentMetadata;
 pub use source::DocumentSource;
-pub use validator::{DocumentValidator, ValidationError, validate_utf8};
+pub use validator::{validate_utf8, DocumentValidator, ValidationError};
 
 // Stage traits + canonical implementations
 pub use chunker::{Chunker, DefaultChunker};
 pub use embedder::{Embedder, ModelProviderEmbedder};
+pub use extractor::{Extractor, ReaderCapabilities};
+pub use extractor_registry::ExtractorRegistry;
+pub use extractors::{
+    DocxExtractor, HtmlExtractor, MarkdownExtractor, PdfExtractor, TextExtractor,
+};
 pub use reader::{Reader, TextReader};
 pub use readers::{DocxReader, HtmlReader, MarkdownReader, PdfReader};
 pub use registry::ReaderRegistry;
-pub use extractor::{Extractor, ReaderCapabilities};
-pub use extractors::{DocxExtractor, HtmlExtractor, MarkdownExtractor, PdfExtractor, TextExtractor};
-pub use extractor_registry::ExtractorRegistry;
 pub use writer::{NoopWriter, Writer};
 
 // E4 observability
 pub use cancel::CancellationToken;
 pub use config::PipelineConfig;
-pub use execution::{PipelineResult, StageName, StageMetrics, StageResult};
+pub use execution::{PipelineResult, StageMetrics, StageName, StageResult};
 pub use hooks::{NoopHook, PipelineHook};
 pub use progress::{ProgressEvent, ProgressSender};
 pub use retry::RetryPolicy;
@@ -64,6 +66,6 @@ pub use retry::RetryPolicy;
 pub use pipeline::{IngestPipeline, IngestPipelineBuilder};
 
 // Backward-compatible flat re-exports (existing node call sites unchanged).
-pub use chunker::{IngestChunk, chunk_content_hash, chunk_document};
-pub use embed::{EmbedConfig, EmbedError, embed_batch};
-pub use handler::{IngestDocumentRequest, IngestDocumentResponse, ingest_document};
+pub use chunker::{chunk_content_hash, chunk_document, IngestChunk};
+pub use embed::{embed_batch, EmbedConfig, EmbedError};
+pub use handler::{ingest_document, IngestDocumentRequest, IngestDocumentResponse};

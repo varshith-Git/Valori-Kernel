@@ -5,7 +5,7 @@
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
+use valori_kernel::snapshot::encode::{encode_capacity_hint, encode_state};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::enums::{EdgeKind, NodeKind};
 use valori_kernel::types::id::{EdgeId, NodeId, RecordId};
@@ -17,12 +17,18 @@ const DIM: usize = 4;
 fn populated_state() -> KernelState {
     let mut state = KernelState::new();
     for i in 0u32..20 {
-        let data = (0..DIM).map(|d| FxpScalar((i * 100 + d as u32) as i32)).collect();
+        let data = (0..DIM)
+            .map(|d| FxpScalar((i * 100 + d as u32) as i32))
+            .collect();
         state
             .apply_event(&KernelEvent::InsertRecord {
                 id: RecordId(i),
                 vector: FxpVector { data },
-                metadata: if i % 3 == 0 { Some(vec![i as u8; 8]) } else { None },
+                metadata: if i % 3 == 0 {
+                    Some(vec![i as u8; 8])
+                } else {
+                    None
+                },
                 tag: i as u64,
             })
             .unwrap();
@@ -149,7 +155,9 @@ fn valid_one_record_snapshot() -> Vec<u8> {
     state
         .apply_event(&KernelEvent::InsertRecord {
             id: RecordId(0),
-            vector: FxpVector { data: vec![FxpScalar(1), FxpScalar(2)] },
+            vector: FxpVector {
+                data: vec![FxpScalar(1), FxpScalar(2)],
+            },
             metadata: None,
             tag: 0,
         })
@@ -168,9 +176,9 @@ fn valid_one_record_snapshot() -> Vec<u8> {
 //  32      format_id    (V5+)
 //  33..37  total_slots  (records section header)
 //  37      is_present   (first record slot flag)
-const OFF_DIM:         usize = 20;
+const OFF_DIM: usize = 20;
 const OFF_TOTAL_SLOTS: usize = 33;
-const OFF_IS_PRESENT:  usize = 37;
+const OFF_IS_PRESENT: usize = 37;
 
 #[test]
 fn invalid_is_present_flag_is_rejected() {
@@ -185,7 +193,10 @@ fn oversized_dim_is_rejected() {
     let mut buf = encode(&state);
     let bad_dim: u32 = 65537; // MAX_DIM + 1
     buf[OFF_DIM..OFF_DIM + 4].copy_from_slice(&bad_dim.to_le_bytes());
-    assert!(decode_state(&buf).is_err(), "dim > MAX_DIM must be rejected");
+    assert!(
+        decode_state(&buf).is_err(),
+        "dim > MAX_DIM must be rejected"
+    );
 }
 
 #[test]
@@ -194,7 +205,10 @@ fn oversized_total_slots_is_rejected() {
     let mut buf = encode(&state);
     let bad_slots: u32 = 10_000_001; // > MAX_RECORDS (10_000_000)
     buf[OFF_TOTAL_SLOTS..OFF_TOTAL_SLOTS + 4].copy_from_slice(&bad_slots.to_le_bytes());
-    assert!(decode_state(&buf).is_err(), "total_slots > MAX_RECORDS must be rejected");
+    assert!(
+        decode_state(&buf).is_err(),
+        "total_slots > MAX_RECORDS must be rejected"
+    );
 }
 
 #[test]
@@ -204,7 +218,10 @@ fn record_id_mismatch_is_rejected() {
     let id_offset = OFF_IS_PRESENT + 1;
     let wrong_id: u32 = 99; // slot 0 must have id 0
     buf[id_offset..id_offset + 4].copy_from_slice(&wrong_id.to_le_bytes());
-    assert!(decode_state(&buf).is_err(), "record id != slot index must be rejected");
+    assert!(
+        decode_state(&buf).is_err(),
+        "record id != slot index must be rejected"
+    );
 }
 
 #[test]
@@ -214,5 +231,8 @@ fn unsupported_schema_version_is_rejected() {
     // schema_ver is at offset 4 (after MAGIC).
     let bad_ver: u32 = 99;
     buf[4..8].copy_from_slice(&bad_ver.to_le_bytes());
-    assert!(decode_state(&buf).is_err(), "schema_ver 99 must be rejected");
+    assert!(
+        decode_state(&buf).is_err(),
+        "schema_ver 99 must be rejected"
+    );
 }

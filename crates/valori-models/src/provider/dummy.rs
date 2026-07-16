@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! `DummyProvider` — deterministic zero vectors, for tests only.
 
-use crate::error::ModelResult;
 use super::ModelProvider;
+use crate::error::ModelResult;
 
 pub struct DummyProvider {
     dim: usize,
@@ -16,9 +16,15 @@ impl DummyProvider {
 
 #[async_trait::async_trait]
 impl ModelProvider for DummyProvider {
-    fn kind(&self) -> &'static str { "dummy" }
-    fn model_name(&self) -> &str { "dummy" }
-    fn dim(&self) -> usize { self.dim }
+    fn kind(&self) -> &'static str {
+        "dummy"
+    }
+    fn model_name(&self) -> &str {
+        "dummy"
+    }
+    fn dim(&self) -> usize {
+        self.dim
+    }
 
     async fn embed(&self, texts: &[String]) -> ModelResult<Vec<Vec<f32>>> {
         Ok(texts.iter().map(|_| vec![0.0f32; self.dim]).collect())

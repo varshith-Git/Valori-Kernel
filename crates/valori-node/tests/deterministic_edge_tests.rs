@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_index::{deterministic_kmeans, IvfIndex, IvfConfig, VectorIndex};
+use valori_index::{deterministic_kmeans, IvfConfig, IvfIndex, VectorIndex};
+use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
 use valori_node::engine::Engine;
 use valori_node::EngineFromNodeConfig;
-use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
 
 /// Q16.16 conversion — matches what the kernel does internally.
 fn to_q16(f: f32) -> i32 {
@@ -13,7 +13,10 @@ fn to_q16(f: f32) -> i32 {
 fn test_kmeans_empty() {
     let empty: Vec<(u32, Vec<f32>)> = Vec::new();
     let centroids = deterministic_kmeans(&empty, 5, 10);
-    assert!(centroids.is_empty(), "Should return empty centroids for empty input");
+    assert!(
+        centroids.is_empty(),
+        "Should return empty centroids for empty input"
+    );
 }
 
 #[test]
@@ -33,25 +36,22 @@ fn test_kmeans_k_greater_than_n() {
 #[test]
 #[should_panic(expected = "All vectors must share the same dimension")]
 fn test_kmeans_dimension_mismatch() {
-    let records = vec![
-        (0, vec![1.0, 2.0]),
-        (1, vec![1.0]),
-    ];
+    let records = vec![(0, vec![1.0, 2.0]), (1, vec![1.0])];
     deterministic_kmeans(&records, 2, 10);
 }
 
 #[test]
 fn test_kmeans_rounding_does_not_overflow() {
     // Large-but-safe Q16.16 values should not overflow i32 during centroid computation.
-    let records = vec![
-        (0u32, vec![30000.0f32]),
-        (1u32, vec![30000.0]),
-    ];
+    let records = vec![(0u32, vec![30000.0f32]), (1u32, vec![30000.0])];
     let centroids = deterministic_kmeans(&records, 1, 5);
     assert!(!centroids.is_empty());
     // Centroid of identical values must equal that value.
     let expected = to_q16(30000.0);
-    assert!((centroids[0][0] - expected).abs() <= 1, "centroid should round-trip 30000.0");
+    assert!(
+        (centroids[0][0] - expected).abs() <= 1,
+        "centroid should round-trip 30000.0"
+    );
 }
 
 #[test]
@@ -65,8 +65,14 @@ fn test_engine_insert_out_of_range() {
     let mut engine = Engine::new(&cfg);
 
     // Values outside the Q16.16 safe range must be rejected.
-    assert!(engine.insert_record_from_f32(&[33000.0]).is_err(), ">32767.99 must be rejected");
-    assert!(engine.insert_record_from_f32(&[-33000.0]).is_err(), "<-32768 must be rejected");
+    assert!(
+        engine.insert_record_from_f32(&[33000.0]).is_err(),
+        ">32767.99 must be rejected"
+    );
+    assert!(
+        engine.insert_record_from_f32(&[-33000.0]).is_err(),
+        "<-32768 must be rejected"
+    );
 
     // Value within range must succeed.
     assert!(engine.insert_record_from_f32(&[32000.0]).is_ok());
@@ -74,14 +80,14 @@ fn test_engine_insert_out_of_range() {
 
 #[test]
 fn test_pq_overflow_handling() {
-    use valori_index::{ProductQuantizer, PqConfig};
+    use valori_index::{PqConfig, ProductQuantizer};
 
     let dim = 4;
-    let records = vec![
-        (0u32, vec![32000.0f32; dim]),
-        (1u32, vec![-32000.0; dim]),
-    ];
-    let cfg = PqConfig { n_subvectors: 1, n_centroids: 2 };
+    let records = vec![(0u32, vec![32000.0f32; dim]), (1u32, vec![-32000.0; dim])];
+    let cfg = PqConfig {
+        n_subvectors: 1,
+        n_centroids: 2,
+    };
     let mut pq = ProductQuantizer::new(cfg, dim);
     pq.build(&records);
 

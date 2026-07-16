@@ -62,7 +62,11 @@ async fn embed_ollama(
 
     for text in texts {
         // Truncate to ~6000 chars to stay inside any model's context window.
-        let safe = if text.len() > 6000 { &text[..6000] } else { text.as_str() };
+        let safe = if text.len() > 6000 {
+            &text[..6000]
+        } else {
+            text.as_str()
+        };
 
         // Try /api/embed first (Ollama ≥0.1.36).
         let body = serde_json::json!({ "model": cfg.model, "input": safe });
@@ -203,7 +207,10 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(embed_batch(&["hello".into()], &cfg, &client));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown embed provider"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown embed provider"));
     }
 
     #[test]

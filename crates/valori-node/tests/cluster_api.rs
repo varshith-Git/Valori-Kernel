@@ -42,16 +42,15 @@ async fn wait_for_leader(h: &ClusterHandle, id: u64) {
         .unwrap();
 }
 
-async fn get_json(
-    router: axum::Router,
-    uri: &str,
-) -> (StatusCode, serde_json::Value) {
+async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let resp = router
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
@@ -72,7 +71,9 @@ async fn post_json(
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
@@ -83,7 +84,14 @@ async fn status_reports_leadership_and_membership() {
     let h = boot(1, true).await;
     wait_for_leader(&h, 1).await;
 
-    let router = cluster_router(Arc::new(h.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = get_json(router, "/v1/cluster/status").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -98,7 +106,14 @@ async fn status_reports_leadership_and_membership() {
 async fn health_is_503_without_a_leader_and_200_with_one() {
     // Booted but NOT initialized: no membership, no election, no leader.
     let h = boot(1, false).await;
-    let router = cluster_router(Arc::new(h.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = get_json(router.clone(), "/v1/cluster/health").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["status"], "no-leader");
@@ -141,7 +156,14 @@ async fn add_node_grows_the_cluster_and_replicates_state() {
     // Node 2 boots empty (no init — it joins, never initializes).
     let h2 = boot(2, false).await;
 
-    let router = cluster_router(Arc::new(h1.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h1.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h1.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h1.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = post_json(
         router.clone(),
         "/v1/cluster/add-node",
@@ -167,7 +189,10 @@ async fn add_node_grows_the_cluster_and_replicates_state() {
         if h2.state_machine.with_state(|s| s.record_count()).await == 1 {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "node 2 never caught up");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "node 2 never caught up"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(
@@ -183,7 +208,14 @@ async fn remove_node_shrinks_the_cluster() {
     wait_for_leader(&h1, 1).await;
     let h2 = boot(2, false).await;
 
-    let router = cluster_router(Arc::new(h1.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h1.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h1.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h1.raft.clone(),
+        )])),
+        None,
+    );
     let (status, _) = post_json(
         router.clone(),
         "/v1/cluster/add-node",
@@ -208,7 +240,11 @@ async fn remove_node_shrinks_the_cluster() {
         .iter()
         .filter(|m| m["voter"] == true)
         .collect();
-    assert_eq!(voters.len(), 1, "only node 1 remains a voter: {status_body}");
+    assert_eq!(
+        voters.len(),
+        1,
+        "only node 1 remains a voter: {status_body}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -216,7 +252,14 @@ async fn removing_the_last_voter_is_refused() {
     let h = boot(1, true).await;
     wait_for_leader(&h, 1).await;
 
-    let router = cluster_router(Arc::new(h.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = post_json(
         router,
         "/v1/cluster/remove-node",
@@ -231,7 +274,14 @@ async fn removing_the_last_voter_is_refused() {
 async fn membership_change_on_an_uninitialized_node_is_forbidden() {
     // Never initialized: not a leader, can't change membership.
     let h = boot(1, false).await;
-    let router = cluster_router(Arc::new(h.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = post_json(
         router,
         "/v1/cluster/add-node",
@@ -258,7 +308,14 @@ async fn membership_changes_are_chained_admin_events() {
     wait_for_leader(&h1, 1).await;
     let h2 = boot(2, false).await;
 
-    let router = cluster_router(Arc::new(h1.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h1.raft.clone())])), Some(audit.clone()));
+    let router = cluster_router(
+        Arc::new(h1.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h1.raft.clone(),
+        )])),
+        Some(audit.clone()),
+    );
 
     // Join then remove node 2 — both must be audited.
     let (status, _) = post_json(
@@ -296,7 +353,9 @@ async fn membership_changes_are_chained_admin_events() {
 
     assert_eq!(admin_events.len(), 2, "join + leave both audited");
     match &admin_events[0] {
-        AdminEvent::NodeJoined { node_id, api_addr, .. } => {
+        AdminEvent::NodeJoined {
+            node_id, api_addr, ..
+        } => {
             assert_eq!(*node_id, 2);
             assert_eq!(api_addr, "10.0.0.2:3000");
         }
@@ -313,10 +372,20 @@ async fn role_endpoint_returns_leader_or_follower() {
     let h = boot(1, true).await;
     wait_for_leader(&h, 1).await;
 
-    let router = cluster_router(Arc::new(h.raft.clone()), Arc::new(std::collections::BTreeMap::from([(valori_consensus::types::ShardId(0), h.raft.clone())])), None);
+    let router = cluster_router(
+        Arc::new(h.raft.clone()),
+        Arc::new(std::collections::BTreeMap::from([(
+            valori_consensus::types::ShardId(0),
+            h.raft.clone(),
+        )])),
+        None,
+    );
     let (status, body) = get_json(router, "/v1/cluster/role").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["role"], "leader", "single-node cluster should be leader");
+    assert_eq!(
+        body["role"], "leader",
+        "single-node cluster should be leader"
+    );
     assert_eq!(body["node_id"], 1u64);
 }

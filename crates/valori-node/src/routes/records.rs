@@ -77,5 +77,8 @@ pub async fn delete_record<O: RecordOps>(
             d.state_after,
         );
     }
-    Ok(Json(DeleteRecordResponse { success: true, log_index: d.log_index }))
+    Ok(Json(DeleteRecordResponse {
+        success: true,
+        log_index: d.log_index,
+    }))
 }

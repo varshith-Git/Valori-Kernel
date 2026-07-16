@@ -18,7 +18,9 @@ pub struct MetadataStore {
 
 impl MetadataStore {
     pub fn new() -> Self {
-        Self { data: RwLock::new(HashMap::new()) }
+        Self {
+            data: RwLock::new(HashMap::new()),
+        }
     }
 
     pub fn set(&self, key: String, value: Value) {
@@ -49,12 +51,16 @@ impl MetadataStore {
 
     /// Load from a JSON file. A missing file is silently ignored.
     pub fn load_from(&self, path: &Path) -> std::io::Result<()> {
-        if !path.exists() { return Ok(()); }
+        if !path.exists() {
+            return Ok(());
+        }
         self.restore(&std::fs::read(path)?);
         Ok(())
     }
 }
 
 impl Default for MetadataStore {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -48,7 +48,13 @@ pub struct NodeInfo {
 
 impl NodeInfo {
     pub(crate) fn stopped(name: &str) -> Self {
-        Self { name: name.to_string(), status: RuntimeState::Stopped, pid: None, port: None, uptime_secs: None }
+        Self {
+            name: name.to_string(),
+            status: RuntimeState::Stopped,
+            pid: None,
+            port: None,
+            uptime_secs: None,
+        }
     }
 }
 

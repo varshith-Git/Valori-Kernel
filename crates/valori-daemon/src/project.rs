@@ -9,8 +9,8 @@
 //! This module owns *persistence and layout only* — starting/stopping the node
 //! is the [`crate::supervisor::Supervisor`]'s job.
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::error::{DaemonError, DaemonResult};
 
@@ -86,7 +86,10 @@ fn default_max_records() -> usize {
 
 impl Default for StorageConfig {
     fn default() -> Self {
-        Self { max_records: default_max_records(), protect_at_rest: false }
+        Self {
+            max_records: default_max_records(),
+            protect_at_rest: false,
+        }
     }
 }
 
@@ -182,7 +185,9 @@ impl JsonProjectStore {
     pub fn is_valid_name(name: &str) -> bool {
         !name.is_empty()
             && name.len() <= 64
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     }
 
     fn write_manifest(&self, project: &Project) -> DaemonResult<()> {
@@ -218,10 +223,13 @@ impl crate::store::ProjectStore for JsonProjectStore {
 
     fn get(&self, name: &str) -> DaemonResult<Project> {
         let manifest = self.manifest_path(name);
-        let bytes = std::fs::read(&manifest)
-            .map_err(|_| DaemonError::NotFound(name.to_string()))?;
+        let bytes =
+            std::fs::read(&manifest).map_err(|_| DaemonError::NotFound(name.to_string()))?;
         let config: ProjectManifest = serde_json::from_slice(&bytes)?;
-        Ok(Project { config, dir: self.projects_root.join(name) })
+        Ok(Project {
+            config,
+            dir: self.projects_root.join(name),
+        })
     }
 
     fn import(&self, config: ProjectManifest) -> DaemonResult<Project> {
@@ -290,7 +298,10 @@ impl crate::store::ProjectStore for JsonProjectStore {
             .map_err(|_| DaemonError::NotFound(old_name.to_string()))?;
         let mut config: ProjectManifest = serde_json::from_slice(&bytes)?;
         config.name = new_name.to_string();
-        let project = Project { config, dir: new_dir };
+        let project = Project {
+            config,
+            dir: new_dir,
+        };
         self.write_manifest(&project)?;
         Ok(project)
     }
@@ -343,7 +354,12 @@ mod tests {
         pm.create(cfg("healthcare")).unwrap();
         pm.create(cfg("finance")).unwrap();
 
-        let names: Vec<_> = pm.list().unwrap().into_iter().map(|p| p.config.name).collect();
+        let names: Vec<_> = pm
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.config.name)
+            .collect();
         assert_eq!(names, vec!["finance", "healthcare"]); // sorted
 
         let hc = pm.get("healthcare").unwrap();
@@ -362,7 +378,10 @@ mod tests {
         assert!(pm.create(cfg("../escape")).is_err());
         assert!(pm.create(cfg("")).is_err());
         pm.create(cfg("ok")).unwrap();
-        assert!(matches!(pm.create(cfg("ok")), Err(DaemonError::AlreadyExists(_))));
+        assert!(matches!(
+            pm.create(cfg("ok")),
+            Err(DaemonError::AlreadyExists(_))
+        ));
     }
 
     #[test]
@@ -410,9 +429,21 @@ mod tests {
         config.cluster = Some(ClusterConfig {
             replication: 3,
             nodes: vec![
-                ProjectNode { id: 1, http_port: 4010, raft_port: Some(4110) },
-                ProjectNode { id: 2, http_port: 4011, raft_port: Some(4111) },
-                ProjectNode { id: 3, http_port: 4012, raft_port: Some(4112) },
+                ProjectNode {
+                    id: 1,
+                    http_port: 4010,
+                    raft_port: Some(4110),
+                },
+                ProjectNode {
+                    id: 2,
+                    http_port: 4011,
+                    raft_port: Some(4111),
+                },
+                ProjectNode {
+                    id: 3,
+                    http_port: 4012,
+                    raft_port: Some(4112),
+                },
             ],
             shard_count: 2,
         });
@@ -425,7 +456,11 @@ mod tests {
         config.storage.protect_at_rest = true;
 
         pm.create(config.clone()).unwrap();
-        let reloaded = JsonProjectStore::new(home.path()).unwrap().get("clustered").unwrap().config;
+        let reloaded = JsonProjectStore::new(home.path())
+            .unwrap()
+            .get("clustered")
+            .unwrap()
+            .config;
         assert_eq!(reloaded, config);
     }
 }

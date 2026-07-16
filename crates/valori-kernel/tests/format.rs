@@ -4,11 +4,11 @@
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::fxp::format::{
-    format_name, parse_format, FxpFormat, Q16_16, Q32_32, Q8_8, ACTIVE_FORMAT_ID,
+    format_name, parse_format, FxpFormat, ACTIVE_FORMAT_ID, Q16_16, Q32_32, Q8_8,
 };
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_kernel::snapshot::encode::{encode_state, encode_capacity_hint};
+use valori_kernel::snapshot::encode::{encode_capacity_hint, encode_state};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::vector::FxpVector;
@@ -25,9 +25,18 @@ fn format_ids_are_distinct_and_stable() {
 
 #[test]
 fn accumulators_are_wider_than_reprs() {
-    assert_eq!(core::mem::size_of::<<Q16_16 as FxpFormat>::Wide>(), 2 * core::mem::size_of::<<Q16_16 as FxpFormat>::Repr>());
-    assert_eq!(core::mem::size_of::<<Q8_8 as FxpFormat>::Wide>(), 2 * core::mem::size_of::<<Q8_8 as FxpFormat>::Repr>());
-    assert_eq!(core::mem::size_of::<<Q32_32 as FxpFormat>::Wide>(), 2 * core::mem::size_of::<<Q32_32 as FxpFormat>::Repr>());
+    assert_eq!(
+        core::mem::size_of::<<Q16_16 as FxpFormat>::Wide>(),
+        2 * core::mem::size_of::<<Q16_16 as FxpFormat>::Repr>()
+    );
+    assert_eq!(
+        core::mem::size_of::<<Q8_8 as FxpFormat>::Wide>(),
+        2 * core::mem::size_of::<<Q8_8 as FxpFormat>::Repr>()
+    );
+    assert_eq!(
+        core::mem::size_of::<<Q32_32 as FxpFormat>::Wide>(),
+        2 * core::mem::size_of::<<Q32_32 as FxpFormat>::Repr>()
+    );
 }
 
 #[test]
@@ -36,8 +45,16 @@ fn parse_and_name_roundtrip() {
         assert_eq!(parse_format(name), Some(id));
         assert_eq!(format_name(id), Some(name));
     }
-    assert_eq!(parse_format("Q16.16"), Some(1), "parsing is case-insensitive");
-    assert_eq!(parse_format(" q16.16 "), Some(1), "parsing trims whitespace");
+    assert_eq!(
+        parse_format("Q16.16"),
+        Some(1),
+        "parsing is case-insensitive"
+    );
+    assert_eq!(
+        parse_format(" q16.16 "),
+        Some(1),
+        "parsing trims whitespace"
+    );
     assert_eq!(parse_format("float32"), None);
     assert_eq!(format_name(200), None);
 }
@@ -86,7 +103,10 @@ fn snapshot_with_foreign_format_is_refused() {
 
     // Format byte position: MAGIC(4) + schema_ver(4) + state_version(8)
     // + 4 capacity u32s(16) = offset 32.
-    assert_eq!(buf[32], ACTIVE_FORMAT_ID, "format byte location moved — update this test");
+    assert_eq!(
+        buf[32], ACTIVE_FORMAT_ID,
+        "format byte location moved — update this test"
+    );
     buf[32] = Q8_8::FORMAT_ID;
     assert!(
         decode_state(&buf).is_err(),

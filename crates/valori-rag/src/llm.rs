@@ -64,7 +64,11 @@ JSON:"#,
             let base = cfg.url.trim_end_matches('/');
             let url = format!("{base}/chat/completions");
             let model = model_override.unwrap_or_else(|| {
-                if cfg.model.contains("embed") { "gpt-4o-mini" } else { &cfg.model }
+                if cfg.model.contains("embed") {
+                    "gpt-4o-mini"
+                } else {
+                    &cfg.model
+                }
             });
             let body = serde_json::json!({
                 "model": model,
@@ -93,13 +97,20 @@ JSON:"#,
                 "format": "json",
                 "stream": false
             });
-            let resp = http.post(&url).json(&body).send().await.map_err(|e| e.to_string())?;
+            let resp = http
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
             let content = json["response"]
                 .as_str()
                 .ok_or_else(|| "no response field from Ollama".to_string())?;
             serde_json::from_str(content).map_err(|e| format!("JSON parse error: {e}"))
         }
-        other => Err(format!("entity extraction not supported for provider '{other}'")),
+        other => Err(format!(
+            "entity extraction not supported for provider '{other}'"
+        )),
     }
 }

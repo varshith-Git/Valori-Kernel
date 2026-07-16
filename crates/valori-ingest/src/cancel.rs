@@ -5,8 +5,8 @@
 //! calling `token.cancel()`. The pipeline checks between stages and returns
 //! `IngestError::Cancelled` instead of continuing.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::document::IngestError;
 
@@ -21,7 +21,9 @@ pub struct CancellationToken {
 
 impl CancellationToken {
     pub fn new() -> Self {
-        Self { cancelled: Arc::new(AtomicBool::new(false)) }
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Signal that the operation should stop at the next checkpoint.

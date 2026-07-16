@@ -15,15 +15,17 @@ use valori_kernel::event::KernelEvent;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
+use valori_verify::{replay_log, verify_log_file};
 use valori_wire::{
     chain_advance_v3, encode_entry, encode_header_v4, LogEntry, FORMAT_Q16_16, VERSION_V4,
 };
-use valori_verify::{replay_log, verify_log_file};
 
 const DIM: usize = 4;
 
 fn vec4(a: i32, b: i32, c: i32, d: i32) -> FxpVector {
-    FxpVector { data: vec![FxpScalar(a), FxpScalar(b), FxpScalar(c), FxpScalar(d)] }
+    FxpVector {
+        data: vec![FxpScalar(a), FxpScalar(b), FxpScalar(c), FxpScalar(d)],
+    }
 }
 
 /// Write a log containing both plain `Event` and namespace-scoped `EventNs`
@@ -32,43 +34,56 @@ fn write_mixed_log() -> NamedTempFile {
     let tmp = NamedTempFile::new().unwrap();
     let mut out = std::io::BufWriter::new(tmp.reopen().unwrap());
 
-    out.write_all(&encode_header_v4(DIM as u32, FORMAT_Q16_16, 0, &[0u8; 32])).unwrap();
+    out.write_all(&encode_header_v4(DIM as u32, FORMAT_Q16_16, 0, &[0u8; 32]))
+        .unwrap();
 
     let entries: Vec<(u16, LogEntry)> = vec![
         // ns 0 — default namespace
-        (0, LogEntry::Event(KernelEvent::InsertRecord {
-            id: RecordId(0),
-            vector: vec4(1000, 2000, -1000, 500),
-            metadata: None,
-            tag: 0,
-        })),
+        (
+            0,
+            LogEntry::Event(KernelEvent::InsertRecord {
+                id: RecordId(0),
+                vector: vec4(1000, 2000, -1000, 500),
+                metadata: None,
+                tag: 0,
+            }),
+        ),
         // ns 1 — collection "tenant-a"
-        (1, LogEntry::EventNs {
-            namespace_id: 1,
-            event: KernelEvent::InsertRecord {
-                id: RecordId(1),
-                vector: vec4(-500, 1500, 2500, -2000),
-                metadata: None,
-                tag: 0,
+        (
+            1,
+            LogEntry::EventNs {
+                namespace_id: 1,
+                event: KernelEvent::InsertRecord {
+                    id: RecordId(1),
+                    vector: vec4(-500, 1500, 2500, -2000),
+                    metadata: None,
+                    tag: 0,
+                },
             },
-        }),
+        ),
         // ns 2 — collection "tenant-b"
-        (2, LogEntry::EventNs {
-            namespace_id: 2,
-            event: KernelEvent::InsertRecord {
-                id: RecordId(2),
-                vector: vec4(3000, -1000, 500, 1000),
+        (
+            2,
+            LogEntry::EventNs {
+                namespace_id: 2,
+                event: KernelEvent::InsertRecord {
+                    id: RecordId(2),
+                    vector: vec4(3000, -1000, 500, 1000),
+                    metadata: None,
+                    tag: 0,
+                },
+            },
+        ),
+        // back to ns 0
+        (
+            0,
+            LogEntry::Event(KernelEvent::InsertRecord {
+                id: RecordId(3),
+                vector: vec4(0, 0, 65535, -65536),
                 metadata: None,
                 tag: 0,
-            },
-        }),
-        // back to ns 0
-        (0, LogEntry::Event(KernelEvent::InsertRecord {
-            id: RecordId(3),
-            vector: vec4(0, 0, 65535, -65536),
-            metadata: None,
-            tag: 0,
-        })),
+            }),
+        ),
     ];
 
     let base_ts: u64 = 1_750_000_000;
@@ -95,8 +110,12 @@ fn anchor_and_verify_agree_on_mixed_ns_log() {
     let report = verify_log_file(path, None).expect("verify_log_file failed");
     // no expected_hash supplied → verdict is the chain-integrity result
     assert!(
-        matches!(report["verdict"].as_str(), Some("verified") | Some("no_expected_hash")),
-        "unexpected verdict: {}", report["verdict"]
+        matches!(
+            report["verdict"].as_str(),
+            Some("verified") | Some("no_expected_hash")
+        ),
+        "unexpected verdict: {}",
+        report["verdict"]
     );
     let vf_state_hash = report["replay"]["state_hash"].as_str().unwrap().to_owned();
     let vf_chain_head = report["replay"]["chain_head"].as_str().unwrap().to_owned();

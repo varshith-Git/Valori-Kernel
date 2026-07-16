@@ -115,8 +115,16 @@ mod tests {
     fn fresh_beats_old_when_half_life_short() {
         let now = 1_000;
         let hits = vec![
-            DecayHit { id: 1, distance: 1.0, created_at: Some(now - 100) },
-            DecayHit { id: 2, distance: 1.4, created_at: Some(now) },
+            DecayHit {
+                id: 1,
+                distance: 1.0,
+                created_at: Some(now - 100),
+            },
+            DecayHit {
+                id: 2,
+                distance: 1.4,
+                created_at: Some(now),
+            },
         ];
         let ranked = rerank(hits, now, 100, 2);
         // id 1: adjusted = 1.0 / 0.5 = 2.0  |  id 2: adjusted = 1.4 / 1.0 = 1.4
@@ -130,8 +138,16 @@ mod tests {
     fn unknown_age_is_neutral() {
         let now = 1_000;
         let hits = vec![
-            DecayHit { id: 1, distance: 1.0, created_at: None },
-            DecayHit { id: 2, distance: 2.0, created_at: None },
+            DecayHit {
+                id: 1,
+                distance: 1.0,
+                created_at: None,
+            },
+            DecayHit {
+                id: 2,
+                distance: 2.0,
+                created_at: None,
+            },
         ];
         let ranked = rerank(hits, now, 10, 2);
         assert_eq!(ranked[0].id, 1, "unknown ages keep pure distance order");
@@ -142,7 +158,11 @@ mod tests {
     #[test]
     fn future_timestamp_not_penalised() {
         let now = 1_000;
-        let hits = vec![DecayHit { id: 7, distance: 0.5, created_at: Some(now + 500) }];
+        let hits = vec![DecayHit {
+            id: 7,
+            distance: 0.5,
+            created_at: Some(now + 500),
+        }];
         let ranked = rerank(hits, now, 10, 1);
         assert_eq!(ranked[0].factor, 1.0);
         assert_eq!(ranked[0].age_secs, Some(0));
@@ -152,21 +172,48 @@ mod tests {
     fn huge_half_life_preserves_distance_order() {
         let now = 1_000_000;
         let hits = vec![
-            DecayHit { id: 1, distance: 3.0, created_at: Some(0) },
-            DecayHit { id: 2, distance: 1.0, created_at: Some(0) },
-            DecayHit { id: 3, distance: 2.0, created_at: Some(now) },
+            DecayHit {
+                id: 1,
+                distance: 3.0,
+                created_at: Some(0),
+            },
+            DecayHit {
+                id: 2,
+                distance: 1.0,
+                created_at: Some(0),
+            },
+            DecayHit {
+                id: 3,
+                distance: 2.0,
+                created_at: Some(now),
+            },
         ];
         let ranked = rerank(hits, now, 100 * 365 * 24 * 3600, 3);
-        assert_eq!(ranked.iter().map(|h| h.id).collect::<Vec<_>>(), vec![2, 3, 1]);
+        assert_eq!(
+            ranked.iter().map(|h| h.id).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
     }
 
     #[test]
     fn truncates_to_k_and_is_stable() {
         let now = 100;
         let hits = vec![
-            DecayHit { id: 5, distance: 1.0, created_at: Some(now) },
-            DecayHit { id: 2, distance: 1.0, created_at: Some(now) },
-            DecayHit { id: 9, distance: 1.0, created_at: Some(now) },
+            DecayHit {
+                id: 5,
+                distance: 1.0,
+                created_at: Some(now),
+            },
+            DecayHit {
+                id: 2,
+                distance: 1.0,
+                created_at: Some(now),
+            },
+            DecayHit {
+                id: 9,
+                distance: 1.0,
+                created_at: Some(now),
+            },
         ];
         let ranked = rerank(hits, now, 10, 2);
         assert_eq!(ranked.len(), 2);
@@ -178,8 +225,16 @@ mod tests {
     fn exact_match_stays_best_regardless_of_age() {
         let now = 1_000;
         let hits = vec![
-            DecayHit { id: 1, distance: 0.0, created_at: Some(0) },
-            DecayHit { id: 2, distance: 0.1, created_at: Some(now) },
+            DecayHit {
+                id: 1,
+                distance: 0.0,
+                created_at: Some(0),
+            },
+            DecayHit {
+                id: 2,
+                distance: 0.1,
+                created_at: Some(now),
+            },
         ];
         let ranked = rerank(hits, now, 10, 2);
         assert_eq!(ranked[0].id, 1, "distance 0 / factor == 0, always best");

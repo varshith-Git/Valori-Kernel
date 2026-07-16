@@ -13,9 +13,9 @@ use crate::events::{Event, EventStore, MemoryEventStore};
 use crate::project::{JsonProjectStore, Project, ProjectManifest};
 use crate::runtime::{LocalRuntime, NodeInfo, ResourceStats, Runtime};
 use crate::store::{ProjectStore, WorkspaceStore};
-use valori_models::{JsonModelStore, ModelManager, ModelManifest, ModelStore};
 use crate::supervisor::SupervisionInfo;
 use crate::workspace::{JsonWorkspaceStore, Workspace};
+use valori_models::{JsonModelStore, ModelManager, ModelManifest, ModelStore};
 
 /// The daemon's injected dependencies. Everything the `Daemon` needs is a trait
 /// object supplied at construction — nothing durable is built internally, so
@@ -102,11 +102,13 @@ impl Daemon {
     pub fn create_project(&self, config: ProjectManifest) -> DaemonResult<Project> {
         if !self.workspaces.exists(&config.workspace) {
             return Err(DaemonError::InvalidInput(format!(
-                "workspace '{}' does not exist", config.workspace
+                "workspace '{}' does not exist",
+                config.workspace
             )));
         }
         let project = self.projects.create(config)?;
-        self.events.record("project.created", Some(project.config.name.as_str()));
+        self.events
+            .record("project.created", Some(project.config.name.as_str()));
         Ok(project)
     }
 
@@ -131,7 +133,8 @@ impl Daemon {
     pub async fn start_project(&mut self, name: &str) -> DaemonResult<NodeInfo> {
         let project = self.projects.get(name)?;
         let info = self.runtime.start(&project).await?;
-        self.supervisor.on_started(name, project.config.restart_policy);
+        self.supervisor
+            .on_started(name, project.config.restart_policy);
         self.events.record("project.started", Some(name));
         Ok(info)
     }
@@ -156,7 +159,9 @@ impl Daemon {
 
         let mut restarted = 0;
         for name in self.supervisor.due_for_restart() {
-            let Ok(project) = self.projects.get(&name) else { continue };
+            let Ok(project) = self.projects.get(&name) else {
+                continue;
+            };
             self.supervisor.set_recovering(&name);
             self.events.record("project.recovering", Some(&name));
             match self.runtime.start(&project).await {
@@ -187,7 +192,10 @@ impl Daemon {
         Ok(out)
     }
 
-    pub fn project_detail(&self, name: &str) -> DaemonResult<(Project, NodeInfo, Option<SupervisionInfo>)> {
+    pub fn project_detail(
+        &self,
+        name: &str,
+    ) -> DaemonResult<(Project, NodeInfo, Option<SupervisionInfo>)> {
         let project = self.projects.get(name)?;
         let (status, sup) = self.node_status(name);
         Ok((project, status, sup))
@@ -229,7 +237,10 @@ impl Daemon {
             .list()
             .iter()
             .map(|w| {
-                let n = projects.iter().filter(|p| p.config.workspace == w.name).count();
+                let n = projects
+                    .iter()
+                    .filter(|p| p.config.workspace == w.name)
+                    .count();
                 json!({ "id": w.id, "name": w.name, "created_at": w.created_at, "projects": n })
             })
             .collect()
@@ -281,7 +292,11 @@ impl Daemon {
 
     pub async fn create_collection(&self, name: &str, collection: &str) -> DaemonResult<Value> {
         let base = self.node_base(name)?;
-        proxy_post(&format!("{base}/v1/namespaces"), json!({ "name": collection })).await
+        proxy_post(
+            &format!("{base}/v1/namespaces"),
+            json!({ "name": collection }),
+        )
+        .await
     }
 
     pub async fn delete_collection(&self, name: &str, collection: &str) -> DaemonResult<Value> {
@@ -320,9 +335,9 @@ impl Daemon {
     /// Live resource sample for a running node.
     pub fn project_resources(&self, name: &str) -> DaemonResult<ResourceStats> {
         self.projects.get(name)?; // 404 if unknown
-        self.runtime.resources(name).ok_or_else(|| {
-            DaemonError::InvalidInput(format!("project '{name}' is not running"))
-        })
+        self.runtime
+            .resources(name)
+            .ok_or_else(|| DaemonError::InvalidInput(format!("project '{name}' is not running")))
     }
 
     /// Recent daemon lifecycle events (Docker-style).

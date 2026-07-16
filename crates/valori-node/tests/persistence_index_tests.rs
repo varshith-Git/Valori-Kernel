@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
-use valori_node::EngineFromNodeConfig;
-use valori_node::engine::Engine;
 use tempfile::tempdir;
+use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
+use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 
 const DIM: usize = 16;
 const N: usize = 200;
@@ -50,6 +50,9 @@ fn test_ivf_persistence() {
         let hits = engine.search_l2(&q, 5).unwrap();
         assert!(!hits.is_empty());
         // Record 50 has vec[0] = 0.5 — should be nearest to the query.
-        assert_eq!(hits[0].0, 50, "IVF restore: record 50 should be nearest to 0.5");
+        assert_eq!(
+            hits[0].0, 50,
+            "IVF restore: record 50 should be nearest to 0.5"
+        );
     }
 }

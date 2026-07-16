@@ -162,7 +162,14 @@ impl KeyStore {
         }
         self.save();
 
-        ApiKeyCreated { id, token: raw, scope, collection, description, created_at }
+        ApiKeyCreated {
+            id,
+            token: raw,
+            scope,
+            collection,
+            description,
+            created_at,
+        }
     }
 
     /// Revoke a key by ID.  Returns `true` if found and removed.
@@ -188,8 +195,12 @@ impl KeyStore {
 
     fn load(&self) {
         let Some(ref path) = self.path else { return };
-        let Ok(data) = std::fs::read(path) else { return };
-        let Ok(records) = serde_json::from_slice::<Vec<ApiKeyRecord>>(&data) else { return };
+        let Ok(data) = std::fs::read(path) else {
+            return;
+        };
+        let Ok(records) = serde_json::from_slice::<Vec<ApiKeyRecord>>(&data) else {
+            return;
+        };
         let mut bh = self.by_hash.write().unwrap();
         let mut ih = self.id_to_hash.write().unwrap();
         for r in records {
@@ -204,7 +215,10 @@ impl KeyStore {
         let records: Vec<&ApiKeyRecord> = bh.values().collect();
         let json = match serde_json::to_vec_pretty(&records) {
             Ok(j) => j,
-            Err(e) => { tracing::error!("key store serialize failed: {e}"); return; }
+            Err(e) => {
+                tracing::error!("key store serialize failed: {e}");
+                return;
+            }
         };
         // M-5: Atomic write (temp + rename) so a crash mid-write never corrupts the file.
         // Set 0600 permissions so other users on the system cannot read token hashes.
@@ -301,7 +315,6 @@ fn os_random_32() -> [u8; 32] {
     let mut buf = [0u8; 32];
     // getrandom uses the OS CSPRNG on all platforms (urandom, BCryptGenRandom,
     // getentropy, …). No fallback to time+pid (H-3).
-    getrandom::getrandom(&mut buf)
-        .expect("OS CSPRNG unavailable — cannot generate secure token");
+    getrandom::getrandom(&mut buf).expect("OS CSPRNG unavailable — cannot generate secure token");
     buf
 }

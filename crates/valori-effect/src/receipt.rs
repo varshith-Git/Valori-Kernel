@@ -30,7 +30,9 @@ impl ReceiptHash {
         self.0.iter().map(|b| format!("{:02x}", b)).collect()
     }
 
-    pub fn zero() -> Self { ReceiptHash([0u8; 32]) }
+    pub fn zero() -> Self {
+        ReceiptHash([0u8; 32])
+    }
 }
 
 /// Opaque BLAKE3 hash of a kernel state snapshot.
@@ -38,9 +40,13 @@ impl ReceiptHash {
 pub struct StateHash(pub String);
 
 impl StateHash {
-    pub fn zero() -> Self { StateHash("0".repeat(64)) }
+    pub fn zero() -> Self {
+        StateHash("0".repeat(64))
+    }
 
-    pub fn from_hex(s: impl Into<String>) -> Self { StateHash(s.into()) }
+    pub fn from_hex(s: impl Into<String>) -> Self {
+        StateHash(s.into())
+    }
 }
 
 // ── Receipt ───────────────────────────────────────────────────────────────────
@@ -54,7 +60,10 @@ pub struct ReceiptEnvelope {
 
 impl ReceiptEnvelope {
     pub fn v1(payload: Receipt) -> Self {
-        ReceiptEnvelope { version: 1, payload }
+        ReceiptEnvelope {
+            version: 1,
+            payload,
+        }
     }
 }
 
@@ -174,15 +183,16 @@ impl ReceiptAssembler {
     /// receipt is taken from the first fragment; `state_hash_after` from the last
     /// mutating fragment (or `state_hash_before` for read-only operations).
     pub fn assemble(&self) -> Receipt {
-        let mut frags = self.fragments.lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut frags = self.fragments.lock().unwrap_or_else(|e| e.into_inner());
         frags.sort_by_key(|f| f.task_index);
 
-        let state_hash_before = frags.first()
+        let state_hash_before = frags
+            .first()
             .map(|f| StateHash::from_hex(&f.state_hash_before))
             .unwrap_or_else(StateHash::zero);
 
-        let state_hash_after = frags.iter()
+        let state_hash_after = frags
+            .iter()
             .filter(|f| f.mutated)
             .last()
             .map(|f| StateHash::from_hex(&f.state_hash_after))
@@ -278,7 +288,8 @@ pub fn verify_receipt(receipt: &Receipt) -> Result<(), String> {
     if expected_hash != receipt.receipt_hash {
         return Err(format!(
             "receipt_hash mismatch: computed {} != stored {}",
-            expected_hash.to_hex(), receipt.receipt_hash.to_hex()
+            expected_hash.to_hex(),
+            receipt.receipt_hash.to_hex()
         ));
     }
 
@@ -366,8 +377,8 @@ impl ReceiptStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use valori_core::id::ExecutionId;
     use crate::effect::ReceiptFragment;
+    use valori_core::id::ExecutionId;
 
     fn assembler() -> ReceiptAssembler {
         ReceiptAssembler::new(
@@ -375,7 +386,13 @@ mod tests {
             "op_hash_hex".into(),
             "graph_hash_hex".into(),
             "fp_hash_hex".into(),
-            1, false, false, 1, 0, 42, vec![],
+            1,
+            false,
+            false,
+            1,
+            0,
+            42,
+            vec![],
         )
     }
 
@@ -404,7 +421,7 @@ mod tests {
         asm.push(ReceiptFragment {
             task_index: 0,
             state_hash_before: "before".into(),
-            state_hash_after:  "after".into(),
+            state_hash_after: "after".into(),
             mutated: true,
             fragment_hash: "fh".into(),
         });

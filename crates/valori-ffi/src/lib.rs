@@ -1,17 +1,15 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use pyo3::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
 use std::sync::{Arc, Mutex};
+use valori_kernel::event::KernelEvent;
+use valori_kernel::fxp::ops::from_f32;
+use valori_kernel::proof::generate_proof_bytes;
+use valori_kernel::types::id::RecordId;
+use valori_kernel::types::vector::FxpVector;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::EngineFromNodeConfig;
-use valori_kernel::types::vector::FxpVector;
-use valori_kernel::types::id::RecordId;
-use valori_kernel::fxp::ops::from_f32;
-use valori_kernel::event::KernelEvent;
-use valori_kernel::proof::generate_proof_bytes;
-use serde_json;
-use hex;
 
 /// Acquire the engine lock, returning a Python error if the mutex is poisoned
 /// (which happens when a prior call panicked while holding the lock).
@@ -36,13 +34,15 @@ impl ValoricoreEngine {
         // M-4: build a clean config rather than NodeConfig::default(), which reads all
         // VALORI_* env vars and may inadvertently pick up auth tokens, S3 credentials,
         // or embed provider settings from the surrounding process.
-        let mut config = NodeConfig::default();
         // Null out server-mode-only fields so they have no effect in the embedded SDK.
-        config.auth_token = None;
-        config.keys_path = None;
-        config.object_store_url = None;
-        config.embed_provider = None;
-        config.cors_origin = None;
+        let mut config = NodeConfig {
+            auth_token: None,
+            keys_path: None,
+            object_store_url: None,
+            embed_provider: None,
+            cors_origin: None,
+            ..NodeConfig::default()
+        };
 
         let wal_path = std::path::PathBuf::from(format!("{}/wal.log", path));
         let event_log_path = std::path::PathBuf::from(format!("{}/events.log", path));
@@ -78,7 +78,8 @@ impl ValoricoreEngine {
         if let Some(dim) = engine.kernel_dim() {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
-                    "dimension mismatch: engine expects {dim}, got {}", vector.len()
+                    "dimension mismatch: engine expects {dim}, got {}",
+                    vector.len()
                 )));
             }
         }
@@ -94,12 +95,18 @@ impl ValoricoreEngine {
         }
         let fxp_vec = FxpVector { data: fxp_data };
 
-        engine.insert_record_fxp(fxp_vec, None, tag, valori_kernel::types::id::DEFAULT_NS.0)
+        engine
+            .insert_record_fxp(fxp_vec, None, tag, valori_kernel::types::id::DEFAULT_NS.0)
             .map_err(|e| PyRuntimeError::new_err(format!("insert failed: {:?}", e)))
     }
 
     #[pyo3(signature = (vector, k, filter_tag=None))]
-    fn search(&self, vector: Vec<f32>, k: usize, filter_tag: Option<u64>) -> PyResult<Vec<(u32, i64)>> {
+    fn search(
+        &self,
+        vector: Vec<f32>,
+        k: usize,
+        filter_tag: Option<u64>,
+    ) -> PyResult<Vec<(u32, i64)>> {
         let engine = lock_engine!(self);
 
         // H-3: Reject dimension mismatches; the kernel silently truncates to
@@ -107,7 +114,8 @@ impl ValoricoreEngine {
         if let Some(dim) = engine.kernel_dim() {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
-                    "dimension mismatch: engine expects {dim}, got {}", vector.len()
+                    "dimension mismatch: engine expects {dim}, got {}",
+                    vector.len()
                 )));
             }
         }
@@ -117,11 +125,16 @@ impl ValoricoreEngine {
         // only when a tag is provided (the ANN index has no tag awareness).
         let py_results: Vec<(u32, i64)> = if filter_tag.is_none() {
             let hits = engine.index.search(&vector, k);
-            hits.into_iter().map(|(id, dist)| (id, (dist * 65536.0) as i64)).collect()
+            hits.into_iter()
+                .map(|(id, dist)| (id, (dist * 65536.0) as i64))
+                .collect()
         } else {
-            engine.search_l2_filtered(&vector, k, filter_tag)
+            engine
+                .search_l2_filtered(&vector, k, filter_tag)
                 .map_err(|e| PyRuntimeError::new_err(e.to_string()))?
-                .into_iter().map(|(id, dist)| (id, (dist * 65536.0) as i64)).collect()
+                .into_iter()
+                .map(|(id, dist)| (id, (dist * 65536.0) as i64))
+                .collect()
         };
 
         Ok(py_results)
@@ -137,28 +150,35 @@ impl ValoricoreEngine {
         // so it would return NotFound for records inserted via the committer path.
         // We must use the committer directly here to stay on the same state.
         if let Some(committer) = engine.event_committer_mut() {
-            let node_kind = valori_kernel::types::enums::NodeKind::from_u8(kind)
-                .unwrap_or_default();
+            let node_kind =
+                valori_kernel::types::enums::NodeKind::from_u8(kind).unwrap_or_default();
             let record = record_id.map(valori_kernel::types::id::RecordId);
 
             // Validate record exists in live_state before committing.
             if let Some(rid) = record {
                 if committer.live_state().get_record(rid).is_none() {
                     return Err(PyRuntimeError::new_err(format!(
-                        "CreateNode failed: Kernel(NotFound) — record {} not in live_state", rid.0
+                        "CreateNode failed: Kernel(NotFound) — record {} not in live_state",
+                        rid.0
                     )));
                 }
             }
 
             let node_id = committer.live_state().next_node_id();
-            let event = KernelEvent::CreateNode { id: node_id, kind: node_kind, record };
-            committer.commit_event(event)
+            let event = KernelEvent::CreateNode {
+                id: node_id,
+                kind: node_kind,
+                record,
+            };
+            committer
+                .commit_event(event)
                 .map_err(|e| PyRuntimeError::new_err(format!("CreateNode failed: {:?}", e)))?;
             return Ok(node_id.0);
         }
 
         // WAL / ephemeral path: commit_and_apply_ns touches engine.state directly.
-        let node_id = engine.create_node_for_record(record_id, kind, 0)
+        let node_id = engine
+            .create_node_for_record(record_id, kind, 0)
             .map_err(|e| PyRuntimeError::new_err(format!("CreateNode failed: {:?}", e)))?;
         Ok(node_id)
     }
@@ -168,21 +188,27 @@ impl ValoricoreEngine {
 
         // Same live_state/engine.state split as create_node: use committer when active.
         if let Some(committer) = engine.event_committer_mut() {
-            use valori_kernel::types::id::{NodeId, EdgeId};
+            use valori_kernel::types::id::{EdgeId, NodeId};
             let from_id = NodeId(from);
             let to_id = NodeId(to);
-            let edge_kind = valori_kernel::types::enums::EdgeKind::from_u8(kind)
-                .unwrap_or_default();
+            let edge_kind =
+                valori_kernel::types::enums::EdgeKind::from_u8(kind).unwrap_or_default();
             let edge_id = committer.live_state().next_edge_id();
-            let event = KernelEvent::CreateEdge { id: edge_id, kind: edge_kind, from: from_id, to: to_id };
-            committer.commit_event(event)
+            let event = KernelEvent::CreateEdge {
+                id: edge_id,
+                kind: edge_kind,
+                from: from_id,
+                to: to_id,
+            };
+            committer
+                .commit_event(event)
                 .map_err(|e| PyRuntimeError::new_err(format!("CreateEdge failed: {:?}", e)))?;
             return Ok(edge_id.0);
         }
 
-        engine.create_edge(from, to, kind).map_err(|e| {
-            PyRuntimeError::new_err(format!("CreateEdge failed: {:?}", e))
-        })
+        engine
+            .create_edge(from, to, kind)
+            .map_err(|e| PyRuntimeError::new_err(format!("CreateEdge failed: {:?}", e)))
     }
 
     fn delete_node(&self, node_id: u32) -> PyResult<()> {
@@ -191,9 +217,10 @@ impl ValoricoreEngine {
         let nid = NodeId(node_id);
 
         if engine.get_node(nid).is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("node {} not found", node_id)
-            ));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "node {} not found",
+                node_id
+            )));
         }
 
         engine.delete_node(node_id).map_err(|e| {
@@ -207,9 +234,10 @@ impl ValoricoreEngine {
         let eid = EdgeId(edge_id);
 
         if engine.get_edge(eid).is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("edge {} not found", edge_id)
-            ));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "edge {} not found",
+                edge_id
+            )));
         }
 
         engine.delete_edge(edge_id).map_err(|e| {
@@ -226,8 +254,8 @@ impl ValoricoreEngine {
             Some(n) => {
                 let rec = n.record.map(|r| r.0);
                 Ok(Some((n.kind as u8, rec)))
-            },
-            None => Ok(None)
+            }
+            None => Ok(None),
         }
     }
 
@@ -249,8 +277,8 @@ impl ValoricoreEngine {
     #[pyo3(signature = (start_node, max_depth = 2))]
     fn walk(&self, start_node: u32, max_depth: u32) -> PyResult<Vec<u32>> {
         let engine = lock_engine!(self);
-        use valori_kernel::types::id::NodeId;
         use std::collections::{HashSet, VecDeque};
+        use valori_kernel::types::id::NodeId;
 
         let max_depth = std::cmp::min(max_depth, 10);
         let mut visited = HashSet::new();
@@ -282,8 +310,8 @@ impl ValoricoreEngine {
     #[pyo3(signature = (start_node, max_depth = 2))]
     fn expand(&self, start_node: u32, max_depth: u32) -> PyResult<Vec<u32>> {
         let engine = lock_engine!(self);
-        use valori_kernel::types::id::NodeId;
         use std::collections::{HashSet, VecDeque};
+        use valori_kernel::types::id::NodeId;
 
         let max_depth = std::cmp::min(max_depth, 10);
         let mut visited = HashSet::new();
@@ -321,7 +349,9 @@ impl ValoricoreEngine {
         if let Some(ref t) = tags {
             if t.len() != vectors.len() {
                 return Err(PyValueError::new_err(format!(
-                    "tags length {} does not match vectors length {}", t.len(), vectors.len()
+                    "tags length {} does not match vectors length {}",
+                    t.len(),
+                    vectors.len()
                 )));
             }
         }
@@ -333,7 +363,8 @@ impl ValoricoreEngine {
             if let Some(dim) = engine.kernel_dim() {
                 if vector.len() != dim {
                     return Err(PyValueError::new_err(format!(
-                        "vector[{i}] dimension mismatch: engine expects {dim}, got {}", vector.len()
+                        "vector[{i}] dimension mismatch: engine expects {dim}, got {}",
+                        vector.len()
                     )));
                 }
             }
@@ -348,8 +379,11 @@ impl ValoricoreEngine {
             }
             let tag = tags.as_ref().map_or(0, |t| t[i]);
             let fxp_vec = FxpVector { data: fxp_data };
-            let rid = engine.insert_record_fxp(fxp_vec, None, tag, valori_kernel::types::id::DEFAULT_NS.0)
-                .map_err(|e| PyRuntimeError::new_err(format!("batch insert failed at [{i}]: {:?}", e)))?;
+            let rid = engine
+                .insert_record_fxp(fxp_vec, None, tag, valori_kernel::types::id::DEFAULT_NS.0)
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("batch insert failed at [{i}]: {:?}", e))
+                })?;
             ids.push(rid);
         }
 
@@ -357,9 +391,15 @@ impl ValoricoreEngine {
     }
 
     #[pyo3(signature = (vectors, tags))]
-    fn insert_batch_with_proof(&self, vectors: Vec<Vec<f32>>, tags: Vec<u64>) -> PyResult<Vec<(u32, String)>> {
+    fn insert_batch_with_proof(
+        &self,
+        vectors: Vec<Vec<f32>>,
+        tags: Vec<u64>,
+    ) -> PyResult<Vec<(u32, String)>> {
         if vectors.len() != tags.len() {
-            return Err(PyValueError::new_err("vectors and tags must have the same length"));
+            return Err(PyValueError::new_err(
+                "vectors and tags must have the same length",
+            ));
         }
 
         let mut results = Vec::with_capacity(vectors.len());
@@ -369,7 +409,8 @@ impl ValoricoreEngine {
             if let Some(dim) = engine.kernel_dim() {
                 if vector.len() != dim {
                     return Err(PyValueError::new_err(format!(
-                        "vector[{i}] dimension mismatch: engine expects {dim}, got {}", vector.len()
+                        "vector[{i}] dimension mismatch: engine expects {dim}, got {}",
+                        vector.len()
                     )));
                 }
             }
@@ -390,12 +431,19 @@ impl ValoricoreEngine {
             let proof_bytes = generate_proof_bytes(&fixed_values);
             let proof_hex = hex::encode(&proof_bytes);
 
-            let rid = engine.insert_record_fxp(
-                fxp_vec,
-                Some(proof_bytes),
-                tags[i],
-                valori_kernel::types::id::DEFAULT_NS.0,
-            ).map_err(|e| PyRuntimeError::new_err(format!("insert_batch_with_proof [{i}] failed: {:?}", e)))?;
+            let rid = engine
+                .insert_record_fxp(
+                    fxp_vec,
+                    Some(proof_bytes),
+                    tags[i],
+                    valori_kernel::types::id::DEFAULT_NS.0,
+                )
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!(
+                        "insert_batch_with_proof [{i}] failed: {:?}",
+                        e
+                    ))
+                })?;
 
             results.push((rid, proof_hex));
         }
@@ -431,19 +479,24 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         if engine.get_record(rid).is_none() {
-            return Err(PyValueError::new_err(format!("record {} not found", record_id)));
+            return Err(PyValueError::new_err(format!(
+                "record {} not found",
+                record_id
+            )));
         }
 
         let key = format!("record_{}", record_id);
         let value = hex::encode(&metadata);
-        engine.apply_meta_event(key.clone(), value)
+        engine
+            .apply_meta_event(key.clone(), value)
             .map_err(|e| PyRuntimeError::new_err(format!("set_metadata commit failed: {:?}", e)))?;
 
         let json_value = serde_json::to_value(&metadata)
             .map_err(|e| PyValueError::new_err(format!("serialize failed: {}", e)))?;
         engine.metadata.set(key, json_value);
-        engine.flush_metadata()
-            .map_err(|e| PyRuntimeError::new_err(format!("set_metadata: sidecar flush failed: {:?}", e)))?;
+        engine.flush_metadata().map_err(|e| {
+            PyRuntimeError::new_err(format!("set_metadata: sidecar flush failed: {:?}", e))
+        })?;
         Ok(())
     }
 
@@ -462,7 +515,7 @@ impl ValoricoreEngine {
         // After E1 engine.state is always current — no sync needed before snapshot.
         match engine.snapshot() {
             Ok(data) => Ok(data),
-            Err(e) => Err(PyRuntimeError::new_err(format!("snapshot failed: {:?}", e)))
+            Err(e) => Err(PyRuntimeError::new_err(format!("snapshot failed: {:?}", e))),
         }
     }
 
@@ -472,12 +525,16 @@ impl ValoricoreEngine {
         // Flush any buffered WAL entries before snapshotting so the snapshot
         // and WAL are in sync — crash recovery will replay from the right offset.
         if let Some(c) = engine.event_committer_mut() {
-            c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
+            c.flush_pending()
+                .map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
             // After E1 engine.state is always current; no sync needed.
         }
         match engine.save_snapshot(None) {
             Ok(path) => Ok(path.to_string_lossy().into_owned()),
-            Err(e) => Err(PyRuntimeError::new_err(format!("save_snapshot failed: {:?}", e)))
+            Err(e) => Err(PyRuntimeError::new_err(format!(
+                "save_snapshot failed: {:?}",
+                e
+            ))),
         }
     }
 
@@ -486,16 +543,17 @@ impl ValoricoreEngine {
     fn flush(&self) -> PyResult<()> {
         let mut engine = lock_engine!(self);
         if let Some(c) = engine.event_committer_mut() {
-            c.flush_pending().map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
+            c.flush_pending()
+                .map_err(|e| PyRuntimeError::new_err(format!("flush failed: {:?}", e)))?;
         }
         Ok(())
     }
 
     fn restore(&self, data: Vec<u8>) -> PyResult<()> {
         let mut engine = lock_engine!(self);
-        engine.restore(&data).map_err(|e| {
-            PyRuntimeError::new_err(format!("restore failed: {:?}", e))
-        })
+        engine
+            .restore(&data)
+            .map_err(|e| PyRuntimeError::new_err(format!("restore failed: {:?}", e)))
     }
 
     fn soft_delete(&self, record_id: u32) -> PyResult<()> {
@@ -503,12 +561,15 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         if engine.get_record(rid).is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!("record {} not found", record_id)));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "record {} not found",
+                record_id
+            )));
         }
 
-        engine.soft_delete_record(record_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e))
-        })
+        engine
+            .soft_delete_record(record_id)
+            .map_err(|e| PyRuntimeError::new_err(format!("SoftDelete failed: {:?}", e)))
     }
 
     fn delete(&self, record_id: u32) -> PyResult<()> {
@@ -516,12 +577,15 @@ impl ValoricoreEngine {
         let rid = RecordId(record_id);
 
         if engine.get_record(rid).is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!("record {} not found", record_id)));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "record {} not found",
+                record_id
+            )));
         }
 
-        engine.delete_record(record_id).map_err(|e| {
-            PyRuntimeError::new_err(format!("Delete failed: {:?}", e))
-        })
+        engine
+            .delete_record(record_id)
+            .map_err(|e| PyRuntimeError::new_err(format!("Delete failed: {:?}", e)))
     }
 
     #[pyo3(signature = (vector, tag))]
@@ -531,7 +595,8 @@ impl ValoricoreEngine {
         if let Some(dim) = engine.kernel_dim() {
             if vector.len() != dim {
                 return Err(PyValueError::new_err(format!(
-                    "dimension mismatch: engine expects {dim}, got {}", vector.len()
+                    "dimension mismatch: engine expects {dim}, got {}",
+                    vector.len()
                 )));
             }
         }
@@ -552,12 +617,14 @@ impl ValoricoreEngine {
         let proof_bytes = generate_proof_bytes(&fixed_values);
         let proof_hex = hex::encode(&proof_bytes);
 
-        let rid = engine.insert_record_fxp(
-            fxp_vec,
-            Some(proof_bytes),
-            tag,
-            valori_kernel::types::id::DEFAULT_NS.0,
-        ).map_err(|e| PyRuntimeError::new_err(format!("insert_with_proof failed: {:?}", e)))?;
+        let rid = engine
+            .insert_record_fxp(
+                fxp_vec,
+                Some(proof_bytes),
+                tag,
+                valori_kernel::types::id::DEFAULT_NS.0,
+            )
+            .map_err(|e| PyRuntimeError::new_err(format!("insert_with_proof failed: {:?}", e)))?;
 
         Ok((rid, proof_hex))
     }
@@ -573,43 +640,77 @@ impl ValoricoreEngine {
 
         for (event_id, event) in committed.iter().enumerate() {
             let event_str = match event {
-                KernelEvent::InsertRecord { id, tag, .. } =>
-                    format!("Event ID {event_id}: InsertRecord (Record {}, Tag: {tag})", id.0),
-                KernelEvent::DeleteRecord { id } =>
-                    format!("Event ID {event_id}: DeleteRecord (Record {})", id.0),
-                KernelEvent::SoftDeleteRecord { id } =>
-                    format!("Event ID {event_id}: SoftDeleteRecord (Record {})", id.0),
-                KernelEvent::CreateNode { id, kind, .. } =>
-                    format!("Event ID {event_id}: CreateNode (Node {}, Kind: {kind:?})", id.0),
-                KernelEvent::CreateEdge { id, from, to, kind } =>
-                    format!("Event ID {event_id}: CreateEdge (Edge {}, {from:?} -> {to:?}, Kind: {kind:?})", id.0),
-                KernelEvent::DeleteEdge { id } =>
-                    format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0),
-                KernelEvent::DeleteNode { id } =>
-                    format!("Event ID {event_id}: DeleteNode (Node {})", id.0),
-                KernelEvent::InsertRecordEncrypted { id, key_id, .. } =>
-                    format!("Event ID {event_id}: InsertRecordEncrypted (Record {}, key {})",
-                        id.0, key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
-                KernelEvent::ShredKey { key_id } =>
-                    format!("Event ID {event_id}: ShredKey (key {})",
-                        key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
-                KernelEvent::AutoInsertRecord { tag, .. } =>
-                    format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})"),
-                KernelEvent::AutoCreateNode { kind, .. } =>
-                    format!("Event ID {event_id}: AutoCreateNode (Kind: {kind:?})"),
-                KernelEvent::AutoCreateEdge { from, to, kind } =>
-                    format!("Event ID {event_id}: AutoCreateEdge ({from:?} -> {to:?}, Kind: {kind:?})"),
-                KernelEvent::AutoInsertRecordEncrypted { key_id, tag, .. } =>
-                    format!("Event ID {event_id}: AutoInsertRecordEncrypted (key {}, Tag: {tag})",
-                        key_id.iter().take(4).map(|b| format!("{b:02x}")).collect::<String>()),
-                KernelEvent::SetMeta { key, value } =>
-                    format!("Event ID {event_id}: SetMeta ({key:?} = {value:?})"),
-                KernelEvent::AutoCreateNamespace { name } =>
-                    format!("Event ID {event_id}: AutoCreateNamespace (Name: {name:?})"),
-                KernelEvent::DropNamespace { name } =>
-                    format!("Event ID {event_id}: DropNamespace (Name: {name:?})"),
-                KernelEvent::UpdateRecordMetadata { id, .. } =>
-                    format!("Event ID {event_id}: UpdateRecordMetadata (Record {})", id.0),
+                KernelEvent::InsertRecord { id, tag, .. } => format!(
+                    "Event ID {event_id}: InsertRecord (Record {}, Tag: {tag})",
+                    id.0
+                ),
+                KernelEvent::DeleteRecord { id } => {
+                    format!("Event ID {event_id}: DeleteRecord (Record {})", id.0)
+                }
+                KernelEvent::SoftDeleteRecord { id } => {
+                    format!("Event ID {event_id}: SoftDeleteRecord (Record {})", id.0)
+                }
+                KernelEvent::CreateNode { id, kind, .. } => format!(
+                    "Event ID {event_id}: CreateNode (Node {}, Kind: {kind:?})",
+                    id.0
+                ),
+                KernelEvent::CreateEdge { id, from, to, kind } => format!(
+                    "Event ID {event_id}: CreateEdge (Edge {}, {from:?} -> {to:?}, Kind: {kind:?})",
+                    id.0
+                ),
+                KernelEvent::DeleteEdge { id } => {
+                    format!("Event ID {event_id}: DeleteEdge (Edge {})", id.0)
+                }
+                KernelEvent::DeleteNode { id } => {
+                    format!("Event ID {event_id}: DeleteNode (Node {})", id.0)
+                }
+                KernelEvent::InsertRecordEncrypted { id, key_id, .. } => format!(
+                    "Event ID {event_id}: InsertRecordEncrypted (Record {}, key {})",
+                    id.0,
+                    key_id
+                        .iter()
+                        .take(4)
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                ),
+                KernelEvent::ShredKey { key_id } => format!(
+                    "Event ID {event_id}: ShredKey (key {})",
+                    key_id
+                        .iter()
+                        .take(4)
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                ),
+                KernelEvent::AutoInsertRecord { tag, .. } => {
+                    format!("Event ID {event_id}: AutoInsertRecord (Tag: {tag})")
+                }
+                KernelEvent::AutoCreateNode { kind, .. } => {
+                    format!("Event ID {event_id}: AutoCreateNode (Kind: {kind:?})")
+                }
+                KernelEvent::AutoCreateEdge { from, to, kind } => format!(
+                    "Event ID {event_id}: AutoCreateEdge ({from:?} -> {to:?}, Kind: {kind:?})"
+                ),
+                KernelEvent::AutoInsertRecordEncrypted { key_id, tag, .. } => format!(
+                    "Event ID {event_id}: AutoInsertRecordEncrypted (key {}, Tag: {tag})",
+                    key_id
+                        .iter()
+                        .take(4)
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>()
+                ),
+                KernelEvent::SetMeta { key, value } => {
+                    format!("Event ID {event_id}: SetMeta ({key:?} = {value:?})")
+                }
+                KernelEvent::AutoCreateNamespace { name } => {
+                    format!("Event ID {event_id}: AutoCreateNamespace (Name: {name:?})")
+                }
+                KernelEvent::DropNamespace { name } => {
+                    format!("Event ID {event_id}: DropNamespace (Name: {name:?})")
+                }
+                KernelEvent::UpdateRecordMetadata { id, .. } => format!(
+                    "Event ID {event_id}: UpdateRecordMetadata (Record {})",
+                    id.0
+                ),
             };
             events.push(event_str);
         }
@@ -634,7 +735,9 @@ fn ingest_embedding(floats: Vec<f32>) -> PyResult<Vec<i32>> {
 #[pyfunction]
 fn generate_proof(fixed_values: Vec<i32>) -> PyResult<String> {
     if fixed_values.is_empty() {
-        return Err(PyValueError::new_err("cannot generate proof for empty vector"));
+        return Err(PyValueError::new_err(
+            "cannot generate proof for empty vector",
+        ));
     }
     Ok(hex::encode(generate_proof_bytes(&fixed_values)))
 }
@@ -666,7 +769,7 @@ fn verify_log_file(log_path: String, expected_hash: Option<String>) -> PyResult<
     use std::path::Path;
     let path = Path::new(&log_path);
     let result = valori_verify::verify_log_file(path, expected_hash.as_deref())
-        .map_err(|e| PyRuntimeError::new_err(e))?;
+        .map_err(PyRuntimeError::new_err)?;
     serde_json::to_string(&result).map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 

@@ -20,24 +20,38 @@ pub struct BqIndex {
 
 impl BqIndex {
     pub fn new() -> Self {
-        Self { dim: 0, words_per_vec: 0, codes: HashMap::new(), vectors: HashMap::new() }
+        Self {
+            dim: 0,
+            words_per_vec: 0,
+            codes: HashMap::new(),
+            vectors: HashMap::new(),
+        }
     }
 
-    pub fn len(&self) -> usize { self.vectors.len() }
-    pub fn is_empty(&self) -> bool { self.vectors.is_empty() }
+    pub fn len(&self) -> usize {
+        self.vectors.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.vectors.is_empty()
+    }
 
     fn binarize(vec: &[f32]) -> Vec<u64> {
         let words = (vec.len() + 63) / 64;
         let mut code = vec![0u64; words];
         for (i, &v) in vec.iter().enumerate() {
-            if v > 0.0 { code[i / 64] |= 1u64 << (i % 64); }
+            if v > 0.0 {
+                code[i / 64] |= 1u64 << (i % 64);
+            }
         }
         code
     }
 
     #[inline]
     fn hamming(a: &[u64], b: &[u64]) -> u32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum()
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x ^ y).count_ones())
+            .sum()
     }
 
     #[inline]
@@ -47,7 +61,9 @@ impl BqIndex {
 }
 
 impl Default for BqIndex {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VectorIndex for BqIndex {
@@ -97,12 +113,14 @@ impl VectorIndex for BqIndex {
 
         let mut results: Vec<(u32, f32)> = candidates
             .iter()
-            .filter_map(|&(_, id)| {
-                self.vectors.get(&id).map(|v| (id, Self::l2_sq(query, v)))
-            })
+            .filter_map(|&(_, id)| self.vectors.get(&id).map(|v| (id, Self::l2_sq(query, v))))
             .collect();
 
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0)));
+        results.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
         results.truncate(k);
         results
     }

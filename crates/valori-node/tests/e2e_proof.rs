@@ -7,10 +7,10 @@
 //!   3. Two engines that apply the same sequence of operations produce an
 //!      identical BLAKE3 state hash (full determinism across restarts).
 
-use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
-use valori_node::EngineFromNodeConfig;
-use valori_node::engine::{Engine, RecoveryMode};
 use tempfile::tempdir;
+use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
+use valori_node::engine::{Engine, RecoveryMode};
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg_no_log(dim: usize) -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -86,7 +86,10 @@ fn test_verify_embedding_round_trip() {
     }
 
     let results = engine.search_l2(&target, 1).expect("search");
-    assert!(!results.is_empty(), "search must return at least one result");
+    assert!(
+        !results.is_empty(),
+        "search must return at least one result"
+    );
     assert_eq!(
         results[0].0, rid,
         "nearest neighbour of the target vector must be the target record itself"
@@ -155,7 +158,8 @@ fn test_hash_changes_on_every_insert() {
         let hash = engine.get_proof().final_state_hash;
         assert!(
             seen.insert(hash),
-            "hash after insert {} must differ from all prior hashes", i
+            "hash after insert {} must differ from all prior hashes",
+            i
         );
     }
 }
@@ -191,7 +195,8 @@ fn test_proof_hash_stable_through_event_log_recovery() {
 
         assert!(
             matches!(mode, RecoveryMode::EventLog(40)),
-            "expected EventLog(40), got {:?}", mode
+            "expected EventLog(40), got {:?}",
+            mode
         );
 
         let post_hash = engine2.get_proof().final_state_hash;

@@ -5,15 +5,17 @@
 
 use valori_kernel::event::KernelEvent;
 use valori_kernel::index::IndexVariant;
+use valori_kernel::index::SearchResult;
+use valori_kernel::snapshot::{decode::decode_state, encode::encode_state};
 use valori_kernel::state::kernel::KernelState;
 use valori_kernel::types::id::RecordId;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
-use valori_kernel::snapshot::{encode::encode_state, decode::decode_state};
-use valori_kernel::index::SearchResult;
 
 fn fxp_vec(vals: &[i32]) -> FxpVector {
-    FxpVector { data: vals.iter().copied().map(FxpScalar).collect() }
+    FxpVector {
+        data: vals.iter().copied().map(FxpScalar).collect(),
+    }
 }
 
 fn make_state_with_records(n: usize, dim: usize) -> KernelState {

@@ -4,11 +4,11 @@
 //! Inputs:  `{"shard_id":0,"namespace_id":0,"vector":[...],"k":5,...}`
 //! Outputs: `[{"memory_id":…,"record_id":…,"score":…,"metadata":…}]`
 //! Effects: `Counter("memory_searches", 1.0)` — Ephemeral
-use async_trait::async_trait;
-use serde::Deserialize;
 use crate::effect::{Effect, EffectId, EffectPayload};
 use crate::error::{EffectError, EffectResult};
 use crate::task::{Task, TaskContext, TaskOutput};
+use async_trait::async_trait;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct MemorySearchInputs {
@@ -30,7 +30,9 @@ pub struct MemorySearchTask;
 
 #[async_trait]
 impl Task for MemorySearchTask {
-    fn name(&self) -> &'static str { "memory_search" }
+    fn name(&self) -> &'static str {
+        "memory_search"
+    }
 
     async fn run(
         &self,
@@ -41,22 +43,32 @@ impl Task for MemorySearchTask {
         let inputs: MemorySearchInputs = serde_json::from_str(inputs_json)
             .map_err(|e| EffectError::TaskFailed(format!("MemorySearchTask bad inputs: {e}")))?;
 
-        let results = ctx.capabilities.kernel.memory_search(
-            inputs.shard_id,
-            inputs.namespace_id,
-            inputs.vector,
-            inputs.k,
-            inputs.decay_half_life_secs,
-            inputs.rerank,
-            inputs.query_text,
-            inputs.metadata_filter,
-        ).await?;
+        let results = ctx
+            .capabilities
+            .kernel
+            .memory_search(
+                inputs.shard_id,
+                inputs.namespace_id,
+                inputs.vector,
+                inputs.k,
+                inputs.decay_half_life_secs,
+                inputs.rerank,
+                inputs.query_text,
+                inputs.metadata_filter,
+            )
+            .await?;
 
         let metric_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 0);
-        let _ = ctx.bus.dispatch(Effect::ephemeral(
-            metric_id,
-            EffectPayload::Counter { name: "memory_searches".into(), value: 1.0 },
-        )).await;
+        let _ = ctx
+            .bus
+            .dispatch(Effect::ephemeral(
+                metric_id,
+                EffectPayload::Counter {
+                    name: "memory_searches".into(),
+                    value: 1.0,
+                },
+            ))
+            .await;
 
         let state_hash = ctx.capabilities.kernel.state_hash(inputs.shard_id);
         Ok(TaskOutput::with_value(results, state_hash))

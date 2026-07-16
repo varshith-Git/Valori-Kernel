@@ -126,9 +126,7 @@ mod tests {
 
     #[test]
     fn k_ge_n_returns_all() {
-        let records: Vec<(u32, Vec<f32>)> = (0..5u32)
-            .map(|i| (i, vec![i as f32, 0.0]))
-            .collect();
+        let records: Vec<(u32, Vec<f32>)> = (0..5u32).map(|i| (i, vec![i as f32, 0.0])).collect();
         let centroids = deterministic_kmeans(&records, 10, 5);
         assert_eq!(centroids.len(), 5);
     }

@@ -58,7 +58,10 @@ impl RuntimeState {
             *self = next;
             Ok(())
         } else {
-            Err(DaemonError::InvalidState { from: *self, to: next })
+            Err(DaemonError::InvalidState {
+                from: *self,
+                to: next,
+            })
         }
     }
 

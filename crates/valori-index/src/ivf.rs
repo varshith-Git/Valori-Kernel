@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::deterministic::kmeans::{
+    deterministic_kmeans, f32_to_q16, l2_sq_q16 as _l2_sq_q16_scalar,
+};
 use crate::traits::VectorIndex;
-use crate::deterministic::kmeans::{deterministic_kmeans, f32_to_q16, l2_sq_q16 as _l2_sq_q16_scalar};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 
 #[cfg(target_arch = "aarch64")]
@@ -17,13 +19,14 @@ unsafe fn l2_sq_neon(a: &[i32], b: &[i32]) -> i64 {
     let mut acc3 = vdupq_n_s64(0);
     let chunks8 = len / 8;
     for _ in 0..chunks8 {
-        let d0 = vsubq_s32(vld1q_s32(pa),        vld1q_s32(pb));
+        let d0 = vsubq_s32(vld1q_s32(pa), vld1q_s32(pb));
         let d1 = vsubq_s32(vld1q_s32(pa.add(4)), vld1q_s32(pb.add(4)));
-        acc0 = vmlal_s32(acc0, vget_low_s32(d0),  vget_low_s32(d0));
+        acc0 = vmlal_s32(acc0, vget_low_s32(d0), vget_low_s32(d0));
         acc1 = vmlal_s32(acc1, vget_high_s32(d0), vget_high_s32(d0));
-        acc2 = vmlal_s32(acc2, vget_low_s32(d1),  vget_low_s32(d1));
+        acc2 = vmlal_s32(acc2, vget_low_s32(d1), vget_low_s32(d1));
         acc3 = vmlal_s32(acc3, vget_high_s32(d1), vget_high_s32(d1));
-        pa = pa.add(8); pb = pb.add(8);
+        pa = pa.add(8);
+        pb = pb.add(8);
     }
     let combined = vaddq_s64(vaddq_s64(acc0, acc1), vaddq_s64(acc2, acc3));
     let mut sum = vgetq_lane_s64::<0>(combined) + vgetq_lane_s64::<1>(combined);
@@ -56,11 +59,17 @@ pub struct IvfConfig {
     pub auto_scale: bool,
 }
 
-fn default_auto_scale() -> bool { true }
+fn default_auto_scale() -> bool {
+    true
+}
 
 impl Default for IvfConfig {
     fn default() -> Self {
-        Self { n_list: 100, n_probe: 10, auto_scale: true }
+        Self {
+            n_list: 100,
+            n_probe: 10,
+            auto_scale: true,
+        }
     }
 }
 
@@ -74,7 +83,13 @@ pub struct IvfIndex {
 
 impl IvfIndex {
     pub fn new(config: IvfConfig, dim: usize) -> Self {
-        Self { config, dim, centroids: Vec::new(), inverted_lists: Vec::new(), n_at_last_build: 0 }
+        Self {
+            config,
+            dim,
+            centroids: Vec::new(),
+            inverted_lists: Vec::new(),
+            n_at_last_build: 0,
+        }
     }
 
     pub fn needs_rebuild(&self, current_count: usize) -> bool {
@@ -85,13 +100,15 @@ impl IvfIndex {
         if !config.auto_scale {
             return (config.n_list, config.n_probe);
         }
-        let n_list  = ((n as f64).sqrt() as usize).max(16);
+        let n_list = ((n as f64).sqrt() as usize).max(16);
         let n_probe = ((n_list as f64).sqrt() as usize).max(1);
         (n_list, n_probe)
     }
 
     fn find_nearest_centroid(&self, q_vec: &[i32]) -> (usize, i64) {
-        if self.centroids.is_empty() { return (0, i64::MAX); }
+        if self.centroids.is_empty() {
+            return (0, i64::MAX);
+        }
         let mut best_idx = 0usize;
         let mut best_dist = i64::MAX;
         for (i, c) in self.centroids.iter().enumerate() {
@@ -107,10 +124,12 @@ impl IvfIndex {
 
 impl VectorIndex for IvfIndex {
     fn build(&mut self, records: &[(u32, Vec<f32>)]) {
-        if records.is_empty() { return; }
+        if records.is_empty() {
+            return;
+        }
 
         let (eff_n_list, eff_n_probe) = Self::effective_params(&self.config, records.len());
-        self.config.n_list  = eff_n_list;
+        self.config.n_list = eff_n_list;
         self.config.n_probe = eff_n_probe;
 
         self.centroids = deterministic_kmeans(records, eff_n_list, 20);
@@ -153,8 +172,11 @@ impl VectorIndex for IvfIndex {
             return CANDIDATE_SCRATCH.with(|cell| {
                 let mut candidates = cell.borrow_mut();
                 candidates.clear();
-                candidates.extend(self.inverted_lists[0].iter()
-                    .map(|(id, q_vec)| (*id, l2_sq(&q_query, q_vec))));
+                candidates.extend(
+                    self.inverted_lists[0]
+                        .iter()
+                        .map(|(id, q_vec)| (*id, l2_sq(&q_query, q_vec))),
+                );
                 if candidates.len() > k {
                     candidates.select_nth_unstable_by(k - 1, |a, b| {
                         a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0))
@@ -172,8 +194,12 @@ impl VectorIndex for IvfIndex {
                 let mut candidates = qcell.borrow_mut();
 
                 centroid_dists.clear();
-                centroid_dists.extend(self.centroids.iter().enumerate()
-                    .map(|(i, c)| (i, l2_sq(&q_query, c))));
+                centroid_dists.extend(
+                    self.centroids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (i, l2_sq(&q_query, c))),
+                );
 
                 let probes = self.config.n_probe.min(centroid_dists.len());
                 if probes < centroid_dists.len() {
@@ -211,7 +237,9 @@ impl VectorIndex for IvfIndex {
             inverted_lists: Vec<Vec<(u32, &'a Vec<i32>)>>,
         }
 
-        let sorted_lists: Vec<Vec<(u32, &Vec<i32>)>> = self.inverted_lists.iter()
+        let sorted_lists: Vec<Vec<(u32, &Vec<i32>)>> = self
+            .inverted_lists
+            .iter()
             .map(|list| {
                 let mut refs: Vec<(u32, &Vec<i32>)> = list.iter().map(|(id, v)| (*id, v)).collect();
                 refs.sort_by_key(|(id, _)| *id);
@@ -225,7 +253,10 @@ impl VectorIndex for IvfIndex {
             inverted_lists: sorted_lists,
         };
 
-        Ok(bincode::serde::encode_to_vec(&dump, bincode::config::standard())?)
+        Ok(bincode::serde::encode_to_vec(
+            &dump,
+            bincode::config::standard(),
+        )?)
     }
 
     fn restore(&mut self, data: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -240,7 +271,11 @@ impl VectorIndex for IvfIndex {
         self.config = dump.config;
         self.centroids = dump.centroids;
         self.inverted_lists = dump.inverted_lists;
-        self.dim = if self.centroids.is_empty() { 0 } else { self.centroids[0].len() };
+        self.dim = if self.centroids.is_empty() {
+            0
+        } else {
+            self.centroids[0].len()
+        };
         self.n_at_last_build = total;
         Ok(())
     }
@@ -286,8 +321,8 @@ mod tests {
         let r1 = idx.search(&[0.1, 0.2, 0.3, 0.4], 5);
         let r2 = idx2.search(&[0.1, 0.2, 0.3, 0.4], 5);
         assert_eq!(
-            r1.iter().map(|(id,_)| *id).collect::<Vec<_>>(),
-            r2.iter().map(|(id,_)| *id).collect::<Vec<_>>()
+            r1.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            r2.iter().map(|(id, _)| *id).collect::<Vec<_>>()
         );
     }
 

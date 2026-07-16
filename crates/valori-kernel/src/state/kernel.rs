@@ -1,18 +1,20 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Kernel State definition.
 
-use crate::types::id::{Version, DEFAULT_NS, NS_LIST_NIL, MAX_NAMESPACES};
-use crate::storage::pool::RecordPool;
-use crate::graph::pool::{NodePool, EdgePool};
+use crate::error::{KernelError, Result};
 use crate::event::KernelEvent;
-use crate::index::{ActiveIndex, BruteForceIndex, BinaryQuantizationIndex, IndexVariant, SearchResult, VectorIndex};
-use crate::error::{Result, KernelError};
-use crate::graph::node::GraphNode;
 use crate::graph::adjacency::{add_edge, OutEdgeIterator};
-use crate::types::id::{RecordId, NodeId, EdgeId};
-use crate::types::vector::FxpVector;
-use crate::storage::record::Record;
+use crate::graph::node::GraphNode;
+use crate::graph::pool::{EdgePool, NodePool};
+use crate::index::{
+    ActiveIndex, BinaryQuantizationIndex, BruteForceIndex, IndexVariant, SearchResult, VectorIndex,
+};
 use crate::math::l2::fxp_l2_sq;
+use crate::storage::pool::RecordPool;
+use crate::storage::record::Record;
+use crate::types::id::{EdgeId, NodeId, RecordId};
+use crate::types::id::{Version, DEFAULT_NS, MAX_NAMESPACES, NS_LIST_NIL};
+use crate::types::vector::FxpVector;
 
 #[derive(Clone)]
 pub struct KernelState {
@@ -76,7 +78,9 @@ impl KernelState {
         }
         self.index = match variant {
             IndexVariant::BruteForce => ActiveIndex::BruteForce(BruteForceIndex::default()),
-            IndexVariant::BinaryQuantization => ActiveIndex::BinaryQuantization(BinaryQuantizationIndex::new()),
+            IndexVariant::BinaryQuantization => {
+                ActiveIndex::BinaryQuantization(BinaryQuantizationIndex::new())
+            }
         };
         self.index.rebuild(&self.records);
     }
@@ -92,7 +96,10 @@ impl KernelState {
     /// `FLAG_SHREDDED`. Called when applying `KernelEvent::ShredKey`.
     #[cfg(feature = "std")]
     pub fn apply_shred_key(&mut self, key_id: [u8; 16]) -> Result<()> {
-        let records = self.encrypted_record_keys.remove(&key_id).unwrap_or_default();
+        let records = self
+            .encrypted_record_keys
+            .remove(&key_id)
+            .unwrap_or_default();
         for rid in records {
             let _ = self.records.mark_shredded(rid);
         }
@@ -128,11 +135,18 @@ impl KernelState {
     }
 
     pub fn outgoing_edges<'a>(&'a self, node_id: NodeId) -> Option<OutEdgeIterator<'a>> {
-        self.nodes.get(node_id).map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
+        self.nodes
+            .get(node_id)
+            .map(|node| OutEdgeIterator::new(&self.edges, node.first_out_edge))
     }
 
-    pub fn incoming_edges<'a>(&'a self, node_id: NodeId) -> Option<crate::graph::adjacency::InEdgeIterator<'a>> {
-        self.nodes.get(node_id).map(|node| crate::graph::adjacency::InEdgeIterator::new(&self.edges, node.first_in_edge))
+    pub fn incoming_edges<'a>(
+        &'a self,
+        node_id: NodeId,
+    ) -> Option<crate::graph::adjacency::InEdgeIterator<'a>> {
+        self.nodes.get(node_id).map(|node| {
+            crate::graph::adjacency::InEdgeIterator::new(&self.edges, node.first_in_edge)
+        })
     }
 
     /// Iterate over all live graph nodes (excludes deleted/hole slots).
@@ -141,8 +155,13 @@ impl KernelState {
     }
 
     /// Iterate over all live records in a given namespace.
-    pub fn iter_records_in_ns(&self, namespace_id: u16) -> impl Iterator<Item = &crate::storage::record::Record> {
-        self.records.iter().filter(move |r| r.namespace_id == namespace_id)
+    pub fn iter_records_in_ns(
+        &self,
+        namespace_id: u16,
+    ) -> impl Iterator<Item = &crate::storage::record::Record> {
+        self.records
+            .iter()
+            .filter(move |r| r.namespace_id == namespace_id)
     }
 
     pub fn next_record_id(&self) -> RecordId {
@@ -172,13 +191,23 @@ impl KernelState {
     }
 
     /// Search across ALL records regardless of namespace (backward-compat, single-tenant).
-    pub fn search_l2(&self, query: &FxpVector, results: &mut [SearchResult], filter: Option<u64>) -> usize {
+    pub fn search_l2(
+        &self,
+        query: &FxpVector,
+        results: &mut [SearchResult],
+        filter: Option<u64>,
+    ) -> usize {
         self.index.search(&self.records, query, results, filter)
     }
 
     /// Namespace-scoped brute-force search.
     /// Traverses only the records in `namespace_id`'s intrusive linked list — O(N_tenant).
-    pub fn search_l2_ns(&self, query: &FxpVector, results: &mut [SearchResult], namespace_id: u16) -> usize {
+    pub fn search_l2_ns(
+        &self,
+        query: &FxpVector,
+        results: &mut [SearchResult],
+        namespace_id: u16,
+    ) -> usize {
         let ns = namespace_id as usize;
         if ns >= MAX_NAMESPACES {
             return 0;
@@ -189,14 +218,22 @@ impl KernelState {
         }
 
         for r in results.iter_mut() {
-            *r = SearchResult { score: i64::MAX, id: RecordId(u32::MAX) };
+            *r = SearchResult {
+                score: i64::MAX,
+                id: RecordId(u32::MAX),
+            };
         }
 
         let mut found = 0usize;
         let mut cursor = self.namespace_record_heads[ns];
 
         while cursor != NS_LIST_NIL {
-            let (next, vec_ref) = match self.records.records.get(cursor as usize).and_then(|s| s.as_ref()) {
+            let (next, vec_ref) = match self
+                .records
+                .records
+                .get(cursor as usize)
+                .and_then(|s| s.as_ref())
+            {
                 Some(rec) if rec.is_active() => (rec.next_in_ns, Some(&rec.vector)),
                 Some(rec) => (rec.next_in_ns, None),
                 None => break,
@@ -204,7 +241,10 @@ impl KernelState {
 
             if let Some(vec) = vec_ref {
                 let dist = fxp_l2_sq(vec, query);
-                let candidate = SearchResult { score: dist, id: RecordId(cursor) };
+                let candidate = SearchResult {
+                    score: dist,
+                    id: RecordId(cursor),
+                };
 
                 if found < k {
                     // Insertion sort into the result buffer
@@ -231,15 +271,27 @@ impl KernelState {
         found
     }
 
-    pub fn create_node(&mut self, kind: crate::types::enums::NodeKind, record: Option<RecordId>) -> Result<NodeId> {
+    pub fn create_node(
+        &mut self,
+        kind: crate::types::enums::NodeKind,
+        record: Option<RecordId>,
+    ) -> Result<NodeId> {
         let id = NodeId(self.nodes.len() as u32);
         self.apply_event_ns(&KernelEvent::CreateNode { id, kind, record }, DEFAULT_NS.0)?;
         Ok(id)
     }
 
-    pub fn create_edge(&mut self, from: NodeId, to: NodeId, kind: crate::types::enums::EdgeKind) -> Result<EdgeId> {
+    pub fn create_edge(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        kind: crate::types::enums::EdgeKind,
+    ) -> Result<EdgeId> {
         let id = EdgeId(self.edges.len() as u32);
-        self.apply_event_ns(&KernelEvent::CreateEdge { id, from, to, kind }, DEFAULT_NS.0)?;
+        self.apply_event_ns(
+            &KernelEvent::CreateEdge { id, from, to, kind },
+            DEFAULT_NS.0,
+        )?;
         Ok(id)
     }
 
@@ -256,25 +308,45 @@ impl KernelState {
     /// there is no intermediate representation between `KernelEvent` and `KernelState`.
     pub fn apply_event_ns(&mut self, evt: &KernelEvent, namespace_id: u16) -> Result<()> {
         match evt {
-            KernelEvent::InsertRecord { id, vector, metadata, tag } => {
+            KernelEvent::InsertRecord {
+                id,
+                vector,
+                metadata,
+                tag,
+            } => {
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
-                if self.records.next_id() != *id { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
+                if self.records.next_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
                 let d = vector.len();
                 if let Some(dim) = self.dim {
-                    if d != dim { return Err(KernelError::DimensionMismatch { expected: dim, found: d }); }
+                    if d != dim {
+                        return Err(KernelError::DimensionMismatch {
+                            expected: dim,
+                            found: d,
+                        });
+                    }
                 } else {
                     self.dim = Some(d);
                 }
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
-                    if m.len() > MAX_METADATA_SIZE { return Err(KernelError::MetadataTooLarge); }
+                    if m.len() > MAX_METADATA_SIZE {
+                        return Err(KernelError::MetadataTooLarge);
+                    }
                 }
-                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
+                let allocated_id =
+                    self.records
+                        .insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
                 debug_assert_eq!(allocated_id, *id);
                 let old_head = self.namespace_record_heads[ns];
                 {
-                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    let r = self.records.records[allocated_id.0 as usize]
+                        .as_mut()
+                        .unwrap();
                     r.next_in_ns = old_head;
                     r.prev_in_ns = NS_LIST_NIL;
                 }
@@ -309,11 +381,17 @@ impl KernelState {
 
             KernelEvent::CreateNode { id, kind, record } => {
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
-                if self.next_node_id() != *id { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
+                if self.next_node_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
                 if let Some(rid) = record {
                     let rec = self.records.get(*rid).ok_or(KernelError::NotFound)?;
-                    if rec.namespace_id != namespace_id { return Err(KernelError::InvalidOperation); }
+                    if rec.namespace_id != namespace_id {
+                        return Err(KernelError::InvalidOperation);
+                    }
                 }
                 let node = GraphNode::new(*id, *kind, *record, namespace_id);
                 let allocated = self.nodes.insert(node)?;
@@ -333,10 +411,22 @@ impl KernelState {
             }
 
             KernelEvent::CreateEdge { id, from, to, kind } => {
-                if self.next_edge_id() != *id { return Err(KernelError::InvalidOperation); }
-                let from_ns = self.nodes.get(*from).ok_or(KernelError::NotFound)?.namespace_id;
-                let to_ns   = self.nodes.get(*to).ok_or(KernelError::NotFound)?.namespace_id;
-                if from_ns != to_ns { return Err(KernelError::InvalidOperation); }
+                if self.next_edge_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
+                let from_ns = self
+                    .nodes
+                    .get(*from)
+                    .ok_or(KernelError::NotFound)?
+                    .namespace_id;
+                let to_ns = self
+                    .nodes
+                    .get(*to)
+                    .ok_or(KernelError::NotFound)?
+                    .namespace_id;
+                if from_ns != to_ns {
+                    return Err(KernelError::InvalidOperation);
+                }
                 let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
                 debug_assert_eq!(allocated, *id);
             }
@@ -349,25 +439,42 @@ impl KernelState {
                 self._delete_edge(*id)?;
             }
 
-            KernelEvent::AutoInsertRecord { vector, metadata, tag } => {
+            KernelEvent::AutoInsertRecord {
+                vector,
+                metadata,
+                tag,
+            } => {
                 let id = self.next_record_id();
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
                 let d = vector.len();
                 if let Some(dim) = self.dim {
-                    if d != dim { return Err(KernelError::DimensionMismatch { expected: dim, found: d }); }
+                    if d != dim {
+                        return Err(KernelError::DimensionMismatch {
+                            expected: dim,
+                            found: d,
+                        });
+                    }
                 } else {
                     self.dim = Some(d);
                 }
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
-                    if m.len() > MAX_METADATA_SIZE { return Err(KernelError::MetadataTooLarge); }
+                    if m.len() > MAX_METADATA_SIZE {
+                        return Err(KernelError::MetadataTooLarge);
+                    }
                 }
-                let allocated_id = self.records.insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
+                let allocated_id =
+                    self.records
+                        .insert(vector.clone(), metadata.clone(), *tag, namespace_id)?;
                 debug_assert_eq!(allocated_id, id);
                 let old_head = self.namespace_record_heads[ns];
                 {
-                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    let r = self.records.records[allocated_id.0 as usize]
+                        .as_mut()
+                        .unwrap();
                     r.next_in_ns = old_head;
                     r.prev_in_ns = NS_LIST_NIL;
                 }
@@ -383,10 +490,14 @@ impl KernelState {
             KernelEvent::AutoCreateNode { kind, record } => {
                 let id = self.next_node_id();
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
                 if let Some(rid) = record {
                     let rec = self.records.get(*rid).ok_or(KernelError::NotFound)?;
-                    if rec.namespace_id != namespace_id { return Err(KernelError::InvalidOperation); }
+                    if rec.namespace_id != namespace_id {
+                        return Err(KernelError::InvalidOperation);
+                    }
                 }
                 let node = GraphNode::new(id, *kind, *record, namespace_id);
                 let allocated = self.nodes.insert(node)?;
@@ -407,23 +518,41 @@ impl KernelState {
 
             KernelEvent::AutoCreateEdge { from, to, kind } => {
                 let id = self.next_edge_id();
-                let from_ns = self.nodes.get(*from).ok_or(KernelError::NotFound)?.namespace_id;
-                let to_ns   = self.nodes.get(*to).ok_or(KernelError::NotFound)?.namespace_id;
-                if from_ns != to_ns { return Err(KernelError::InvalidOperation); }
+                let from_ns = self
+                    .nodes
+                    .get(*from)
+                    .ok_or(KernelError::NotFound)?
+                    .namespace_id;
+                let to_ns = self
+                    .nodes
+                    .get(*to)
+                    .ok_or(KernelError::NotFound)?
+                    .namespace_id;
+                if from_ns != to_ns {
+                    return Err(KernelError::InvalidOperation);
+                }
                 let allocated = add_edge(&mut self.nodes, &mut self.edges, *kind, *from, *to)?;
                 debug_assert_eq!(allocated, id);
             }
 
-            KernelEvent::AutoInsertRecordEncrypted { namespace_id: evt_ns, key_id, ciphertext, tag } => {
+            KernelEvent::AutoInsertRecordEncrypted {
+                namespace_id: evt_ns,
+                key_id,
+                ciphertext,
+                tag,
+            } => {
                 let id = self.next_record_id();
                 // Delegate to the concrete InsertRecordEncrypted arm; that arm will bump version.
-                return self.apply_event_ns(&KernelEvent::InsertRecordEncrypted {
-                    id,
-                    key_id: *key_id,
-                    ciphertext: ciphertext.clone(),
-                    metadata_ciphertext: None,
-                    tag: *tag,
-                }, *evt_ns);
+                return self.apply_event_ns(
+                    &KernelEvent::InsertRecordEncrypted {
+                        id,
+                        key_id: *key_id,
+                        ciphertext: ciphertext.clone(),
+                        metadata_ciphertext: None,
+                        tag: *tag,
+                    },
+                    *evt_ns,
+                );
             }
 
             KernelEvent::UpdateRecordMetadata { id, metadata } => {
@@ -438,18 +567,27 @@ impl KernelState {
                 // The name is not stored in KernelState — namespaces are pure integer ids here.
                 // `namespace_id` is the id already allocated by the consensus layer.
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
                 // Idempotent: head is already NS_LIST_NIL for a fresh namespace.
             }
 
             KernelEvent::DropNamespace { name: _ } => {
                 // The consensus layer resolved name -> id before calling here.
                 let ns = namespace_id as usize;
-                if ns == 0 { return Err(KernelError::InvalidOperation); }
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
+                if ns == 0 {
+                    return Err(KernelError::InvalidOperation);
+                }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
                 let mut cursor = self.namespace_record_heads[ns];
                 while cursor != NS_LIST_NIL {
-                    let next = self.records.records.get(cursor as usize)
+                    let next = self
+                        .records
+                        .records
+                        .get(cursor as usize)
                         .and_then(|s| s.as_ref())
                         .map(|r| r.next_in_ns)
                         .unwrap_or(NS_LIST_NIL);
@@ -461,7 +599,10 @@ impl KernelState {
                 let mut node_ids = alloc::vec::Vec::new();
                 let mut node_cursor = self.namespace_node_heads[ns];
                 while node_cursor != NS_LIST_NIL {
-                    let next = self.nodes.nodes.get(node_cursor as usize)
+                    let next = self
+                        .nodes
+                        .nodes
+                        .get(node_cursor as usize)
                         .and_then(|s| s.as_ref())
                         .map(|n| n.next_in_ns)
                         .unwrap_or(NS_LIST_NIL);
@@ -476,22 +617,42 @@ impl KernelState {
                 self.namespace_node_heads[ns] = NS_LIST_NIL;
             }
 
-            KernelEvent::InsertRecordEncrypted { id, #[cfg(feature = "std")] key_id, ciphertext, tag, .. } => {
+            KernelEvent::InsertRecordEncrypted {
+                id,
+                #[cfg(feature = "std")]
+                key_id,
+                ciphertext,
+                tag,
+                ..
+            } => {
                 let ns = namespace_id as usize;
-                if ns >= MAX_NAMESPACES { return Err(KernelError::InvalidOperation); }
-                if self.records.next_id() != *id { return Err(KernelError::InvalidOperation); }
+                if ns >= MAX_NAMESPACES {
+                    return Err(KernelError::InvalidOperation);
+                }
+                if self.records.next_id() != *id {
+                    return Err(KernelError::InvalidOperation);
+                }
                 use crate::config::MAX_METADATA_SIZE;
-                if ciphertext.len() > MAX_METADATA_SIZE + 28 { return Err(KernelError::MetadataTooLarge); }
+                if ciphertext.len() > MAX_METADATA_SIZE + 28 {
+                    return Err(KernelError::MetadataTooLarge);
+                }
                 let dim = self.dim.ok_or(KernelError::InvalidOperation)?;
                 let zero_vec = FxpVector::new_zeros(dim);
-                let allocated_id = self.records.insert(zero_vec, Some(ciphertext.clone()), *tag, namespace_id)?;
+                let allocated_id =
+                    self.records
+                        .insert(zero_vec, Some(ciphertext.clone()), *tag, namespace_id)?;
                 debug_assert_eq!(allocated_id, *id);
                 self.records.mark_encrypted(allocated_id)?;
                 #[cfg(feature = "std")]
-                self.encrypted_record_keys.entry(*key_id).or_default().push(allocated_id);
+                self.encrypted_record_keys
+                    .entry(*key_id)
+                    .or_default()
+                    .push(allocated_id);
                 let old_head = self.namespace_record_heads[ns];
                 {
-                    let r = self.records.records[allocated_id.0 as usize].as_mut().unwrap();
+                    let r = self.records.records[allocated_id.0 as usize]
+                        .as_mut()
+                        .unwrap();
                     r.next_in_ns = old_head;
                     r.prev_in_ns = NS_LIST_NIL;
                 }
@@ -508,7 +669,10 @@ impl KernelState {
                 #[cfg(feature = "std")]
                 self.apply_shred_key(*key_id)?;
                 #[cfg(not(feature = "std"))]
-                { let _ = key_id; return Err(KernelError::InvalidOperation); }
+                {
+                    let _ = key_id;
+                    return Err(KernelError::InvalidOperation);
+                }
             }
         }
 
@@ -521,7 +685,12 @@ impl KernelState {
     /// Unlink a record from its namespace list using the stored prev/next pointers.
     fn _unlink_record_from_ns(&mut self, ns: usize, prev: u32, next: u32) {
         if prev != NS_LIST_NIL {
-            if let Some(r) = self.records.records.get_mut(prev as usize).and_then(|s| s.as_mut()) {
+            if let Some(r) = self
+                .records
+                .records
+                .get_mut(prev as usize)
+                .and_then(|s| s.as_mut())
+            {
                 r.next_in_ns = next;
             }
         } else {
@@ -529,7 +698,12 @@ impl KernelState {
             self.namespace_record_heads[ns] = next;
         }
         if next != NS_LIST_NIL {
-            if let Some(r) = self.records.records.get_mut(next as usize).and_then(|s| s.as_mut()) {
+            if let Some(r) = self
+                .records
+                .records
+                .get_mut(next as usize)
+                .and_then(|s| s.as_mut())
+            {
                 r.prev_in_ns = prev;
             }
         }
@@ -538,14 +712,24 @@ impl KernelState {
     /// Unlink a node from its namespace list using the stored prev/next pointers.
     fn _unlink_node_from_ns(&mut self, ns: usize, prev: u32, next: u32) {
         if prev != NS_LIST_NIL {
-            if let Some(n) = self.nodes.nodes.get_mut(prev as usize).and_then(|s| s.as_mut()) {
+            if let Some(n) = self
+                .nodes
+                .nodes
+                .get_mut(prev as usize)
+                .and_then(|s| s.as_mut())
+            {
                 n.next_in_ns = next;
             }
         } else {
             self.namespace_node_heads[ns] = next;
         }
         if next != NS_LIST_NIL {
-            if let Some(n) = self.nodes.nodes.get_mut(next as usize).and_then(|s| s.as_mut()) {
+            if let Some(n) = self
+                .nodes
+                .nodes
+                .get_mut(next as usize)
+                .and_then(|s| s.as_mut())
+            {
                 n.prev_in_ns = prev;
             }
         }
@@ -596,7 +780,7 @@ impl KernelState {
     fn _delete_edge(&mut self, edge_id: EdgeId) -> Result<()> {
         let edge = self.edges.get(edge_id).ok_or(KernelError::NotFound)?;
         let from_node_id = edge.from;
-        let to_node_id   = edge.to;
+        let to_node_id = edge.to;
 
         {
             let mut prev: Option<EdgeId> = None;
@@ -691,8 +875,12 @@ impl KernelState {
     /// and after any direct pool manipulation that bypasses `apply()`.
     pub fn rebuild_namespace_lists(&mut self) {
         // Reset all heads
-        for h in self.namespace_record_heads.iter_mut() { *h = NS_LIST_NIL; }
-        for h in self.namespace_node_heads.iter_mut()   { *h = NS_LIST_NIL; }
+        for h in self.namespace_record_heads.iter_mut() {
+            *h = NS_LIST_NIL;
+        }
+        for h in self.namespace_node_heads.iter_mut() {
+            *h = NS_LIST_NIL;
+        }
 
         // Walk records in REVERSE order so that after prepend-to-head the
         // list is in forward (ascending ID) order — matching insert order.

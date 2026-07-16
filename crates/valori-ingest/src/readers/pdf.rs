@@ -63,7 +63,10 @@ mod tests {
 
     #[tokio::test]
     async fn missing_file_returns_reader_error() {
-        let err = PdfReader.read("/nonexistent/path.pdf", None).await.unwrap_err();
+        let err = PdfReader
+            .read("/nonexistent/path.pdf", None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, IngestError::Reader(_)));
         assert!(err.to_string().contains("not found"));
     }

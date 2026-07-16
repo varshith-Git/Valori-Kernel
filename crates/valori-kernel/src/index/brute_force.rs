@@ -2,10 +2,10 @@
 //! Brute-force index.
 
 use crate::index::{SearchResult, VectorIndex};
-use crate::storage::pool::RecordPool;
-use crate::types::vector::FxpVector;
-use crate::types::id::RecordId;
 use crate::math::l2::fxp_l2_sq;
+use crate::storage::pool::RecordPool;
+use crate::types::id::RecordId;
+use crate::types::vector::FxpVector;
 use alloc::collections::BinaryHeap;
 
 /// A stateless brute-force index that scans the RecordPool.
@@ -13,11 +13,11 @@ use alloc::collections::BinaryHeap;
 pub struct BruteForceIndex;
 
 impl VectorIndex for BruteForceIndex {
-    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector) { }
+    fn on_insert(&mut self, _id: RecordId, _vec: &FxpVector) {}
 
-    fn on_delete(&mut self, _id: RecordId) { }
+    fn on_delete(&mut self, _id: RecordId) {}
 
-    fn rebuild(&mut self, _pool: &RecordPool) { }
+    fn rebuild(&mut self, _pool: &RecordPool) {}
 
     fn search(
         &self,
@@ -27,7 +27,9 @@ impl VectorIndex for BruteForceIndex {
         filter: Option<u64>,
     ) -> usize {
         let k = results.len();
-        if k == 0 { return 0; }
+        if k == 0 {
+            return 0;
+        }
 
         // Max-heap (worst-on-top) of capacity k: O(log k) per candidate instead of O(k).
         // BinaryHeap<SearchResult> is a max-heap; peek() gives the *largest* score
@@ -42,7 +44,10 @@ impl VectorIndex for BruteForceIndex {
             }
 
             let dist_sq = fxp_l2_sq(&record.vector, query);
-            let candidate = SearchResult { score: dist_sq, id: record.id };
+            let candidate = SearchResult {
+                score: dist_sq,
+                id: record.id,
+            };
 
             if heap.len() < k {
                 heap.push(candidate);
@@ -77,7 +82,7 @@ impl BruteForceIndex {
         // Use the trait method here or self implementation if we duplicated?
         // Let's call the trait method explicitly via UFCS or just impl logic?
         // To strictly avoid code dup, we could move implementation to a standalone fn or keep it here.
-        // For simplicity: duplicate logic or re-use? 
+        // For simplicity: duplicate logic or re-use?
         // We implemented the trait. Let's make this helper use the trait impl.
         VectorIndex::search(self, pool, query, &mut buf, None);
         buf

@@ -1,10 +1,10 @@
 //! Fixed-point operations.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::types::scalar::FxpScalar;
 use crate::fxp::qformat::FRAC_BITS;
 #[cfg(any(test, feature = "std"))]
 use crate::fxp::qformat::SCALE;
+use crate::types::scalar::FxpScalar;
 
 /// Basic fixed-point addition with saturation.
 pub fn fxp_add(a: FxpScalar, b: FxpScalar) -> FxpScalar {
@@ -22,7 +22,7 @@ pub fn fxp_mul(a: FxpScalar, b: FxpScalar) -> FxpScalar {
     // Shift right by FRAC_BITS to normalize, with rounding if needed (simple implementation just truncates/shifts)
     // We stick to the rule: "Use i64 intermediates... then shift and saturate back to i32"
     let shifted = product >> FRAC_BITS;
-    
+
     // Manual saturation to i32 range
     let saturated = if shifted > (i32::MAX as i64) {
         i32::MAX

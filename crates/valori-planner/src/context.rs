@@ -40,7 +40,13 @@ impl PlannerFingerprint {
         hasher.update(&feature_flags_hash);
         hasher.update(&metadata_schema_version.to_le_bytes());
         let hash = *hasher.finalize().as_bytes();
-        PlannerFingerprint { version, routing_config_hash, feature_flags_hash, metadata_schema_version, hash }
+        PlannerFingerprint {
+            version,
+            routing_config_hash,
+            feature_flags_hash,
+            metadata_schema_version,
+            hash,
+        }
     }
 
     pub fn hash_hex(&self) -> String {
@@ -103,7 +109,13 @@ mod tests {
 
     fn ctx() -> PlanningContext {
         PlanningContext {
-            capability_set: CapabilitySet { embed: true, llm: false, object_store: false, cluster: false, shard_count: 1 },
+            capability_set: CapabilitySet {
+                embed: true,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
             schema_version: 1,
             shard_count: 1,
             cluster_epoch: 0,
@@ -123,7 +135,10 @@ mod tests {
     fn different_context_different_hash() {
         let mut c2 = ctx();
         c2.schema_version = 2;
-        assert_ne!(PlanningContextHash::compute(&ctx()), PlanningContextHash::compute(&c2));
+        assert_ne!(
+            PlanningContextHash::compute(&ctx()),
+            PlanningContextHash::compute(&c2)
+        );
     }
 
     #[test]

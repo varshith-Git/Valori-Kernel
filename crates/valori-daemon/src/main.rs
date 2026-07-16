@@ -39,7 +39,10 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    tracing::info!("valori-daemon listening on {bind}  (home: {})", home.display());
+    tracing::info!(
+        "valori-daemon listening on {bind}  (home: {})",
+        home.display()
+    );
 
     // Supervision monitor: every 2s, detect crashed nodes and restart per policy.
     let monitor = shared.clone();

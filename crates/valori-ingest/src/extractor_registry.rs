@@ -63,12 +63,12 @@ impl ExtractorRegistry {
     /// Return an extractor for the given file path by inspecting its extension.
     pub fn extractor_for_path(path: impl AsRef<Path>) -> Result<Box<dyn Extractor>, IngestError> {
         let path = path.as_ref();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or_else(|| IngestError::Reader(format!(
-                "cannot determine extension for '{}'", path.display()
-            )))?;
+        let ext = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+            IngestError::Reader(format!(
+                "cannot determine extension for '{}'",
+                path.display()
+            ))
+        })?;
         Self::extractor_for_extension(ext)
     }
 
@@ -125,7 +125,9 @@ mod tests {
 
     #[test]
     fn resolves_all_supported_extensions() {
-        for ext in &["txt", "text", "md", "markdown", "html", "htm", "pdf", "docx"] {
+        for ext in &[
+            "txt", "text", "md", "markdown", "html", "htm", "pdf", "docx",
+        ] {
             ExtractorRegistry::extractor_for_extension(ext)
                 .unwrap_or_else(|_| panic!("expected extractor for '{ext}'"));
         }

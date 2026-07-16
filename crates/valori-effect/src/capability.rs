@@ -4,9 +4,9 @@
 //! Capabilities are checked at plan time (`PlanningContext::capability_set`) and
 //! at dispatch time (`CapabilityRegistry`). A task must not call a capability
 //! directly — all side effects flow through `Effect` + `EffectBus`.
-use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
+use std::sync::Arc;
 
 use crate::effect::KernelCommandBody;
 use crate::error::EffectError;
@@ -51,7 +51,11 @@ pub trait KernelCapability: Capability {
 
     /// Persist the current kernel state to `path` (standalone only).
     /// Returns the state_hash hex after the snapshot is written.
-    async fn save_snapshot(&self, _shard_id: u8, _path: Option<&str>) -> Result<String, EffectError> {
+    async fn save_snapshot(
+        &self,
+        _shard_id: u8,
+        _path: Option<&str>,
+    ) -> Result<String, EffectError> {
         Err(EffectError::CapabilityUnavailable("save_snapshot"))
     }
 
@@ -111,7 +115,11 @@ pub trait KernelCapability: Capability {
 
     /// Build a TreeIndex from markdown text.
     /// Returns `{"cache_key":…,"chunk_count":…,"tree":…}`.
-    async fn tree_build(&self, _text: String, _doc_name: String) -> Result<serde_json::Value, EffectError> {
+    async fn tree_build(
+        &self,
+        _text: String,
+        _doc_name: String,
+    ) -> Result<serde_json::Value, EffectError> {
         Err(EffectError::CapabilityUnavailable("tree_build"))
     }
 
@@ -213,56 +221,84 @@ pub trait SchedulerCapability: Capability {
 /// an optional capability, so `None` at dispatch time should not happen for
 /// correctly-planned operations.
 pub struct CapabilityRegistry {
-    pub kernel:    Arc<dyn KernelCapability>,
-    pub embed:     Option<Arc<dyn EmbedCapability>>,
-    pub llm:       Option<Arc<dyn LlmCapability>>,
-    pub storage:   Option<Arc<dyn StorageCapability>>,
-    pub http:      Option<Arc<dyn HttpCapability>>,
-    pub proof:     Option<Arc<dyn ProofCapability>>,
+    pub kernel: Arc<dyn KernelCapability>,
+    pub embed: Option<Arc<dyn EmbedCapability>>,
+    pub llm: Option<Arc<dyn LlmCapability>>,
+    pub storage: Option<Arc<dyn StorageCapability>>,
+    pub http: Option<Arc<dyn HttpCapability>>,
+    pub proof: Option<Arc<dyn ProofCapability>>,
     pub scheduler: Option<Arc<dyn SchedulerCapability>>,
 }
 
 impl CapabilityRegistry {
     pub fn embed(&self) -> Result<&Arc<dyn EmbedCapability>, EffectError> {
-        self.embed.as_ref().ok_or(EffectError::CapabilityUnavailable("embed"))
+        self.embed
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("embed"))
     }
 
     pub fn llm(&self) -> Result<&Arc<dyn LlmCapability>, EffectError> {
-        self.llm.as_ref().ok_or(EffectError::CapabilityUnavailable("llm"))
+        self.llm
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("llm"))
     }
 
     pub fn storage(&self) -> Result<&Arc<dyn StorageCapability>, EffectError> {
-        self.storage.as_ref().ok_or(EffectError::CapabilityUnavailable("storage"))
+        self.storage
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("storage"))
     }
 
     pub fn http(&self) -> Result<&Arc<dyn HttpCapability>, EffectError> {
-        self.http.as_ref().ok_or(EffectError::CapabilityUnavailable("http"))
+        self.http
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("http"))
     }
 
     pub fn proof(&self) -> Result<&Arc<dyn ProofCapability>, EffectError> {
-        self.proof.as_ref().ok_or(EffectError::CapabilityUnavailable("proof"))
+        self.proof
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("proof"))
     }
 
     pub fn scheduler(&self) -> Result<&Arc<dyn SchedulerCapability>, EffectError> {
-        self.scheduler.as_ref().ok_or(EffectError::CapabilityUnavailable("scheduler"))
+        self.scheduler
+            .as_ref()
+            .ok_or(EffectError::CapabilityUnavailable("scheduler"))
     }
 }
 
 // ── NoOpKernelCapability ──────────────────────────────────────────────────────
 
 /// A no-op `KernelCapability` for tests and disabled-kernel contexts.
-pub struct NoOpKernelCapability { pub shard_count: u8 }
+pub struct NoOpKernelCapability {
+    pub shard_count: u8,
+}
 
 impl Capability for NoOpKernelCapability {
-    fn name(&self) -> &'static str { "kernel_noop" }
-    fn is_available(&self) -> bool { true }
+    fn name(&self) -> &'static str {
+        "kernel_noop"
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
 impl KernelCapability for NoOpKernelCapability {
-    fn shard_count(&self) -> u8 { self.shard_count }
-    async fn apply_command(&self, _shard_id: u8, _ns: u16, _body: &KernelCommandBody, _req_id: &str) -> Result<serde_json::Value, EffectError> {
-        Ok(serde_json::json!({ "record_id": 0u32, "state_hash": "0000000000000000000000000000000000000000000000000000000000000000" }))
+    fn shard_count(&self) -> u8 {
+        self.shard_count
+    }
+    async fn apply_command(
+        &self,
+        _shard_id: u8,
+        _ns: u16,
+        _body: &KernelCommandBody,
+        _req_id: &str,
+    ) -> Result<serde_json::Value, EffectError> {
+        Ok(
+            serde_json::json!({ "record_id": 0u32, "state_hash": "0000000000000000000000000000000000000000000000000000000000000000" }),
+        )
     }
     fn state_hash(&self, _shard_id: u8) -> String {
         "0000000000000000000000000000000000000000000000000000000000000000".into()
@@ -278,7 +314,12 @@ mod tests {
         let cap = NoOpKernelCapability { shard_count: 1 };
         assert!(cap.is_available());
         use crate::effect::KernelCommandBody;
-        let body = KernelCommandBody::InsertRecord { values: vec![], text: None, metadata: None, tag: 0 };
+        let body = KernelCommandBody::InsertRecord {
+            values: vec![],
+            text: None,
+            metadata: None,
+            tag: 0,
+        };
         let v = cap.apply_command(0, 0, &body, "test-req").await.unwrap();
         assert!(v["state_hash"].as_str().unwrap().len() == 64);
     }
@@ -287,8 +328,16 @@ mod tests {
     fn registry_returns_error_for_absent_capability() {
         let reg = CapabilityRegistry {
             kernel: Arc::new(NoOpKernelCapability { shard_count: 1 }),
-            embed: None, llm: None, storage: None, http: None, proof: None, scheduler: None,
+            embed: None,
+            llm: None,
+            storage: None,
+            http: None,
+            proof: None,
+            scheduler: None,
         };
-        assert!(matches!(reg.embed(), Err(EffectError::CapabilityUnavailable("embed"))));
+        assert!(matches!(
+            reg.embed(),
+            Err(EffectError::CapabilityUnavailable("embed"))
+        ));
     }
 }

@@ -3,7 +3,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use alloc::vec;
 use alloc::vec::Vec;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// A cryptographic proof of the kernel's state and history.
 ///
@@ -14,13 +14,13 @@ use serde::{Serialize, Deserialize};
 pub struct DeterministicProof {
     /// The version of the kernel protocol (schema version).
     pub kernel_version: u64,
-    
+
     /// BLAKE3 hash of the starting snapshot (canonical encoding).
     pub snapshot_hash: [u8; 32],
-    
+
     /// BLAKE3 hash of the WAL file (command log).
     pub wal_hash: [u8; 32],
-    
+
     /// BLAKE3 hash of the final kernel state after replay.
     pub final_state_hash: [u8; 32],
 }
@@ -89,15 +89,28 @@ impl InsertReceipt {
         if proof_vec.len() == 32 {
             proof.copy_from_slice(&proof_vec);
         }
-        let state_hash = Self::compute_self_hash(record_id, &old_root, &new_root, &proof, sequence, timestamp);
-        InsertReceipt { record_id, old_root, new_root, proof, sequence, timestamp, state_hash }
+        let state_hash =
+            Self::compute_self_hash(record_id, &old_root, &new_root, &proof, sequence, timestamp);
+        InsertReceipt {
+            record_id,
+            old_root,
+            new_root,
+            proof,
+            sequence,
+            timestamp,
+            state_hash,
+        }
     }
 
     /// Returns `true` iff the `state_hash` field is consistent with the other fields.
     pub fn verify(&self) -> bool {
         let expected = Self::compute_self_hash(
-            self.record_id, &self.old_root, &self.new_root, &self.proof,
-            self.sequence, self.timestamp,
+            self.record_id,
+            &self.old_root,
+            &self.new_root,
+            &self.proof,
+            self.sequence,
+            self.timestamp,
         );
         self.state_hash == expected
     }

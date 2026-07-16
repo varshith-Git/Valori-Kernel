@@ -1,24 +1,23 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use crate::api::*;
+use crate::api_keys::{required_scope, ApiScope, AuthState, KeyStore};
+use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
+use crate::engine::Engine;
+use crate::errors::EngineError;
 use axum::{
-    routing::{post, delete, get},
-    Router,
-    extract::{State, Path as AxumPath, Extension},
-    Json,
     body::Body,
+    extract::{Extension, Path as AxumPath, State},
+    http::{HeaderValue, Request},
     middleware::Next,
-    http::{Request, HeaderValue},
     response::Response,
+    routing::{delete, get, post},
+    Json, Router,
 };
-use tower_http::cors::{CorsLayer, Any};
-use tokio_util::io::ReaderStream;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::engine::Engine;
-use crate::api::*;
-use crate::errors::EngineError;
-use crate::api_keys::{ApiScope, AuthState, KeyStore, required_scope};
-use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
-use serde::{Deserialize, Serialize};
+use tokio_util::io::ReaderStream;
+use tower_http::cors::{Any, CorsLayer};
 
 /// Phase 3.11: RwLock-backed engine — allows concurrent reads.
 /// Read handlers call `.read().await`; write handlers call `.write().await`.
@@ -32,12 +31,12 @@ pub(crate) fn shared_http_client() -> &'static reqwest::Client {
     HTTP_CLIENT.get_or_init(reqwest::Client::new)
 }
 
-use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use axum::extract::Query;
-use axum::response::IntoResponse;
-use axum::http::StatusCode;
 use axum::extract::Request as AxumRequest;
 use axum::http::header::AUTHORIZATION;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use valori_kernel::types::enums::{EdgeKind, NodeKind};
 
 /// Validate that a user-supplied path is safe to use for file operations.
 ///
@@ -84,7 +83,11 @@ fn safe_path(
     match allowed_dir {
         Some(dir) => {
             // Build the candidate: if raw is relative, join to dir; if absolute, check prefix.
-            let candidate = if p.is_absolute() { p.to_path_buf() } else { dir.join(p) };
+            let candidate = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                dir.join(p)
+            };
             // Canonicalize dir so symlinks don't escape.
             let canon_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
             let canon_cand = candidate.canonicalize().unwrap_or(candidate.clone());
@@ -101,7 +104,8 @@ fn safe_path(
             if p.is_absolute() {
                 return Err(EngineError::InvalidInput(
                     "absolute paths are not allowed when no data directory is configured; \
-                     set VALORI_SNAPSHOT_PATH or VALORI_EVENT_LOG_PATH".into(),
+                     set VALORI_SNAPSHOT_PATH or VALORI_EVENT_LOG_PATH"
+                        .into(),
                 ));
             }
             Ok(p.to_path_buf())
@@ -155,10 +159,7 @@ async fn auth_guard_v2(
 /// H-5: `VALORI_CORS_ORIGIN=*` with auth enabled is a misconfiguration —
 /// it lets any website make authenticated cross-origin requests. Callers
 /// must pass the legacy token / key store to allow this check.
-fn make_cors_layer(
-    origin: &Option<String>,
-    has_auth: bool,
-) -> Option<CorsLayer> {
+fn make_cors_layer(origin: &Option<String>, has_auth: bool) -> Option<CorsLayer> {
     let origin = origin.as_deref()?;
     let layer = if origin == "*" {
         if has_auth {
@@ -198,9 +199,7 @@ async fn deprecation_warning(req: Request<Body>, next: Next) -> Response {
     headers.insert("Deprecation", HeaderValue::from_static("true"));
     headers.insert(
         "Link",
-        HeaderValue::from_static(
-            "<https://docs.valori.ai/api/v1>; rel=\"successor-version\"",
-        ),
+        HeaderValue::from_static("<https://docs.valori.ai/api/v1>; rel=\"successor-version\""),
     );
     resp
 }
@@ -210,7 +209,13 @@ pub fn build_router(
     auth_token: Option<String>,
     cors_origin: Option<String>,
 ) -> Router {
-    build_router_with_keys(state, auth_token, cors_origin, Arc::new(KeyStore::new(None)), Arc::new(valori_effect::ReceiptStore::new(256)))
+    build_router_with_keys(
+        state,
+        auth_token,
+        cors_origin,
+        Arc::new(KeyStore::new(None)),
+        Arc::new(valori_effect::ReceiptStore::new(256)),
+    )
 }
 
 /// Full router builder used by `main.rs` — supports per-tenant API keys.
@@ -223,16 +228,20 @@ pub fn build_router_with_keys(
 ) -> Router {
     use crate::capabilities::CapabilityRegistryBuilder;
     use crate::runner::TaskRegistry;
-    let sc = if let Ok(eng) = state.try_read() { eng.shard_count as u8 } else { 1 };
+    let sc = if let Ok(eng) = state.try_read() {
+        eng.shard_count as u8
+    } else {
+        1
+    };
     let capability_registry: Arc<valori_effect::capability::CapabilityRegistry> = Arc::new(
-        CapabilityRegistryBuilder::new(state.clone(), sc, shared_http_client().clone()).build()
+        CapabilityRegistryBuilder::new(state.clone(), sc, shared_http_client().clone()).build(),
     );
     let task_registry: Arc<TaskRegistry> = Arc::new(TaskRegistry::default_registry());
     let execution_registry: Arc<crate::execution_registry::ExecutionRegistry> =
         Arc::new(crate::execution_registry::ExecutionRegistry::default());
     // ── Public routes — no auth required ─────────────────────────────────────
     let public = Router::new()
-        .route("/health",  axum::routing::get(health_check))
+        .route("/health", axum::routing::get(health_check))
         .route("/metrics", axum::routing::get(metrics_handler))
         .with_state(state.clone());
 
@@ -245,98 +254,137 @@ pub fn build_router_with_keys(
     // Everything an integrator should use. This is the stable, enterprise-safe
     // surface. All legacy paths below alias into these same handlers.
     let v1 = Router::new()
-        .route("/v1/version",                   axum::routing::get(version_handler))
-        .route("/v1/records",                   post(insert_record))
-        .route("/v1/records/:id",               axum::routing::get(get_record_by_id))
-        .route("/v1/records/:id/metadata",      axum::routing::patch(update_record_metadata))
-        .route("/v1/search",                    post(search))
-        .route("/v1/graph/node",                post(create_node))
-        .route("/v1/graph/node/:id",            axum::routing::get(get_node).delete(delete_node))
-        .route("/v1/graph/nodes",               axum::routing::get(list_nodes))
-        .route("/v1/graph/edge",                post(create_edge))
-        .route("/v1/graph/edges/:id",           axum::routing::get(get_edges))
-        .route("/v1/graph/subgraph",            axum::routing::get(get_subgraph))
-        .route("/v1/delete",                    post(delete_record))
-        .route("/v1/soft-delete",               post(soft_delete_record))
-        .route("/v1/vectors/batch-insert",      post(batch_insert))
-        .route("/v1/graphrag",                  post(graphrag))
-        .route("/v1/snapshot/download",         axum::routing::get(snapshot))
-        .route("/v1/snapshot/upload",           post(restore))
-        .route("/v1/snapshot/save",             post(snapshot_save))
-        .route("/v1/snapshot/restore",          post(snapshot_restore))
-        .route("/v1/memory/upsert",             post(memory_upsert_vector))
-        .route("/v1/memory/upsert_vector",      post(memory_upsert_vector))
-        .route("/v1/memory/search",             post(memory_search_vector))
-        .route("/v1/memory/search_vector",      post(memory_search_vector))
-        .route("/v1/memory/consolidate",        post(memory_consolidate))
-        .route("/v1/memory/contradict",         post(memory_contradict))
-        .route("/v1/memory/meta/set",           post(meta_set))
-        .route("/v1/memory/meta/get",           axum::routing::get(meta_get))
-        .route("/v1/proof/state",               axum::routing::get(get_proof))
-        .route("/v1/proof/event-log",           axum::routing::get(get_event_proof))
-        .route("/v1/proof/receipt",             axum::routing::get(get_latest_receipt))
-        .route("/v1/proof/receipt/:id",         axum::routing::get(get_receipt_by_id))
-        .route("/v1/replication/wal",           axum::routing::get(get_wal_stream))
-        .route("/v1/replication/events",        axum::routing::get(get_replication_events))
-        .route("/v1/replication/state",         axum::routing::get(get_replication_state))
-        .route("/v1/timeline",                  axum::routing::get(get_timeline))
-        .route("/v1/operations",                axum::routing::get(get_operations))
-        .route("/v1/operations/:id",            axum::routing::get(get_operation_by_id))
-        .route("/v1/operations/:id/execution",  axum::routing::get(get_operation_execution))
-        .route("/v1/namespaces",                post(create_collection_handler).get(list_collections_handler))
-        .route("/v1/namespaces/:name",          delete(drop_collection_handler))
-        .route("/v1/storage/snapshots",         axum::routing::get(list_remote_snapshots))
-        .route("/v1/storage/snapshots/upload",  post(upload_snapshot_to_store))
+        .route("/v1/version", axum::routing::get(version_handler))
+        .route("/v1/records", post(insert_record))
+        .route("/v1/records/:id", axum::routing::get(get_record_by_id))
+        .route(
+            "/v1/records/:id/metadata",
+            axum::routing::patch(update_record_metadata),
+        )
+        .route("/v1/search", post(search))
+        .route("/v1/graph/node", post(create_node))
+        .route(
+            "/v1/graph/node/:id",
+            axum::routing::get(get_node).delete(delete_node),
+        )
+        .route("/v1/graph/nodes", axum::routing::get(list_nodes))
+        .route("/v1/graph/edge", post(create_edge))
+        .route("/v1/graph/edges/:id", axum::routing::get(get_edges))
+        .route("/v1/graph/subgraph", axum::routing::get(get_subgraph))
+        .route("/v1/delete", post(delete_record))
+        .route("/v1/soft-delete", post(soft_delete_record))
+        .route("/v1/vectors/batch-insert", post(batch_insert))
+        .route("/v1/graphrag", post(graphrag))
+        .route("/v1/snapshot/download", axum::routing::get(snapshot))
+        .route("/v1/snapshot/upload", post(restore))
+        .route("/v1/snapshot/save", post(snapshot_save))
+        .route("/v1/snapshot/restore", post(snapshot_restore))
+        .route("/v1/memory/upsert", post(memory_upsert_vector))
+        .route("/v1/memory/upsert_vector", post(memory_upsert_vector))
+        .route("/v1/memory/search", post(memory_search_vector))
+        .route("/v1/memory/search_vector", post(memory_search_vector))
+        .route("/v1/memory/consolidate", post(memory_consolidate))
+        .route("/v1/memory/contradict", post(memory_contradict))
+        .route("/v1/memory/meta/set", post(meta_set))
+        .route("/v1/memory/meta/get", axum::routing::get(meta_get))
+        .route("/v1/proof/state", axum::routing::get(get_proof))
+        .route("/v1/proof/event-log", axum::routing::get(get_event_proof))
+        .route("/v1/proof/receipt", axum::routing::get(get_latest_receipt))
+        .route(
+            "/v1/proof/receipt/:id",
+            axum::routing::get(get_receipt_by_id),
+        )
+        .route("/v1/replication/wal", axum::routing::get(get_wal_stream))
+        .route(
+            "/v1/replication/events",
+            axum::routing::get(get_replication_events),
+        )
+        .route(
+            "/v1/replication/state",
+            axum::routing::get(get_replication_state),
+        )
+        .route("/v1/timeline", axum::routing::get(get_timeline))
+        .route("/v1/operations", axum::routing::get(get_operations))
+        .route(
+            "/v1/operations/:id",
+            axum::routing::get(get_operation_by_id),
+        )
+        .route(
+            "/v1/operations/:id/execution",
+            axum::routing::get(get_operation_execution),
+        )
+        .route(
+            "/v1/namespaces",
+            post(create_collection_handler).get(list_collections_handler),
+        )
+        .route("/v1/namespaces/:name", delete(drop_collection_handler))
+        .route(
+            "/v1/storage/snapshots",
+            axum::routing::get(list_remote_snapshots),
+        )
+        .route(
+            "/v1/storage/snapshots/upload",
+            post(upload_snapshot_to_store),
+        )
         .route("/v1/storage/snapshots/restore", post(restore_from_store))
-        .route("/v1/storage/wal",               axum::routing::get(list_remote_wal))
-        .route("/v1/storage/wal/archive",       post(archive_wal_segment))
-        .route("/v1/records/encrypted",         post(insert_encrypted_handler))
-        .route("/v1/crypto/shred/:key_id",      delete(shred_key_handler))
-        .route("/v1/crypto/status/:key_id",     get(crypto_status_handler))
-        .route("/v1/index/config",              axum::routing::get(index_config_handler))
-        .route("/v1/index/rebuild",             post(index_rebuild_handler))
-        .route("/v1/shard/routing",             axum::routing::get(shard_routing_handler))
-        .route("/v1/ingest/document",           post(valori_ingest::ingest_document))
-        .route("/v1/ingest",                    post(crate::ingest::ingest))
-        .route("/v1/ingest/status/:job_id",     get(crate::ingest::get_ingest_status))
-        .route("/v1/ingest/update",             post(crate::ingest::ingest_update))
-        .route("/v1/ingest/extract-entities",   post(extract_entities))
-        .route("/v1/tree/build",                post(tree_build))
-        .route("/v1/tree/query",                post(tree_query))
-        .route("/v1/tree/hybrid",               post(tree_hybrid))
-        .route("/v1/tree/verify",               post(valori_rag::tree::tree_verify))
-        .route("/v1/tree/chain-verify",         post(valori_rag::tree::tree_chain_verify))
-        .route("/v1/community/detect",          post(community_detect))
-        .route("/v1/community/search",          post(community_search))
-        .route("/v1/community/overview",        get(community_overview))
-        .route("/v1/models/health",             axum::routing::get(models_health))
+        .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
+        .route("/v1/storage/wal/archive", post(archive_wal_segment))
+        .route("/v1/records/encrypted", post(insert_encrypted_handler))
+        .route("/v1/crypto/shred/:key_id", delete(shred_key_handler))
+        .route("/v1/crypto/status/:key_id", get(crypto_status_handler))
+        .route("/v1/index/config", axum::routing::get(index_config_handler))
+        .route("/v1/index/rebuild", post(index_rebuild_handler))
+        .route(
+            "/v1/shard/routing",
+            axum::routing::get(shard_routing_handler),
+        )
+        .route("/v1/ingest/document", post(valori_ingest::ingest_document))
+        .route("/v1/ingest", post(crate::ingest::ingest))
+        .route(
+            "/v1/ingest/status/:job_id",
+            get(crate::ingest::get_ingest_status),
+        )
+        .route("/v1/ingest/update", post(crate::ingest::ingest_update))
+        .route("/v1/ingest/extract-entities", post(extract_entities))
+        .route("/v1/tree/build", post(tree_build))
+        .route("/v1/tree/query", post(tree_query))
+        .route("/v1/tree/hybrid", post(tree_hybrid))
+        .route("/v1/tree/verify", post(valori_rag::tree::tree_verify))
+        .route(
+            "/v1/tree/chain-verify",
+            post(valori_rag::tree::tree_chain_verify),
+        )
+        .route("/v1/community/detect", post(community_detect))
+        .route("/v1/community/search", post(community_search))
+        .route("/v1/community/overview", get(community_overview))
+        .route("/v1/models/health", axum::routing::get(models_health))
         .merge(key_routes);
 
     // ── Deprecated legacy routes — same handlers, deprecation headers added ───
     // Kept alive for backward compatibility. Will be removed in v2.
     // Clients see `Deprecation: true` + `Link` on every response.
     let legacy = Router::new()
-        .route("/version",          axum::routing::get(version_handler))
-        .route("/records",          post(insert_record))
-        .route("/search",           post(search))
-        .route("/timeline",         axum::routing::get(get_timeline))
-        .route("/operations",       axum::routing::get(get_operations))
-        .route("/operations/:id",   axum::routing::get(get_operation_by_id))
-        .route("/graph/node",       post(create_node))
-        .route("/graph/node/:id",   axum::routing::get(get_node).delete(delete_node))
-        .route("/graph/nodes",      axum::routing::get(list_nodes))
-        .route("/graph/edge",       post(create_edge))
-        .route("/graph/edges/:id",  axum::routing::get(get_edges))
-        .route("/graph/subgraph",   axum::routing::get(get_subgraph))
+        .route("/version", axum::routing::get(version_handler))
+        .route("/records", post(insert_record))
+        .route("/search", post(search))
+        .route("/timeline", axum::routing::get(get_timeline))
+        .route("/operations", axum::routing::get(get_operations))
+        .route("/operations/:id", axum::routing::get(get_operation_by_id))
+        .route("/graph/node", post(create_node))
+        .route(
+            "/graph/node/:id",
+            axum::routing::get(get_node).delete(delete_node),
+        )
+        .route("/graph/nodes", axum::routing::get(list_nodes))
+        .route("/graph/edge", post(create_edge))
+        .route("/graph/edges/:id", axum::routing::get(get_edges))
+        .route("/graph/subgraph", axum::routing::get(get_subgraph))
         // snake_case alias kept for SDK backward compat — canonical is /v1/vectors/batch-insert
-        .route("/v1/vectors/batch_insert",      post(batch_insert))
+        .route("/v1/vectors/batch_insert", post(batch_insert))
         .layer(axum::middleware::from_fn(deprecation_warning));
 
     // ── Protected routes = canonical v1 + deprecated legacy ──────────────────
-    let protected = Router::new()
-        .merge(v1)
-        .merge(legacy)
-        .with_state(state);
+    let protected = Router::new().merge(v1).merge(legacy).with_state(state);
 
     let auth = Arc::new(AuthState {
         key_store: key_store.clone(),
@@ -362,10 +410,9 @@ pub fn build_router_with_keys(
     // H-2: Global body size limit — prevent OOM via unbounded request bodies.
     // Snapshot upload (binary) legitimately needs more room; everything else
     // uses JSON that should never exceed 32 MB.
-    let mut router = Router::new()
-        .merge(public)
-        .merge(protected)
-        .layer(tower_http::limit::RequestBodyLimitLayer::new(32 * 1024 * 1024));
+    let mut router = Router::new().merge(public).merge(protected).layer(
+        tower_http::limit::RequestBodyLimitLayer::new(32 * 1024 * 1024),
+    );
     if let Some(cors) = make_cors_layer(&cors_origin, has_auth) {
         tracing::info!("CORS enabled: origin = {:?}", cors_origin);
         router = router.layer(cors);
@@ -382,9 +429,7 @@ pub fn build_router_with_keys(
 ///
 /// This endpoint is **always unauthenticated** so that load-balancer health
 /// probes and liveness checks work without a bearer token.
-async fn health_check(
-    State(state): State<SharedEngine>,
-) -> impl IntoResponse {
+async fn health_check(State(state): State<SharedEngine>) -> impl IntoResponse {
     let engine = state.read().await;
     let h = engine.health();
 
@@ -419,15 +464,21 @@ impl crate::routes::records::RecordOps for SharedEngine {
     ) -> Result<crate::routes::records::DeletedRecord, Response> {
         use valori_kernel::snapshot::blake3::hash_state_blake3;
         let mut engine = self.write().await;
-        let state_before: String =
-            hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        let state_before: String = hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
         if soft {
-            engine.soft_delete_record(id).map_err(|e| e.into_response())?;
+            engine
+                .soft_delete_record(id)
+                .map_err(|e| e.into_response())?;
         } else {
             engine.delete_record(id).map_err(|e| e.into_response())?;
         }
-        let state_after: String =
-            hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        let state_after: String = hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
         Ok(crate::routes::records::DeletedRecord {
             log_index: None,
             shard_id: 0,
@@ -460,12 +511,25 @@ async fn get_record_by_id(
     Query(q): Query<crate::routes::graph::CollectionQuery>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let engine = state.read().await;
-    let ns = engine.resolve_collection(q.collection.as_deref()).map_err(|e| e.into_response())?;
+    let ns = engine
+        .resolve_collection(q.collection.as_deref())
+        .map_err(|e| e.into_response())?;
     let rec_id = valori_kernel::types::id::RecordId(id);
-    let rec = engine.state.get_record(rec_id)
+    let rec = engine
+        .state
+        .get_record(rec_id)
         .filter(|r| r.namespace_id == ns)
-        .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response())?;
-    let vector: Vec<f32> = rec.vector.data.iter()
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({"error": "record not found"})),
+            )
+                .into_response()
+        })?;
+    let vector: Vec<f32> = rec
+        .vector
+        .data
+        .iter()
         .map(|s| valori_kernel::fxp::ops::to_f32(*s))
         .collect();
     Ok(Json(serde_json::json!({
@@ -484,15 +548,32 @@ async fn update_record_metadata(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, Response> {
     let mut engine = state.write().await;
-    let ns = engine.resolve_collection(q.collection.as_deref()).map_err(|e| e.into_response())?;
+    let ns = engine
+        .resolve_collection(q.collection.as_deref())
+        .map_err(|e| e.into_response())?;
     let rec_id = valori_kernel::types::id::RecordId(id);
-    if engine.state.get_record(rec_id).filter(|r| r.namespace_id == ns).is_none() {
-        return Err((axum::http::StatusCode::NOT_FOUND, axum::Json(serde_json::json!({"error": "record not found"}))).into_response());
+    if engine
+        .state
+        .get_record(rec_id)
+        .filter(|r| r.namespace_id == ns)
+        .is_none()
+    {
+        return Err((
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error": "record not found"})),
+        )
+            .into_response());
     }
     let metadata_bytes = serde_json::to_vec(&body).ok();
-    engine.update_record_metadata(id, metadata_bytes, ns).map_err(|e| {
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response()
-    })?;
+    engine
+        .update_record_metadata(id, metadata_bytes, ns)
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        })?;
     Ok(Json(serde_json::json!({ "ok": true, "id": id })))
 }
 
@@ -502,27 +583,38 @@ async fn snapshot_save(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(req): Json<SnapshotSaveRequest>,
 ) -> Result<Json<SnapshotSaveResponse>, EngineError> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     // Validate path under a short read lock, then release.
     let (validated_path, shard_count) = {
         let engine = state.read().await;
         let sc = engine.shard_count as u8;
-        let p = req.path.as_deref().map(|raw| {
-            let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
-            safe_path(raw, allowed)
-        }).transpose()?.map(std::path::PathBuf::from);
+        let p = req
+            .path
+            .as_deref()
+            .map(|raw| {
+                let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
+                safe_path(raw, allowed)
+            })
+            .transpose()?
+            .map(std::path::PathBuf::from);
         (p, sc)
     };
 
-    let path_str = validated_path.as_deref()
+    let path_str = validated_path
+        .as_deref()
         .and_then(|p| p.to_str())
         .map(|s| s.to_string());
-    let filename = validated_path.as_ref()
+    let filename = validated_path
+        .as_ref()
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "snapshot.val".into());
@@ -530,17 +622,39 @@ async fn snapshot_save(
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "shard_id": 0u8,
         "path": path_str,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::Snapshot, &OperationInputs::Snapshot { shard_id: 0 }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::Snapshot,
+        &OperationInputs::Snapshot { shard_id: 0 },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::SnapshotArtifact, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::SnapshotArtifact,
+            inputs_json,
+            shard_id: Some(0),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -549,7 +663,10 @@ async fn snapshot_save(
         .await
         .map_err(|e| EngineError::InvalidInput(format!("snapshot: {e}")))?;
 
-    Ok(Json(SnapshotSaveResponse { success: true, path: filename }))
+    Ok(Json(SnapshotSaveResponse {
+        success: true,
+        path: filename,
+    }))
 }
 
 async fn snapshot_restore(
@@ -561,9 +678,14 @@ async fn snapshot_restore(
     let allowed = engine.snapshot_path.as_deref().and_then(|p| p.parent());
     let path = safe_path(&req.path, allowed)?;
     if !path.exists() {
-        return Err(EngineError::InvalidInput(format!("snapshot not found: {}", path.display())));
+        return Err(EngineError::InvalidInput(format!(
+            "snapshot not found: {}",
+            path.display()
+        )));
     }
-    let data = tokio::fs::read(&path).await.map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+    let data = tokio::fs::read(&path)
+        .await
+        .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
     engine.restore(&data)?;
     Ok(Json(SnapshotRestoreResponse { success: true }))
 }
@@ -594,7 +716,11 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
         self.read().await.resolve_collection(name).ok()
     }
 
-    async fn ensure_read_consistency(&self, _ns: u16, _consistency: Option<&str>) -> Result<(), Response> {
+    async fn ensure_read_consistency(
+        &self,
+        _ns: u16,
+        _consistency: Option<&str>,
+    ) -> Result<(), Response> {
         Ok(())
     }
 
@@ -605,28 +731,39 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
     ) -> Result<crate::routes::memory::UpsertedMemory, Response> {
         use valori_kernel::snapshot::blake3::hash_state_blake3;
         let mut engine = self.write().await;
-        let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-        let record_id = engine.insert_record_from_f32_ns(&req.vector, ns)
+        let state_before: String = hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        let record_id = engine
+            .insert_record_from_f32_ns(&req.vector, ns)
             .map_err(|e| EngineError::from(e).into_response())?;
 
         let doc_node_id = if let Some(existing) = req.attach_to_document_node {
             existing
         } else {
-            engine.create_node_for_record(None, NodeKind::Document as u8, ns)
+            engine
+                .create_node_for_record(None, NodeKind::Document as u8, ns)
                 .map_err(|e| EngineError::from(e).into_response())?
         };
 
-        let chunk_node_id = engine.create_node_for_record(Some(record_id), NodeKind::Chunk as u8, ns)
+        let chunk_node_id = engine
+            .create_node_for_record(Some(record_id), NodeKind::Chunk as u8, ns)
             .map_err(|e| EngineError::from(e).into_response())?;
-        engine.create_edge(doc_node_id, chunk_node_id, EdgeKind::ParentOf as u8)
+        engine
+            .create_edge(doc_node_id, chunk_node_id, EdgeKind::ParentOf as u8)
             .map_err(|e| EngineError::from(e).into_response())?;
 
         let memory_id = format!("rec:{}", record_id);
         if let Some(meta) = &req.metadata {
-            engine.set_meta_audited(memory_id.clone(), meta.clone())
+            engine
+                .set_meta_audited(memory_id.clone(), meta.clone())
                 .map_err(|e| EngineError::from(e).into_response())?;
         }
-        let state_after: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+        let state_after: String = hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
         Ok(crate::routes::memory::UpsertedMemory {
             memory_id,
             record_id,
@@ -646,7 +783,10 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
         req: &MemorySearchVectorRequest,
     ) -> Result<Vec<MemorySearchHit>, Response> {
         let engine = self.read().await;
-        let half_life = req.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+        let half_life = req
+            .decay_half_life_secs
+            .or(engine.decay_half_life_secs)
+            .unwrap_or(0);
         let mf = req.metadata_filter.as_ref();
         // Over-fetch when a metadata filter is active so post-filtering can fill k.
         let base_k = if mf.is_some() {
@@ -662,48 +802,67 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
             } else {
                 base_k
             };
-            let hits = engine.search_l2_ns(&req.query_vector, fetch_k, ns)
+            let hits = engine
+                .search_l2_ns(&req.query_vector, fetch_k, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
             let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, req.k);
             let final_ids: Vec<(u32, f32)> = if use_rerank {
                 let query_text = req.query_text.as_deref().unwrap_or("");
-                let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
-                engine.reranker.rerank(query_text, candidates)
-                    .into_iter().take(req.k).map(|(id, s)| (id as u32, s)).collect()
+                let candidates: Vec<(u64, f32)> =
+                    filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
+                engine
+                    .reranker
+                    .rerank(query_text, candidates)
+                    .into_iter()
+                    .take(req.k)
+                    .map(|(id, s)| (id as u32, s))
+                    .collect()
             } else {
                 filtered
             };
-            final_ids.into_iter()
+            final_ids
+                .into_iter()
                 .map(|(record_id, score)| {
                     let memory_id = format!("rec:{record_id}");
                     let metadata = engine.metadata.get(&memory_id);
-                    MemorySearchHit { memory_id, record_id, score, metadata,
-                        decay_factor: None, age_secs: None }
+                    MemorySearchHit {
+                        memory_id,
+                        record_id,
+                        score,
+                        metadata,
+                        decay_factor: None,
+                        age_secs: None,
+                    }
                 })
                 .collect()
         } else {
             let pool = base_k.saturating_mul(4).max(50).min(1000);
-            let raw = engine.search_l2_ns(&req.query_vector, pool, ns)
+            let raw = engine
+                .search_l2_ns(&req.query_vector, pool, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs()).unwrap_or(0);
-            let candidates: Vec<valori_search::DecayHit> = raw.into_iter()
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let candidates: Vec<valori_search::DecayHit> = raw
+                .into_iter()
                 .map(|(id, score)| valori_search::DecayHit {
-                    id, distance: score, created_at: engine.record_created_at(id),
+                    id,
+                    distance: score,
+                    created_at: engine.record_created_at(id),
                 })
                 .collect();
             valori_search::decay_rerank(candidates, now, half_life, base_k)
                 .into_iter()
-                .filter(|h| {
-                    match mf {
-                        None => true,
-                        Some(f) => {
-                            let key = format!("rec:{}", h.id);
-                            engine.metadata.get(&key)
-                                .map(|m| valori_search::matches_metadata_filter(&m, f))
-                                .unwrap_or(false)
-                        }
+                .filter(|h| match mf {
+                    None => true,
+                    Some(f) => {
+                        let key = format!("rec:{}", h.id);
+                        engine
+                            .metadata
+                            .get(&key)
+                            .map(|m| valori_search::matches_metadata_filter(&m, f))
+                            .unwrap_or(false)
                     }
                 })
                 .take(req.k)
@@ -711,8 +870,12 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
                     let memory_id = format!("rec:{}", h.id);
                     let metadata = engine.metadata.get(&memory_id);
                     MemorySearchHit {
-                        memory_id, record_id: h.id, score: h.distance, metadata,
-                        decay_factor: Some(h.factor), age_secs: h.age_secs,
+                        memory_id,
+                        record_id: h.id,
+                        score: h.distance,
+                        metadata,
+                        decay_factor: Some(h.factor),
+                        age_secs: h.age_secs,
                     }
                 })
                 .collect()
@@ -727,28 +890,41 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
     ) -> Result<crate::routes::memory::ConsolidatedMemory, Response> {
         use valori_kernel::snapshot::blake3::hash_state_blake3;
         let mut engine = self.write().await;
-        let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-        engine.soft_delete_record(req.old_record_id)
+        let state_before: String = hash_state_blake3(&engine.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        engine
+            .soft_delete_record(req.old_record_id)
             .map_err(|e| EngineError::from(e).into_response())?;
 
-        let new_record_id = engine.insert_record_from_f32_ns(&req.new_vector, ns)
+        let new_record_id = engine
+            .insert_record_from_f32_ns(&req.new_vector, ns)
             .map_err(|e| EngineError::from(e).into_response())?;
 
-        let new_node = engine.create_node_for_record(Some(new_record_id), NodeKind::Chunk as u8, ns)
+        let new_node = engine
+            .create_node_for_record(Some(new_record_id), NodeKind::Chunk as u8, ns)
             .map_err(|e| EngineError::from(e).into_response())?;
-        let old_node = engine.create_node_for_record(Some(req.old_record_id), NodeKind::Chunk as u8, ns)
+        let old_node = engine
+            .create_node_for_record(Some(req.old_record_id), NodeKind::Chunk as u8, ns)
             .map_err(|e| EngineError::from(e).into_response())?;
-        let edge_id = engine.create_edge(new_node, old_node, EdgeKind::Supersedes as u8)
+        let edge_id = engine
+            .create_edge(new_node, old_node, EdgeKind::Supersedes as u8)
             .map_err(|e| EngineError::from(e).into_response())?;
 
         if let Some(meta) = &req.metadata {
             let memory_id = format!("rec:{}", new_record_id);
-            engine.set_meta_audited(memory_id, meta.clone())
+            engine
+                .set_meta_audited(memory_id, meta.clone())
                 .map_err(|e| EngineError::from(e).into_response())?;
         }
 
         let proof = engine.get_proof();
-        let state_hash: String = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+        let state_hash: String = proof
+            .final_state_hash
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         let state_after: String = state_hash.clone();
 
         Ok(crate::routes::memory::ConsolidatedMemory {
@@ -775,29 +951,49 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
 
         let similarity = {
             let engine = self.read().await;
-            engine.cosine_similarity(req.record_a, req.record_b)
-                .ok_or_else(|| EngineError::InvalidInput(
-                    format!("one or both records ({}, {}) not found or not searchable",
-                        req.record_a, req.record_b)
-                ).into_response())?
+            engine
+                .cosine_similarity(req.record_a, req.record_b)
+                .ok_or_else(|| {
+                    EngineError::InvalidInput(format!(
+                        "one or both records ({}, {}) not found or not searchable",
+                        req.record_a, req.record_b
+                    ))
+                    .into_response()
+                })?
         };
 
         let contradicts = similarity >= threshold;
 
         let (edge_id, state_before, state_after) = if contradicts {
             let mut engine = self.write().await;
-            let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
-            let node_a = engine.create_node_for_record(Some(req.record_a), NodeKind::Chunk as u8, ns)
+            let state_before: String = hash_state_blake3(&engine.state)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect();
+            let node_a = engine
+                .create_node_for_record(Some(req.record_a), NodeKind::Chunk as u8, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
-            let node_b = engine.create_node_for_record(Some(req.record_b), NodeKind::Chunk as u8, ns)
+            let node_b = engine
+                .create_node_for_record(Some(req.record_b), NodeKind::Chunk as u8, ns)
                 .map_err(|e| EngineError::from(e).into_response())?;
-            let eid = engine.create_edge(node_a, node_b, EdgeKind::Contradicts as u8)
+            let eid = engine
+                .create_edge(node_a, node_b, EdgeKind::Contradicts as u8)
                 .map_err(|e| EngineError::from(e).into_response())?;
-            let hash: String = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+            let hash: String = engine
+                .get_proof()
+                .final_state_hash
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             (Some(eid), state_before, hash)
         } else {
             let engine = self.read().await;
-            let hash: String = engine.get_proof().final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+            let hash: String = engine
+                .get_proof()
+                .final_state_hash
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             (None, hash.clone(), hash)
         };
 
@@ -838,12 +1034,16 @@ async fn insert_record(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<InsertRecordRequest>,
 ) -> Result<Json<InsertRecordResponse>, EngineError> {
-    use valori_kernel::snapshot::blake3::hash_state_blake3;
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_kernel::snapshot::blake3::hash_state_blake3;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     // Resolve namespace under a short read lock (no write needed yet — insert
     // goes through the effect bus / EngineKernelCapability below).
@@ -856,11 +1056,16 @@ async fn insert_record(
         (ns, or, sb, sc)
     };
 
-    let fxp_values: Vec<i32> = payload.values.iter()
+    let fxp_values: Vec<i32> = payload
+        .values
+        .iter()
         .map(|&f| valori_kernel::fxp::ops::from_f32(f).0)
         .collect();
 
-    let collection_name = payload.collection.clone().unwrap_or_else(|| "default".into());
+    let collection_name = payload
+        .collection
+        .clone()
+        .unwrap_or_else(|| "default".into());
     let shard_id = ((ns as u32) % (shard_count as u32).max(1)) as u8;
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
@@ -871,22 +1076,44 @@ async fn insert_record(
         "metadata": null,
         "tag": 0u8,
         "request_id": null,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::Ingest, &OperationInputs::Ingest {
-        strategy: "direct".into(),
-        collection: collection_name.clone(),
-        shard_id,
-        embed_enabled: false,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::Ingest,
+        &OperationInputs::Ingest {
+            strategy: "direct".into(),
+            collection: collection_name.clone(),
+            shard_id,
+            embed_enabled: false,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::InsertRecord, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::InsertRecord,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -894,16 +1121,17 @@ async fn insert_record(
     let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
         .await
         .map_err(|e| match e {
-            valori_effect::error::EffectError::Capacity(_) =>
-                EngineError::Kernel(valori_kernel::error::KernelError::CapacityExceeded),
-            valori_effect::error::EffectError::Dispatch(msg)
-            | valori_effect::error::EffectError::TaskFailed(msg) => {
-                EngineError::InvalidInput(msg)
+            valori_effect::error::EffectError::Capacity(_) => {
+                EngineError::Kernel(valori_kernel::error::KernelError::CapacityExceeded)
             }
+            valori_effect::error::EffectError::Dispatch(msg)
+            | valori_effect::error::EffectError::TaskFailed(msg) => EngineError::InvalidInput(msg),
             other => EngineError::Unknown(other.to_string()),
         })?;
 
-    let record_id = outputs.into_iter().next()
+    let record_id = outputs
+        .into_iter()
+        .next()
         .flatten()
         .and_then(|o| o.json.get("record_id").and_then(|v| v.as_u64()))
         .unwrap_or(0) as u32;
@@ -912,7 +1140,10 @@ async fn insert_record(
         let eng = state.read().await;
         let nr: [u8; 32] = hash_state_blake3(&eng.state);
         let sa = nr.iter().map(|b| format!("{:02x}", b)).collect::<String>();
-        let seq = eng.event_committer().map(|c| c.journal().committed_height()).unwrap_or(0);
+        let seq = eng
+            .event_committer()
+            .map(|c| c.journal().committed_height())
+            .unwrap_or(0);
         (nr, sa, seq)
     };
     let timestamp = std::time::SystemTime::now()
@@ -920,17 +1151,35 @@ async fn insert_record(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    crate::receipt_bridge::emit_write(&receipts, OperationKind::Ingest, &OperationInputs::Ingest {
-        strategy: "direct".into(),
-        collection: collection_name,
-        shard_id,
-        embed_enabled: false,
-    }, ns, 0, sequence, false, state_before, state_after);
+    crate::receipt_bridge::emit_write(
+        &receipts,
+        OperationKind::Ingest,
+        &OperationInputs::Ingest {
+            strategy: "direct".into(),
+            collection: collection_name,
+            shard_id,
+            embed_enabled: false,
+        },
+        ns,
+        0,
+        sequence,
+        false,
+        state_before,
+        state_after,
+    );
 
     let receipt = valori_kernel::proof::InsertReceipt::build(
-        record_id, old_root, &fxp_values, new_root, sequence, timestamp,
+        record_id,
+        old_root,
+        &fxp_values,
+        new_root,
+        sequence,
+        timestamp,
     );
-    Ok(Json(InsertRecordResponse { id: record_id, receipt: receipt.into() }))
+    Ok(Json(InsertRecordResponse {
+        id: record_id,
+        receipt: receipt.into(),
+    }))
 }
 
 async fn batch_insert(
@@ -941,23 +1190,33 @@ async fn batch_insert(
     use valori_kernel::snapshot::blake3::hash_state_blake3;
     let mut engine = state.write().await;
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
-    let state_before: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+    let state_before: String = hash_state_blake3(&engine.state)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     let meta_bytes: Option<Vec<Option<Vec<u8>>>> = payload.metadata.as_ref().map(|m| {
-        m.iter().map(|s| s.as_ref().map(|s| s.as_bytes().to_vec())).collect()
+        m.iter()
+            .map(|s| s.as_ref().map(|s| s.as_bytes().to_vec()))
+            .collect()
     });
     // Parse optional per-item idempotency keys from 32-hex strings to [u8;16].
     let parsed_request_ids: Option<Vec<Option<[u8; 16]>>> =
         payload.request_ids.as_ref().map(|rids| {
-            rids.iter().map(|entry| {
-                entry.as_deref().and_then(|hex| {
-                    if hex.len() != 32 { return None; }
-                    let mut bytes = [0u8; 16];
-                    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-                        bytes[i] = u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
-                    }
-                    Some(bytes)
+            rids.iter()
+                .map(|entry| {
+                    entry.as_deref().and_then(|hex| {
+                        if hex.len() != 32 {
+                            return None;
+                        }
+                        let mut bytes = [0u8; 16];
+                        for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+                            bytes[i] =
+                                u8::from_str_radix(std::str::from_utf8(chunk).ok()?, 16).ok()?;
+                        }
+                        Some(bytes)
+                    })
                 })
-            }).collect()
+                .collect()
         });
     let ids = engine.insert_batch_ns(
         &payload.batch,
@@ -973,16 +1232,32 @@ async fn batch_insert(
             }
         }
     }
-    let state_after: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+    let state_after: String = hash_state_blake3(&engine.state)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     drop(engine);
     {
-        use valori_planner::operation::{OperationKind, OperationInputs};
+        use valori_planner::operation::{OperationInputs, OperationKind};
         let inputs = OperationInputs::BatchInsert {
             count: ids.len() as u32,
-            collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
+            collection: payload
+                .collection
+                .clone()
+                .unwrap_or_else(|| "default".into()),
             shard_id: 0,
         };
-        crate::receipt_bridge::emit_write(&receipts, OperationKind::BatchInsert, &inputs, ns, 0, 0, false, state_before, state_after);
+        crate::receipt_bridge::emit_write(
+            &receipts,
+            OperationKind::BatchInsert,
+            &inputs,
+            ns,
+            0,
+            0,
+            false,
+            state_before,
+            state_after,
+        );
     }
     Ok(Json(BatchInsertResponse { ids }))
 }
@@ -998,12 +1273,18 @@ async fn search(
         return search_as_of(state, payload).await;
     }
     let engine = state.read().await;
-    let state_hash: String = hash_state_blake3(&engine.state).iter().map(|b| format!("{:02x}", b)).collect();
+    let state_hash: String = hash_state_blake3(&engine.state)
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
     let ns = engine.resolve_collection(payload.collection.as_deref())?;
 
     // Effective decay half-life: request value wins (incl. an explicit 0 to
     // disable), else the server default. 0 / None => pure distance ranking.
-    let half_life = payload.decay_half_life_secs.or(engine.decay_half_life_secs).unwrap_or(0);
+    let half_life = payload
+        .decay_half_life_secs
+        .or(engine.decay_half_life_secs)
+        .unwrap_or(0);
 
     // When metadata_filter is set, over-fetch a wider pool so post-filtering
     // has enough candidates to fill k results.
@@ -1015,8 +1296,8 @@ async fn search(
     };
 
     if half_life == 0 {
-        let use_rerank = payload.rerank && payload.query_text.is_some()
-            && !engine.reranker.is_empty();
+        let use_rerank =
+            payload.rerank && payload.query_text.is_some() && !engine.reranker.is_empty();
         let fetch_k = if use_rerank {
             (base_k * valori_search::POOL_FACTOR).max(base_k)
         } else {
@@ -1030,28 +1311,54 @@ async fn search(
         let filtered = apply_metadata_filter(hits.into_iter(), mf, &engine.metadata, payload.k);
         let final_hits = if use_rerank {
             let query_text = payload.query_text.as_deref().unwrap_or("");
-            let candidates: Vec<(u64, f32)> = filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
+            let candidates: Vec<(u64, f32)> =
+                filtered.iter().map(|(id, s)| (*id as u64, *s)).collect();
             let reranked = engine.reranker.rerank(query_text, candidates);
-            reranked.into_iter().take(payload.k)
-                .map(|(id, score)| SearchHit { id: id as u32, score, decay_factor: None, age_secs: None })
+            reranked
+                .into_iter()
+                .take(payload.k)
+                .map(|(id, score)| SearchHit {
+                    id: id as u32,
+                    score,
+                    decay_factor: None,
+                    age_secs: None,
+                })
                 .collect()
         } else {
-            filtered.into_iter()
-                .map(|(id, score)| SearchHit { id, score, decay_factor: None, age_secs: None })
+            filtered
+                .into_iter()
+                .map(|(id, score)| SearchHit {
+                    id,
+                    score,
+                    decay_factor: None,
+                    age_secs: None,
+                })
                 .collect()
         };
         {
-            use valori_planner::operation::{OperationKind, OperationInputs, ConsistencyLevel};
+            use valori_planner::operation::{ConsistencyLevel, OperationInputs, OperationKind};
             let inputs = OperationInputs::Search {
                 k: payload.k as u32,
-                collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
+                collection: payload
+                    .collection
+                    .clone()
+                    .unwrap_or_else(|| "default".into()),
                 shard_id: 0,
                 rerank: payload.rerank,
                 decay: half_life > 0,
                 metadata_filter: payload.metadata_filter.is_some(),
                 consistency: ConsistencyLevel::Local,
             };
-            crate::receipt_bridge::emit_read(&receipts, OperationKind::Search, &inputs, ns, 0, 0, false, state_hash.clone());
+            crate::receipt_bridge::emit_read(
+                &receipts,
+                OperationKind::Search,
+                &inputs,
+                ns,
+                0,
+                0,
+                false,
+                state_hash.clone(),
+            );
         }
         return Ok(Json(SearchResponse::simple(final_hits)));
     }
@@ -1066,8 +1373,10 @@ async fn search(
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs()).unwrap_or(0);
-    let candidates: Vec<valori_search::DecayHit> = raw.into_iter()
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let candidates: Vec<valori_search::DecayHit> = raw
+        .into_iter()
         .map(|(id, score)| valori_search::DecayHit {
             id,
             distance: score,
@@ -1075,7 +1384,8 @@ async fn search(
         })
         .collect();
     let decayed = valori_search::decay_rerank(candidates, now, half_life, pool);
-    let results: Vec<SearchHit> = decayed.into_iter()
+    let results: Vec<SearchHit> = decayed
+        .into_iter()
         .filter(|h| {
             if let Some(f) = mf {
                 let key = format!("rec:{}", h.id);
@@ -1096,17 +1406,29 @@ async fn search(
         })
         .collect();
     {
-        use valori_planner::operation::{OperationKind, OperationInputs, ConsistencyLevel};
+        use valori_planner::operation::{ConsistencyLevel, OperationInputs, OperationKind};
         let inputs = OperationInputs::Search {
             k: payload.k as u32,
-            collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
+            collection: payload
+                .collection
+                .clone()
+                .unwrap_or_else(|| "default".into()),
             shard_id: 0,
             rerank: payload.rerank,
             decay: half_life > 0,
             metadata_filter: payload.metadata_filter.is_some(),
             consistency: ConsistencyLevel::Local,
         };
-        crate::receipt_bridge::emit_read(&receipts, OperationKind::Search, &inputs, ns, 0, 0, false, state_hash);
+        crate::receipt_bridge::emit_read(
+            &receipts,
+            OperationKind::Search,
+            &inputs,
+            ns,
+            0,
+            0,
+            false,
+            state_hash,
+        );
     }
     Ok(Json(SearchResponse::simple(results)))
 }
@@ -1117,12 +1439,12 @@ async fn search_as_of(
     state: SharedEngine,
     payload: SearchRequest,
 ) -> Result<Json<SearchResponse>, EngineError> {
-    use valori_kernel::state::kernel::KernelState;
+    use valori_kernel::fxp::qformat::SCALE;
     use valori_kernel::index::SearchResult;
+    use valori_kernel::snapshot::blake3::hash_state_blake3;
+    use valori_kernel::state::kernel::KernelState;
     use valori_kernel::types::scalar::FxpScalar;
     use valori_kernel::types::vector::FxpVector;
-    use valori_kernel::fxp::qformat::SCALE;
-    use valori_kernel::snapshot::blake3::hash_state_blake3;
 
     let engine = state.read().await;
 
@@ -1139,10 +1461,11 @@ async fn search_as_of(
         (idx as usize, ts)
     } else {
         // Parse the ISO 8601 timestamp.
-        let unix = parse_iso8601(payload.as_of.as_deref().unwrap_or(""))
-            .ok_or_else(|| EngineError::InvalidInput(
+        let unix = parse_iso8601(payload.as_of.as_deref().unwrap_or("")).ok_or_else(|| {
+            EngineError::InvalidInput(
                 "invalid as_of timestamp — expected ISO 8601 UTC, e.g. 2026-03-03T00:00:00Z".into(),
-            ))?;
+            )
+        })?;
         match journal.find_log_index_at_or_before(unix) {
             Some(idx) => (idx, unix),
             None => {
@@ -1184,7 +1507,9 @@ async fn search_as_of(
             ));
         }
     }
-    let fxp_data: Vec<FxpScalar> = payload.query.iter()
+    let fxp_data: Vec<FxpScalar> = payload
+        .query
+        .iter()
         .map(|&v| FxpScalar((v * SCALE as f32) as i32))
         .collect();
     let fxp_query = FxpVector { data: fxp_data };
@@ -1196,12 +1521,20 @@ async fn search_as_of(
     } else {
         replay.search_l2_ns(&fxp_query, &mut results_buf, ns)
     };
-    let results: Vec<SearchHit> = results_buf[..found].iter().map(|r| {
-        let score = r.score as f32 / (SCALE as f32 * SCALE as f32);
-        // Decay is a "now"-relative re-rank; it is intentionally NOT applied to
-        // point-in-time (as_of) queries, which reconstruct a historical state.
-        SearchHit { id: r.id.0, score, decay_factor: None, age_secs: None }
-    }).collect();
+    let results: Vec<SearchHit> = results_buf[..found]
+        .iter()
+        .map(|r| {
+            let score = r.score as f32 / (SCALE as f32 * SCALE as f32);
+            // Decay is a "now"-relative re-rank; it is intentionally NOT applied to
+            // point-in-time (as_of) queries, which reconstruct a historical state.
+            SearchHit {
+                id: r.id.0,
+                score,
+                decay_factor: None,
+                age_secs: None,
+            }
+        })
+        .collect();
 
     let state_hash_bytes = hash_state_blake3(&replay);
     let state_hash_hex = bytes_to_hex(&state_hash_bytes);
@@ -1224,14 +1557,18 @@ fn bytes_to_hex(b: &[u8]) -> String {
 pub fn parse_iso8601(s: &str) -> Option<u64> {
     let s = s.trim();
     // Require at least "YYYY-MM-DDTHH:MM:SS"
-    if s.len() < 19 { return None; }
-    let year:  u64 = s[0..4].parse().ok()?;
+    if s.len() < 19 {
+        return None;
+    }
+    let year: u64 = s[0..4].parse().ok()?;
     let month: u64 = s[5..7].parse().ok()?;
-    let day:   u64 = s[8..10].parse().ok()?;
-    let hour:  u64 = s[11..13].parse().ok()?;
-    let min:   u64 = s[14..16].parse().ok()?;
-    let sec:   u64 = s[17..19].parse().ok()?;
-    if s.as_bytes().get(10) != Some(&b'T') { return None; }
+    let day: u64 = s[8..10].parse().ok()?;
+    let hour: u64 = s[11..13].parse().ok()?;
+    let min: u64 = s[14..16].parse().ok()?;
+    let sec: u64 = s[17..19].parse().ok()?;
+    if s.as_bytes().get(10) != Some(&b'T') {
+        return None;
+    }
 
     // Leap-year calculation for days-since-epoch.
     // Months → cumulative days (non-leap year).
@@ -1250,16 +1587,21 @@ pub fn parse_iso8601(s: &str) -> Option<u64> {
     }
     days += day as i64 - 1; // 1-indexed day
 
-    if days < 0 { return None; }
+    if days < 0 {
+        return None;
+    }
     Some(days as u64 * 86400 + hour * 3600 + min * 60 + sec)
 }
 
 /// Format unix seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC only).
 pub fn unix_to_iso8601(unix_secs: u64) -> String {
     let mut rem = unix_secs;
-    let sec = rem % 60; rem /= 60;
-    let min = rem % 60; rem /= 60;
-    let hour = rem % 24; rem /= 24;
+    let sec = rem % 60;
+    rem /= 60;
+    let min = rem % 60;
+    rem /= 60;
+    let hour = rem % 24;
+    rem /= 24;
 
     // Days since 1970-01-01.
     let is_leap = |y: u64| y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
@@ -1268,14 +1610,18 @@ pub fn unix_to_iso8601(unix_secs: u64) -> String {
     let mut year = 1970u64;
     loop {
         let days_in_year = if is_leap(year) { 366 } else { 365 };
-        if rem < days_in_year { break; }
+        if rem < days_in_year {
+            break;
+        }
         rem -= days_in_year;
         year += 1;
     }
     let mut month = 1u64;
     loop {
         let dim = DAYS_IN_MONTH[month as usize] + if month == 2 && is_leap(year) { 1 } else { 0 };
-        if rem < dim { break; }
+        if rem < dim {
+            break;
+        }
         rem -= dim;
         month += 1;
     }
@@ -1308,7 +1654,10 @@ impl crate::routes::graph::GraphOps for SharedEngine {
         let id = engine
             .create_node_for_record(record_id, kind as u8, ns)
             .map_err(|e| e.into_response())?;
-        Ok(crate::routes::graph::CommittedGraphWrite { id, log_index: None })
+        Ok(crate::routes::graph::CommittedGraphWrite {
+            id,
+            log_index: None,
+        })
     }
 
     async fn create_edge(
@@ -1319,12 +1668,20 @@ impl crate::routes::graph::GraphOps for SharedEngine {
         kind: EdgeKind,
     ) -> Result<crate::routes::graph::CommittedGraphWrite, Response> {
         let mut engine = self.write().await;
-        let id = engine.create_edge(from, to, kind as u8).map_err(|e| e.into_response())?;
-        Ok(crate::routes::graph::CommittedGraphWrite { id, log_index: None })
+        let id = engine
+            .create_edge(from, to, kind as u8)
+            .map_err(|e| e.into_response())?;
+        Ok(crate::routes::graph::CommittedGraphWrite {
+            id,
+            log_index: None,
+        })
     }
 
     async fn delete_node(&self, _ns: u16, id: u32) -> Result<Option<u64>, Response> {
-        self.write().await.delete_node(id).map_err(|e| e.into_response())?;
+        self.write()
+            .await
+            .delete_node(id)
+            .map_err(|e| e.into_response())?;
         Ok(None)
     }
 
@@ -1356,7 +1713,12 @@ impl crate::routes::graph::GraphOps for SharedEngine {
         Ok(engine
             .nodes_in_ns(ns)
             .into_iter()
-            .map(|(node_id, kind, record_id)| NodeInfo { node_id, kind, record_id, namespace_id: ns })
+            .map(|(node_id, kind, record_id)| NodeInfo {
+                node_id,
+                kind,
+                record_id,
+                namespace_id: ns,
+            })
             .collect())
     }
 
@@ -1368,7 +1730,10 @@ impl crate::routes::graph::GraphOps for SharedEngine {
     ) -> Result<(serde_json::Value, serde_json::Value), Response> {
         let engine = self.read().await;
         let (nodes, edges) = valori_rag::graph::expand_subgraph(&engine.state, &[root], depth);
-        Ok((serde_json::Value::Array(nodes), serde_json::Value::Array(edges)))
+        Ok((
+            serde_json::Value::Array(nodes),
+            serde_json::Value::Array(edges),
+        ))
     }
 }
 
@@ -1417,7 +1782,9 @@ async fn get_edges(
     crate::routes::graph::get_edges(&state, id, q).await
 }
 
-fn default_depth() -> u32 { 2 }
+fn default_depth() -> u32 {
+    2
+}
 
 async fn get_subgraph(
     State(state): State<SharedEngine>,
@@ -1446,11 +1813,15 @@ async fn graphrag(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<GraphRagRequest>,
 ) -> Result<Json<serde_json::Value>, EngineError> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let (ns, shard_count) = {
         let eng = state.read().await;
@@ -1465,19 +1836,47 @@ async fn graphrag(
         "vector": payload.query_vector,
         "k": payload.k,
         "depth": payload.depth,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::GraphRag, &OperationInputs::GraphRag {
-        k: payload.k as u32, depth: payload.depth, collection: payload.collection.clone().unwrap_or_else(|| "default".into()), shard_id,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::GraphRag,
+        &OperationInputs::GraphRag {
+            k: payload.k as u32,
+            depth: payload.depth,
+            collection: payload
+                .collection
+                .clone()
+                .unwrap_or_else(|| "default".into()),
+            shard_id,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::GraphRag, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::GraphRag,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -1493,9 +1892,7 @@ async fn graphrag(
     Ok(Json(result))
 }
 
-async fn snapshot(
-    State(state): State<SharedEngine>,
-) -> Result<Vec<u8>, EngineError> {
+async fn snapshot(State(state): State<SharedEngine>) -> Result<Vec<u8>, EngineError> {
     let engine = state.read().await;
     engine.snapshot()
 }
@@ -1524,17 +1921,28 @@ async fn memory_search_vector(
     axum::extract::Query(explain): axum::extract::Query<crate::routes::explain::ExplainParams>,
     Json(payload): Json<MemorySearchVectorRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
     use axum::http::StatusCode;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let (ns, shard_count) = {
         let eng = state.read().await;
-        let ns = eng.resolve_collection(payload.collection.as_deref())
-            .map_err(|e| (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+        let ns = eng
+            .resolve_collection(payload.collection.as_deref())
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response()
+            })?;
         (ns, eng.shard_count as u8)
     };
     let shard_id = ((ns as u32) % (shard_count as u32).max(1)) as u8;
@@ -1550,20 +1958,44 @@ async fn memory_search_vector(
         "metadata_filter": payload.metadata_filter.as_ref().map(|m| serde_json::Value::Object(m.clone())),
     })).unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::MemorySearch, &OperationInputs::MemorySearch {
-        k: payload.k as u32,
-        collection: payload.collection.clone().unwrap_or_else(|| "default".into()),
-        shard_id,
-        decay: payload.decay_half_life_secs.is_some(),
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::MemorySearch,
+        &OperationInputs::MemorySearch {
+            k: payload.k as u32,
+            collection: payload
+                .collection
+                .clone()
+                .unwrap_or_else(|| "default".into()),
+            shard_id,
+            decay: payload.decay_half_life_secs.is_some(),
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::MemorySearch, inputs_json, shard_id: Some(shard_id), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::MemorySearch,
+            inputs_json,
+            shard_id: Some(shard_id),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -1574,31 +2006,57 @@ async fn memory_search_vector(
     let exec_started = std::time::Instant::now();
     let outputs = run_graph_inline(graph.clone(), caps, task_reg, ExecutionPolicy::default())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response()
+        })?;
     let exec_ms = exec_started.elapsed().as_secs_f64() * 1000.0;
 
-    let raw = outputs.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Array(vec![]));
-    let results: Vec<MemorySearchHit> = raw.as_array()
-        .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+    let raw = outputs
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::Value::Array(vec![]));
+    let results: Vec<MemorySearchHit> = raw
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
         .unwrap_or_default();
 
     let execution = if explain.on() {
         let state_hash = { state.read().await.get_proof().final_state_hash };
-        Some(crate::routes::explain::execution_block("MemorySearch", Some(&graph), &state_hash, Some(exec_ms)))
+        Some(crate::routes::explain::execution_block(
+            "MemorySearch",
+            Some(&graph),
+            &state_hash,
+            Some(exec_ms),
+        ))
     } else {
         None
     };
-    Ok(Json(crate::routes::explain::with_execution(MemorySearchResponse { results }, execution)))
+    Ok(Json(crate::routes::explain::with_execution(
+        MemorySearchResponse { results },
+        execution,
+    )))
 }
 
-async fn get_proof(
-    State(state): State<SharedEngine>,
-) -> impl IntoResponse {
+async fn get_proof(State(state): State<SharedEngine>) -> impl IntoResponse {
     let engine = state.read().await;
     let proof = engine.get_proof();
     // Encode all 32 bytes as lowercase hex — same wire format as the cluster's
     // state_proof handler so external clients see an identical response shape.
-    let hex: String = proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = proof
+        .final_state_hash
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     Json(serde_json::json!({ "final_state_hash": hex }))
 }
 
@@ -1624,7 +2082,7 @@ async fn get_event_proof(
     State(state): State<SharedEngine>,
 ) -> Result<Json<EventProofResponse>, EngineError> {
     let engine = state.read().await;
-    
+
     if let Some(committer) = engine.event_committer() {
         let proof = engine.get_proof();
         let committed_height = committer.journal().committed_height();
@@ -1640,8 +2098,15 @@ async fn get_event_proof(
 
         let response = EventProofResponse {
             kernel_version: 1,
-            event_log_hash: event_log_hash_bytes.iter().map(|b| format!("{b:02x}")).collect(),
-            final_state_hash: proof.final_state_hash.iter().map(|b| format!("{b:02x}")).collect(),
+            event_log_hash: event_log_hash_bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+            final_state_hash: proof
+                .final_state_hash
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
             snapshot_hash: None,
             event_count: committed_height,
             committed_height,
@@ -1649,7 +2114,9 @@ async fn get_event_proof(
 
         Ok(Json(response))
     } else {
-        Err(EngineError::InvalidInput("Event log not enabled".to_string()))
+        Err(EngineError::InvalidInput(
+            "Event log not enabled".to_string(),
+        ))
     }
 }
 
@@ -1663,7 +2130,9 @@ async fn get_latest_receipt(
     axum::Extension(store): axum::Extension<Arc<valori_effect::ReceiptStore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     match store.latest() {
-        Some(r) => Ok(Json(serde_json::to_value(&r).unwrap_or(serde_json::Value::Null))),
+        Some(r) => Ok(Json(
+            serde_json::to_value(&r).unwrap_or(serde_json::Value::Null),
+        )),
         None => Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "no receipt available yet"})),
@@ -1677,7 +2146,9 @@ async fn get_receipt_by_id(
     axum::Extension(store): axum::Extension<Arc<valori_effect::ReceiptStore>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     match store.get(&id) {
-        Some(r) => Ok(Json(serde_json::to_value(&r).unwrap_or(serde_json::Value::Null))),
+        Some(r) => Ok(Json(
+            serde_json::to_value(&r).unwrap_or(serde_json::Value::Null),
+        )),
         None => Err((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": format!("receipt '{}' not found", id)})),
@@ -1685,15 +2156,15 @@ async fn get_receipt_by_id(
     }
 }
 
-async fn get_wal_stream(
-    State(state): State<SharedEngine>,
-) -> Result<Body, EngineError> {
+async fn get_wal_stream(State(state): State<SharedEngine>) -> Result<Body, EngineError> {
     let path = {
         let engine = state.read().await;
         engine.wal_path.clone()
-    }.ok_or(EngineError::InvalidInput("No WAL configured".into()))?;
+    }
+    .ok_or(EngineError::InvalidInput("No WAL configured".into()))?;
 
-    let file = tokio::fs::File::open(&path).await
+    let file = tokio::fs::File::open(&path)
+        .await
         .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
     Ok(Body::from_stream(ReaderStream::new(file)))
 }
@@ -1715,20 +2186,27 @@ async fn get_replication_events(
             if let Err(e) = committer.flush_log() {
                 tracing::error!("Failed to flush event log for replication: {}", e);
             }
-            (committer.event_log().path().to_path_buf(), committer.subscribe())
+            (
+                committer.event_log().path().to_path_buf(),
+                committer.subscribe(),
+            )
         } else {
-             return Err(EngineError::InvalidInput("Event log not enabled".to_string()));
+            return Err(EngineError::InvalidInput(
+                "Event log not enabled".to_string(),
+            ));
         }
     };
-    
-    let rx_stream = crate::replication::spawn_replication_stream(log_path, rx, start_offset).await?;
-    
+
+    let rx_stream =
+        crate::replication::spawn_replication_stream(log_path, rx, start_offset).await?;
+
     use futures::StreamExt;
-    let body_stream = tokio_stream::wrappers::ReceiverStream::new(rx_stream).map(|res| {
-        match res {
-            Ok(json_line) => Ok(json_line),
-            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
-        }
+    let body_stream = tokio_stream::wrappers::ReceiverStream::new(rx_stream).map(|res| match res {
+        Ok(json_line) => Ok(json_line),
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        )),
     });
 
     Ok(Body::from_stream(body_stream))
@@ -1747,9 +2225,7 @@ async fn get_replication_state() -> Json<serde_json::Value> {
 ///
 /// This endpoint is **always unauthenticated** so that Prometheus can scrape
 /// without a bearer token.
-async fn metrics_handler(
-    State(state): State<SharedEngine>,
-) -> String {
+async fn metrics_handler(State(state): State<SharedEngine>) -> String {
     // Update kernel gauges from live state before rendering.
     {
         let engine = state.read().await;
@@ -1778,38 +2254,54 @@ async fn get_timeline(
 
     let engine = state.read().await;
     let Some(committer) = engine.event_committer() else {
-        return Err(EngineError::InvalidInput("Event log not enabled (set VALORI_EVENT_LOG_PATH)".to_string()));
+        return Err(EngineError::InvalidInput(
+            "Event log not enabled (set VALORI_EVENT_LOG_PATH)".to_string(),
+        ));
     };
 
     let from_unix = q.from.as_deref().and_then(parse_iso8601);
-    let to_unix   = q.to.as_deref().and_then(parse_iso8601);
+    let to_unix = q.to.as_deref().and_then(parse_iso8601);
 
     let journal = committer.journal();
     let mut entries: Vec<TimelineEntry> = Vec::new();
 
     for (log_index, (event, ts)) in journal.committed_with_timestamps().enumerate() {
         // Apply timestamp range filter.
-        if let Some(from) = from_unix { if ts < from { continue; } }
-        if let Some(to)   = to_unix   { if ts > to   { continue; } }
+        if let Some(from) = from_unix {
+            if ts < from {
+                continue;
+            }
+        }
+        if let Some(to) = to_unix {
+            if ts > to {
+                continue;
+            }
+        }
 
         let (event_type, record_id, node_id, edge_id) = match event {
-            KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
-            KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),
-            KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted", Some(id.0), None,       None),
-            KernelEvent::DeleteRecord { id }              => ("DeleteRecord",           Some(id.0), None,       None),
-            KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",       Some(id.0), None,       None),
-            KernelEvent::ShredKey { .. }                  => ("ShredKey",               None,       None,       None),
-            KernelEvent::CreateNode { id, .. }            => ("CreateNode",             None,       Some(id.0), None),
-            KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",         None,       None,       None),
-            KernelEvent::DeleteNode { id }                => ("DeleteNode",             None,       Some(id.0), None),
-            KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",             None,       None,       Some(id.0)),
-            KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
-            KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
-            KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
-            KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
-            KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
-            KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
-            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
+            KernelEvent::InsertRecord { id, .. } => ("InsertRecord", Some(id.0), None, None),
+            KernelEvent::AutoInsertRecord { .. } => ("AutoInsertRecord", None, None, None),
+            KernelEvent::InsertRecordEncrypted { id, .. } => {
+                ("InsertRecordEncrypted", Some(id.0), None, None)
+            }
+            KernelEvent::DeleteRecord { id } => ("DeleteRecord", Some(id.0), None, None),
+            KernelEvent::SoftDeleteRecord { id } => ("SoftDeleteRecord", Some(id.0), None, None),
+            KernelEvent::ShredKey { .. } => ("ShredKey", None, None, None),
+            KernelEvent::CreateNode { id, .. } => ("CreateNode", None, Some(id.0), None),
+            KernelEvent::AutoCreateNode { .. } => ("AutoCreateNode", None, None, None),
+            KernelEvent::DeleteNode { id } => ("DeleteNode", None, Some(id.0), None),
+            KernelEvent::CreateEdge { id, .. } => ("CreateEdge", None, None, Some(id.0)),
+            KernelEvent::AutoCreateEdge { .. } => ("AutoCreateEdge", None, None, None),
+            KernelEvent::DeleteEdge { id } => ("DeleteEdge", None, None, Some(id.0)),
+            KernelEvent::AutoInsertRecordEncrypted { .. } => {
+                ("AutoInsertRecordEncrypted", None, None, None)
+            }
+            KernelEvent::SetMeta { .. } => ("SetMeta", None, None, None),
+            KernelEvent::AutoCreateNamespace { .. } => ("AutoCreateNamespace", None, None, None),
+            KernelEvent::DropNamespace { .. } => ("DropNamespace", None, None, None),
+            KernelEvent::UpdateRecordMetadata { id, .. } => {
+                ("UpdateRecordMetadata", Some(id.0), None, None)
+            }
         };
 
         entries.push(TimelineEntry {
@@ -1840,7 +2332,10 @@ async fn get_operations(
 
     let engine = state.read().await;
     let Some(committer) = engine.event_committer() else {
-        return Ok(Json(crate::api::OperationsListResponse { operations: vec![], total: 0 }));
+        return Ok(Json(crate::api::OperationsListResponse {
+            operations: vec![],
+            total: 0,
+        }));
     };
 
     let journal = committer.journal();
@@ -1848,23 +2343,29 @@ async fn get_operations(
 
     for (log_index, (event, ts)) in journal.committed_with_timestamps().enumerate() {
         let (event_type, record_id, node_id, edge_id) = match event {
-            KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
-            KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),
-            KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted", Some(id.0), None,       None),
-            KernelEvent::DeleteRecord { id }              => ("DeleteRecord",           Some(id.0), None,       None),
-            KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",       Some(id.0), None,       None),
-            KernelEvent::ShredKey { .. }                  => ("ShredKey",               None,       None,       None),
-            KernelEvent::CreateNode { id, .. }            => ("CreateNode",             None,       Some(id.0), None),
-            KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",         None,       None,       None),
-            KernelEvent::DeleteNode { id }                => ("DeleteNode",             None,       Some(id.0), None),
-            KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",             None,       None,       Some(id.0)),
-            KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
-            KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
-            KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
-            KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
-            KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
-            KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
-            KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
+            KernelEvent::InsertRecord { id, .. } => ("InsertRecord", Some(id.0), None, None),
+            KernelEvent::AutoInsertRecord { .. } => ("AutoInsertRecord", None, None, None),
+            KernelEvent::InsertRecordEncrypted { id, .. } => {
+                ("InsertRecordEncrypted", Some(id.0), None, None)
+            }
+            KernelEvent::DeleteRecord { id } => ("DeleteRecord", Some(id.0), None, None),
+            KernelEvent::SoftDeleteRecord { id } => ("SoftDeleteRecord", Some(id.0), None, None),
+            KernelEvent::ShredKey { .. } => ("ShredKey", None, None, None),
+            KernelEvent::CreateNode { id, .. } => ("CreateNode", None, Some(id.0), None),
+            KernelEvent::AutoCreateNode { .. } => ("AutoCreateNode", None, None, None),
+            KernelEvent::DeleteNode { id } => ("DeleteNode", None, Some(id.0), None),
+            KernelEvent::CreateEdge { id, .. } => ("CreateEdge", None, None, Some(id.0)),
+            KernelEvent::AutoCreateEdge { .. } => ("AutoCreateEdge", None, None, None),
+            KernelEvent::DeleteEdge { id } => ("DeleteEdge", None, None, Some(id.0)),
+            KernelEvent::AutoInsertRecordEncrypted { .. } => {
+                ("AutoInsertRecordEncrypted", None, None, None)
+            }
+            KernelEvent::SetMeta { .. } => ("SetMeta", None, None, None),
+            KernelEvent::AutoCreateNamespace { .. } => ("AutoCreateNamespace", None, None, None),
+            KernelEvent::DropNamespace { .. } => ("DropNamespace", None, None, None),
+            KernelEvent::UpdateRecordMetadata { id, .. } => {
+                ("UpdateRecordMetadata", Some(id.0), None, None)
+            }
         };
 
         let details = serde_json::json!({
@@ -1903,37 +2404,55 @@ async fn get_operation_by_id(
 
     let engine = state.read().await;
     let Some(committer) = engine.event_committer() else {
-        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Event log not enabled"}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Event log not enabled"})),
+        ));
     };
 
     let idx_str = id.strip_prefix("op-").unwrap_or(&id);
     let log_index: usize = idx_str.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid operation ID format: {}", id)})))
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("invalid operation ID format: {}", id)})),
+        )
     })?;
 
     let journal = committer.journal();
-    let (event, ts) = journal.committed_with_timestamps().nth(log_index).ok_or_else(|| {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("operation '{}' not found", id)})))
-    })?;
+    let (event, ts) = journal
+        .committed_with_timestamps()
+        .nth(log_index)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("operation '{}' not found", id)})),
+            )
+        })?;
 
     let (event_type, record_id, node_id, edge_id) = match event {
-        KernelEvent::InsertRecord { id, .. }          => ("InsertRecord",          Some(id.0), None,       None),
-        KernelEvent::AutoInsertRecord { .. }          => ("AutoInsertRecord",       None,       None,       None),
-        KernelEvent::InsertRecordEncrypted { id, .. } => ("InsertRecordEncrypted", Some(id.0), None,       None),
-        KernelEvent::DeleteRecord { id }              => ("DeleteRecord",           Some(id.0), None,       None),
-        KernelEvent::SoftDeleteRecord { id }          => ("SoftDeleteRecord",       Some(id.0), None,       None),
-        KernelEvent::ShredKey { .. }                  => ("ShredKey",               None,       None,       None),
-        KernelEvent::CreateNode { id, .. }            => ("CreateNode",             None,       Some(id.0), None),
-        KernelEvent::AutoCreateNode { .. }            => ("AutoCreateNode",         None,       None,       None),
-        KernelEvent::DeleteNode { id }                => ("DeleteNode",             None,       Some(id.0), None),
-        KernelEvent::CreateEdge { id, .. }            => ("CreateEdge",             None,       None,       Some(id.0)),
-        KernelEvent::AutoCreateEdge { .. }            => ("AutoCreateEdge",         None,       None,       None),
-        KernelEvent::DeleteEdge { id }                => ("DeleteEdge",             None,       None,       Some(id.0)),
-        KernelEvent::AutoInsertRecordEncrypted { .. } => ("AutoInsertRecordEncrypted", None,    None,       None),
-        KernelEvent::SetMeta { .. }                   => ("SetMeta",                   None,    None,       None),
-        KernelEvent::AutoCreateNamespace { .. }       => ("AutoCreateNamespace",        None,    None,       None),
-        KernelEvent::DropNamespace { .. }             => ("DropNamespace",              None,    None,       None),
-        KernelEvent::UpdateRecordMetadata { id, .. } => ("UpdateRecordMetadata",        Some(id.0), None,   None),
+        KernelEvent::InsertRecord { id, .. } => ("InsertRecord", Some(id.0), None, None),
+        KernelEvent::AutoInsertRecord { .. } => ("AutoInsertRecord", None, None, None),
+        KernelEvent::InsertRecordEncrypted { id, .. } => {
+            ("InsertRecordEncrypted", Some(id.0), None, None)
+        }
+        KernelEvent::DeleteRecord { id } => ("DeleteRecord", Some(id.0), None, None),
+        KernelEvent::SoftDeleteRecord { id } => ("SoftDeleteRecord", Some(id.0), None, None),
+        KernelEvent::ShredKey { .. } => ("ShredKey", None, None, None),
+        KernelEvent::CreateNode { id, .. } => ("CreateNode", None, Some(id.0), None),
+        KernelEvent::AutoCreateNode { .. } => ("AutoCreateNode", None, None, None),
+        KernelEvent::DeleteNode { id } => ("DeleteNode", None, Some(id.0), None),
+        KernelEvent::CreateEdge { id, .. } => ("CreateEdge", None, None, Some(id.0)),
+        KernelEvent::AutoCreateEdge { .. } => ("AutoCreateEdge", None, None, None),
+        KernelEvent::DeleteEdge { id } => ("DeleteEdge", None, None, Some(id.0)),
+        KernelEvent::AutoInsertRecordEncrypted { .. } => {
+            ("AutoInsertRecordEncrypted", None, None, None)
+        }
+        KernelEvent::SetMeta { .. } => ("SetMeta", None, None, None),
+        KernelEvent::AutoCreateNamespace { .. } => ("AutoCreateNamespace", None, None, None),
+        KernelEvent::DropNamespace { .. } => ("DropNamespace", None, None, None),
+        KernelEvent::UpdateRecordMetadata { id, .. } => {
+            ("UpdateRecordMetadata", Some(id.0), None, None)
+        }
     };
 
     let op_id = format!("op-{}", log_index);
@@ -1959,7 +2478,11 @@ async fn get_operation_by_id(
         "message": format!("Operation {} successfully completed and committed to kernel WAL.", event_type)
     });
 
-    let proof = if let Some(r) = receipt_store.get(&id).or_else(|| receipt_store.get(&op_id)).or_else(|| receipt_store.latest()) {
+    let proof = if let Some(r) = receipt_store
+        .get(&id)
+        .or_else(|| receipt_store.get(&op_id))
+        .or_else(|| receipt_store.latest())
+    {
         serde_json::to_value(&r).unwrap_or(serde_json::json!({}))
     } else {
         serde_json::json!({
@@ -2002,17 +2525,18 @@ async fn get_operation_by_id(
 pub async fn get_operation_execution(
     axum::extract::Path(id): axum::extract::Path<String>,
     axum::Extension(executions): axum::Extension<Arc<crate::execution_registry::ExecutionRegistry>>,
-) -> Result<Json<crate::execution_registry::ExecutionRecord>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<crate::execution_registry::ExecutionRecord>, (StatusCode, Json<serde_json::Value>)>
+{
     match executions.get(&id) {
         Some(record) => Ok(Json((*record).clone())),
         None => Err((
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("no execution record for operation '{}'", id)})),
+            Json(
+                serde_json::json!({"error": format!("no execution record for operation '{}'", id)}),
+            ),
         )),
     }
 }
-
-
 
 // ── Collection (namespace) management endpoints ───────────────────────────────
 
@@ -2032,12 +2556,20 @@ impl crate::routes::collections::CollectionOps for SharedEngine {
         // Single write lock: the existence check and the create are atomic.
         let mut engine = self.write().await;
         let already_existed = engine.namespaces.map.contains_key(name);
-        let id = engine.create_collection(name).map_err(|e| e.into_response())?;
-        Ok(crate::routes::collections::CreatedCollection { id, already_existed })
+        let id = engine
+            .create_collection(name)
+            .map_err(|e| e.into_response())?;
+        Ok(crate::routes::collections::CreatedCollection {
+            id,
+            already_existed,
+        })
     }
 
     async fn drop_collection(&self, name: &str) -> Result<(), Response> {
-        self.write().await.drop_collection(name).map_err(|e| e.into_response())
+        self.write()
+            .await
+            .drop_collection(name)
+            .map_err(|e| e.into_response())
     }
 
     async fn list(&self) -> Vec<(String, u16)> {
@@ -2125,9 +2657,10 @@ async fn list_remote_snapshots(
             "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
         )
     })?;
-    let snapshots = os.list_snapshots().await.map_err(|e| {
-        EngineError::InvalidInput(format!("object store list failed: {e}"))
-    })?;
+    let snapshots = os
+        .list_snapshots()
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("object store list failed: {e}")))?;
     let count = snapshots.len();
     Ok(Json(ListRemoteSnapshotsResponse { snapshots, count }))
 }
@@ -2171,10 +2704,7 @@ async fn upload_snapshot_to_store(
         .await
         .map_err(|e| EngineError::InvalidInput(format!("upload failed: {e}")))?;
 
-    let pruned = os
-        .prune_snapshots(keep)
-        .await
-        .unwrap_or(0);
+    let pruned = os.prune_snapshots(keep).await.unwrap_or(0);
 
     Ok(Json(StorageSnapshotUploadResponse {
         key,
@@ -2248,9 +2778,10 @@ async fn list_remote_wal(
             "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
         )
     })?;
-    let segments = os.list_wal_segments().await.map_err(|e| {
-        EngineError::InvalidInput(format!("object store list failed: {e}"))
-    })?;
+    let segments = os
+        .list_wal_segments()
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("object store list failed: {e}")))?;
     let count = segments.len();
     Ok(Json(ListRemoteWalResponse { segments, count }))
 }
@@ -2279,8 +2810,19 @@ async fn archive_wal_segment(
     let allowed_dir = {
         let eng = state.read().await;
         eng.event_committer()
-            .map(|c| c.event_log().path().parent().unwrap_or(std::path::Path::new(".")).to_path_buf())
-            .or_else(|| eng.wal_path.as_deref().and_then(|p| p.parent()).map(|p| p.to_path_buf()))
+            .map(|c| {
+                c.event_log()
+                    .path()
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf()
+            })
+            .or_else(|| {
+                eng.wal_path
+                    .as_deref()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_path_buf())
+            })
     };
     let local_path = safe_path(&req.path, allowed_dir.as_deref())?;
     if !local_path.exists() {
@@ -2289,9 +2831,7 @@ async fn archive_wal_segment(
             local_path.display()
         )));
     }
-    let size_bytes = std::fs::metadata(&local_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size_bytes = std::fs::metadata(&local_path).map(|m| m.len()).unwrap_or(0);
     let key = os
         .archive_wal_segment(&local_path)
         .await
@@ -2310,19 +2850,21 @@ struct CreateKeyRequest {
     description: Option<String>,
 }
 
-fn default_scope() -> ApiScope { ApiScope::ReadWrite }
+fn default_scope() -> ApiScope {
+    ApiScope::ReadWrite
+}
 
 async fn create_key_handler(
     Extension(auth): Extension<Arc<AuthState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> impl IntoResponse {
-    let created = auth.key_store.create(req.scope, req.collection, req.description);
+    let created = auth
+        .key_store
+        .create(req.scope, req.collection, req.description);
     (StatusCode::CREATED, Json(created))
 }
 
-async fn list_keys_handler(
-    Extension(auth): Extension<Arc<AuthState>>,
-) -> impl IntoResponse {
+async fn list_keys_handler(Extension(auth): Extension<Arc<AuthState>>) -> impl IntoResponse {
     let keys = auth.key_store.list();
     Json(serde_json::json!({ "keys": keys }))
 }
@@ -2366,24 +2908,33 @@ async fn insert_encrypted_handler(
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64 decode: {e}")))?;
 
     let key_id: [u8; 16] = if let Some(ref hex) = payload.key_id {
-        hex_to_key_id(hex)
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?
+        hex_to_key_id(hex).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "key_id must be 32 hex chars".into(),
+            )
+        })?
     } else {
         new_key_id()
     };
 
     let mut engine = state.write().await;
-    let ns = engine.resolve_collection(payload.collection.as_deref())
+    let ns = engine
+        .resolve_collection(payload.collection.as_deref())
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
     let tag = payload.tag.unwrap_or(0);
 
-    let id = engine.insert_encrypted_ns(&plaintext, tag, ns, key_id)
+    let id = engine
+        .insert_encrypted_ns(&plaintext, tag, ns, key_id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok((StatusCode::CREATED, Json(InsertEncryptedResponse {
-        id,
-        key_id: key_id_to_hex(&key_id),
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(InsertEncryptedResponse {
+            id,
+            key_id: key_id_to_hex(&key_id),
+        }),
+    ))
 }
 
 #[derive(Serialize)]
@@ -2396,14 +2947,22 @@ async fn shred_key_handler(
     State(state): State<SharedEngine>,
     AxumPath(key_id_hex): AxumPath<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let key_id = hex_to_key_id(&key_id_hex)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?;
+    let key_id = hex_to_key_id(&key_id_hex).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "key_id must be 32 hex chars".into(),
+        )
+    })?;
 
     let mut engine = state.write().await;
-    engine.shred_key(key_id)
+    engine
+        .shred_key(key_id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(ShredKeyResponse { key_id: key_id_hex, shredded: true }))
+    Ok(Json(ShredKeyResponse {
+        key_id: key_id_hex,
+        shredded: true,
+    }))
 }
 
 #[derive(Serialize)]
@@ -2416,12 +2975,19 @@ async fn crypto_status_handler(
     State(state): State<SharedEngine>,
     AxumPath(key_id_hex): AxumPath<String>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let key_id = hex_to_key_id(&key_id_hex)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "key_id must be 32 hex chars".into()))?;
+    let key_id = hex_to_key_id(&key_id_hex).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "key_id must be 32 hex chars".into(),
+        )
+    })?;
 
     let engine = state.read().await;
     let exists = engine.vault.key_exists(&key_id);
-    Ok(Json(CryptoStatusResponse { key_id: key_id_hex, exists }))
+    Ok(Json(CryptoStatusResponse {
+        key_id: key_id_hex,
+        exists,
+    }))
 }
 
 // ── Phase 3.13: index config endpoint ────────────────────────────────────────
@@ -2440,16 +3006,14 @@ struct HnswConfigView {
     ef_search: usize,
 }
 
-async fn index_config_handler(
-    State(state): State<SharedEngine>,
-) -> impl IntoResponse {
+async fn index_config_handler(State(state): State<SharedEngine>) -> impl IntoResponse {
     let engine = state.read().await;
     let index_type = match engine.index_kind {
         crate::config::IndexKind::BruteForce => "brute_force",
-        crate::config::IndexKind::Hnsw       => "hnsw",
-        crate::config::IndexKind::Ivf        => "ivf",
-        crate::config::IndexKind::Bq         => "bq",
-        crate::config::IndexKind::Auto       => "auto",
+        crate::config::IndexKind::Hnsw => "hnsw",
+        crate::config::IndexKind::Ivf => "ivf",
+        crate::config::IndexKind::Bq => "bq",
+        crate::config::IndexKind::Auto => "auto",
     };
     let hnsw = if engine.index_kind == crate::config::IndexKind::Hnsw {
         let c = &engine.hnsw_config;
@@ -2462,7 +3026,10 @@ async fn index_config_handler(
     } else {
         None
     };
-    Json(IndexConfigResponse { index_type: index_type.into(), hnsw })
+    Json(IndexConfigResponse {
+        index_type: index_type.into(),
+        hnsw,
+    })
 }
 
 /// `POST /v1/index/rebuild` — switch the active index type and rebuild it.
@@ -2477,13 +3044,16 @@ async fn index_rebuild_handler(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     use crate::config::IndexKind;
-    let kind_str = body.get("index").and_then(|v| v.as_str()).unwrap_or("brute");
+    let kind_str = body
+        .get("index")
+        .and_then(|v| v.as_str())
+        .unwrap_or("brute");
     let kind = match kind_str {
-        "hnsw"        => IndexKind::Hnsw,
-        "ivf"         => IndexKind::Ivf,
-        "bq"          => IndexKind::Bq,
+        "hnsw" => IndexKind::Hnsw,
+        "ivf" => IndexKind::Ivf,
+        "bq" => IndexKind::Bq,
         "auto" | "mstg" => IndexKind::Auto,
-        _             => IndexKind::BruteForce,
+        _ => IndexKind::BruteForce,
     };
     let mut engine = state.write().await;
     engine.index_kind = kind;
@@ -2512,44 +3082,79 @@ async fn tree_build(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::BuildRequest>,
 ) -> Json<valori_rag::tree::BuildResponse> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
-    let doc_name = payload.doc_name.clone().unwrap_or_else(|| "document".into());
+    let doc_name = payload
+        .doc_name
+        .clone()
+        .unwrap_or_else(|| "document".into());
     let shard_count = engine.read().await.shard_count as u8;
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "text": payload.text,
         "doc_name": doc_name,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::TreeBuild, &OperationInputs::TreeBuild { shard_id: 0 }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::TreeBuild,
+        &OperationInputs::TreeBuild { shard_id: 0 },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeBuild, inputs_json, shard_id: None, topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeBuild,
+            inputs_json,
+            shard_id: None,
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
     let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
-        .await.ok()
+        .await
+        .ok()
         .and_then(|o| o.into_iter().next().flatten())
         .map(|o| o.json)
         .unwrap_or(serde_json::json!({}));
 
     // Reconstruct the BuildResponse from the task output JSON.
-    let tree: valori_rag::tree::TreeIndex = result.get("tree")
+    let tree: valori_rag::tree::TreeIndex = result
+        .get("tree")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
         .unwrap_or_else(|| valori_rag::tree::TreeIndex::from_markdown(&payload.text, &doc_name));
-    let cache_key = result.get("cache_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let cache_key = result
+        .get("cache_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     Json(valori_rag::tree::BuildResponse {
         cache_key,
@@ -2569,11 +3174,15 @@ async fn tree_query(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::QueryRequest>,
 ) -> Result<Json<valori_rag::tree::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let k = payload.k.max(1);
     let shard_count = engine.read().await.shard_count as u8;
@@ -2590,7 +3199,10 @@ async fn tree_query(
                 "cache_key": key
             }))))?
     } else {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({ "error": "provide 'tree' or 'cache_key'" }))));
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "provide 'tree' or 'cache_key'" })),
+        ));
     };
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
@@ -2598,28 +3210,67 @@ async fn tree_query(
         "query": payload.query,
         "k": k,
         "prev_hash": payload.prev_hash,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::TreeQuery, &OperationInputs::TreeQuery { k: k as u32, shard_id: 0 }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::TreeQuery,
+        &OperationInputs::TreeQuery {
+            k: k as u32,
+            shard_id: 0,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeQuery, inputs_json, shard_id: None, topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeQuery,
+            inputs_json,
+            shard_id: None,
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
     let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let out_val = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Null);
-    let answer: valori_rag::tree::AnswerResult = serde_json::from_value(out_val)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let out_val = result
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::Value::Null);
+    let answer: valori_rag::tree::AnswerResult = serde_json::from_value(out_val).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
 
     Ok(Json(answer))
 }
@@ -2643,27 +3294,40 @@ async fn tree_hybrid(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::tree::HybridRequest>,
 ) -> Result<Json<valori_rag::tree::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
     use valori_rag::tree::{HybridResponse, TreeIndex, GENESIS};
 
     // ── Resolve tree and optional query vector before dispatching ─────────────
     let (tree_json, cache_key_opt) = if let Some(t) = payload.tree {
-        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
+        (
+            Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)),
+            None,
+        )
     } else if let Some(ref key) = payload.cache_key {
         (None, Some(key.clone()))
     } else if let Some(ref text) = payload.text {
         let doc_name = payload.doc_name.as_deref().unwrap_or("document");
         let t = TreeIndex::from_markdown(text, doc_name);
         let _ = engine.write().await.cache_tree(text, t.clone());
-        (Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)), None)
+        (
+            Some(serde_json::to_value(&t).unwrap_or(serde_json::Value::Null)),
+            None,
+        )
     } else {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({
-            "error": "provide 'text', 'tree', or 'cache_key'"
-        }))));
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "provide 'text', 'tree', or 'cache_key'"
+            })),
+        ));
     };
 
     // Resolve namespace and optionally embed the query for vector fusion.
@@ -2678,7 +3342,9 @@ async fn tree_hybrid(
     if let Some(ref ecfg) = embed_cfg {
         let http = shared_http_client();
         if let Ok(vecs) = valori_ingest::embed_batch(&[payload.query.clone()], ecfg, http).await {
-            if !vecs.is_empty() { query_vec = Some(vecs.into_iter().next().unwrap()); }
+            if !vecs.is_empty() {
+                query_vec = Some(vecs.into_iter().next().unwrap());
+            }
         }
     }
 
@@ -2687,9 +3353,15 @@ async fn tree_hybrid(
         "tree_weight": payload.tree_weight,
         "prev_hash": payload.prev_hash.as_deref().unwrap_or(GENESIS),
     });
-    if let Some(tj) = tree_json { params["tree"] = tj; }
-    if let Some(ref ck) = cache_key_opt { params["cache_key"] = serde_json::Value::String(ck.clone()); }
-    if let Some(ref qv) = query_vec { params["vector"] = serde_json::json!(qv); }
+    if let Some(tj) = tree_json {
+        params["tree"] = tj;
+    }
+    if let Some(ref ck) = cache_key_opt {
+        params["cache_key"] = serde_json::Value::String(ck.clone());
+    }
+    if let Some(ref qv) = query_vec {
+        params["vector"] = serde_json::json!(qv);
+    }
 
     let inputs_json = serde_json::json!({
         "shard_id": 0u8,
@@ -2697,37 +3369,75 @@ async fn tree_hybrid(
         "query": payload.query,
         "k": payload.k,
         "params": params,
-    }).to_string();
+    })
+    .to_string();
 
     // ── Dispatch through planner ───────────────────────────────────────────────
     let op_hash = compute_operation_hash(
         OperationKind::TreeHybrid,
-        &OperationInputs::TreeHybrid { k: payload.k as u32, shard_id: 0, embed_enabled: embed_cfg.is_some() },
+        &OperationInputs::TreeHybrid {
+            k: payload.k as u32,
+            shard_id: 0,
+            embed_enabled: embed_cfg.is_some(),
+        },
         &ExecutionPolicy::default(),
     );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
         capability_set: CapabilitySet {
-            embed: embed_cfg.is_some(), llm: false, object_store: false, cluster: false, shard_count: 1,
+            embed: embed_cfg.is_some(),
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count: 1,
         },
-        schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+        schema_version: 1,
+        shard_count: 1,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = std::sync::Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::TreeHybrid, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::TreeHybrid,
+            inputs_json,
+            shard_id: Some(0),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
-    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default()).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let output_val = outputs.into_iter().next().flatten()
+    let output_val = outputs
+        .into_iter()
+        .next()
+        .flatten()
         .map(|o| o.json)
-        .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "tree_hybrid produced no output"}))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "tree_hybrid produced no output"})),
+            )
+        })?;
 
-    let response: HybridResponse = serde_json::from_value(output_val)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("tree_hybrid decode: {e}")}))))?;
+    let response: HybridResponse = serde_json::from_value(output_val).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("tree_hybrid decode: {e}")})),
+        )
+    })?;
 
     Ok(Json(response))
 }
@@ -2747,37 +3457,73 @@ async fn community_detect(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::community::DetectRequest>,
 ) -> Json<valori_rag::community::DetectResponse> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let (ns_id, shard_count) = {
         let eng = engine.read().await;
-        let ns = payload.namespace.as_deref().and_then(|n| eng.namespaces.resolve(Some(n))).unwrap_or(0);
+        let ns = payload
+            .namespace
+            .as_deref()
+            .and_then(|n| eng.namespaces.resolve(Some(n)))
+            .unwrap_or(0);
         (ns, eng.shard_count as u8)
     };
-    let max_iter = payload.max_iter.unwrap_or(valori_rag::community::DEFAULT_MAX_ITER);
+    let max_iter = payload
+        .max_iter
+        .unwrap_or(valori_rag::community::DEFAULT_MAX_ITER);
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "shard_id": 0u8,
         "namespace_id": ns_id,
         "max_iter": max_iter,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::CommunityDetect, &OperationInputs::CommunityDetect {
-        collection: payload.namespace.clone().unwrap_or_else(|| "default".into()),
-        shard_id: 0, max_iter,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::CommunityDetect,
+        &OperationInputs::CommunityDetect {
+            collection: payload
+                .namespace
+                .clone()
+                .unwrap_or_else(|| "default".into()),
+            shard_id: 0,
+            max_iter,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunityDetect, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::CommunityDetect,
+            inputs_json,
+            shard_id: Some(0),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
@@ -2792,8 +3538,13 @@ async fn community_detect(
     Json(valori_rag::community::DetectResponse {
         community_count: result["community_count"].as_u64().unwrap_or(0) as usize,
         node_count: result["node_count"].as_u64().unwrap_or(0) as usize,
-        communities: result["communities"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+        communities: result["communities"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                    .collect()
+            })
             .unwrap_or_default(),
         receipt: result["receipt"].as_str().unwrap_or("").to_string(),
     })
@@ -2810,11 +3561,15 @@ async fn community_search(
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
     Json(payload): Json<valori_rag::community::SearchRequest>,
 ) -> Result<Json<valori_rag::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::ExecutionRetentionPolicy;
+    use valori_planner::graph::{ExecutionGraph, TaskId, TaskKind, TaskSpec};
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     let shard_count = engine.read().await.shard_count as u8;
 
@@ -2825,34 +3580,78 @@ async fn community_search(
         "k": payload.k,
         "depth": 1u32,
         "drill_in": false,
-    })).unwrap_or_default();
+    }))
+    .unwrap_or_default();
 
-    let op_hash = compute_operation_hash(OperationKind::CommunitySearch, &OperationInputs::CommunitySearch {
-        k: payload.k as u32, depth: 1, drill_in: false, collection: "default".into(), shard_id: 0,
-    }, &ExecutionPolicy::default());
+    let op_hash = compute_operation_hash(
+        OperationKind::CommunitySearch,
+        &OperationInputs::CommunitySearch {
+            k: payload.k as u32,
+            depth: 1,
+            drill_in: false,
+            collection: "default".into(),
+            shard_id: 0,
+        },
+        &ExecutionPolicy::default(),
+    );
     let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count },
-        schema_version: 1, shard_count, cluster_epoch: 0, cluster_mode: false,
+        capability_set: CapabilitySet {
+            embed: false,
+            llm: false,
+            object_store: false,
+            cluster: false,
+            shard_count,
+        },
+        schema_version: 1,
+        shard_count,
+        cluster_epoch: 0,
+        cluster_mode: false,
     });
     let graph = Arc::new(ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        vec![TaskSpec { id: TaskId(0), kind: TaskKind::CommunitySearch, inputs_json, shard_id: Some(0), topological_index: 0 }],
+        op_hash,
+        fp,
+        ctx_hash,
+        vec![TaskSpec {
+            id: TaskId(0),
+            kind: TaskKind::CommunitySearch,
+            inputs_json,
+            shard_id: Some(0),
+            topological_index: 0,
+        }],
         vec![],
         ExecutionRetentionPolicy::default(),
     ));
 
     let result = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
         .await
-        .map_err(|e| (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({"error": e.to_string()}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::PRECONDITION_FAILED,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
-    let out = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::json!({}));
-    let communities: Vec<valori_rag::community::CommunityHit> = out["communities"].as_array()
-        .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
+    let out = result
+        .into_iter()
+        .next()
+        .flatten()
+        .map(|o| o.json)
+        .unwrap_or(serde_json::json!({}));
+    let communities: Vec<valori_rag::community::CommunityHit> = out["communities"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
         .unwrap_or_default();
     let total = out["total_communities_searched"].as_u64().unwrap_or(0) as usize;
 
-    Ok(Json(valori_rag::community::SearchResponse { communities, total_communities_searched: total }))
+    Ok(Json(valori_rag::community::SearchResponse {
+        communities,
+        total_communities_searched: total,
+    }))
 }
 
 /// `GET /v1/community/overview`
@@ -2867,12 +3666,17 @@ async fn community_overview(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let eng = engine.read().await;
     let store = eng.resources.community_store.as_ref().ok_or_else(|| {
-        (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({
-            "error": "community index not built — call POST /v1/community/detect first"
-        })))
+        (
+            StatusCode::PRECONDITION_FAILED,
+            Json(serde_json::json!({
+                "error": "community index not built — call POST /v1/community/detect first"
+            })),
+        )
     })?;
 
-    let mut communities: Vec<serde_json::Value> = store.members.iter()
+    let mut communities: Vec<serde_json::Value> = store
+        .members
+        .iter()
         .map(|(&cid, members)| {
             let centroid = store.centroids.get(&cid).cloned().unwrap_or_default();
             serde_json::json!({
@@ -2907,7 +3711,10 @@ async fn community_overview(
 async fn extract_entities(
     State(engine): State<SharedEngine>,
     Json(payload): Json<valori_rag::community::ExtractEntitiesRequest>,
-) -> Result<Json<valori_rag::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<
+    Json<valori_rag::community::ExtractEntitiesResponse>,
+    (StatusCode, Json<serde_json::Value>),
+> {
     // Validate embed config available.
     let embed_cfg = {
         let eng = engine.read().await;
@@ -2931,36 +3738,64 @@ async fn extract_entities(
         &llm_cfg,
         payload.model.as_deref(),
         &http,
-    ).await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))))?;
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e})),
+        )
+    })?;
 
     // Resolve namespace.
     let ns_id = {
         let eng = engine.read().await;
-        eng.namespaces.resolve(payload.namespace.as_deref()).unwrap_or(0)
+        eng.namespaces
+            .resolve(payload.namespace.as_deref())
+            .unwrap_or(0)
     };
 
     // Embed entity descriptions → insert records → create Concept nodes.
-    let descriptions: Vec<String> = extracted.entities.iter()
+    let descriptions: Vec<String> = extracted
+        .entities
+        .iter()
         .map(|e| e.description.clone())
         .collect();
     let vecs = valori_ingest::embed_batch(&descriptions, &embed_cfg, &http)
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": e.0})),
+            )
+        })?;
 
-    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut entity_name_to_node_id: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     let mut inserted_entities: Vec<valori_rag::community::InsertedEntity> = Vec::new();
 
     {
         let mut eng = engine.write().await;
         for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {
-            let record_id = eng.insert_record_from_f32_ns(vec, ns_id)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+            let record_id = eng.insert_record_from_f32_ns(vec, ns_id).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
 
-            let node_id = eng.create_node_for_record(
-                Some(record_id),
-                valori_kernel::types::enums::NodeKind::Concept as u8,
-                ns_id,
-            ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+            let node_id = eng
+                .create_node_for_record(
+                    Some(record_id),
+                    valori_kernel::types::enums::NodeKind::Concept as u8,
+                    ns_id,
+                )
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": e.to_string()})),
+                    )
+                })?;
 
             entity_name_to_node_id.insert(entity.name.clone(), node_id);
             inserted_entities.push(valori_rag::community::InsertedEntity {
@@ -2981,12 +3816,18 @@ async fn extract_entities(
         let mut eng = engine.write().await;
         for rel in &extracted.relationships {
             let from = entity_name_to_node_id.get(&rel.source).copied();
-            let to   = entity_name_to_node_id.get(&rel.target).copied();
+            let to = entity_name_to_node_id.get(&rel.target).copied();
             match (from, to) {
                 (Some(from_id), Some(to_id)) => {
                     use valori_kernel::types::enums::EdgeKind;
-                    let edge_id = eng.create_edge(from_id, to_id, EdgeKind::Relation as u8)
-                        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
+                    let edge_id = eng
+                        .create_edge(from_id, to_id, EdgeKind::Relation as u8)
+                        .map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::json!({"error": e.to_string()})),
+                            )
+                        })?;
                     inserted_rels.push(valori_rag::community::InsertedRelationship {
                         source_name: rel.source.clone(),
                         target_name: rel.target.clone(),
@@ -2994,7 +3835,9 @@ async fn extract_entities(
                         edge_id,
                     });
                 }
-                _ => { skipped += 1; }
+                _ => {
+                    skipped += 1;
+                }
             }
         }
     }
@@ -3030,9 +3873,11 @@ async fn shard_routing_handler(
         }
     }
 
-    let shards: Vec<serde_json::Value> = shard_map.into_iter().enumerate().map(|(i, cols)| {
-        serde_json::json!({ "shard": i, "collections": cols })
-    }).collect();
+    let shards: Vec<serde_json::Value> = shard_map
+        .into_iter()
+        .enumerate()
+        .map(|(i, cols)| serde_json::json!({ "shard": i, "collections": cols }))
+        .collect();
 
     axum::Json(serde_json::json!({
         "mode": "standalone",
@@ -3048,11 +3893,10 @@ async fn shard_routing_handler(
 /// `~/.valori/models`).  Reference counts are always 0 until M6.2 wiring
 /// lands; "reclaimable_bytes" reflects unreferenced-in-terms-of-projects.
 async fn models_health() -> axum::Json<serde_json::Value> {
-    let models_dir = std::env::var("VALORI_MODELS_DIR").ok()
+    let models_dir = std::env::var("VALORI_MODELS_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            dirs::home_dir().map(|h| h.join(".valori").join("models"))
-        });
+        .or_else(|| dirs::home_dir().map(|h| h.join(".valori").join("models")));
 
     let Some(dir) = models_dir else {
         return axum::Json(serde_json::json!({ "error": "models directory not configured" }));
@@ -3067,4 +3911,3 @@ async fn models_health() -> axum::Json<serde_json::Value> {
         Err(e) => axum::Json(serde_json::json!({ "error": e.to_string() })),
     }
 }
-

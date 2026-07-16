@@ -5,8 +5,8 @@
 //! reference for approximate indexes. Snapshot is a no-op because the engine
 //! rebuilds from the record pool on restore.
 
+use crate::traits::{l2_distance_sq, VectorIndex};
 use std::collections::HashMap;
-use crate::traits::{VectorIndex, l2_distance_sq};
 
 pub struct BruteForceIndex {
     vectors: HashMap<u32, Vec<f32>>,
@@ -14,7 +14,9 @@ pub struct BruteForceIndex {
 
 impl BruteForceIndex {
     pub fn new() -> Self {
-        Self { vectors: HashMap::new() }
+        Self {
+            vectors: HashMap::new(),
+        }
     }
 
     pub fn len(&self) -> usize {

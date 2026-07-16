@@ -106,16 +106,21 @@ impl ForensicEngine {
                         }
                         // S15: namespace-scoped data event — replay into its
                         // own collection so point-in-time state matches.
-                        LogEntry::EventNs { namespace_id, event } => {
+                        LogEntry::EventNs {
+                            namespace_id,
+                            event,
+                        } => {
                             event_index += 1;
 
                             if event_index > target_count {
                                 break;
                             }
 
-                            self.state.apply_event_ns(&event, namespace_id).map_err(|e| {
-                                anyhow::anyhow!("Event #{event_index} failed: {e:?}")
-                            })?;
+                            self.state
+                                .apply_event_ns(&event, namespace_id)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Event #{event_index} failed: {e:?}")
+                                })?;
 
                             self.current_event_count = event_index;
                             self.applied_events.push(event_index);
@@ -140,10 +145,18 @@ impl ForensicEngine {
     }
 
     // Mirror the Engine accessor API so CLI commands compile unchanged.
-    pub fn record_count(&self) -> usize { self.state.record_count() }
-    pub fn node_count(&self) -> usize { self.state.node_count() }
-    pub fn edge_count(&self) -> usize { self.state.edge_count() }
-    pub fn kernel_state(&self) -> &KernelState { &self.state }
+    pub fn record_count(&self) -> usize {
+        self.state.record_count()
+    }
+    pub fn node_count(&self) -> usize {
+        self.state.node_count()
+    }
+    pub fn edge_count(&self) -> usize {
+        self.state.edge_count()
+    }
+    pub fn kernel_state(&self) -> &KernelState {
+        &self.state
+    }
 
     /// Returns the BLAKE3 content hash of the current kernel state as raw bytes.
     ///
@@ -170,11 +183,13 @@ pub fn floats_to_fxp(floats: &[f64]) -> valori_kernel::types::vector::FxpVector 
     FxpVector {
         data: floats
             .iter()
-            .map(|&f| FxpScalar(
-                (f as f32 * 65536.0)
-                    .round()
-                    .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
-            ))
+            .map(|&f| {
+                FxpScalar(
+                    (f as f32 * 65536.0)
+                        .round()
+                        .clamp(i32::MIN as f32, i32::MAX as f32) as i32,
+                )
+            })
             .collect(),
     }
 }
@@ -222,7 +237,10 @@ pub fn parse_kernel_from_snapshot_bytes(data: &[u8]) -> Result<KernelState> {
 /// state.  Cheap structural check — suitable for the `inspect` command.
 pub fn inspect_snapshot_bytes(data: &[u8]) -> Result<SnapshotInfo> {
     if data.len() < 4 {
-        bail!("File is too short to be a Valori snapshot ({} bytes)", data.len());
+        bail!(
+            "File is too short to be a Valori snapshot ({} bytes)",
+            data.len()
+        );
     }
 
     let magic_ok = &data[0..4] == SNAPSHOT_MAGIC;
@@ -266,9 +284,9 @@ pub fn inspect_snapshot_bytes(data: &[u8]) -> Result<SnapshotInfo> {
 /// Lightweight structural summary returned by [`inspect_snapshot_bytes`].
 #[derive(Debug)]
 pub struct SnapshotInfo {
-    pub magic_ok:     bool,
-    pub kernel_len:   usize,
+    pub magic_ok: bool,
+    pub kernel_len: usize,
     pub metadata_len: usize,
-    pub index_len:    usize,
-    pub total_size:   usize,
+    pub index_len: usize,
+    pub total_size: usize,
 }

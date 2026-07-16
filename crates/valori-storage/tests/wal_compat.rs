@@ -34,7 +34,9 @@ fn replay_wal(path: &std::path::Path) -> (KernelState, usize) {
     let mut count = 0;
     for result in reader {
         let (evt, ns) = result.expect("WAL entry must decode");
-        state.apply_event_ns(&evt, ns).expect("WAL event must apply");
+        state
+            .apply_event_ns(&evt, ns)
+            .expect("WAL event must apply");
         count += 1;
     }
     (state, count)
@@ -86,13 +88,23 @@ fn generate_wal_fixtures() {
         let path = dir.join("wal_v1_inserts.wal");
         let mut w = WalWriter::open(&path, 4).unwrap();
         for i in 0u32..20 {
-            let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
-            w.append_event(&KernelEvent::InsertRecord {
-                id: RecordId(i),
-                vector: FxpVector { data },
-                metadata: if i % 4 == 0 { Some(format!("{{\"n\":{i}}}").into_bytes()) } else { None },
-                tag: i as u64 % 5,
-            }, 0).unwrap();
+            let data = (0..4)
+                .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+                .collect();
+            w.append_event(
+                &KernelEvent::InsertRecord {
+                    id: RecordId(i),
+                    vector: FxpVector { data },
+                    metadata: if i % 4 == 0 {
+                        Some(format!("{{\"n\":{i}}}").into_bytes())
+                    } else {
+                        None
+                    },
+                    tag: i as u64 % 5,
+                },
+                0,
+            )
+            .unwrap();
         }
         drop(w);
 
@@ -107,22 +119,34 @@ fn generate_wal_fixtures() {
         let path = dir.join("wal_v1_namespace.wal");
         let mut w = WalWriter::open(&path, 4).unwrap();
         for i in 0u32..8 {
-            let data = (0..4).map(|d| FxpScalar((i * 1000 + d * 7) as i32)).collect();
-            w.append_event(&KernelEvent::InsertRecord {
-                id: RecordId(i),
-                vector: FxpVector { data },
-                metadata: None,
-                tag: 0,
-            }, 0).unwrap();
+            let data = (0..4)
+                .map(|d| FxpScalar((i * 1000 + d * 7) as i32))
+                .collect();
+            w.append_event(
+                &KernelEvent::InsertRecord {
+                    id: RecordId(i),
+                    vector: FxpVector { data },
+                    metadata: None,
+                    tag: 0,
+                },
+                0,
+            )
+            .unwrap();
         }
         for i in 8u32..16 {
-            let data = (0..4).map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000)).collect();
-            w.append_event(&KernelEvent::InsertRecord {
-                id: RecordId(i),
-                vector: FxpVector { data },
-                metadata: None,
-                tag: 1,
-            }, 1).unwrap();
+            let data = (0..4)
+                .map(|d| FxpScalar((i * 500 + d * 13) as i32 - 1000))
+                .collect();
+            w.append_event(
+                &KernelEvent::InsertRecord {
+                    id: RecordId(i),
+                    vector: FxpVector { data },
+                    metadata: None,
+                    tag: 1,
+                },
+                1,
+            )
+            .unwrap();
         }
         drop(w);
 

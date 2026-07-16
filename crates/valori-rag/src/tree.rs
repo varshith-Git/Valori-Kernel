@@ -38,16 +38,18 @@ pub fn hash_text(text: &str) -> String {
 }
 
 fn join_hash(parts: &[&str]) -> String {
-    blake3::hash(parts.join("\u{1f}").as_bytes()).to_hex().to_string()
+    blake3::hash(parts.join("\u{1f}").as_bytes())
+        .to_hex()
+        .to_string()
 }
 
 // ── Stopwords ─────────────────────────────────────────────────────────────────
 
 const STOP: &[&str] = &[
-    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are",
-    "do", "does", "i", "you", "my", "our", "how", "what", "when", "where",
-    "which", "can", "may", "get", "much", "many", "per", "with", "at", "be",
-    "if", "it", "this", "that", "as", "by", "from", "have", "has",
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "are", "do", "does", "i",
+    "you", "my", "our", "how", "what", "when", "where", "which", "can", "may", "get", "much",
+    "many", "per", "with", "at", "be", "if", "it", "this", "that", "as", "by", "from", "have",
+    "has",
 ];
 
 fn tokens(text: &str) -> Vec<String> {
@@ -158,7 +160,10 @@ impl TreeIndex {
             let body_start = line_num;
             let body_end = next_header_line.saturating_sub(1);
             let own_text = if body_start < body_end {
-                lines[body_start..body_end.min(lines.len())].join("\n").trim().to_string()
+                lines[body_start..body_end.min(lines.len())]
+                    .join("\n")
+                    .trim()
+                    .to_string()
             } else {
                 String::new()
             };
@@ -195,7 +200,11 @@ impl TreeIndex {
             nodes.insert(node_id, node);
         }
 
-        TreeIndex { doc_name: doc_name.to_string(), roots, nodes }
+        TreeIndex {
+            doc_name: doc_name.to_string(),
+            roots,
+            nodes,
+        }
     }
 
     /// The path from the root to this node, e.g. "Policies > Leave > Sick Leave".
@@ -231,8 +240,10 @@ impl TreeIndex {
         let q_terms: std::collections::BTreeSet<String> = tokens(query).into_iter().collect();
         let mut scored: Vec<(String, f64, Vec<String>)> = Vec::new();
         for (nid, n) in &self.nodes {
-            let title_t: std::collections::BTreeSet<String> = tokens(&n.title).into_iter().collect();
-            let sum_t: std::collections::BTreeSet<String> = tokens(&n.summary).into_iter().collect();
+            let title_t: std::collections::BTreeSet<String> =
+                tokens(&n.title).into_iter().collect();
+            let sum_t: std::collections::BTreeSet<String> =
+                tokens(&n.summary).into_iter().collect();
             let body_counts = count(tokens(&n.own_text));
             let mut matched = Vec::new();
             let mut score = 0.0_f64;
@@ -268,16 +279,25 @@ impl TreeIndex {
     pub fn select_nodes(&self, query: &str, k: usize) -> (Vec<String>, String) {
         let ranked: Vec<_> = self.rank_nodes(query).into_iter().take(k).collect();
         if ranked.is_empty() {
-            return (Vec::new(), "No section matched the query terms.".to_string());
+            return (
+                Vec::new(),
+                "No section matched the query terms.".to_string(),
+            );
         }
         let reasoning = ranked
             .iter()
             .map(|(nid, sc, mt)| {
-                format!("{nid} ({}) matched {mt:?} score={sc}", self.nodes[nid].title)
+                format!(
+                    "{nid} ({}) matched {mt:?} score={sc}",
+                    self.nodes[nid].title
+                )
             })
             .collect::<Vec<_>>()
             .join("; ");
-        (ranked.into_iter().map(|(nid, _, _)| nid).collect(), reasoning)
+        (
+            ranked.into_iter().map(|(nid, _, _)| nid).collect(),
+            reasoning,
+        )
     }
 
     /// Navigate the tree and answer the query with citations and a receipt.
@@ -304,7 +324,14 @@ impl TreeIndex {
             evidence_text.clone()
         };
 
-        let receipt = Receipt::make(query, &node_ids, &ranges, &evidence_text, &answer_text, prev_hash);
+        let receipt = Receipt::make(
+            query,
+            &node_ids,
+            &ranges,
+            &evidence_text,
+            &answer_text,
+            prev_hash,
+        );
 
         AnswerResult {
             query: query.to_string(),
@@ -335,7 +362,9 @@ impl TreeIndex {
     pub fn rank_nodes_normalized(&self, query: &str, k: usize) -> Vec<(String, f64)> {
         let ranked = self.rank_nodes(query);
         let max = ranked.first().map(|(_, s, _)| *s).unwrap_or(1.0).max(1e-9);
-        ranked.into_iter().take(k)
+        ranked
+            .into_iter()
+            .take(k)
             .map(|(nid, s, _)| (nid, s / max))
             .collect()
     }
@@ -478,7 +507,9 @@ pub struct QueryRequest {
     pub prev_hash: Option<String>,
 }
 
-fn default_k() -> usize { 2 }
+fn default_k() -> usize {
+    2
+}
 
 #[derive(Deserialize)]
 pub struct VerifyRequest {
@@ -532,7 +563,9 @@ pub struct HybridRequest {
     pub doc_name: Option<String>,
 }
 
-fn default_tree_weight() -> f64 { 0.6 }
+fn default_tree_weight() -> f64 {
+    0.6
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct HybridResponse {
@@ -578,7 +611,10 @@ pub async fn tree_chain_verify(
         }
         prev = r.receipt_hash.clone();
     }
-    Json(ChainVerifyResponse { valid: broken_at.is_none(), broken_at })
+    Json(ChainVerifyResponse {
+        valid: broken_at.is_none(),
+        broken_at,
+    })
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -673,8 +709,11 @@ mod tests {
         assert!(t.verify_receipt(&r.receipt));
 
         let mut tampered = t.clone();
-        tampered.nodes.get_mut(&r.visited_node_ids[0]).unwrap().own_text =
-            "You get 999 paid sick days per year.".to_string();
+        tampered
+            .nodes
+            .get_mut(&r.visited_node_ids[0])
+            .unwrap()
+            .own_text = "You get 999 paid sick days per year.".to_string();
         assert!(!tampered.verify_receipt(&r.receipt));
     }
 

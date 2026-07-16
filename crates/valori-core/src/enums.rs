@@ -6,17 +6,19 @@ use serde::{Deserialize, Serialize};
 // ── Graph node kinds ──────────────────────────────────────────────────────────
 
 /// Semantic kind of a knowledge-graph node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[repr(u8)]
 pub enum NodeKind {
-    Record   = 0,
-    Concept  = 1,
-    Agent    = 2,
-    User     = 3,
-    Tool     = 4,
+    #[default]
+    Record = 0,
+    Concept = 1,
+    Agent = 2,
+    User = 3,
+    Tool = 4,
     Document = 5,
-    Chunk    = 6,
+    Chunk = 6,
 }
 
 impl NodeKind {
@@ -34,24 +36,22 @@ impl NodeKind {
     }
 }
 
-impl Default for NodeKind {
-    fn default() -> Self { NodeKind::Record }
-}
-
 // ── Graph edge kinds ──────────────────────────────────────────────────────────
 
 /// Semantic kind of a directed knowledge-graph edge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[repr(u8)]
 pub enum EdgeKind {
-    Relation   = 0,
-    Follows    = 1,
-    InEpisode  = 2,
-    ByAgent    = 3,
-    Mentions   = 4,
-    RefersTo   = 5,
-    ParentOf   = 6,
+    #[default]
+    Relation = 0,
+    Follows = 1,
+    InEpisode = 2,
+    ByAgent = 3,
+    Mentions = 4,
+    RefersTo = 5,
+    ParentOf = 6,
     /// A record supersedes an older one (consolidation — Phase C4.2).
     Supersedes = 7,
     /// A record contradicts an older one (NLI verdict — Phase C4.3).
@@ -73,10 +73,6 @@ impl EdgeKind {
             _ => None,
         }
     }
-}
-
-impl Default for EdgeKind {
-    fn default() -> Self { EdgeKind::Relation }
 }
 
 #[cfg(test)]

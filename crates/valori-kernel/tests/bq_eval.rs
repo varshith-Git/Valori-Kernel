@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Evaluation and Benchmark of 1-bit Binary Quantization (BQ) vs Brute-Force Index.
 
-use valori_kernel::index::{SearchResult, VectorIndex};
-use valori_kernel::index::brute_force::BruteForceIndex;
+use std::time::Instant;
 use valori_kernel::index::bq::BinaryQuantizationIndex;
+use valori_kernel::index::brute_force::BruteForceIndex;
+use valori_kernel::index::{SearchResult, VectorIndex};
 use valori_kernel::storage::pool::RecordPool;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::vector::FxpVector;
-use std::time::Instant;
 
 /// Simple deterministic linear congruential generator for test data generation.
 struct PseudoRand {
@@ -20,7 +20,10 @@ impl PseudoRand {
     }
 
     fn next_i32(&mut self, min: i32, max: i32) -> i32 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let range = (max - min) as u64;
         min + ((self.state >> 32) % range) as i32
     }
@@ -45,7 +48,10 @@ fn evaluate_bq_value_add() {
     println!("\n==============================================================");
     println!("🚀 VALORI KERNEL: BQ vs BRUTE-FORCE INDEX EVALUATION");
     println!("==============================================================");
-    println!("Dataset: {} clustered embeddings, Dimension: {}, Top-K: {}", num_records, dim, k);
+    println!(
+        "Dataset: {} clustered embeddings, Dimension: {}, Top-K: {}",
+        num_records, dim, k
+    );
 
     let mut rng = PseudoRand::new(42);
     let mut pool = RecordPool::new();
@@ -96,13 +102,25 @@ fn evaluate_bq_value_add() {
     let bq_index_bytes = bq_idx.codes.len() * 8;
 
     println!("\n📦 MEMORY FOOTPRINT & BUILD TIME:");
-    println!("  • Full Q16.16 Vectors Size : {:>8} bytes ({:.2} KB)", raw_vec_bytes, raw_vec_bytes as f64 / 1024.0);
-    println!("  • BQ Bitstring Index Size  : {:>8} bytes ({:.2} KB)", bq_index_bytes, bq_index_bytes as f64 / 1024.0);
-    println!("  • Memory Reduction         : {:.1}x smaller ({:.1}% saved!)",
+    println!(
+        "  • Full Q16.16 Vectors Size : {:>8} bytes ({:.2} KB)",
+        raw_vec_bytes,
+        raw_vec_bytes as f64 / 1024.0
+    );
+    println!(
+        "  • BQ Bitstring Index Size  : {:>8} bytes ({:.2} KB)",
+        bq_index_bytes,
+        bq_index_bytes as f64 / 1024.0
+    );
+    println!(
+        "  • Memory Reduction         : {:.1}x smaller ({:.1}% saved!)",
         raw_vec_bytes as f64 / bq_index_bytes as f64,
         (1.0 - (bq_index_bytes as f64 / raw_vec_bytes as f64)) * 100.0
     );
-    println!("  • BQ Index Rebuild Time    : {:.2?} (vs {:.2?} for BF)", bq_build_time, bf_build_time);
+    println!(
+        "  • BQ Index Rebuild Time    : {:.2?} (vs {:.2?} for BF)",
+        bq_build_time, bf_build_time
+    );
 
     // 2. Measure Search Latency & Speedup
     let mut bf_results = vec![SearchResult::default(); k];
@@ -124,8 +142,16 @@ fn evaluate_bq_value_add() {
     let bq_search_time = bq_search_start.elapsed();
 
     println!("\n⚡ SEARCH LATENCY (Over {} queries):", num_queries);
-    println!("  • Brute-Force Total Time   : {:.2?} ({:.2?} / query)", bf_search_time, bf_search_time / num_queries as u32);
-    println!("  • BQ Two-Stage Total Time  : {:.2?} ({:.2?} / query)", bq_search_time, bq_search_time / num_queries as u32);
+    println!(
+        "  • Brute-Force Total Time   : {:.2?} ({:.2?} / query)",
+        bf_search_time,
+        bf_search_time / num_queries as u32
+    );
+    println!(
+        "  • BQ Two-Stage Total Time  : {:.2?} ({:.2?} / query)",
+        bq_search_time,
+        bq_search_time / num_queries as u32
+    );
     let speedup = bf_search_time.as_secs_f64() / bq_search_time.as_secs_f64();
     println!("  • Latency Speedup          : {:.2}x faster!", speedup);
 
@@ -144,9 +170,15 @@ fn evaluate_bq_value_add() {
 
     let recall_pct = (total_recall_hits as f64 / total_expected_hits as f64) * 100.0;
     println!("\n🎯 ACCURACY / RECALL@{}:", k);
-    println!("  • Exact matches found      : {} / {}", total_recall_hits, total_expected_hits);
+    println!(
+        "  • Exact matches found      : {} / {}",
+        total_recall_hits, total_expected_hits
+    );
     println!("  • Recall@{} Score           : {:.2}%", k, recall_pct);
     println!("==============================================================\n");
 
-    assert!(recall_pct > 80.0, "Recall should be high due to two-stage rescoring!");
+    assert!(
+        recall_pct > 80.0,
+        "Recall should be high due to two-stage rescoring!"
+    );
 }

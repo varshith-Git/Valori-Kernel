@@ -7,15 +7,17 @@ use valori_daemon::{Daemon, EmbeddingConfig, ProjectManifest, StorageConfig};
 
 /// Locate `target/debug/valori-node` relative to this crate.
 fn node_binary() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/valori-node")
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/valori-node")
 }
 
 #[tokio::test]
 async fn create_start_health_stop_delete() {
     let bin = node_binary();
     if !bin.exists() {
-        eprintln!("skipping: {} not built (run `cargo build -p valori-node`)", bin.display());
+        eprintln!(
+            "skipping: {} not built (run `cargo build -p valori-node`)",
+            bin.display()
+        );
         return;
     }
     std::env::set_var("VALORI_NODE_BIN", &bin);

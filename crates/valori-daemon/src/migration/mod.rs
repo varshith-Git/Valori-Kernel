@@ -72,7 +72,10 @@ pub fn run_all(home: &Path, projects: &dyn ProjectStore) {
                 write_applied(home, &applied);
             }
             Err(e) => {
-                tracing::warn!("migration '{}' failed: {e} — will retry next startup", migration.id());
+                tracing::warn!(
+                    "migration '{}' failed: {e} — will retry next startup",
+                    migration.id()
+                );
             }
         }
     }

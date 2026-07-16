@@ -12,8 +12,8 @@
 //!   4. Assert the specific section survived.
 
 use valori_node::config::NodeConfig;
-use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
@@ -31,14 +31,24 @@ fn crts_timestamps_survive_roundtrip() {
     let mut engine = Engine::new(&make_cfg());
 
     // Insert two records so they each get a created_at entry.
-    let id0 = engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
-    let id1 = engine.insert_record_from_f32(&[0.9, 0.8, 0.7, 0.6]).unwrap();
+    let id0 = engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
+    let id1 = engine
+        .insert_record_from_f32(&[0.9, 0.8, 0.7, 0.6])
+        .unwrap();
 
     // Capture the timestamps before snapshot.
     let ts0_before = engine.record_created_at(id0);
     let ts1_before = engine.record_created_at(id1);
-    assert!(ts0_before.is_some(), "record 0 must have a created_at entry");
-    assert!(ts1_before.is_some(), "record 1 must have a created_at entry");
+    assert!(
+        ts0_before.is_some(),
+        "record 0 must have a created_at entry"
+    );
+    assert!(
+        ts1_before.is_some(),
+        "record 1 must have a created_at entry"
+    );
 
     // Roundtrip through snapshot bytes.
     let snap = engine.snapshot().expect("snapshot must succeed");
@@ -63,7 +73,9 @@ fn crts_absent_in_old_snapshot_does_not_panic() {
     // Simulate an old snapshot that has no CRTS section by stripping the
     // trailing bytes after the NSRG tag.
     let mut engine = Engine::new(&make_cfg());
-    engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
 
     let snap = engine.snapshot().expect("snapshot");
 
@@ -72,14 +84,15 @@ fn crts_absent_in_old_snapshot_does_not_panic() {
         .windows(4)
         .position(|w| w == b"NSRG")
         .expect("NSRG must be present in snapshot");
-    let nsrg_payload_len = u32::from_le_bytes(
-        snap[nsrg_pos + 4..nsrg_pos + 8].try_into().unwrap()
-    ) as usize;
+    let nsrg_payload_len =
+        u32::from_le_bytes(snap[nsrg_pos + 4..nsrg_pos + 8].try_into().unwrap()) as usize;
     let truncated = &snap[..nsrg_pos + 8 + nsrg_payload_len];
 
     // Restore must succeed and created_at is simply empty (no panic).
     let mut engine2 = Engine::new(&make_cfg());
-    engine2.restore(truncated).expect("restore of pre-CRTS snapshot must succeed");
+    engine2
+        .restore(truncated)
+        .expect("restore of pre-CRTS snapshot must succeed");
     assert_eq!(
         engine2.record_created_at(0),
         None,
@@ -94,15 +107,22 @@ fn bcrp_corpus_survives_roundtrip() {
     let mut engine = Engine::new(&make_cfg());
 
     // Insert with text so the reranker indexes the tokens.
-    let id0 = engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    let id0 = engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
     engine.reranker_insert(id0, "the quick brown fox");
 
-    let id1 = engine.insert_record_from_f32(&[0.9, 0.8, 0.7, 0.6]).unwrap();
+    let id1 = engine
+        .insert_record_from_f32(&[0.9, 0.8, 0.7, 0.6])
+        .unwrap();
     engine.reranker_insert(id1, "lazy dog over fence");
 
     // Corpus size before snapshot.
     let corpus_len_before = engine.reranker_corpus_len();
-    assert!(corpus_len_before > 0, "reranker corpus must be non-empty before snapshot");
+    assert!(
+        corpus_len_before > 0,
+        "reranker corpus must be non-empty before snapshot"
+    );
 
     let snap = engine.snapshot().expect("snapshot");
     let mut engine2 = Engine::new(&make_cfg());
@@ -119,15 +139,23 @@ fn bcrp_corpus_survives_roundtrip() {
     let query = vec![0.1f32, 0.2, 0.3, 0.4];
     let candidates = vec![(id0, 0.1f32), (id1, 0.9f32)];
     let reranked = engine2.reranker_rerank("quick fox", &query, &candidates);
-    assert!(!reranked.is_empty(), "reranker must return results after restore");
+    assert!(
+        !reranked.is_empty(),
+        "reranker must return results after restore"
+    );
     // id0 has "quick" and "fox" — should rank above id1 for this query.
-    assert_eq!(reranked[0].0, id0, "record with matching tokens must rank first");
+    assert_eq!(
+        reranked[0].0, id0,
+        "record with matching tokens must rank first"
+    );
 }
 
 #[test]
 fn bcrp_absent_in_old_snapshot_does_not_panic() {
     let mut engine = Engine::new(&make_cfg());
-    let id0 = engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    let id0 = engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
     engine.reranker_insert(id0, "hello world");
 
     let snap = engine.snapshot().expect("snapshot");
@@ -140,7 +168,9 @@ fn bcrp_absent_in_old_snapshot_does_not_panic() {
     let truncated = &snap[..bcrp_pos];
 
     let mut engine2 = Engine::new(&make_cfg());
-    engine2.restore(truncated).expect("restore of pre-BCRP snapshot must succeed");
+    engine2
+        .restore(truncated)
+        .expect("restore of pre-BCRP snapshot must succeed");
     assert_eq!(
         engine2.reranker_corpus_len(),
         0,
@@ -154,9 +184,13 @@ fn bcrp_absent_in_old_snapshot_does_not_panic() {
 fn crts_and_bcrp_both_survive_roundtrip() {
     let mut engine = Engine::new(&make_cfg());
 
-    let id0 = engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    let id0 = engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
     engine.reranker_insert(id0, "neural retrieval augmented generation");
-    let id1 = engine.insert_record_from_f32(&[0.5, 0.5, 0.5, 0.5]).unwrap();
+    let id1 = engine
+        .insert_record_from_f32(&[0.5, 0.5, 0.5, 0.5])
+        .unwrap();
     engine.reranker_insert(id1, "vector database deterministic search");
 
     let ts0 = engine.record_created_at(id0);

@@ -10,10 +10,10 @@ use valori_kernel::types::id::RecordId;
 
 pub fn run(
     snapshot_path: &str,
-    log_path:      &str,
-    target_count:  u64,
-    query_arg:     Option<String>,
-    top_k:         usize,
+    log_path: &str,
+    target_count: u64,
+    query_arg: Option<String>,
+    top_k: usize,
 ) -> anyhow::Result<()> {
     // ── Restore baseline ─────────────────────────────────────────────────────
     let mut engine = ForensicEngine::from_snapshot(snapshot_path)?;
@@ -21,7 +21,7 @@ pub fn run(
     // ── Replay ───────────────────────────────────────────────────────────────
     let t0 = Instant::now();
     let replayed = engine.replay_to(log_path, target_count)?;
-    let elapsed  = t0.elapsed();
+    let elapsed = t0.elapsed();
 
     if engine.current_event_count < target_count {
         println!(
@@ -41,13 +41,19 @@ pub fn run(
             Cell::new("Value").add_attribute(Attribute::Bold),
         ]);
 
-    table.add_row(vec!["Target event",    &target_count.to_string()]);
-    table.add_row(vec!["Current event",   &engine.current_event_count.to_string()]);
+    table.add_row(vec!["Target event", &target_count.to_string()]);
+    table.add_row(vec![
+        "Current event",
+        &engine.current_event_count.to_string(),
+    ]);
     table.add_row(vec!["Events replayed", &replayed.to_string()]);
-    table.add_row(vec!["Replay time",     &format!("{:.3} ms", elapsed.as_secs_f64() * 1000.0)]);
-    table.add_row(vec!["Records",         &engine.record_count().to_string()]);
-    table.add_row(vec!["Nodes",           &engine.node_count().to_string()]);
-    table.add_row(vec!["Edges",           &engine.edge_count().to_string()]);
+    table.add_row(vec![
+        "Replay time",
+        &format!("{:.3} ms", elapsed.as_secs_f64() * 1000.0),
+    ]);
+    table.add_row(vec!["Records", &engine.record_count().to_string()]);
+    table.add_row(vec!["Nodes", &engine.node_count().to_string()]);
+    table.add_row(vec!["Edges", &engine.edge_count().to_string()]);
     table.add_row(vec!["State Hash (BLAKE3)", &engine.blake3_hex()]);
 
     println!("\nSimulation Report");
@@ -56,15 +62,22 @@ pub fn run(
 
     // ── Optional search ───────────────────────────────────────────────────────
     if let Some(query_str) = query_arg {
-        let floats: Vec<f64> = serde_json::from_str(&query_str)
-            .map_err(|_| anyhow::anyhow!(
+        let floats: Vec<f64> = serde_json::from_str(&query_str).map_err(|_| {
+            anyhow::anyhow!(
                 "Invalid --query value. Expected a JSON float array, e.g. '[0.1, 0.2, 0.3]'. \
                  Got: {query_str}"
-            ))?;
+            )
+        })?;
 
         let query_fxp = floats_to_fxp(&floats);
-        let top_k     = top_k.max(1);
-        let mut buf   = vec![SearchResult { id: RecordId(0), score: i64::MAX }; top_k];
+        let top_k = top_k.max(1);
+        let mut buf = vec![
+            SearchResult {
+                id: RecordId(0),
+                score: i64::MAX
+            };
+            top_k
+        ];
 
         let qt = Instant::now();
         let found = engine.kernel_state().search_l2(&query_fxp, &mut buf, None);
@@ -90,14 +103,10 @@ pub fn run(
             ]);
         }
 
-        println!(
-            "Search Results  ·  top-{}  ·  {:.3} ms",
-            top_k, query_ms
-        );
+        println!("Search Results  ·  top-{}  ·  {:.3} ms", top_k, query_ms);
         println!("{}", "─".repeat(40));
         println!("{res_table}\n");
     }
 
     Ok(())
 }
-

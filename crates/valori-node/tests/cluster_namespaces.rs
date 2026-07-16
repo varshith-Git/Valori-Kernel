@@ -23,9 +23,15 @@ async fn boot_leader() -> ClusterHandle {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: "10.0.0.1:3000".into(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
@@ -58,11 +64,23 @@ async fn two_node_cluster() -> (ClusterHandle, ClusterHandle) {
     let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
 
     h1.raft
-        .add_learner(2, ValoriNode { api_addr: "10.0.0.2:3000".into(), raft_addr: h2.raft_addr.to_string() }, true)
+        .add_learner(
+            2,
+            ValoriNode {
+                api_addr: "10.0.0.2:3000".into(),
+                raft_addr: h2.raft_addr.to_string(),
+            },
+            true,
+        )
         .await
         .unwrap();
     h1.raft
-        .change_membership([1u64, 2].into_iter().collect::<std::collections::BTreeSet<_>>(), false)
+        .change_membership(
+            [1u64, 2]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            false,
+        )
         .await
         .unwrap();
     h2.raft
@@ -91,19 +109,32 @@ async fn post_json(
         .await
         .unwrap();
     let status = resp.status();
-    let location = resp.headers().get(header::LOCATION).map(|v| v.to_str().unwrap().to_string());
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let location = resp
+        .headers()
+        .get(header::LOCATION)
+        .map(|v| v.to_str().unwrap().to_string());
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, location, json)
 }
 
 async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
     let resp = router
-        .oneshot(Request::builder().method(Method::GET).uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -112,7 +143,12 @@ async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, serde_json::V
 /// not wait for followers to replicate and apply it too. Polls a follower's
 /// state machine until it agrees (or times out), matching the eventual
 /// nature of async replication rather than assuming instantaneous convergence.
-async fn wait_for_namespace(handle: &ClusterHandle, name: &str, expect: Option<u16>, timeout: Duration) {
+async fn wait_for_namespace(
+    handle: &ClusterHandle,
+    name: &str,
+    expect: Option<u16>,
+    timeout: Duration,
+) {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let got = handle.state_machine.resolve_namespace(Some(name)).await;
@@ -128,7 +164,13 @@ async fn wait_for_namespace(handle: &ClusterHandle, name: &str, expect: Option<u
 
 async fn delete_uri(router: axum::Router, uri: &str) -> StatusCode {
     router
-        .oneshot(Request::builder().method(Method::DELETE).uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap()
         .status()
@@ -139,8 +181,12 @@ async fn create_collection_via_http_replicates_to_all_nodes() {
     let (h1, h2) = two_node_cluster().await;
     let router = build_cluster_router(&h1, None);
 
-    let (status, _, body) =
-        post_json(router, "/v1/namespaces", serde_json::json!({ "name": "tenant-acme" })).await;
+    let (status, _, body) = post_json(
+        router,
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-acme" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let allocated_id = body["id"].as_u64().unwrap() as u16;
 
@@ -148,7 +194,13 @@ async fn create_collection_via_http_replicates_to_all_nodes() {
     // the same id, read in-process, IS the fix: pre-S2 this would have been
     // an empty, independent, node-local registry with no way to know "docs"
     // even exists.
-    wait_for_namespace(&h2, "tenant-acme", Some(allocated_id), Duration::from_secs(5)).await;
+    wait_for_namespace(
+        &h2,
+        "tenant-acme",
+        Some(allocated_id),
+        Duration::from_secs(5),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -156,14 +208,30 @@ async fn create_collection_is_idempotent_across_retries() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
 
-    let (s1, _, b1) = post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "docs" })).await;
-    let (s2, _, b2) = post_json(router, "/v1/namespaces", serde_json::json!({ "name": "docs" })).await;
+    let (s1, _, b1) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "docs" }),
+    )
+    .await;
+    let (s2, _, b2) = post_json(
+        router,
+        "/v1/namespaces",
+        serde_json::json!({ "name": "docs" }),
+    )
+    .await;
 
     assert_eq!(s1, StatusCode::OK);
     assert_eq!(s2, StatusCode::OK);
-    assert_eq!(b1["id"], b2["id"], "same name must always resolve to the same id");
+    assert_eq!(
+        b1["id"], b2["id"],
+        "same name must always resolve to the same id"
+    );
     assert_eq!(b1["created"], true);
-    assert_eq!(b2["created"], false, "the second call must report it already existed");
+    assert_eq!(
+        b2["created"], false,
+        "the second call must report it already existed"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -171,10 +239,20 @@ async fn drop_collection_replicates_across_nodes() {
     let (h1, h2) = two_node_cluster().await;
     let router = build_cluster_router(&h1, None);
 
-    let (_, _, create_body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-acme" })).await;
+    let (_, _, create_body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-acme" }),
+    )
+    .await;
     let allocated_id = create_body["id"].as_u64().unwrap() as u16;
-    wait_for_namespace(&h2, "tenant-acme", Some(allocated_id), Duration::from_secs(5)).await;
+    wait_for_namespace(
+        &h2,
+        "tenant-acme",
+        Some(allocated_id),
+        Duration::from_secs(5),
+    )
+    .await;
 
     let status = delete_uri(router, "/v1/namespaces/tenant-acme").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -195,8 +273,18 @@ async fn list_collections_reflects_committed_creates() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
 
-    post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "docs" })).await;
-    post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "images" })).await;
+    post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "docs" }),
+    )
+    .await;
+    post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "images" }),
+    )
+    .await;
 
     let (status, body) = get_json(router, "/v1/namespaces").await;
     assert_eq!(status, StatusCode::OK);
@@ -217,8 +305,12 @@ async fn write_to_a_follower_redirects_for_namespace_create() {
     let _ = h1; // keep the leader alive for the duration of the test
     let follower_router = build_cluster_router(&h2, None);
 
-    let (status, location, body) =
-        post_json(follower_router, "/v1/namespaces", serde_json::json!({ "name": "tenant-acme" })).await;
+    let (status, location, body) = post_json(
+        follower_router,
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-acme" }),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::TEMPORARY_REDIRECT, "{body}");
     assert_eq!(
@@ -238,14 +330,24 @@ async fn shard_count_one_is_unaffected_by_namespace_replication() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
 
-    let (status, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "docs" })).await;
+    let (status, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "docs" }),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(handle.state_machine.resolve_namespace(Some("docs")).await, Some(body["id"].as_u64().unwrap() as u16));
+    assert_eq!(
+        handle.state_machine.resolve_namespace(Some("docs")).await,
+        Some(body["id"].as_u64().unwrap() as u16)
+    );
 
     let status = delete_uri(router, "/v1/namespaces/docs").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(handle.state_machine.resolve_namespace(Some("docs")).await, None);
+    assert_eq!(
+        handle.state_machine.resolve_namespace(Some("docs")).await,
+        None
+    );
 }
 
 // ── Phase S3b: real shard-routed writes ──────────────────────────────────────
@@ -254,9 +356,15 @@ async fn boot_leader_with_shards(shard_count: u32) -> ClusterHandle {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: "10.0.0.1:3000".into(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
@@ -286,10 +394,18 @@ async fn writes_to_different_collections_route_to_different_shards() {
     // Namespace ids are assigned sequentially starting at 1, so the first
     // two collections created land on shard_for(1)=1 and shard_for(2)=2
     // with shard_count=3 — two distinct shards, deterministically.
-    let (_, _, body_a) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
-    let (_, _, body_b) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-b" })).await;
+    let (_, _, body_a) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
+    let (_, _, body_b) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-b" }),
+    )
+    .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
     let ns_b = body_b["id"].as_u64().unwrap() as u16;
     assert_ne!(ns_a, ns_b);
@@ -298,24 +414,41 @@ async fn writes_to_different_collections_route_to_different_shards() {
         router.clone(),
         "/v1/memory/upsert",
         serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     let (status, _, body) = post_json(
         router,
         "/v1/memory/upsert",
         serde_json::json!({ "vector": [5.0, 6.0, 7.0, 8.0], "collection": "tenant-b" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     let shard_b = valori_consensus::types::ShardId((ns_b as u32) % 3);
-    assert_ne!(shard_a, shard_b, "test setup must exercise two distinct shards");
+    assert_ne!(
+        shard_a, shard_b,
+        "test setup must exercise two distinct shards"
+    );
 
-    let count_a = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
-    let count_b = handle.shards[&shard_b].state_machine.with_state(|s| s.record_count()).await;
-    assert_eq!(count_a, 1, "tenant-a's record must land on its own shard ({shard_a:?})");
-    assert_eq!(count_b, 1, "tenant-b's record must land on its own shard ({shard_b:?})");
+    let count_a = handle.shards[&shard_a]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    let count_b = handle.shards[&shard_b]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(
+        count_a, 1,
+        "tenant-a's record must land on its own shard ({shard_a:?})"
+    );
+    assert_eq!(
+        count_b, 1,
+        "tenant-b's record must land on its own shard ({shard_b:?})"
+    );
 
     // And NOT cross-contaminate: tenant-a's shard holds exactly tenant-a's
     // data, nothing from tenant-b, and vice versa (already implied by
@@ -326,7 +459,10 @@ async fn writes_to_different_collections_route_to_different_shards() {
         .state_machine
         .with_state(|s| s.record_count())
         .await;
-    assert_eq!(count_shard0, 0, "shard 0 holds the namespace registry, not tenant-a/b's records");
+    assert_eq!(
+        count_shard0, 0,
+        "shard 0 holds the namespace registry, not tenant-a/b's records"
+    );
 }
 
 /// Phase S13: a write routed to a non-zero shard must be durably,
@@ -343,15 +479,23 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: "10.0.0.1:3000".into(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
         shard_count: 3,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+        .await
+        .unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -363,17 +507,26 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
 
     // Same routing proof as writes_to_different_collections_route_to_different_shards:
     // sequential namespace ids land on distinct shards deterministically.
-    let (_, _, body_a) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body_a) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
-    assert_ne!(shard_a, valori_consensus::types::ShardId(0), "test must exercise a non-zero shard");
+    assert_ne!(
+        shard_a,
+        valori_consensus::types::ShardId(0),
+        "test must exercise a non-zero shard"
+    );
 
     let (status, _, body) = post_json(
         router,
         "/v1/memory/upsert",
         serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // The shard-specific writer must exist and its file must be non-empty.
@@ -386,7 +539,10 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
         .as_ref()
         .expect("a non-zero shard that received a write must have a real audit sink");
     let shard_a_path = shard_a_writer.lock().unwrap().path().to_path_buf();
-    assert!(shard_a_path.exists(), "shard {shard_a:?}'s own event log must exist on disk");
+    assert!(
+        shard_a_path.exists(),
+        "shard {shard_a:?}'s own event log must exist on disk"
+    );
     assert!(
         std::fs::metadata(&shard_a_path).unwrap().len() > 0,
         "shard {shard_a:?}'s event log must be non-empty"
@@ -398,9 +554,16 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
     // cluster_memory_upsert is a compound write (record + document node +
     // chunk node + ParentOf edge, all routed to the same shard) — assert
     // the record insert is among them rather than assuming exactly one event.
-    let events: Vec<_> = valori_node::events::event_replay::read_all_segments(&shard_a_path, Some(4))
-        .unwrap().into_iter().map(|(_, e)| e).collect();
-    assert!(!events.is_empty(), "the upsert must have committed at least one event to this shard");
+    let events: Vec<_> =
+        valori_node::events::event_replay::read_all_segments(&shard_a_path, Some(4))
+            .unwrap()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
+    assert!(
+        !events.is_empty(),
+        "the upsert must have committed at least one event to this shard"
+    );
     assert!(
         events.iter().any(|e| e.event_type() == "AutoInsertRecord"),
         "the record insert must be chained onto tenant-a's own shard: {:?}",
@@ -416,13 +579,25 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
         .as_ref()
         .expect("shard 0 always has a real audit sink when a path is configured");
     let shard0_path = shard0_writer.lock().unwrap().path().to_path_buf();
-    assert_ne!(shard0_path, shard_a_path, "shard 0 and tenant-a's shard must have distinct files");
-    let shard0_events: Vec<_> = valori_node::events::event_replay::read_all_segments(&shard0_path, Some(4))
-        .unwrap().into_iter().map(|(_, e)| e).collect();
+    assert_ne!(
+        shard0_path, shard_a_path,
+        "shard 0 and tenant-a's shard must have distinct files"
+    );
+    let shard0_events: Vec<_> =
+        valori_node::events::event_replay::read_all_segments(&shard0_path, Some(4))
+            .unwrap()
+            .into_iter()
+            .map(|(_, e)| e)
+            .collect();
     assert!(
-        shard0_events.iter().all(|e| e.event_type() != "AutoInsertRecord"),
+        shard0_events
+            .iter()
+            .all(|e| e.event_type() != "AutoInsertRecord"),
         "tenant-a's AutoInsertRecord must not appear in shard 0's audit log: {:?}",
-        shard0_events.iter().map(|e| e.event_type()).collect::<Vec<_>>()
+        shard0_events
+            .iter()
+            .map(|e| e.event_type())
+            .collect::<Vec<_>>()
     );
 }
 
@@ -435,8 +610,12 @@ async fn consolidate_routes_to_the_collections_shard() {
     let router = build_cluster_router(&handle, None);
 
     // First collection created gets namespace id 1 -> shard 1 (1 % 3 = 1).
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     assert_ne!(shard_a, valori_consensus::types::ShardId(0));
@@ -445,7 +624,8 @@ async fn consolidate_routes_to_the_collections_shard() {
         router.clone(),
         "/v1/memory/upsert",
         serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let old_record_id = body["record_id"].as_u64().unwrap() as u32;
 
@@ -457,21 +637,31 @@ async fn consolidate_routes_to_the_collections_shard() {
             "new_vector": [5.0, 6.0, 7.0, 8.0],
             "collection": "tenant-a",
         }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // record_count() excludes soft-deleted slots, so after consolidate
     // (old soft-deleted, new inserted) exactly 1 LIVE record remains — and
     // it must be on tenant-a's OWN shard, proving the fix routes the whole
     // sequence there, not just to shard 0.
-    let count = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
-    assert_eq!(count, 1, "the new (live) record must be on tenant-a's shard");
+    let count = handle.shards[&shard_a]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(
+        count, 1,
+        "the new (live) record must be on tenant-a's shard"
+    );
 
     let count_shard0 = handle.shards[&valori_consensus::types::ShardId(0)]
         .state_machine
         .with_state(|s| s.record_count())
         .await;
-    assert_eq!(count_shard0, 0, "none of tenant-a's consolidate traffic should touch shard 0's data");
+    assert_eq!(
+        count_shard0, 0,
+        "none of tenant-a's consolidate traffic should touch shard 0's data"
+    );
 }
 
 /// Phase S5: cluster_insert_encrypted now routes ciphertext to the target
@@ -486,24 +676,43 @@ async fn shred_key_reaches_records_on_every_shard() {
     let handle = boot_leader_with_shards(3).await;
     let router = build_cluster_router(&handle, None);
 
-    let (_, _, body_a) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
-    let (_, _, body_b) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-b" })).await;
+    let (_, _, body_a) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
+    let (_, _, body_b) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-b" }),
+    )
+    .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
     let ns_b = body_b["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     let shard_b = valori_consensus::types::ShardId((ns_b as u32) % 3);
-    assert_ne!(shard_a, shard_b, "test setup must exercise two distinct shards");
+    assert_ne!(
+        shard_a, shard_b,
+        "test setup must exercise two distinct shards"
+    );
 
     // Encrypted inserts store a zero-vector placeholder sized to the
     // kernel's already-locked dim — they cannot lock it themselves. Each
     // shard needs one plain insert first (a pre-existing kernel
     // constraint, unrelated to this phase).
-    post_json(router.clone(), "/v1/memory/upsert",
-        serde_json::json!({ "vector": [0.0, 0.0, 0.0, 0.0], "collection": "tenant-a" })).await;
-    post_json(router.clone(), "/v1/memory/upsert",
-        serde_json::json!({ "vector": [0.0, 0.0, 0.0, 0.0], "collection": "tenant-b" })).await;
+    post_json(
+        router.clone(),
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [0.0, 0.0, 0.0, 0.0], "collection": "tenant-a" }),
+    )
+    .await;
+    post_json(
+        router.clone(),
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [0.0, 0.0, 0.0, 0.0], "collection": "tenant-b" }),
+    )
+    .await;
 
     let key_id_hex = "aa".repeat(16); // 32 hex chars = 16 bytes
     let payload = base64::engine::general_purpose::STANDARD.encode(b"secret-a");
@@ -512,7 +721,8 @@ async fn shred_key_reaches_records_on_every_shard() {
         router.clone(),
         "/v1/records/encrypted",
         serde_json::json!({ "payload": payload, "collection": "tenant-a", "key_id": key_id_hex }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body_ins_a}");
     let record_a = body_ins_a["id"].as_u64().unwrap() as u32;
 
@@ -520,17 +730,26 @@ async fn shred_key_reaches_records_on_every_shard() {
         router.clone(),
         "/v1/records/encrypted",
         serde_json::json!({ "payload": payload, "collection": "tenant-b", "key_id": key_id_hex }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body_ins_b}");
     let record_b = body_ins_b["id"].as_u64().unwrap() as u32;
 
     // Before shredding: the record is not flagged.
     const FLAG_SHREDDED: u8 = 0x04;
-    let flags_before_a = handle.shards[&shard_a].state_machine
-        .with_state(move |s| s.get_record(valori_kernel::types::id::RecordId(record_a)).map(|r| r.flags))
+    let flags_before_a = handle.shards[&shard_a]
+        .state_machine
+        .with_state(move |s| {
+            s.get_record(valori_kernel::types::id::RecordId(record_a))
+                .map(|r| r.flags)
+        })
         .await
         .expect("record_a must exist before shredding");
-    assert_eq!(flags_before_a & FLAG_SHREDDED, 0, "record must not be pre-flagged shredded");
+    assert_eq!(
+        flags_before_a & FLAG_SHREDDED,
+        0,
+        "record must not be pre-flagged shredded"
+    );
 
     let resp = router
         .oneshot(
@@ -543,23 +762,41 @@ async fn shred_key_reaches_records_on_every_shard() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["shredded"], true, "{body}");
 
     // The real proof: FLAG_SHREDDED must be set on BOTH records, on their
     // OWN independent shards — not just whichever shard used to be the
     // only one shred_key touched (shard 0, which neither record is on).
-    let flags_a = handle.shards[&shard_a].state_machine
-        .with_state(move |s| s.get_record(valori_kernel::types::id::RecordId(record_a)).map(|r| r.flags))
+    let flags_a = handle.shards[&shard_a]
+        .state_machine
+        .with_state(move |s| {
+            s.get_record(valori_kernel::types::id::RecordId(record_a))
+                .map(|r| r.flags)
+        })
         .await
         .expect("record_a must still exist (shredded, not deleted)");
-    let flags_b = handle.shards[&shard_b].state_machine
-        .with_state(move |s| s.get_record(valori_kernel::types::id::RecordId(record_b)).map(|r| r.flags))
+    let flags_b = handle.shards[&shard_b]
+        .state_machine
+        .with_state(move |s| {
+            s.get_record(valori_kernel::types::id::RecordId(record_b))
+                .map(|r| r.flags)
+        })
         .await
         .expect("record_b must still exist (shredded, not deleted)");
-    assert_eq!(flags_a & FLAG_SHREDDED, FLAG_SHREDDED, "tenant-a's record must be shredded on its own shard");
-    assert_eq!(flags_b & FLAG_SHREDDED, FLAG_SHREDDED, "tenant-b's record must be shredded on its own shard");
+    assert_eq!(
+        flags_a & FLAG_SHREDDED,
+        FLAG_SHREDDED,
+        "tenant-a's record must be shredded on its own shard"
+    );
+    assert_eq!(
+        flags_b & FLAG_SHREDDED,
+        FLAG_SHREDDED,
+        "tenant-b's record must be shredded on its own shard"
+    );
 }
 
 /// Phase S6: the read-index protocol (`GET /v1/cluster/read-index`) is now
@@ -574,13 +811,24 @@ async fn memory_search_is_linearizable_on_a_non_zero_shard() {
     let handle = boot_leader_with_shards(3).await;
     let router = build_cluster_router(&handle, None);
 
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
-    assert_ne!(valori_consensus::types::ShardId((ns_a as u32) % 3), valori_consensus::types::ShardId(0));
+    assert_ne!(
+        valori_consensus::types::ShardId((ns_a as u32) % 3),
+        valori_consensus::types::ShardId(0)
+    );
 
-    post_json(router.clone(), "/v1/memory/upsert",
-        serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" })).await;
+    post_json(
+        router.clone(),
+        "/v1/memory/upsert",
+        serde_json::json!({ "vector": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
+    )
+    .await;
 
     // Default (linearizable) consistency.
     let (status, _, body) = post_json(
@@ -607,7 +855,8 @@ async fn memory_search_is_linearizable_on_a_non_zero_shard() {
     let (status, body) = get_json(
         build_cluster_router(&handle, None),
         &format!("/v1/cluster/read-index?shard={shard_a}"),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["shard"], shard_a);
 }
@@ -621,8 +870,12 @@ async fn core_crud_routes_to_the_collections_shard() {
     let handle = boot_leader_with_shards(3).await;
     let router = build_cluster_router(&handle, None);
 
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     assert_ne!(shard_a, valori_consensus::types::ShardId(0));
@@ -632,11 +885,15 @@ async fn core_crud_routes_to_the_collections_shard() {
         router.clone(),
         "/v1/records",
         serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0], "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let id_a = body["id"].as_u64().unwrap() as u32;
 
-    let count = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
+    let count = handle.shards[&shard_a]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
     assert_eq!(count, 1, "insert_record must land on tenant-a's own shard");
 
     // Search via /v1/search finds it, scoped to tenant-a.
@@ -644,7 +901,8 @@ async fn core_crud_routes_to_the_collections_shard() {
         router.clone(),
         "/v1/search",
         serde_json::json!({ "query": [1.0, 2.0, 3.0, 4.0], "k": 5, "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["results"].as_array().unwrap().len(), 1, "{body}");
 
@@ -653,10 +911,17 @@ async fn core_crud_routes_to_the_collections_shard() {
         router.clone(),
         "/v1/vectors/batch-insert",
         serde_json::json!({ "batch": [[5.0, 6.0, 7.0, 8.0]], "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let count = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
-    assert_eq!(count, 2, "batch_insert must land on tenant-a's own shard too");
+    let count = handle.shards[&shard_a]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(
+        count, 2,
+        "batch_insert must land on tenant-a's own shard too"
+    );
 
     // Soft-delete resolves via the collection field, not shard 0, and
     // mutates the right shard's kernel state.
@@ -664,16 +929,26 @@ async fn core_crud_routes_to_the_collections_shard() {
         router.clone(),
         "/v1/soft-delete",
         serde_json::json!({ "id": id_a, "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let count = handle.shards[&shard_a].state_machine.with_state(|s| s.record_count()).await;
-    assert_eq!(count, 1, "soft-delete excludes the record from record_count on tenant-a's shard");
+    let count = handle.shards[&shard_a]
+        .state_machine
+        .with_state(|s| s.record_count())
+        .await;
+    assert_eq!(
+        count, 1,
+        "soft-delete excludes the record from record_count on tenant-a's shard"
+    );
 
     let count_shard0 = handle.shards[&valori_consensus::types::ShardId(0)]
         .state_machine
         .with_state(|s| s.record_count())
         .await;
-    assert_eq!(count_shard0, 0, "none of tenant-a's core CRUD traffic should touch shard 0's data");
+    assert_eq!(
+        count_shard0, 0,
+        "none of tenant-a's core CRUD traffic should touch shard 0's data"
+    );
 }
 
 /// Phase S8: graph node/edge create + read (`/v1/graph/node`,
@@ -686,8 +961,12 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     let handle = boot_leader_with_shards(3).await;
     let router = build_cluster_router(&handle, None);
 
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     assert_ne!(shard_a, valori_consensus::types::ShardId(0));
@@ -696,7 +975,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
         router.clone(),
         "/v1/graph/node",
         serde_json::json!({ "kind": 0, "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let node_1 = body["node_id"].as_u64().unwrap() as u32;
 
@@ -704,7 +984,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
         router.clone(),
         "/v1/graph/node",
         serde_json::json!({ "kind": 0, "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let node_2 = body["node_id"].as_u64().unwrap() as u32;
 
@@ -712,7 +993,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
         router.clone(),
         "/v1/graph/edge",
         serde_json::json!({ "from": node_1, "to": node_2, "kind": 0, "collection": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
     // Both nodes and the edge must actually be on tenant-a's own shard.
@@ -720,14 +1002,20 @@ async fn graph_endpoints_route_to_the_collections_shard() {
         .state_machine
         .with_state(|s| (s.node_count(), s.edge_count()))
         .await;
-    assert_eq!(node_count, 2, "both graph nodes must land on tenant-a's own shard");
+    assert_eq!(
+        node_count, 2,
+        "both graph nodes must land on tenant-a's own shard"
+    );
     assert_eq!(edge_count, 1, "the edge must land on tenant-a's own shard");
 
     let count_shard0_nodes = handle.shards[&valori_consensus::types::ShardId(0)]
         .state_machine
         .with_state(|s| s.node_count())
         .await;
-    assert_eq!(count_shard0_nodes, 0, "none of tenant-a's graph traffic should touch shard 0");
+    assert_eq!(
+        count_shard0_nodes, 0,
+        "none of tenant-a's graph traffic should touch shard 0"
+    );
 
     // GET reads, scoped by ?collection=, must find them on the right shard.
     // Response shape is wire-compatible with the standalone server's
@@ -738,7 +1026,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     let (status, body) = get_json(
         router.clone(),
         &format!("/v1/graph/node/{node_1}?collection=tenant-a"),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["kind"], 0);
     assert_eq!(body["namespace_id"], ns_a);
@@ -746,7 +1035,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     let (status, body) = get_json(
         router.clone(),
         &format!("/v1/graph/edges/{node_1}?collection=tenant-a"),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let edges = body["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 1, "{body}");
@@ -756,7 +1046,8 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     let (status, body) = get_json(
         router,
         &format!("/v1/graph/subgraph?root={node_1}&depth=2&collection=tenant-a"),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["nodes"].as_array().unwrap().len(), 2, "{body}");
 }
@@ -770,35 +1061,58 @@ async fn community_detect_scoped_to_namespace_scans_the_right_shard() {
     let handle = boot_leader_with_shards(3).await;
     let router = build_cluster_router(&handle, None);
 
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
-    assert_ne!(valori_consensus::types::ShardId((ns_a as u32) % 3), valori_consensus::types::ShardId(0));
+    assert_ne!(
+        valori_consensus::types::ShardId((ns_a as u32) % 3),
+        valori_consensus::types::ShardId(0)
+    );
 
     // Two nodes on tenant-a's shard.
-    post_json(router.clone(), "/v1/graph/node",
-        serde_json::json!({ "kind": 0, "collection": "tenant-a" })).await;
-    post_json(router.clone(), "/v1/graph/node",
-        serde_json::json!({ "kind": 0, "collection": "tenant-a" })).await;
+    post_json(
+        router.clone(),
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 0, "collection": "tenant-a" }),
+    )
+    .await;
+    post_json(
+        router.clone(),
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 0, "collection": "tenant-a" }),
+    )
+    .await;
     // One node on the default namespace, shard 0.
-    post_json(router.clone(), "/v1/graph/node", serde_json::json!({ "kind": 0 })).await;
+    post_json(
+        router.clone(),
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 0 }),
+    )
+    .await;
 
     let (status, _, body) = post_json(
         router.clone(),
         "/v1/community/detect",
         serde_json::json!({ "namespace": "tenant-a" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["node_count"], 2, "detect scoped to tenant-a must find only tenant-a's 2 nodes: {body}");
+    assert_eq!(
+        body["node_count"], 2,
+        "detect scoped to tenant-a must find only tenant-a's 2 nodes: {body}"
+    );
 
     // Omitting namespace keeps the pre-S8 default: scans shard 0 only.
-    let (status, _, body) = post_json(
-        router,
-        "/v1/community/detect",
-        serde_json::json!({}),
-    ).await;
+    let (status, _, body) = post_json(router, "/v1/community/detect", serde_json::json!({})).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["node_count"], 1, "unscoped detect must still default to shard 0 only: {body}");
+    assert_eq!(
+        body["node_count"], 1,
+        "unscoped detect must still default to shard 0 only: {body}"
+    );
 }
 
 /// Minimal OpenAI-compatible embed server for `cluster_ingest` coverage —
@@ -808,13 +1122,15 @@ async fn community_detect_scoped_to_namespace_scans_the_right_shard() {
 async fn spawn_mock_embed_server() -> String {
     let router = axum::Router::new().route(
         "/v1/embeddings",
-        axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
-            let n = body["input"].as_array().map(|a| a.len()).unwrap_or(1);
-            let data: Vec<serde_json::Value> = (0..n)
-                .map(|_| serde_json::json!({ "embedding": [1.0, 2.0, 3.0, 4.0] }))
-                .collect();
-            axum::Json(serde_json::json!({ "data": data }))
-        }),
+        axum::routing::post(
+            |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                let n = body["input"].as_array().map(|a| a.len()).unwrap_or(1);
+                let data: Vec<serde_json::Value> = (0..n)
+                    .map(|_| serde_json::json!({ "embedding": [1.0, 2.0, 3.0, 4.0] }))
+                    .collect();
+                axum::Json(serde_json::json!({ "data": data }))
+            },
+        ),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -850,8 +1166,12 @@ async fn ingest_routes_to_the_collections_shard() {
         std::sync::Arc::new(valori_effect::ReceiptStore::new(64)),
     );
 
-    let (_, _, body) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "tenant-a" })).await;
+    let (_, _, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "tenant-a" }),
+    )
+    .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
     assert_ne!(shard_a, valori_consensus::types::ShardId(0));
@@ -874,14 +1194,23 @@ async fn ingest_routes_to_the_collections_shard() {
         .state_machine
         .with_state(|s| (s.record_count(), s.node_count()))
         .await;
-    assert_eq!(record_count as u64, chunk_count, "every ingested chunk must land on tenant-a's shard");
-    assert!(node_count >= 1 + chunk_count as usize, "document node + one chunk node per chunk, all on tenant-a's shard");
+    assert_eq!(
+        record_count as u64, chunk_count,
+        "every ingested chunk must land on tenant-a's shard"
+    );
+    assert!(
+        node_count >= 1 + chunk_count as usize,
+        "document node + one chunk node per chunk, all on tenant-a's shard"
+    );
 
     let shard0_records = handle.shards[&valori_consensus::types::ShardId(0)]
         .state_machine
         .with_state(|s| s.record_count())
         .await;
-    assert_eq!(shard0_records, 0, "none of tenant-a's ingest traffic should touch shard 0's data");
+    assert_eq!(
+        shard0_records, 0,
+        "none of tenant-a's ingest traffic should touch shard 0's data"
+    );
 }
 
 /// Phase S19: /v1/timeline on a multi-shard cluster must merge events from all
@@ -895,15 +1224,23 @@ async fn timeline_merges_cross_shard_events_in_order() {
     let cfg = ClusterConfig {
         node_id: 1,
         raft_bind: "127.0.0.1:0".into(),
-        members: [(1, ValoriNode { api_addr: "10.0.0.1:3000".into(), raft_addr: String::new() })]
-            .into_iter()
-            .collect(),
+        members: [(
+            1,
+            ValoriNode {
+                api_addr: "10.0.0.1:3000".into(),
+                raft_addr: String::new(),
+            },
+        )]
+        .into_iter()
+        .collect(),
         init: true,
         raft_log_path: None,
         tls: None,
         shard_count: 3,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+        .await
+        .unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -915,13 +1252,21 @@ async fn timeline_merges_cross_shard_events_in_order() {
 
     // Create two collections that land on different shards (ns_id 1 → shard 1,
     // ns_id 2 → shard 2 with shard_count=3).
-    let (_, _, body_a) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "alpha" })).await;
+    let (_, _, body_a) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "alpha" }),
+    )
+    .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
     let shard_a = valori_consensus::types::ShardId((ns_a as u32) % 3);
 
-    let (_, _, body_b) =
-        post_json(router.clone(), "/v1/namespaces", serde_json::json!({ "name": "beta" })).await;
+    let (_, _, body_b) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({ "name": "beta" }),
+    )
+    .await;
     let ns_b = body_b["id"].as_u64().unwrap() as u16;
     let shard_b = valori_consensus::types::ShardId((ns_b as u32) % 3);
 
@@ -932,14 +1277,16 @@ async fn timeline_merges_cross_shard_events_in_order() {
         router.clone(),
         "/v1/records",
         serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0], "collection": "alpha" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, _, _) = post_json(
         router.clone(),
         "/v1/records",
         serde_json::json!({ "values": [5.0, 6.0, 7.0, 8.0], "collection": "beta" }),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     // Fetch the merged timeline.
@@ -947,11 +1294,17 @@ async fn timeline_merges_cross_shard_events_in_order() {
     assert_eq!(status, StatusCode::OK, "timeline must succeed: {body}");
 
     let events = body["events"].as_array().expect("events array");
-    assert!(!events.is_empty(), "timeline must contain events from both shards");
+    assert!(
+        !events.is_empty(),
+        "timeline must contain events from both shards"
+    );
 
     // Every entry must have a shard_id field.
     for e in events {
-        assert!(e.get("shard_id").is_some(), "each entry must carry shard_id: {e}");
+        assert!(
+            e.get("shard_id").is_some(),
+            "each entry must carry shard_id: {e}"
+        );
     }
 
     // Collect shard_ids present — at least two distinct shards must appear.
@@ -981,13 +1334,18 @@ async fn timeline_merges_cross_shard_events_in_order() {
     // Merged output must be sorted by (timestamp_unix, shard_id, log_index).
     let keys: Vec<(u64, u64, u64)> = events
         .iter()
-        .map(|e| (
-            e["timestamp_unix"].as_u64().unwrap(),
-            e["shard_id"].as_u64().unwrap(),
-            e["log_index"].as_u64().unwrap(),
-        ))
+        .map(|e| {
+            (
+                e["timestamp_unix"].as_u64().unwrap(),
+                e["shard_id"].as_u64().unwrap(),
+                e["log_index"].as_u64().unwrap(),
+            )
+        })
         .collect();
     let mut sorted = keys.clone();
     sorted.sort();
-    assert_eq!(keys, sorted, "timeline events must be sorted by (timestamp_unix, shard_id, log_index)");
+    assert_eq!(
+        keys, sorted,
+        "timeline events must be sorted by (timestamp_unix, shard_id, log_index)"
+    );
 }

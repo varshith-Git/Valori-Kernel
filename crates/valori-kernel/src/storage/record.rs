@@ -38,7 +38,13 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new(id: RecordId, vector: FxpVector, metadata: Option<alloc::vec::Vec<u8>>, tag: u64, namespace_id: u16) -> Self {
+    pub fn new(
+        id: RecordId,
+        vector: FxpVector,
+        metadata: Option<alloc::vec::Vec<u8>>,
+        tag: u64,
+        namespace_id: u16,
+    ) -> Self {
         Self {
             id,
             vector,

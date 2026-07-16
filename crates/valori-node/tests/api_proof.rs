@@ -8,14 +8,14 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use serde_json::Value;
-use tower::ServiceExt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 
 use valori_node::config::NodeConfig;
-use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::{build_router, SharedEngine};
+use valori_node::EngineFromNodeConfig;
 
 fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
     let engine = Engine::new(&cfg);
@@ -35,11 +35,19 @@ fn tiny_cfg() -> NodeConfig {
 
 async fn get(router: axum::Router, uri: &str) -> (StatusCode, Value) {
     let resp = router
-        .oneshot(Request::builder().method(Method::GET).uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -48,7 +56,8 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
     let resp = router
         .oneshot(
             Request::builder()
-                .method(Method::POST).uri(uri)
+                .method(Method::POST)
+                .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
@@ -56,7 +65,9 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -69,9 +80,14 @@ async fn proof_state_returns_64_char_hex() {
     let (status, body) = get(router, "/v1/proof/state").await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
-    let hash = body["final_state_hash"].as_str().expect("missing final_state_hash");
+    let hash = body["final_state_hash"]
+        .as_str()
+        .expect("missing final_state_hash");
     assert_eq!(hash.len(), 64, "expected 64-char hex, got '{hash}'");
-    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "not hex: '{hash}'");
+    assert!(
+        hash.chars().all(|c| c.is_ascii_hexdigit()),
+        "not hex: '{hash}'"
+    );
 }
 
 #[tokio::test]
@@ -85,13 +101,17 @@ async fn proof_state_changes_after_insert() {
         router.clone(),
         "/records",
         serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0]}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let (_, after) = get(router, "/v1/proof/state").await;
     let hash_after = after["final_state_hash"].as_str().unwrap().to_string();
 
-    assert_ne!(hash_before, hash_after, "state hash must change after insert");
+    assert_ne!(
+        hash_before, hash_after,
+        "state hash must change after insert"
+    );
 }
 
 // ── /v1/proof/event-log ──────────────────────────────────────────────────────
@@ -102,7 +122,11 @@ async fn proof_event_log_requires_event_log_enabled() {
     let (_, router) = engine_router(tiny_cfg());
     let (status, _) = get(router, "/v1/proof/event-log").await;
     // Returns 422/500 because event log not enabled — not 200.
-    assert_ne!(status, StatusCode::OK, "expected error when event log not configured");
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "expected error when event log not configured"
+    );
 }
 
 #[tokio::test]
@@ -120,19 +144,27 @@ async fn proof_event_log_with_event_log_enabled() {
         router.clone(),
         "/records",
         serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0]}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
 
     let (status, body) = get(router, "/v1/proof/event-log").await;
     assert_eq!(status, StatusCode::OK, "{body}");
 
-    let hash = body["event_log_hash"].as_str().expect("missing event_log_hash");
+    let hash = body["event_log_hash"]
+        .as_str()
+        .expect("missing event_log_hash");
     assert_eq!(hash.len(), 64, "event_log_hash must be 64-char hex");
 
-    let state_hash = body["final_state_hash"].as_str().expect("missing final_state_hash");
+    let state_hash = body["final_state_hash"]
+        .as_str()
+        .expect("missing final_state_hash");
     assert_eq!(state_hash.len(), 64, "final_state_hash must be 64-char hex");
 
-    assert!(body["committed_height"].as_u64().unwrap_or(0) >= 1, "committed_height must be >= 1");
+    assert!(
+        body["committed_height"].as_u64().unwrap_or(0) >= 1,
+        "committed_height must be >= 1"
+    );
 }
 
 // ── /v1/proof/receipt and /v1/proof/receipt/:id ───────────────────────────────
@@ -141,7 +173,11 @@ async fn proof_event_log_with_event_log_enabled() {
 async fn proof_receipt_returns_404_before_any_planner_op() {
     let (_, router) = engine_router(tiny_cfg());
     let (status, body) = get(router, "/v1/proof/receipt").await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "expected 404 before any planner op: {body}");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "expected 404 before any planner op: {body}"
+    );
 }
 
 #[tokio::test]

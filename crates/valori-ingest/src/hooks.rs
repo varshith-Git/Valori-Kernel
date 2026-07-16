@@ -33,10 +33,12 @@ impl PipelineHook for NoopHook {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use crate::document::Document;
+    use std::sync::{Arc, Mutex};
 
-    struct CountingHook { count: Arc<Mutex<usize>> }
+    struct CountingHook {
+        count: Arc<Mutex<usize>>,
+    }
     impl PipelineHook for CountingHook {
         fn before_chunk(&self, _doc: &Document) {
             *self.count.lock().unwrap() += 1;
@@ -46,7 +48,9 @@ mod tests {
     #[test]
     fn hook_called() {
         let count = Arc::new(Mutex::new(0usize));
-        let hook = CountingHook { count: count.clone() };
+        let hook = CountingHook {
+            count: count.clone(),
+        };
         let doc = Document::from_text("hello", Some("test"));
         hook.before_chunk(&doc);
         assert_eq!(*count.lock().unwrap(), 1);

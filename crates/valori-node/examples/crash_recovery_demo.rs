@@ -3,10 +3,10 @@
 //!
 //! Demonstrates event-log based crash recovery via `Engine::try_recover()`.
 
-use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+use tempfile::tempdir;
+use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
 use valori_node::engine::{Engine, RecoveryMode};
 use valori_node::EngineFromNodeConfig;
-use tempfile::tempdir;
 
 const DIM: usize = 16;
 

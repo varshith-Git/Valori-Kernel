@@ -93,7 +93,8 @@ impl IntoResponse for EngineError {
                 ),
                 KernelError::InvalidInput => (
                     StatusCode::BAD_REQUEST,
-                    "Invalid input: vector values are out of the Q16.16 fixed-point range.".to_string(),
+                    "Invalid input: vector values are out of the Q16.16 fixed-point range."
+                        .to_string(),
                 ),
                 KernelError::MetadataTooLarge => (
                     StatusCode::BAD_REQUEST,
@@ -132,16 +133,26 @@ impl IntoResponse for EngineError {
                 ),
             },
             EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
-            EngineError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
-            EngineError::Network(msg) => (StatusCode::BAD_GATEWAY, format!("Upstream error: {}", msg)),
-            EngineError::Unknown(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Unknown error: {}", msg)),
+            EngineError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ),
+            EngineError::Network(msg) => {
+                (StatusCode::BAD_GATEWAY, format!("Upstream error: {}", msg))
+            }
+            EngineError::Unknown(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Unknown error: {}", msg),
+            ),
         };
         (status, Json(json!({ "error": message }))).into_response()
     }
 }
 
 impl From<valori_kernel::error::KernelError> for EngineError {
-    fn from(e: valori_kernel::error::KernelError) -> Self { EngineError::Kernel(e) }
+    fn from(e: valori_kernel::error::KernelError) -> Self {
+        EngineError::Kernel(e)
+    }
 }
 
 impl From<super::CommitError> for EngineError {
@@ -152,7 +163,9 @@ impl From<super::CommitError> for EngineError {
             // the full KernelError so IntoResponse returns the correct HTTP status code.
             super::CommitError::Apply(k) => EngineError::Kernel(k),
             // Pool full — map to the same KernelError the kernel would surface directly.
-            super::CommitError::Capacity { .. } => EngineError::Kernel(KernelError::CapacityExceeded),
+            super::CommitError::Capacity { .. } => {
+                EngineError::Kernel(KernelError::CapacityExceeded)
+            }
             // Persistence/IO failure — internal server error, not the client's fault.
             super::CommitError::Io(_) => EngineError::Internal,
             // Empty batch is a caller bug.

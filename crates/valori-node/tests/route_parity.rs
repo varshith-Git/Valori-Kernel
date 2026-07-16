@@ -56,7 +56,9 @@ const METHOD_GAPS: &[(&str, &str)] = &[];
 fn extract_routes(src: &str) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for line in src.lines() {
-        let Some(idx) = line.find(".route(\"") else { continue };
+        let Some(idx) = line.find(".route(\"") else {
+            continue;
+        };
         let rest = &line[idx + ".route(\"".len()..];
         let Some(end) = rest.find('"') else { continue };
         let path = &rest[..end];
@@ -100,8 +102,16 @@ fn v1_route_sets_match_between_standalone_and_cluster() {
 
     // Parser sanity: both files declare a substantial v1 surface. If these
     // fire, the extraction regex no longer matches the source formatting.
-    assert!(standalone.len() > 40, "parser found only {} standalone v1 routes", standalone.len());
-    assert!(cluster.len() > 40, "parser found only {} cluster v1 routes", cluster.len());
+    assert!(
+        standalone.len() > 40,
+        "parser found only {} standalone v1 routes",
+        standalone.len()
+    );
+    assert!(
+        cluster.len() > 40,
+        "parser found only {} cluster v1 routes",
+        cluster.len()
+    );
 
     let standalone_only: BTreeSet<&str> = STANDALONE_ONLY.iter().copied().collect();
     let cluster_only: BTreeSet<&str> = CLUSTER_ONLY.iter().copied().collect();
@@ -109,12 +119,21 @@ fn v1_route_sets_match_between_standalone_and_cluster() {
     // Allowlist staleness: every entry must still exist on its own side and
     // must NOT have appeared on the other side (if it did, remove the entry).
     for p in &standalone_only {
-        assert!(standalone.contains_key(*p), "STANDALONE_ONLY entry {p} no longer exists in server.rs — remove it");
+        assert!(
+            standalone.contains_key(*p),
+            "STANDALONE_ONLY entry {p} no longer exists in server.rs — remove it"
+        );
         assert!(!cluster.contains_key(*p), "{p} is in STANDALONE_ONLY but cluster_server.rs now serves it — remove the allowlist entry");
     }
     for p in &cluster_only {
-        assert!(cluster.contains_key(*p), "CLUSTER_ONLY entry {p} no longer exists in cluster_server.rs — remove it");
-        assert!(!standalone.contains_key(*p), "{p} is in CLUSTER_ONLY but server.rs now serves it — remove the allowlist entry");
+        assert!(
+            cluster.contains_key(*p),
+            "CLUSTER_ONLY entry {p} no longer exists in cluster_server.rs — remove it"
+        );
+        assert!(
+            !standalone.contains_key(*p),
+            "{p} is in CLUSTER_ONLY but server.rs now serves it — remove the allowlist entry"
+        );
     }
 
     let shared_standalone: BTreeSet<&String> = standalone
@@ -146,20 +165,20 @@ fn v1_route_methods_match_between_standalone_and_cluster() {
 
     let standalone_only: BTreeSet<&str> = STANDALONE_ONLY.iter().copied().collect();
     let cluster_only: BTreeSet<&str> = CLUSTER_ONLY.iter().copied().collect();
-    let gaps: BTreeMap<&str, BTreeSet<&str>> = METHOD_GAPS.iter().fold(
-        BTreeMap::new(),
-        |mut acc, (p, m)| {
+    let gaps: BTreeMap<&str, BTreeSet<&str>> =
+        METHOD_GAPS.iter().fold(BTreeMap::new(), |mut acc, (p, m)| {
             acc.entry(*p).or_default().insert(*m);
             acc
-        },
-    );
+        });
 
     let mut divergences = Vec::new();
     for (path, s_methods) in &standalone {
         if standalone_only.contains(path.as_str()) || cluster_only.contains(path.as_str()) {
             continue;
         }
-        let Some(c_methods) = cluster.get(path) else { continue }; // path parity covered above
+        let Some(c_methods) = cluster.get(path) else {
+            continue;
+        }; // path parity covered above
         let ignore = gaps.get(path.as_str());
         let filt = |ms: &BTreeSet<String>| -> BTreeSet<String> {
             ms.iter()

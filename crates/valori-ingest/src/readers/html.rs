@@ -24,7 +24,11 @@ impl Reader for HtmlReader {
             id,
             source: source_str,
             mime_type: "text/html".to_string(),
-            metadata: DocumentMetadata { title, author, ..Default::default() },
+            metadata: DocumentMetadata {
+                title,
+                author,
+                ..Default::default()
+            },
             content: text,
         })
     }
@@ -32,7 +36,10 @@ impl Reader for HtmlReader {
 
 pub fn extract_meta(doc: &Html, tag: &str) -> Option<String> {
     let sel = Selector::parse(tag).ok()?;
-    doc.select(&sel).next().map(|el| el.text().collect::<String>().trim().to_string()).filter(|s| !s.is_empty())
+    doc.select(&sel)
+        .next()
+        .map(|el| el.text().collect::<String>().trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn extract_meta_name(doc: &Html, name: &str) -> Option<String> {

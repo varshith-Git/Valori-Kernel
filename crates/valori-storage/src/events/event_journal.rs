@@ -81,7 +81,7 @@ impl EventJournal {
             tx,
         }
     }
-    
+
     pub fn set_height(&mut self, height: u64) {
         self.committed_height = height;
     }
@@ -154,11 +154,17 @@ impl EventJournal {
     /// Returns `None` when there are no events or all events are newer than the target.
     pub fn find_log_index_at_or_before(&self, unix_secs: u64) -> Option<usize> {
         let pos = self.timestamps.partition_point(|&t| t <= unix_secs);
-        if pos == 0 { None } else { Some(pos - 1) }
+        if pos == 0 {
+            None
+        } else {
+            Some(pos - 1)
+        }
     }
 
     /// Subscribe to live event stream
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
+    pub fn subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
         self.tx.subscribe()
     }
 }

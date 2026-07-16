@@ -36,9 +36,7 @@ impl<C: NodeClient> McpServer<C> {
         let resp = match req.method.as_str() {
             "initialize" => Response::success(id, self.initialize_result()),
             "ping" => Response::success(id, json!({})),
-            "tools/list" => {
-                Response::success(id, json!({ "tools": tools::tool_definitions() }))
-            }
+            "tools/list" => Response::success(id, json!({ "tools": tools::tool_definitions() })),
             "tools/call" => self.handle_tools_call(id, &req.params).await,
             other => Response::error(
                 id,
@@ -75,8 +73,8 @@ impl<C: NodeClient> McpServer<C> {
 
         match tools::call_tool(&self.client, name, &args).await {
             Ok(payload) => {
-                let text = serde_json::to_string_pretty(&payload)
-                    .unwrap_or_else(|_| payload.to_string());
+                let text =
+                    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
                 // MCP tool results are a content array. We return one text block
                 // carrying the JSON payload.
                 Response::success(
@@ -111,21 +109,53 @@ mod tests {
 
     #[async_trait]
     impl NodeClient for OkNode {
-        async fn memory_upsert(&self, _: Vec<f32>, _: Option<String>, _: Option<Value>) -> Result<Value> {
+        async fn memory_upsert(
+            &self,
+            _: Vec<f32>,
+            _: Option<String>,
+            _: Option<Value>,
+        ) -> Result<Value> {
             Ok(json!({ "memory_id": "m", "record_id": 1 }))
         }
-        async fn memory_search(&self, _: Vec<f32>, _: usize, _: Option<String>, _: Option<u64>, _: Option<Value>, _: bool, _: Option<String>) -> Result<Value> {
+        async fn memory_search(
+            &self,
+            _: Vec<f32>,
+            _: usize,
+            _: Option<String>,
+            _: Option<u64>,
+            _: Option<Value>,
+            _: bool,
+            _: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({ "results": [] }))
         }
-        async fn proof_state(&self) -> Result<String> { Ok("aa".repeat(32)) }
-        async fn proof_event_log(&self) -> Result<Option<(String, u64)>> { Ok(None) }
-        async fn subgraph(&self, _: u32, _: u32) -> Result<Value> { Ok(json!({})) }
-        async fn graphrag(&self, _: Vec<f32>, _: usize, _: u32, _: Option<String>) -> Result<Value> {
+        async fn proof_state(&self) -> Result<String> {
+            Ok("aa".repeat(32))
+        }
+        async fn proof_event_log(&self) -> Result<Option<(String, u64)>> {
+            Ok(None)
+        }
+        async fn subgraph(&self, _: u32, _: u32) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn graphrag(
+            &self,
+            _: Vec<f32>,
+            _: usize,
+            _: u32,
+            _: Option<String>,
+        ) -> Result<Value> {
             Ok(json!({ "hits": [], "subgraph": { "nodes": [], "edges": [] } }))
         }
-        async fn timeline(&self, _: Option<String>, _: Option<String>) -> Result<Value> { Ok(json!({})) }
-        async fn crypto_shred(&self, _: String) -> Result<Value> { Ok(json!({})) }
-        async fn snapshot_save(&self) -> Result<Value> { Ok(json!({})) }
+        async fn timeline(&self, _: Option<String>, _: Option<String>) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn crypto_shred(&self, _: String) -> Result<Value> {
+            Ok(json!({}))
+        }
+        async fn snapshot_save(&self) -> Result<Value> {
+            Ok(json!({}))
+        }
     }
 
     fn req(method: &str, params: Value, id: Option<i64>) -> Request {
@@ -141,7 +171,10 @@ mod tests {
     #[tokio::test]
     async fn initialize_advertises_tools_capability() {
         let s = McpServer::new(OkNode);
-        let r = s.handle(req("initialize", json!({}), Some(1))).await.unwrap();
+        let r = s
+            .handle(req("initialize", json!({}), Some(1)))
+            .await
+            .unwrap();
         let result = r.result.unwrap();
         assert_eq!(result["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(result["serverInfo"]["name"], "valori-mcp");
@@ -151,7 +184,10 @@ mod tests {
     #[tokio::test]
     async fn tools_list_returns_seven() {
         let s = McpServer::new(OkNode);
-        let r = s.handle(req("tools/list", json!({}), Some(2))).await.unwrap();
+        let r = s
+            .handle(req("tools/list", json!({}), Some(2)))
+            .await
+            .unwrap();
         let tools = r.result.unwrap();
         assert_eq!(tools["tools"].as_array().unwrap().len(), 7);
     }
@@ -159,7 +195,9 @@ mod tests {
     #[tokio::test]
     async fn notification_gets_no_response() {
         let s = McpServer::new(OkNode);
-        let r = s.handle(req("notifications/initialized", json!({}), None)).await;
+        let r = s
+            .handle(req("notifications/initialized", json!({}), None))
+            .await;
         assert!(r.is_none());
     }
 
@@ -175,18 +213,28 @@ mod tests {
         let s = McpServer::new(OkNode);
         // Unknown tool → tool-level error, surfaced as isError result not RPC error.
         let r = s
-            .handle(req("tools/call", json!({ "name": "nope", "arguments": {} }), Some(4)))
+            .handle(req(
+                "tools/call",
+                json!({ "name": "nope", "arguments": {} }),
+                Some(4),
+            ))
             .await
             .unwrap();
         let result = r.result.unwrap();
         assert_eq!(result["isError"], true);
-        assert!(result["content"][0]["text"].as_str().unwrap().contains("unknown tool"));
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("unknown tool"));
     }
 
     #[tokio::test]
     async fn tools_call_without_name_is_invalid_params() {
         let s = McpServer::new(OkNode);
-        let r = s.handle(req("tools/call", json!({ "arguments": {} }), Some(5))).await.unwrap();
+        let r = s
+            .handle(req("tools/call", json!({ "arguments": {} }), Some(5)))
+            .await
+            .unwrap();
         assert_eq!(r.error.unwrap().code, codes::INVALID_PARAMS);
     }
 }

@@ -26,15 +26,15 @@ use valori_effect::bus::EffectBus;
 use valori_effect::capability::CapabilityRegistry;
 use valori_effect::error::{EffectError, EffectResult};
 use valori_effect::task::{NoOpTask, Task, TaskContext, TaskOutput};
+use valori_effect::tasks::community::{CommunityDetectTask, CommunitySearchTask};
 use valori_effect::tasks::embed::EmbedTask;
+use valori_effect::tasks::graph_rag::GraphRagTask;
+use valori_effect::tasks::insert_graph::{InsertEdgeTask, InsertNodeTask};
 use valori_effect::tasks::insert_record::InsertRecordTask;
-use valori_effect::tasks::insert_graph::{InsertNodeTask, InsertEdgeTask};
+use valori_effect::tasks::memory_search::MemorySearchTask;
 use valori_effect::tasks::search::SearchTask;
 use valori_effect::tasks::snapshot::SnapshotArtifactTask;
-use valori_effect::tasks::graph_rag::GraphRagTask;
-use valori_effect::tasks::memory_search::MemorySearchTask;
-use valori_effect::tasks::community::{CommunityDetectTask, CommunitySearchTask};
-use valori_effect::tasks::tree_rag::{TreeBuildTask, TreeQueryTask, TreeHybridTask};
+use valori_effect::tasks::tree_rag::{TreeBuildTask, TreeHybridTask, TreeQueryTask};
 use valori_planner::graph::{ExecutionGraph, TaskKind};
 use valori_planner::operation::ExecutionPolicy;
 use valori_planner::registry::{ExecutionHandle, ExecutionStatus};
@@ -53,49 +53,57 @@ impl TaskRegistry {
     /// Build a default registry with all built-in tasks wired up.
     pub fn default_registry() -> Self {
         let mut tasks: HashMap<String, Arc<dyn Task>> = HashMap::new();
-        tasks.insert("embed".into(),              Arc::new(EmbedTask));
-        tasks.insert("insert_record".into(),      Arc::new(InsertRecordTask));
-        tasks.insert("insert_node".into(),        Arc::new(InsertNodeTask));
-        tasks.insert("insert_edge".into(),        Arc::new(InsertEdgeTask));
-        tasks.insert("search".into(),             Arc::new(SearchTask));
-        tasks.insert("snapshot_artifact".into(),  Arc::new(SnapshotArtifactTask));
-        tasks.insert("graph_rag".into(),          Arc::new(GraphRagTask));
-        tasks.insert("memory_search".into(),      Arc::new(MemorySearchTask));
-        tasks.insert("community_detect".into(),   Arc::new(CommunityDetectTask));
-        tasks.insert("community_search".into(),   Arc::new(CommunitySearchTask));
-        tasks.insert("tree_build".into(),         Arc::new(TreeBuildTask));
-        tasks.insert("tree_query".into(),         Arc::new(TreeQueryTask));
-        tasks.insert("tree_hybrid".into(),        Arc::new(TreeHybridTask));
-        tasks.insert("noop".into(),               Arc::new(NoOpTask));
+        tasks.insert("embed".into(), Arc::new(EmbedTask));
+        tasks.insert("insert_record".into(), Arc::new(InsertRecordTask));
+        tasks.insert("insert_node".into(), Arc::new(InsertNodeTask));
+        tasks.insert("insert_edge".into(), Arc::new(InsertEdgeTask));
+        tasks.insert("search".into(), Arc::new(SearchTask));
+        tasks.insert("snapshot_artifact".into(), Arc::new(SnapshotArtifactTask));
+        tasks.insert("graph_rag".into(), Arc::new(GraphRagTask));
+        tasks.insert("memory_search".into(), Arc::new(MemorySearchTask));
+        tasks.insert("community_detect".into(), Arc::new(CommunityDetectTask));
+        tasks.insert("community_search".into(), Arc::new(CommunitySearchTask));
+        tasks.insert("tree_build".into(), Arc::new(TreeBuildTask));
+        tasks.insert("tree_query".into(), Arc::new(TreeQueryTask));
+        tasks.insert("tree_hybrid".into(), Arc::new(TreeHybridTask));
+        tasks.insert("noop".into(), Arc::new(NoOpTask));
         // Remaining stubs for not-yet-implemented task kinds.
-        for kind_name in &["soft_delete_record", "llm_complete", "http_fetch", "read_index", "proof_fragment"] {
+        for kind_name in &[
+            "soft_delete_record",
+            "llm_complete",
+            "http_fetch",
+            "read_index",
+            "proof_fragment",
+        ] {
             tasks.insert(kind_name.to_string(), Arc::new(NoOpTask));
         }
-        TaskRegistry { tasks, jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
+        TaskRegistry {
+            tasks,
+            jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        }
     }
-
 }
 
 fn kind_to_key(kind: &TaskKind) -> &'static str {
     match kind {
-        TaskKind::Embed              => "embed",
-        TaskKind::InsertRecord       => "insert_record",
-        TaskKind::InsertNode         => "insert_node",
-        TaskKind::InsertEdge         => "insert_edge",
-        TaskKind::SoftDeleteRecord   => "soft_delete_record",
-        TaskKind::Search             => "search",
-        TaskKind::GraphRag           => "graph_rag",
-        TaskKind::MemorySearch       => "memory_search",
-        TaskKind::CommunityDetect    => "community_detect",
-        TaskKind::CommunitySearch    => "community_search",
-        TaskKind::TreeBuild          => "tree_build",
-        TaskKind::TreeQuery          => "tree_query",
-        TaskKind::TreeHybrid         => "tree_hybrid",
-        TaskKind::LlmComplete        => "llm_complete",
-        TaskKind::HttpFetch          => "http_fetch",
-        TaskKind::ReadIndex          => "read_index",
-        TaskKind::SnapshotArtifact   => "snapshot_artifact",
-        TaskKind::ProofFragment      => "proof_fragment",
+        TaskKind::Embed => "embed",
+        TaskKind::InsertRecord => "insert_record",
+        TaskKind::InsertNode => "insert_node",
+        TaskKind::InsertEdge => "insert_edge",
+        TaskKind::SoftDeleteRecord => "soft_delete_record",
+        TaskKind::Search => "search",
+        TaskKind::GraphRag => "graph_rag",
+        TaskKind::MemorySearch => "memory_search",
+        TaskKind::CommunityDetect => "community_detect",
+        TaskKind::CommunitySearch => "community_search",
+        TaskKind::TreeBuild => "tree_build",
+        TaskKind::TreeQuery => "tree_query",
+        TaskKind::TreeHybrid => "tree_hybrid",
+        TaskKind::LlmComplete => "llm_complete",
+        TaskKind::HttpFetch => "http_fetch",
+        TaskKind::ReadIndex => "read_index",
+        TaskKind::SnapshotArtifact => "snapshot_artifact",
+        TaskKind::ProofFragment => "proof_fragment",
     }
 }
 
@@ -124,7 +132,12 @@ impl TaskRunner {
         registry: Arc<TaskRegistry>,
         policy: ExecutionPolicy,
     ) -> Self {
-        TaskRunner { graph, capabilities, registry, policy }
+        TaskRunner {
+            graph,
+            capabilities,
+            registry,
+            policy,
+        }
     }
 
     /// Run the graph to completion, updating `handle` as tasks progress.
@@ -134,7 +147,10 @@ impl TaskRunner {
     /// assigned IDs (e.g., `outputs[0]["record_id"]`).
     pub async fn run(self, handle: ExecutionHandle) -> EffectResult<Vec<Option<TaskOutput>>> {
         let total = self.graph.tasks.len() as u32;
-        handle.update(ExecutionStatus::Running { completed_tasks: 0, total_tasks: total });
+        handle.update(ExecutionStatus::Running {
+            completed_tasks: 0,
+            total_tasks: total,
+        });
 
         let bus = Arc::new(EffectBus::new(self.capabilities.clone()));
         let execution_id = self.graph.id;
@@ -144,7 +160,9 @@ impl TaskRunner {
 
         // Collect task specs in topo order upfront so we don't borrow self.graph
         // across an .await boundary (which would make the future non-Send).
-        let sorted_task_ids: Vec<_> = self.graph.tasks_in_topo_order()
+        let sorted_task_ids: Vec<_> = self
+            .graph
+            .tasks_in_topo_order()
             .into_iter()
             .map(|t| t.id)
             .collect();
@@ -154,11 +172,14 @@ impl TaskRunner {
                 Some(t) => t.clone(),
                 None => continue,
             };
-            let task_impl = self.registry.get_by_key(&task_spec.kind)
-                .ok_or_else(|| EffectError::TaskFailed(format!("no impl for {:?}", task_spec.kind)))?;
+            let task_impl = self.registry.get_by_key(&task_spec.kind).ok_or_else(|| {
+                EffectError::TaskFailed(format!("no impl for {:?}", task_spec.kind))
+            })?;
 
             // Build predecessor output slice.
-            let predecessors: Vec<Option<TaskOutput>> = self.graph.predecessors(task_spec.id)
+            let predecessors: Vec<Option<TaskOutput>> = self
+                .graph
+                .predecessors(task_spec.id)
                 .iter()
                 .map(|pred_id| outputs.get(pred_id.0 as usize).and_then(|o| o.clone()))
                 .collect();
@@ -172,19 +193,19 @@ impl TaskRunner {
                 self.policy.resource_budget.clone(),
             );
 
-            let output = self.run_with_retry(
-                task_impl,
-                &task_spec.inputs_json,
-                &predecessors,
-                &ctx,
-            ).await?;
+            let output = self
+                .run_with_retry(task_impl, &task_spec.inputs_json, &predecessors, &ctx)
+                .await?;
 
             if let Some(slot) = outputs.get_mut(task_spec.id.0 as usize) {
                 *slot = Some(output);
             }
 
             let completed = outputs.iter().filter(|o| o.is_some()).count() as u32;
-            handle.update(ExecutionStatus::Running { completed_tasks: completed, total_tasks: total });
+            handle.update(ExecutionStatus::Running {
+                completed_tasks: completed,
+                total_tasks: total,
+            });
             debug!("task completed");
         }
 
@@ -240,7 +261,9 @@ pub fn run_graph(
         let runner = TaskRunner::new(graph, capabilities, registry, policy);
         match runner.run(handle_clone.clone()).await {
             Ok(_) => {}
-            Err(e) => handle_clone.update(ExecutionStatus::Failed { reason: e.to_string() }),
+            Err(e) => handle_clone.update(ExecutionStatus::Failed {
+                reason: e.to_string(),
+            }),
         }
     });
 
@@ -272,35 +295,69 @@ mod tests {
     use std::sync::Arc;
     use valori_effect::capability::CapabilityRegistry;
     use valori_effect::NoOpKernelCapability;
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
     use valori_planner::graph::ExecutionGraph;
-    use valori_planner::operation::{ExecutionPolicy, compute_operation_hash, OperationKind, OperationInputs};
     use valori_planner::graph::ExecutionRetentionPolicy;
-    use valori_planner::registry::ExecutionHandle;
     use valori_planner::operation::OperationId;
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
+    use valori_planner::registry::ExecutionHandle;
 
     fn caps() -> Arc<CapabilityRegistry> {
         Arc::new(CapabilityRegistry {
             kernel: Arc::new(NoOpKernelCapability { shard_count: 1 }),
-            embed: None, llm: None, storage: None, http: None, proof: None, scheduler: None,
+            embed: None,
+            llm: None,
+            storage: None,
+            http: None,
+            proof: None,
+            scheduler: None,
         })
     }
 
     fn empty_graph() -> Arc<ExecutionGraph> {
-        let op = compute_operation_hash(OperationKind::HealthCheck, &OperationInputs::HealthCheck, &ExecutionPolicy::default());
+        let op = compute_operation_hash(
+            OperationKind::HealthCheck,
+            &OperationInputs::HealthCheck,
+            &ExecutionPolicy::default(),
+        );
         let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
         let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-            capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count: 1 },
-            schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+            capability_set: CapabilitySet {
+                embed: false,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
+            schema_version: 1,
+            shard_count: 1,
+            cluster_epoch: 0,
+            cluster_mode: false,
         });
-        Arc::new(ExecutionGraph::build(op, fp, ctx_hash, vec![], vec![], ExecutionRetentionPolicy::default()))
+        Arc::new(ExecutionGraph::build(
+            op,
+            fp,
+            ctx_hash,
+            vec![],
+            vec![],
+            ExecutionRetentionPolicy::default(),
+        ))
     }
 
     #[tokio::test]
     async fn empty_graph_succeeds() {
         let graph = empty_graph();
         let handle = ExecutionHandle::new(OperationId(graph.id));
-        let runner = TaskRunner::new(graph, caps(), Arc::new(TaskRegistry::default_registry()), ExecutionPolicy::default());
+        let runner = TaskRunner::new(
+            graph,
+            caps(),
+            Arc::new(TaskRegistry::default_registry()),
+            ExecutionPolicy::default(),
+        );
         runner.run(handle.clone()).await.unwrap();
         assert_eq!(handle.current_status(), ExecutionStatus::Succeeded);
     }
@@ -308,7 +365,12 @@ mod tests {
     #[tokio::test]
     async fn run_graph_convenience_fn() {
         let graph = empty_graph();
-        let handle = run_graph(graph, caps(), Arc::new(TaskRegistry::default_registry()), ExecutionPolicy::default());
+        let handle = run_graph(
+            graph,
+            caps(),
+            Arc::new(TaskRegistry::default_registry()),
+            ExecutionPolicy::default(),
+        );
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         assert_eq!(handle.current_status(), ExecutionStatus::Succeeded);
     }
@@ -317,10 +379,18 @@ mod tests {
     async fn task_registry_default_has_all_kinds() {
         let reg = TaskRegistry::default_registry();
         for kind in &[
-            TaskKind::Embed, TaskKind::InsertRecord, TaskKind::Search,
-            TaskKind::InsertNode, TaskKind::InsertEdge, TaskKind::ProofFragment,
+            TaskKind::Embed,
+            TaskKind::InsertRecord,
+            TaskKind::Search,
+            TaskKind::InsertNode,
+            TaskKind::InsertEdge,
+            TaskKind::ProofFragment,
         ] {
-            assert!(reg.get_by_key(kind).is_some(), "missing impl for {:?}", kind);
+            assert!(
+                reg.get_by_key(kind).is_some(),
+                "missing impl for {:?}",
+                kind
+            );
         }
     }
 }

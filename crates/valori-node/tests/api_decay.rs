@@ -12,9 +12,9 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::RwLock;
 use valori_node::config::NodeConfig;
-use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 async fn spawn() -> (reqwest::Client, String, TempDir) {
     let dir = TempDir::new().unwrap();
@@ -29,24 +29,47 @@ async fn spawn() -> (reqwest::Client, String, TempDir) {
     let app = build_router(state, None, None);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     (reqwest::Client::new(), format!("http://{}", addr), dir)
 }
 
 async fn insert(client: &reqwest::Client, base: &str, vec: [f32; 4]) -> u32 {
-    let resp = client.post(format!("{base}/records"))
+    let resp = client
+        .post(format!("{base}/records"))
         .json(&serde_json::json!({ "values": vec }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
-    resp.json::<serde_json::Value>().await.unwrap()["id"].as_u64().unwrap() as u32
+    resp.json::<serde_json::Value>().await.unwrap()["id"]
+        .as_u64()
+        .unwrap() as u32
 }
 
-async fn search(client: &reqwest::Client, base: &str, q: [f32; 4], k: usize,
-                half_life: Option<u64>) -> serde_json::Value {
+async fn search(
+    client: &reqwest::Client,
+    base: &str,
+    q: [f32; 4],
+    k: usize,
+    half_life: Option<u64>,
+) -> serde_json::Value {
     let mut body = serde_json::json!({ "query": q, "k": k });
-    if let Some(h) = half_life { body["decay_half_life_secs"] = serde_json::json!(h); }
-    let resp = client.post(format!("{base}/search")).json(&body).send().await.unwrap();
-    assert!(resp.status().is_success(), "search failed: {}", resp.status());
+    if let Some(h) = half_life {
+        body["decay_half_life_secs"] = serde_json::json!(h);
+    }
+    let resp = client
+        .post(format!("{base}/search"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "search failed: {}",
+        resp.status()
+    );
     resp.json().await.unwrap()
 }
 
@@ -59,9 +82,16 @@ async fn no_decay_is_pure_distance_and_clean_response() {
 
     let body = search(&client, &base, [1.0, 0.0, 0.0, 0.0], 2, None).await;
     let results = body["results"].as_array().unwrap();
-    assert_eq!(results[0]["id"].as_u64().unwrap(), near as u64, "closest wins");
+    assert_eq!(
+        results[0]["id"].as_u64().unwrap(),
+        near as u64,
+        "closest wins"
+    );
     // Backward-compat: decay fields must be absent when decay is off.
-    assert!(results[0].get("decay_factor").is_none(), "no decay_factor when off");
+    assert!(
+        results[0].get("decay_factor").is_none(),
+        "no decay_factor when off"
+    );
     assert!(results[0].get("age_secs").is_none(), "no age_secs when off");
 }
 
@@ -82,11 +112,17 @@ async fn decay_reports_factor_and_ages_records() {
     let results = body["results"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     for r in results {
-        assert!(r.get("decay_factor").is_some(), "decay_factor present when decay on");
+        assert!(
+            r.get("decay_factor").is_some(),
+            "decay_factor present when decay on"
+        );
         let f = r["decay_factor"].as_f64().unwrap();
         assert!(f > 0.0 && f <= 1.0, "factor in (0,1], got {f}");
         // Records were just created → age ~0 → factor ~1.0.
-        assert!(f > 0.99, "freshly inserted record should barely decay, got {f}");
+        assert!(
+            f > 0.99,
+            "freshly inserted record should barely decay, got {f}"
+        );
     }
     let ids: Vec<u64> = results.iter().map(|r| r["id"].as_u64().unwrap()).collect();
     assert!(ids.contains(&(a as u64)) && ids.contains(&(b as u64)));
@@ -107,19 +143,38 @@ async fn decay_does_not_mutate_state_hash() {
 
     // The point-in-time hash at the latest index must be stable across two reads
     // that bracket the decayed search — i.e. decay wrote nothing.
-    let hash_a = client.post(format!("{base}/search"))
+    let hash_a = client
+        .post(format!("{base}/search"))
         .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2 }))
-        .send().await.unwrap().json::<serde_json::Value>().await.unwrap()
-        ["as_of_state_hash"].as_str().unwrap().to_string();
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["as_of_state_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let _ = search(&client, &base, [1.0, 0.0, 0.0, 0.0], 3, Some(100000)).await;
 
-    let hash_b = client.post(format!("{base}/search"))
+    let hash_b = client
+        .post(format!("{base}/search"))
         .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2 }))
-        .send().await.unwrap().json::<serde_json::Value>().await.unwrap()
-        ["as_of_state_hash"].as_str().unwrap().to_string();
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["as_of_state_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
-    assert_eq!(hash_a, hash_b, "decay must not mutate the kernel state hash");
+    assert_eq!(
+        hash_a, hash_b,
+        "decay must not mutate the kernel state hash"
+    );
     assert_eq!(hash_a.len(), 64);
 }
 
@@ -131,5 +186,8 @@ async fn explicit_zero_half_life_disables_decay() {
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     let body = search(&client, &base, [1.0, 0.0, 0.0, 0.0], 1, Some(0)).await;
     let results = body["results"].as_array().unwrap();
-    assert!(results[0].get("decay_factor").is_none(), "0 half-life => decay off");
+    assert!(
+        results[0].get("decay_factor").is_none(),
+        "0 half-life => decay off"
+    );
 }

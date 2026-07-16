@@ -120,7 +120,9 @@ pub enum WireError {
     TooShort(usize),
     #[error("unsupported segment version {0} (this build understands v2, v3, and v4)")]
     UnsupportedVersion(u32),
-    #[error("unsupported arithmetic format id {0} (this build understands {FORMAT_Q16_16} = Q16.16)")]
+    #[error(
+        "unsupported arithmetic format id {0} (this build understands {FORMAT_Q16_16} = Q16.16)"
+    )]
     UnsupportedFormat(u8),
     #[error("entry decode failed: {0}")]
     Decode(String),
@@ -137,7 +139,9 @@ pub enum WireError {
     /// (enough bytes, wrong content — real corruption) so segment-replay
     /// callers can tell "safe to stop here" from "must hard-error" without
     /// a byte-offset heuristic.
-    #[error("not enough bytes remain to decode a complete entry — likely a truncated trailing write")]
+    #[error(
+        "not enough bytes remain to decode a complete entry — likely a truncated trailing write"
+    )]
     Truncated,
 }
 
@@ -199,7 +203,9 @@ pub enum AdminEvent {
 impl AdminEvent {
     pub fn describe(&self) -> String {
         match self {
-            AdminEvent::NodeJoined { node_id, raft_addr, .. } => {
+            AdminEvent::NodeJoined {
+                node_id, raft_addr, ..
+            } => {
                 format!("NodeJoined {{ node {node_id} at {raft_addr} }}")
             }
             AdminEvent::NodeLeft { node_id, .. } => {
@@ -377,12 +383,11 @@ fn check_metadata_cap(entry: &LogEntry) -> Result<()> {
     let meta_len = match event {
         KernelEvent::InsertRecord { metadata, .. }
         | KernelEvent::AutoInsertRecord { metadata, .. }
-        | KernelEvent::UpdateRecordMetadata { metadata, .. } => {
-            metadata.as_ref().map(|m| m.len())
-        }
-        KernelEvent::InsertRecordEncrypted { metadata_ciphertext, .. } => {
-            metadata_ciphertext.as_ref().map(|m| m.len())
-        }
+        | KernelEvent::UpdateRecordMetadata { metadata, .. } => metadata.as_ref().map(|m| m.len()),
+        KernelEvent::InsertRecordEncrypted {
+            metadata_ciphertext,
+            ..
+        } => metadata_ciphertext.as_ref().map(|m| m.len()),
         _ => None,
     };
     match meta_len {
@@ -430,9 +435,7 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
             if n + CRC32_SUFFIX_LEN > bytes.len() {
                 return Err(WireError::Truncated);
             }
-            let stored_crc = u32::from_le_bytes(
-                bytes[n..n + CRC32_SUFFIX_LEN].try_into().unwrap()
-            );
+            let stored_crc = u32::from_le_bytes(bytes[n..n + CRC32_SUFFIX_LEN].try_into().unwrap());
             let computed_crc = crc32fast::hash(&bytes[..n]);
             if computed_crc != stored_crc {
                 return Err(WireError::Decode(format!(
@@ -536,9 +539,19 @@ pub fn chain_advance_v3(
 pub fn chain_advance(version: u32, head: &[u8; 32], e: &DecodedEntry) -> Result<[u8; 32]> {
     match version {
         VERSION_V2 => Ok(chain_advance_v2(head, e.wall_time_secs, &e.entry)),
-        VERSION_V3 => Ok(chain_advance_v3(head, e.wall_time_secs, e.request_id, &e.entry)),
+        VERSION_V3 => Ok(chain_advance_v3(
+            head,
+            e.wall_time_secs,
+            e.request_id,
+            &e.entry,
+        )),
         // V4 chain hash is identical to V3 — CRC32 is only a transport check, not part of the chain.
-        VERSION_V4 => Ok(chain_advance_v3(head, e.wall_time_secs, e.request_id, &e.entry)),
+        VERSION_V4 => Ok(chain_advance_v3(
+            head,
+            e.wall_time_secs,
+            e.request_id,
+            &e.entry,
+        )),
         v => Err(WireError::UnsupportedVersion(v)),
     }
 }

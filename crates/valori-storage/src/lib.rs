@@ -11,10 +11,10 @@
 //! bootstrap uses.
 
 pub mod error;
-pub mod wal_writer;
-pub mod wal_reader;
-mod wal_compat;
 pub mod events;
 pub mod object_store;
+mod wal_compat;
+pub mod wal_reader;
+pub mod wal_writer;
 
 pub use error::StorageError;

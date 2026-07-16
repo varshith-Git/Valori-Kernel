@@ -129,12 +129,12 @@ pub enum IngestError {
 impl std::fmt::Display for IngestError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IngestError::Reader(s)     => write!(f, "reader error: {s}"),
-            IngestError::Chunk(s)      => write!(f, "chunk error: {s}"),
-            IngestError::Embed(s)      => write!(f, "embed error: {s}"),
-            IngestError::Writer(s)     => write!(f, "writer error: {s}"),
+            IngestError::Reader(s) => write!(f, "reader error: {s}"),
+            IngestError::Chunk(s) => write!(f, "chunk error: {s}"),
+            IngestError::Embed(s) => write!(f, "embed error: {s}"),
+            IngestError::Writer(s) => write!(f, "writer error: {s}"),
             IngestError::Validation(s) => write!(f, "validation error: {s}"),
-            IngestError::Cancelled     => write!(f, "pipeline cancelled"),
+            IngestError::Cancelled => write!(f, "pipeline cancelled"),
         }
     }
 }

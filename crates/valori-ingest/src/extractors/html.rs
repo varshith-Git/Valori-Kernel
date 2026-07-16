@@ -12,15 +12,19 @@ impl Extractor for HtmlExtractor {
         let raw = std::str::from_utf8(bytes)
             .map_err(|_| IngestError::Reader("HTML input is not valid UTF-8".into()))?;
         let parsed = Html::parse_document(raw);
-        let title  = extract_meta(&parsed, "title");
+        let title = extract_meta(&parsed, "title");
         let author = extract_meta_name(&parsed, "author");
-        let text   = extract_body_text(&parsed);
+        let text = extract_body_text(&parsed);
         let id = blake3_hex(text.as_bytes());
         Ok(Document {
             id,
             source: source.unwrap_or("document.html").to_string(),
             mime_type: "text/html".to_string(),
-            metadata: DocumentMetadata { title, author, ..Default::default() },
+            metadata: DocumentMetadata {
+                title,
+                author,
+                ..Default::default()
+            },
             content: text,
         })
     }

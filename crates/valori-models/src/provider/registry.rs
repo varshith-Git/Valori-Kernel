@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use crate::error::{ModelError, ModelResult};
 use crate::manifest::ModelManifest;
 use crate::provider::{
-    dummy::DummyProvider, ollama::OllamaProvider, openai::OpenAIProvider,
-    voyage::VoyageProvider, ModelProvider,
+    dummy::DummyProvider, ollama::OllamaProvider, openai::OpenAIProvider, voyage::VoyageProvider,
+    ModelProvider,
 };
 
 /// Factory that knows how to construct one kind of `ModelProvider`.
@@ -28,10 +28,7 @@ pub trait ProviderFactory: Send + Sync {
     ) -> ModelResult<Box<dyn ModelProvider>>;
 
     /// Build from an installed manifest (default: delegates to `build_from_params`).
-    fn build_from_manifest(
-        &self,
-        manifest: &ModelManifest,
-    ) -> ModelResult<Box<dyn ModelProvider>> {
+    fn build_from_manifest(&self, manifest: &ModelManifest) -> ModelResult<Box<dyn ModelProvider>> {
         self.build_from_params(
             manifest_model_name(manifest),
             None,
@@ -51,7 +48,9 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn new() -> Self {
-        Self { factories: HashMap::new() }
+        Self {
+            factories: HashMap::new(),
+        }
     }
 
     /// Return a registry with all built-in providers registered.
@@ -85,9 +84,10 @@ impl ProviderRegistry {
         api_key: Option<&str>,
         dim: usize,
     ) -> ModelResult<Box<dyn ModelProvider>> {
-        let factory = self.factories.get(kind).ok_or_else(|| {
-            ModelError::Provider(format!("unknown provider '{kind}'"))
-        })?;
+        let factory = self
+            .factories
+            .get(kind)
+            .ok_or_else(|| ModelError::Provider(format!("unknown provider '{kind}'")))?;
         factory.build_from_params(model, base_url, api_key, dim)
     }
 
@@ -121,7 +121,9 @@ impl Default for ProviderRegistry {
 struct OllamaFactory;
 
 impl ProviderFactory for OllamaFactory {
-    fn kind(&self) -> &'static str { "ollama" }
+    fn kind(&self) -> &'static str {
+        "ollama"
+    }
 
     fn build_from_params(
         &self,
@@ -141,7 +143,9 @@ impl ProviderFactory for OllamaFactory {
 struct OpenAIFactory;
 
 impl ProviderFactory for OpenAIFactory {
-    fn kind(&self) -> &'static str { "openai" }
+    fn kind(&self) -> &'static str {
+        "openai"
+    }
 
     fn build_from_params(
         &self,
@@ -161,10 +165,13 @@ impl ProviderFactory for OpenAIFactory {
 
 // `custom` is an alias for OpenAI-compatible. Register separately so both
 // "openai" and "custom" resolve to the same factory logic.
+#[allow(dead_code)]
 struct CustomFactory;
 
 impl ProviderFactory for CustomFactory {
-    fn kind(&self) -> &'static str { "custom" }
+    fn kind(&self) -> &'static str {
+        "custom"
+    }
 
     fn build_from_params(
         &self,
@@ -185,7 +192,9 @@ impl ProviderFactory for CustomFactory {
 struct VoyageFactory;
 
 impl ProviderFactory for VoyageFactory {
-    fn kind(&self) -> &'static str { "voyage" }
+    fn kind(&self) -> &'static str {
+        "voyage"
+    }
 
     fn build_from_params(
         &self,
@@ -194,14 +203,20 @@ impl ProviderFactory for VoyageFactory {
         api_key: Option<&str>,
         dim: usize,
     ) -> ModelResult<Box<dyn ModelProvider>> {
-        Ok(Box::new(VoyageProvider::new(model, api_key.unwrap_or(""), dim)))
+        Ok(Box::new(VoyageProvider::new(
+            model,
+            api_key.unwrap_or(""),
+            dim,
+        )))
     }
 }
 
 struct DummyFactory;
 
 impl ProviderFactory for DummyFactory {
-    fn kind(&self) -> &'static str { "dummy" }
+    fn kind(&self) -> &'static str {
+        "dummy"
+    }
 
     fn build_from_params(
         &self,
@@ -253,7 +268,15 @@ mod tests {
     fn custom_factory_can_be_registered() {
         let mut r = ProviderRegistry::new();
         r.register(Box::new(CustomFactory));
-        let p = r.build("custom", "my-model", Some("http://localhost:8080"), None, 768).unwrap();
+        let p = r
+            .build(
+                "custom",
+                "my-model",
+                Some("http://localhost:8080"),
+                None,
+                768,
+            )
+            .unwrap();
         assert_eq!(p.dim(), 768);
     }
 }

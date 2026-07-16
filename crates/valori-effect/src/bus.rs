@@ -31,7 +31,10 @@ pub struct EffectBus {
 
 impl EffectBus {
     pub fn new(caps: Arc<CapabilityRegistry>) -> Self {
-        EffectBus { caps, dispatched: Mutex::new(HashSet::new()) }
+        EffectBus {
+            caps,
+            dispatched: Mutex::new(HashSet::new()),
+        }
     }
 
     /// Dispatch one effect.
@@ -60,12 +63,11 @@ impl EffectBus {
     async fn route(&self, effect: Effect) -> EffectResult<serde_json::Value> {
         match effect.payload {
             EffectPayload::KernelWrite(cmd) => {
-                let result = self.caps.kernel.apply_command(
-                    cmd.shard_id,
-                    cmd.namespace_id,
-                    &cmd.body,
-                    &cmd.request_id,
-                ).await?;
+                let result = self
+                    .caps
+                    .kernel
+                    .apply_command(cmd.shard_id, cmd.namespace_id, &cmd.body, &cmd.request_id)
+                    .await?;
                 debug!("EffectBus: KernelWrite dispatched (shard={})", cmd.shard_id);
                 Ok(result)
             }
@@ -79,7 +81,10 @@ impl EffectBus {
                 }
                 Ok(serde_json::Value::Null)
             }
-            EffectPayload::Audit { entry_json, shard_id } => {
+            EffectPayload::Audit {
+                entry_json,
+                shard_id,
+            } => {
                 if let Ok(proof) = self.caps.proof() {
                     proof.append_fragment(shard_id, &entry_json).await?;
                 } else {
@@ -129,17 +134,30 @@ mod tests {
     fn bus() -> EffectBus {
         EffectBus::new(Arc::new(CapabilityRegistry {
             kernel: Arc::new(NoOpKernelCapability { shard_count: 1 }),
-            embed: None, llm: None, storage: None, http: None, proof: None, scheduler: None,
+            embed: None,
+            llm: None,
+            storage: None,
+            http: None,
+            proof: None,
+            scheduler: None,
         }))
     }
 
-    fn eid() -> ExecutionId { ExecutionId { hi: 42, lo: 7 } }
+    fn eid() -> ExecutionId {
+        ExecutionId { hi: 42, lo: 7 }
+    }
 
     #[tokio::test]
     async fn counter_dispatches_ok() {
         let bus = bus();
         let id = EffectId::new(&eid(), 0, 0);
-        let e = Effect::ephemeral(id, EffectPayload::Counter { name: "test".into(), value: 1.0 });
+        let e = Effect::ephemeral(
+            id,
+            EffectPayload::Counter {
+                name: "test".into(),
+                value: 1.0,
+            },
+        );
         bus.dispatch(e).await.unwrap();
     }
 
@@ -149,8 +167,14 @@ mod tests {
         let bus = bus();
         let id = EffectId::new(&eid(), 0, 0);
         let kernel_cmd = crate::effect::KernelCommand {
-            shard_id: 0, namespace_id: 0,
-            body: KernelCommandBody::InsertRecord { values: vec![], text: None, metadata: None, tag: 0 },
+            shard_id: 0,
+            namespace_id: 0,
+            body: KernelCommandBody::InsertRecord {
+                values: vec![],
+                text: None,
+                metadata: None,
+                tag: 0,
+            },
             request_id: "req-1".into(),
         };
         let e1 = Effect::durable(id, EffectPayload::KernelWrite(kernel_cmd.clone()));
@@ -167,8 +191,14 @@ mod tests {
         let bus = bus();
         let id = EffectId::new(&eid(), 0, 0);
         let kernel_cmd = crate::effect::KernelCommand {
-            shard_id: 0, namespace_id: 0,
-            body: KernelCommandBody::InsertRecord { values: vec![], text: None, metadata: None, tag: 0 },
+            shard_id: 0,
+            namespace_id: 0,
+            body: KernelCommandBody::InsertRecord {
+                values: vec![],
+                text: None,
+                metadata: None,
+                tag: 0,
+            },
             request_id: "req-2".into(),
         };
         let effects = vec![

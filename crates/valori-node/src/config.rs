@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use serde::{Serialize, Deserialize};
 
 // IndexKind and QuantizationKind now live in valori-engine; re-export so all
 // existing `crate::config::IndexKind` / `crate::config::QuantizationKind`
@@ -144,27 +144,31 @@ pub struct NodeConfig {
     // VALORI_EMBED_URL:      base URL of the provider  (default per provider)
     // VALORI_EMBED_API_KEY:  API key (required for openai/custom if auth needed)
     pub embed_provider: Option<String>,
-    pub embed_model:    Option<String>,
-    pub embed_url:      Option<String>,
-    pub embed_api_key:  Option<String>,
+    pub embed_model: Option<String>,
+    pub embed_url: Option<String>,
+    pub embed_api_key: Option<String>,
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
         let max_records = std::env::var("VALORI_MAX_RECORDS")
-            .ok().and_then(|v| v.parse().ok())
+            .ok()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(1_000_000);
 
         let dim = std::env::var("VALORI_DIM")
-            .ok().and_then(|v| v.parse().ok())
+            .ok()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(128);
 
         let max_nodes = std::env::var("VALORI_MAX_NODES")
-            .ok().and_then(|v| v.parse().ok())
+            .ok()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(100_000);
 
         let max_edges = std::env::var("VALORI_MAX_EDGES")
-            .ok().and_then(|v| v.parse().ok())
+            .ok()
+            .and_then(|v| v.parse().ok())
             .unwrap_or(500_000);
 
         let bind_addr = std::env::var("VALORI_BIND")
@@ -190,8 +194,7 @@ impl Default for NodeConfig {
         // silently: precision is identity-defining (different format =
         // different hashes, different search results), so a typo or an
         // unimplemented format must stop the process, not default away.
-        let format_name = std::env::var("VALORI_FORMAT")
-            .unwrap_or_else(|_| "q16.16".to_string());
+        let format_name = std::env::var("VALORI_FORMAT").unwrap_or_else(|_| "q16.16".to_string());
         match valori_kernel::fxp::format::parse_format(&format_name) {
             Some(id) if id == valori_kernel::fxp::format::ACTIVE_FORMAT_ID => {}
             Some(_) => panic!(
@@ -203,55 +206,76 @@ impl Default for NodeConfig {
                  (known: q16.16, q8.8, q32.32; implemented: q16.16)"
             ),
         }
-        
+
         let snapshot_path = std::env::var("VALORI_SNAPSHOT_PATH")
-            .ok().map(PathBuf::from);
-            
-        let wal_path = std::env::var("VALORI_WAL_PATH")
-            .ok().map(PathBuf::from);
-            
+            .ok()
+            .map(PathBuf::from);
+
+        let wal_path = std::env::var("VALORI_WAL_PATH").ok().map(PathBuf::from);
+
         let auto_snapshot_interval_secs = std::env::var("VALORI_SNAPSHOT_INTERVAL")
-            .ok().and_then(|v| v.parse::<u64>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
 
         let snapshot_every_events = std::env::var("VALORI_SNAPSHOT_EVERY_EVENTS")
-            .ok().and_then(|v| v.parse::<u64>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
         let snapshot_every_bytes = std::env::var("VALORI_SNAPSHOT_EVERY_BYTES")
-            .ok().and_then(|v| v.parse::<u64>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
         let snapshot_keep = std::env::var("VALORI_SNAPSHOT_KEEP")
-            .ok().and_then(|v| v.parse::<u32>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok());
         let zstd_compression_level = std::env::var("VALORI_ZSTD_LEVEL")
-            .ok().and_then(|v| v.parse::<i32>().ok());
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok());
         let genesis_replay = std::env::var("VALORI_GENESIS_REPLAY")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         let node_id = std::env::var("VALORI_NODE_ID")
-            .ok().and_then(|v| v.parse::<u32>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok());
 
         let auth_token = std::env::var("VALORI_AUTH_TOKEN").ok();
         let keys_path = std::env::var("VALORI_KEYS_PATH").ok().map(PathBuf::from);
-        let shred_log_path = std::env::var("VALORI_SHRED_LOG_PATH").ok().map(PathBuf::from);
+        let shred_log_path = std::env::var("VALORI_SHRED_LOG_PATH")
+            .ok()
+            .map(PathBuf::from);
 
         let object_store_url = std::env::var("VALORI_OBJECT_STORE_URL").ok();
         let object_store_keep = std::env::var("VALORI_OBJECT_STORE_KEEP")
-            .ok().and_then(|v| v.parse::<u32>().ok())
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
             .unwrap_or(7);
 
         let cors_origin = std::env::var("VALORI_CORS_ORIGIN").ok();
 
-        let hnsw_m = std::env::var("VALORI_HNSW_M").ok().and_then(|v| v.parse().ok());
-        let hnsw_ef_construction = std::env::var("VALORI_HNSW_EF_CONSTRUCTION").ok().and_then(|v| v.parse().ok());
-        let hnsw_ef_search = std::env::var("VALORI_HNSW_EF_SEARCH").ok().and_then(|v| v.parse().ok());
+        let hnsw_m = std::env::var("VALORI_HNSW_M")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let hnsw_ef_construction = std::env::var("VALORI_HNSW_EF_CONSTRUCTION")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let hnsw_ef_search = std::env::var("VALORI_HNSW_EF_SEARCH")
+            .ok()
+            .and_then(|v| v.parse().ok());
 
-        let ivf_n_list: Option<usize> = std::env::var("VALORI_IVF_N_LIST").ok().and_then(|v| v.parse().ok());
-        let ivf_n_probe: Option<usize> = std::env::var("VALORI_IVF_N_PROBE").ok().and_then(|v| v.parse().ok());
+        let ivf_n_list: Option<usize> = std::env::var("VALORI_IVF_N_LIST")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let ivf_n_probe: Option<usize> = std::env::var("VALORI_IVF_N_PROBE")
+            .ok()
+            .and_then(|v| v.parse().ok());
 
         let decay_half_life_secs = std::env::var("VALORI_DECAY_HALF_LIFE_SECS")
-            .ok().and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0);
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&v| v > 0);
 
         let embed_provider = std::env::var("VALORI_EMBED_PROVIDER").ok();
-        let embed_model    = std::env::var("VALORI_EMBED_MODEL").ok();
-        let embed_url      = std::env::var("VALORI_EMBED_URL").ok();
-        let embed_api_key  = std::env::var("VALORI_EMBED_API_KEY").ok();
+        let embed_model = std::env::var("VALORI_EMBED_MODEL").ok();
+        let embed_url = std::env::var("VALORI_EMBED_URL").ok();
+        let embed_api_key = std::env::var("VALORI_EMBED_API_KEY").ok();
 
         // Mode
         let mode = if let Ok(url) = std::env::var("VALORI_FOLLOWER_OF") {
@@ -259,17 +283,20 @@ impl Default for NodeConfig {
         } else {
             NodeMode::Leader
         };
-        
+
         let event_log_path = std::env::var("VALORI_EVENT_LOG_PATH")
-            .ok().map(PathBuf::from);
+            .ok()
+            .map(PathBuf::from);
 
         let shard_count = std::env::var("VALORI_SHARD_COUNT")
-            .ok().and_then(|v| v.parse::<usize>().ok())
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(1)
             .max(1);
 
         let event_log_rotation_bytes = std::env::var("VALORI_EVENT_LOG_ROTATION_BYTES")
-            .ok().and_then(|v| v.parse::<u64>().ok());
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok());
 
         Self {
             max_records,

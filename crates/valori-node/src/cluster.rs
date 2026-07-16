@@ -98,7 +98,9 @@ impl ClusterConfig {
             .ok_or(ClusterConfigError::MissingNodeId)?;
         let raft_bind =
             std::env::var("VALORI_RAFT_BIND").unwrap_or_else(|_| "0.0.0.0:3100".to_string());
-        let init = std::env::var("VALORI_CLUSTER_INIT").map(|v| v == "1").unwrap_or(false);
+        let init = std::env::var("VALORI_CLUSTER_INIT")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let raft_log_path = std::env::var("VALORI_RAFT_LOG_PATH")
             .ok()
             .map(std::path::PathBuf::from);
@@ -127,8 +129,7 @@ impl ClusterConfig {
             (None, None, None) => Ok(None),
             (Some(ca), Some(cert), Some(key)) => {
                 let read = |p: &str| {
-                    std::fs::read(p)
-                        .map_err(|e| ClusterConfigError::TlsFile(format!("{p}: {e}")))
+                    std::fs::read(p).map_err(|e| ClusterConfigError::TlsFile(format!("{p}: {e}")))
                 };
                 Ok(Some(valori_consensus::RaftTlsConfig {
                     ca_pem: read(&ca)?,
@@ -140,10 +141,19 @@ impl ClusterConfig {
             }
             (ca, cert, key) => {
                 let mut set = Vec::new();
-                if ca.is_some() { set.push("CA"); }
-                if cert.is_some() { set.push("CERT"); }
-                if key.is_some() { set.push("KEY"); }
-                Err(ClusterConfigError::PartialTls(format!("only {} set", set.join("+"))))
+                if ca.is_some() {
+                    set.push("CA");
+                }
+                if cert.is_some() {
+                    set.push("CERT");
+                }
+                if key.is_some() {
+                    set.push("KEY");
+                }
+                Err(ClusterConfigError::PartialTls(format!(
+                    "only {} set",
+                    set.join("+")
+                )))
             }
         }
     }
@@ -177,7 +187,13 @@ impl ClusterConfig {
             if raft_addr.is_empty() || raft_addr.contains('=') || !raft_addr.contains(':') {
                 return Err(ClusterConfigError::BadMemberEntry(entry.to_string()));
             }
-            parsed.insert(id, ValoriNode { api_addr, raft_addr });
+            parsed.insert(
+                id,
+                ValoriNode {
+                    api_addr,
+                    raft_addr,
+                },
+            );
         }
         if !parsed.contains_key(&node_id) {
             return Err(ClusterConfigError::SelfNotInMembers(node_id));
@@ -357,40 +373,42 @@ pub async fn bootstrap_cluster(
         // Every shard gets a real audit sink of its own (Phase S13) — see
         // the doc comment above bootstrap_cluster for the shard-0-fatal vs
         // shards-1+-graceful-fallback rationale.
-        let (audit_i, event_log_writer_i): (Box<dyn AuditSink>, Option<Arc<Mutex<EventLogWriter>>>) =
-            match event_log_path {
-                Some(base) => {
-                    let path = shard_path(base, shard_id, cfg.shard_count);
-                    match EventLogWriter::open(&path, Some(dim as u32)) {
-                        Ok(writer) => {
-                            let mut sink = EventLogAuditSink::new(writer);
-                            if let Some(limit) = event_log_rotation_bytes {
-                                sink = sink.with_rotation_bytes(Some(limit));
-                            }
-                            let writer_handle = sink.writer();
-                            (Box::new(sink), Some(writer_handle))
+        let (audit_i, event_log_writer_i): (
+            Box<dyn AuditSink>,
+            Option<Arc<Mutex<EventLogWriter>>>,
+        ) = match event_log_path {
+            Some(base) => {
+                let path = shard_path(base, shard_id, cfg.shard_count);
+                match EventLogWriter::open(&path, Some(dim as u32)) {
+                    Ok(writer) => {
+                        let mut sink = EventLogAuditSink::new(writer);
+                        if let Some(limit) = event_log_rotation_bytes {
+                            sink = sink.with_rotation_bytes(Some(limit));
                         }
-                        Err(e) if i == 0 => {
-                            return Err(std::io::Error::other(format!(
-                                "shard 0 audit log open failed at {}: {e}",
-                                path.display()
-                            )));
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                shard = i,
-                                path = %path.display(),
-                                error = %e,
-                                "failed to open shard's audit log — this shard's writes will NOT \
-                                 be chained to disk (falling back to NullAuditSink for this shard \
-                                 only; Raft replication and kernel state are unaffected)"
-                            );
-                            (Box::new(NullAuditSink), None)
-                        }
+                        let writer_handle = sink.writer();
+                        (Box::new(sink), Some(writer_handle))
+                    }
+                    Err(e) if i == 0 => {
+                        return Err(std::io::Error::other(format!(
+                            "shard 0 audit log open failed at {}: {e}",
+                            path.display()
+                        )));
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            shard = i,
+                            path = %path.display(),
+                            error = %e,
+                            "failed to open shard's audit log — this shard's writes will NOT \
+                             be chained to disk (falling back to NullAuditSink for this shard \
+                             only; Raft replication and kernel state are unaffected)"
+                        );
+                        (Box::new(NullAuditSink), None)
                     }
                 }
-                None => (Box::new(NullAuditSink), None),
-            };
+            }
+            None => (Box::new(NullAuditSink), None),
+        };
 
         let (state_machine, raft, startup_committed_index) = match &cfg.raft_log_path {
             Some(base_path) => {
@@ -413,7 +431,9 @@ pub async fn bootstrap_cluster(
                     .map_or(0, |l| l.index);
                 let raft = Raft::new(cfg.node_id, raft_config.clone(), network, store, sm.clone())
                     .await
-                    .map_err(|e| std::io::Error::other(format!("shard {i} raft start failed: {e}")))?;
+                    .map_err(|e| {
+                        std::io::Error::other(format!("shard {i} raft start failed: {e}"))
+                    })?;
                 (sm, raft, startup_committed_index)
             }
             None => {
@@ -445,7 +465,12 @@ pub async fn bootstrap_cluster(
         raft_instances.insert(shard_id, raft.clone());
         shards.insert(
             shard_id,
-            ShardHandle { raft, state_machine, startup_committed_index, event_log_writer: event_log_writer_i },
+            ShardHandle {
+                raft,
+                state_machine,
+                startup_committed_index,
+                event_log_writer: event_log_writer_i,
+            },
         );
     }
 
@@ -562,7 +587,11 @@ fn spawn_raft_metrics_watcher(shard: ShardId, label_shards: bool, raft: Raft) {
                         );
                         metrics::gauge!(
                             "valori_raft_is_leader",
-                            if m.current_leader == Some(m.id) { 1.0 } else { 0.0 }
+                            if m.current_leader == Some(m.id) {
+                                1.0
+                            } else {
+                                0.0
+                            }
                         );
                         metrics::gauge!(
                             "valori_raft_last_log_index",
@@ -630,8 +659,7 @@ fn spawn_state_hash_watcher(
             .timeout(std::time::Duration::from_secs(5))
             .build()
             .expect("http client");
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
@@ -677,33 +705,33 @@ async fn check_state_hash_agreement(
     for peer_addr in &peers {
         let url = format!("http://{peer_addr}/v1/proof/state");
         match http.get(&url).send().await {
-            Ok(r) if r.status().is_success() => {
-                match r.json::<serde_json::Value>().await {
-                    Ok(body) => {
-                        let peer_hash = body
-                            .get("final_state_hash")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if peer_hash != local_hash {
-                            tracing::error!(
-                                peer = peer_addr,
-                                local = %local_hash,
-                                remote = peer_hash,
-                                "STATE HASH MISMATCH — replica divergence detected"
-                            );
-                            all_match = false;
-                            match &shard_label {
-                                Some(s) => metrics::counter!("valori_raft_divergence_detections_total", 1, "shard" => s.clone()),
-                                None => metrics::counter!("valori_raft_divergence_detections_total", 1),
+            Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+                Ok(body) => {
+                    let peer_hash = body
+                        .get("final_state_hash")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if peer_hash != local_hash {
+                        tracing::error!(
+                            peer = peer_addr,
+                            local = %local_hash,
+                            remote = peer_hash,
+                            "STATE HASH MISMATCH — replica divergence detected"
+                        );
+                        all_match = false;
+                        match &shard_label {
+                            Some(s) => {
+                                metrics::counter!("valori_raft_divergence_detections_total", 1, "shard" => s.clone())
                             }
+                            None => metrics::counter!("valori_raft_divergence_detections_total", 1),
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(peer = peer_addr, err = %e, "state hash parse error");
-                        all_match = false;
-                    }
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(peer = peer_addr, err = %e, "state hash parse error");
+                    all_match = false;
+                }
+            },
             Ok(r) => {
                 tracing::warn!(peer = peer_addr, status = %r.status(), "state hash probe non-2xx");
                 all_match = false;
@@ -716,7 +744,12 @@ async fn check_state_hash_agreement(
         }
     }
     match shard_label {
-        Some(s) => metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 }, "shard" => s),
-        None => metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 }),
+        Some(s) => {
+            metrics::gauge!("valori_raft_state_hash_match", if all_match { 1.0 } else { 0.0 }, "shard" => s)
+        }
+        None => metrics::gauge!(
+            "valori_raft_state_hash_match",
+            if all_match { 1.0 } else { 0.0 }
+        ),
     }
 }

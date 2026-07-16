@@ -88,7 +88,11 @@ impl Writer for KernelWriter {
 
         Ok(WriteResult {
             record_id: rid.to_string(),
-            chunk_node_id: if chunk_node_id > 0 { Some(chunk_node_id) } else { None },
+            chunk_node_id: if chunk_node_id > 0 {
+                Some(chunk_node_id)
+            } else {
+                None
+            },
         })
     }
 }

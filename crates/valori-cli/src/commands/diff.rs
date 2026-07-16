@@ -15,16 +15,16 @@ use valori_kernel::types::vector::FxpVector;
 
 pub fn run(
     snapshot_path: &str,
-    log_path:      &str,
-    from_count:    u64,
-    to_count:      u64,
-    query_arg:     Option<String>,
-    top_k:         usize,
+    log_path: &str,
+    from_count: u64,
+    to_count: u64,
+    query_arg: Option<String>,
+    top_k: usize,
 ) -> anyhow::Result<()> {
     // ── Engine A — state at `from` ────────────────────────────────────────────
     let mut engine_a = ForensicEngine::from_snapshot(snapshot_path)?;
     engine_a.replay_to(log_path, from_count)?;
-    let hash_a   = engine_a.blake3_hex();
+    let hash_a = engine_a.blake3_hex();
     let events_a: HashSet<u64> = engine_a.applied_events.iter().copied().collect();
 
     // ── Engine B — state at `to` ──────────────────────────────────────────────
@@ -33,7 +33,11 @@ pub fn run(
     let hash_b = engine_b.blake3_hex();
 
     let state_changed = hash_a != hash_b;
-    let status_label  = if state_changed { "DRIFTED" } else { "IDENTICAL" };
+    let status_label = if state_changed {
+        "DRIFTED"
+    } else {
+        "IDENTICAL"
+    };
 
     // ── State comparison table ────────────────────────────────────────────────
     let mut cmp = Table::new();
@@ -106,14 +110,15 @@ pub fn run(
 
     // ── Semantic diff (optional) ──────────────────────────────────────────────
     if let Some(query_str) = query_arg {
-        let floats: Vec<f64> = serde_json::from_str(&query_str)
-            .map_err(|_| anyhow::anyhow!(
+        let floats: Vec<f64> = serde_json::from_str(&query_str).map_err(|_| {
+            anyhow::anyhow!(
                 "Invalid --query value. Expected a JSON float array, e.g. '[0.1, 0.2]'. \
                  Got: {query_str}"
-            ))?;
+            )
+        })?;
 
         let query_fxp = floats_to_fxp(&floats);
-        let k         = top_k.max(1);
+        let k = top_k.max(1);
 
         let results_a = search(&engine_a, &query_fxp, k);
         let results_b = search(&engine_b, &query_fxp, k);
@@ -177,8 +182,14 @@ pub fn run(
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 fn search(engine: &ForensicEngine, query: &FxpVector, k: usize) -> Vec<SearchResult> {
-    let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
-    let found   = engine.kernel_state().search_l2(query, &mut buf, None);
+    let mut buf = vec![
+        SearchResult {
+            id: RecordId(0),
+            score: i64::MAX
+        };
+        k
+    ];
+    let found = engine.kernel_state().search_l2(query, &mut buf, None);
     buf.truncate(found);
     buf
 }

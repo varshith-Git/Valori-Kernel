@@ -76,15 +76,18 @@ impl LeaderClient {
 
             match self.client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp.json::<LeaderProof>().await
+                    return resp
+                        .json::<LeaderProof>()
+                        .await
                         .map_err(|e| EngineError::Network(e.to_string()));
                 }
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_client_error() {
-                        return Err(EngineError::Network(
-                            format!("Proof request failed: {}", status)
-                        ));
+                        return Err(EngineError::Network(format!(
+                            "Proof request failed: {}",
+                            status
+                        )));
                     }
                     last_err = EngineError::Network(format!("Proof request failed: {}", status));
                 }
@@ -105,13 +108,18 @@ impl LeaderClient {
             "{}/v1/replication/events?start_offset={}",
             self.base_url, start_offset
         );
-        let resp = self.client.get(&url).send().await
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| EngineError::Network(e.to_string()))?;
 
         if !resp.status().is_success() {
-            return Err(EngineError::Network(
-                format!("Stream request failed: {}", resp.status())
-            ));
+            return Err(EngineError::Network(format!(
+                "Stream request failed: {}",
+                resp.status()
+            )));
         }
 
         Ok(resp)
@@ -131,16 +139,19 @@ impl LeaderClient {
 
             match self.client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp.bytes().await
+                    return resp
+                        .bytes()
+                        .await
                         .map(|b| b.to_vec())
                         .map_err(|e| EngineError::Network(e.to_string()));
                 }
                 Ok(resp) => {
                     let status = resp.status();
                     if status.is_client_error() {
-                        return Err(EngineError::Network(
-                            format!("Snapshot request failed: {}", status)
-                        ));
+                        return Err(EngineError::Network(format!(
+                            "Snapshot request failed: {}",
+                            status
+                        )));
                     }
                     last_err = EngineError::Network(format!("Snapshot request failed: {}", status));
                 }
@@ -160,11 +171,11 @@ mod tests {
 
     #[test]
     fn backoff_schedule_is_correct() {
-        assert_eq!(LeaderClient::backoff_ms(0), 0);        // immediate
-        assert_eq!(LeaderClient::backoff_ms(1), 500);      // 500 ms
-        assert_eq!(LeaderClient::backoff_ms(2), 1_000);    // 1 s
-        assert_eq!(LeaderClient::backoff_ms(3), 2_000);    // 2 s
-        assert_eq!(LeaderClient::backoff_ms(4), 4_000);    // 4 s
+        assert_eq!(LeaderClient::backoff_ms(0), 0); // immediate
+        assert_eq!(LeaderClient::backoff_ms(1), 500); // 500 ms
+        assert_eq!(LeaderClient::backoff_ms(2), 1_000); // 1 s
+        assert_eq!(LeaderClient::backoff_ms(3), 2_000); // 2 s
+        assert_eq!(LeaderClient::backoff_ms(4), 4_000); // 4 s
         assert_eq!(LeaderClient::backoff_ms(10), MAX_BACKOFF_MS); // capped
     }
 }

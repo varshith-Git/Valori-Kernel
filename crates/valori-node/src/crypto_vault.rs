@@ -29,11 +29,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Key, Nonce,
 };
-use aes_gcm::aead::rand_core::RngCore;
 
 use valori_kernel::crypto::{CryptoError, KeyId, KeyVault};
 
@@ -54,7 +54,10 @@ impl AesGcmVault {
     /// process lifetime; shredding is in-process only.
     pub fn in_memory() -> Self {
         Self {
-            inner: RwLock::new(VaultInner { keys: HashMap::new(), shredded: HashSet::new() }),
+            inner: RwLock::new(VaultInner {
+                keys: HashMap::new(),
+                shredded: HashSet::new(),
+            }),
             shred_log_path: None,
         }
     }
@@ -78,14 +81,21 @@ impl AesGcmVault {
             }
         }
         Ok(Self {
-            inner: RwLock::new(VaultInner { keys: HashMap::new(), shredded }),
+            inner: RwLock::new(VaultInner {
+                keys: HashMap::new(),
+                shredded,
+            }),
             shred_log_path: Some(path.to_owned()),
         })
     }
 
     fn append_shred_log(&self, key_id: &KeyId) {
         if let Some(ref path) = self.shred_log_path {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
                 let _ = writeln!(f, "{}", hex_key(key_id));
             }
         }
@@ -95,9 +105,10 @@ impl AesGcmVault {
 impl KeyVault for AesGcmVault {
     fn encrypt(&self, key_id: KeyId, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let aes_key: [u8; 32] = {
-            let mut inner = self.inner.write().map_err(|_| {
-                CryptoError::BackendError("lock poisoned".into())
-            })?;
+            let mut inner = self
+                .inner
+                .write()
+                .map_err(|_| CryptoError::BackendError("lock poisoned".into()))?;
             if inner.shredded.contains(&key_id) {
                 return Err(CryptoError::KeyNotFound(key_id));
             }
@@ -113,9 +124,9 @@ impl KeyVault for AesGcmVault {
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext).map_err(|e| {
-            CryptoError::EncryptionFailed(e.to_string())
-        })?;
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
         // Output: [nonce: 12] ‖ [ciphertext + tag]
         let mut out = Vec::with_capacity(12 + ciphertext.len());
@@ -129,29 +140,33 @@ impl KeyVault for AesGcmVault {
             return Err(CryptoError::DecryptionFailed("ciphertext too short".into()));
         }
 
-        let inner = self.inner.read().map_err(|_| {
-            CryptoError::BackendError("lock poisoned".into())
-        })?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|_| CryptoError::BackendError("lock poisoned".into()))?;
 
         if inner.shredded.contains(&key_id) {
             return Err(CryptoError::KeyNotFound(key_id));
         }
 
-        let aes_key = inner.keys.get(&key_id)
+        let aes_key = inner
+            .keys
+            .get(&key_id)
             .ok_or(CryptoError::KeyNotFound(key_id))?;
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(aes_key));
         let nonce = Nonce::from_slice(&data[..12]);
-        cipher.decrypt(nonce, &data[12..]).map_err(|e| {
-            CryptoError::DecryptionFailed(e.to_string())
-        })
+        cipher
+            .decrypt(nonce, &data[12..])
+            .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
     }
 
     fn shred(&self, key_id: KeyId) -> Result<(), CryptoError> {
         {
-            let mut inner = self.inner.write().map_err(|_| {
-                CryptoError::BackendError("lock poisoned".into())
-            })?;
+            let mut inner = self
+                .inner
+                .write()
+                .map_err(|_| CryptoError::BackendError("lock poisoned".into()))?;
             inner.keys.remove(&key_id);
             inner.shredded.insert(key_id);
         }
@@ -175,7 +190,9 @@ fn hex_key(k: &KeyId) -> String {
 }
 
 fn hex_decode(s: &str, out: &mut [u8; 16]) -> Result<(), ()> {
-    if s.len() != 32 { return Err(()); }
+    if s.len() != 32 {
+        return Err(());
+    }
     for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
         let hi = hex_nibble(chunk[0])?;
         let lo = hex_nibble(chunk[1])?;

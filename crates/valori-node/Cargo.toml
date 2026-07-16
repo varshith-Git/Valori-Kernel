@@ -59,3 +59,6 @@ getrandom = "0.2"
 [dev-dependencies] 
 tempfile = "3.23.0"
 tower = { version = "0.5.2", features = ["util"] }
+
+[lints]
+workspace = true

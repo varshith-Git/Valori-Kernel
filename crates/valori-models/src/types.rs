@@ -19,11 +19,11 @@ pub enum ModelTask {
 impl std::fmt::Display for ModelTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ModelTask::Embedding   => write!(f, "embedding"),
-            ModelTask::Generation  => write!(f, "generation"),
-            ModelTask::Reranker    => write!(f, "reranker"),
-            ModelTask::Vision      => write!(f, "vision"),
-            ModelTask::Speech      => write!(f, "speech"),
+            ModelTask::Embedding => write!(f, "embedding"),
+            ModelTask::Generation => write!(f, "generation"),
+            ModelTask::Reranker => write!(f, "reranker"),
+            ModelTask::Vision => write!(f, "vision"),
+            ModelTask::Speech => write!(f, "speech"),
         }
     }
 }
@@ -74,29 +74,30 @@ impl ProviderKind {
     /// Canonical lowercase tag used in registry entries and config parsing.
     pub fn as_str(&self) -> &'static str {
         match self {
-            ProviderKind::OpenAI      => "openai",
-            ProviderKind::Ollama      => "ollama",
-            ProviderKind::Voyage      => "voyage",
-            ProviderKind::Anthropic   => "anthropic",
+            ProviderKind::OpenAI => "openai",
+            ProviderKind::Ollama => "ollama",
+            ProviderKind::Voyage => "voyage",
+            ProviderKind::Anthropic => "anthropic",
             ProviderKind::AzureOpenAI => "azure_openai",
-            ProviderKind::Custom      => "custom",
-            ProviderKind::Local       => "local",
-            ProviderKind::Dummy       => "dummy",
+            ProviderKind::Custom => "custom",
+            ProviderKind::Local => "local",
+            ProviderKind::Dummy => "dummy",
         }
     }
 
     /// Parse from a config string; returns `None` for unrecognised values.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "openai"       => Some(ProviderKind::OpenAI),
-            "ollama"       => Some(ProviderKind::Ollama),
-            "voyage"       => Some(ProviderKind::Voyage),
-            "anthropic"    => Some(ProviderKind::Anthropic),
+            "openai" => Some(ProviderKind::OpenAI),
+            "ollama" => Some(ProviderKind::Ollama),
+            "voyage" => Some(ProviderKind::Voyage),
+            "anthropic" => Some(ProviderKind::Anthropic),
             "azure_openai" => Some(ProviderKind::AzureOpenAI),
-            "custom"       => Some(ProviderKind::Custom),
-            "local"        => Some(ProviderKind::Local),
-            "dummy"        => Some(ProviderKind::Dummy),
-            _              => None,
+            "custom" => Some(ProviderKind::Custom),
+            "local" => Some(ProviderKind::Local),
+            "dummy" => Some(ProviderKind::Dummy),
+            _ => None,
         }
     }
 }
@@ -121,7 +122,10 @@ pub enum ManifestStatus {
     /// Queued for download (not yet started).
     Queued,
     /// Actively downloading.
-    Downloading { progress_bytes: u64, total_bytes: u64 },
+    Downloading {
+        progress_bytes: u64,
+        total_bytes: u64,
+    },
     /// Download paused mid-stream.
     Paused { progress_bytes: u64 },
     /// Download complete; verifying SHA-256.
@@ -157,8 +161,12 @@ mod tests {
     #[test]
     fn provider_kind_roundtrip_str() {
         let kinds = [
-            ProviderKind::OpenAI, ProviderKind::Ollama, ProviderKind::Voyage,
-            ProviderKind::Custom, ProviderKind::Local, ProviderKind::Dummy,
+            ProviderKind::OpenAI,
+            ProviderKind::Ollama,
+            ProviderKind::Voyage,
+            ProviderKind::Custom,
+            ProviderKind::Local,
+            ProviderKind::Dummy,
         ];
         for k in &kinds {
             let s = k.as_str();
@@ -178,7 +186,11 @@ mod tests {
         assert!(!ManifestStatus::Available.is_installed());
         assert!(ManifestStatus::Available.is_available());
         assert!(ManifestStatus::Queued.is_in_progress());
-        assert!(ManifestStatus::Downloading { progress_bytes: 0, total_bytes: 100 }.is_in_progress());
+        assert!(ManifestStatus::Downloading {
+            progress_bytes: 0,
+            total_bytes: 100
+        }
+        .is_in_progress());
         assert!(!ManifestStatus::Installed.is_in_progress());
     }
 
@@ -192,7 +204,10 @@ mod tests {
     fn enums_serde_roundtrip() {
         let task: ModelTask = serde_json::from_str(r#""embedding""#).unwrap();
         assert_eq!(task, ModelTask::Embedding);
-        assert_eq!(serde_json::to_string(&ModelTask::Generation).unwrap(), r#""generation""#);
+        assert_eq!(
+            serde_json::to_string(&ModelTask::Generation).unwrap(),
+            r#""generation""#
+        );
 
         let fmt: ModelFormat = serde_json::from_str(r#""remote""#).unwrap();
         assert_eq!(fmt, ModelFormat::Remote);

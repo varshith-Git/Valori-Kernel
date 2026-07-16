@@ -4,19 +4,19 @@
 // Verify after every change: `cargo build -p valori-kernel --target wasm32-unknown-unknown`
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
+#[cfg(feature = "std")]
+pub mod adapters;
 pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod event;
 pub mod fxp;
 pub mod graph;
-pub mod types;
-pub mod snapshot;
-#[cfg(feature = "std")]
-pub mod adapters;
 pub mod index;
 pub mod math;
 pub mod proof;
+pub mod snapshot;
 pub mod state;
 pub mod storage;
+pub mod types;
 pub mod verify;

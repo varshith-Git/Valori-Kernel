@@ -21,14 +21,14 @@
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use serde_json::Value;
-use tower::ServiceExt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 
 use valori_node::config::NodeConfig;
-use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::{build_router, SharedEngine};
+use valori_node::EngineFromNodeConfig;
 
 fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
     let engine = Engine::new(&cfg);
@@ -48,11 +48,19 @@ fn tiny_cfg() -> NodeConfig {
 
 async fn get(router: axum::Router, uri: &str) -> (StatusCode, Value) {
     let resp = router
-        .oneshot(Request::builder().method(Method::GET).uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -61,7 +69,8 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
     let resp = router
         .oneshot(
             Request::builder()
-                .method(Method::POST).uri(uri)
+                .method(Method::POST)
+                .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
@@ -69,7 +78,9 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -78,7 +89,8 @@ async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode
     let resp = router
         .oneshot(
             Request::builder()
-                .method(Method::PATCH).uri(uri)
+                .method(Method::PATCH)
+                .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(serde_json::to_vec(&body).unwrap()))
                 .unwrap(),
@@ -86,18 +98,16 @@ async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
 
 /// Insert one record and return its id.
 async fn insert_one(router: axum::Router, vec: [f32; 4]) -> u32 {
-    let (status, body) = post_json(
-        router,
-        "/records",
-        serde_json::json!({"values": vec}),
-    ).await;
+    let (status, body) = post_json(router, "/records", serde_json::json!({"values": vec})).await;
     assert_eq!(status, StatusCode::OK, "insert failed: {body}");
     body["id"].as_u64().expect("missing id") as u32
 }
@@ -108,11 +118,18 @@ async fn insert_one(router: axum::Router, vec: [f32; 4]) -> u32 {
 async fn version_returns_string() {
     let (_, router) = engine_router(tiny_cfg());
     let resp = router
-        .oneshot(Request::builder().uri("/v1/version").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/version")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     // Version is returned as a plain string (not JSON object)
     assert!(!bytes.is_empty(), "version must return non-empty body");
 }
@@ -161,7 +178,8 @@ async fn index_rebuild_accepts_hnsw() {
         router,
         "/v1/index/rebuild",
         serde_json::json!({"index": "hnsw"}),
-    ).await;
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     let effective = body["effective"].as_str().unwrap();
@@ -175,11 +193,7 @@ async fn delete_record_by_id() {
     let (_, router) = engine_router(tiny_cfg());
     let id = insert_one(router.clone(), [1.0, 0.0, 0.0, 0.0]).await;
 
-    let (status, body) = post_json(
-        router,
-        "/v1/delete",
-        serde_json::json!({"id": id}),
-    ).await;
+    let (status, body) = post_json(router, "/v1/delete", serde_json::json!({"id": id})).await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["success"].as_bool().unwrap(), true);
@@ -188,12 +202,12 @@ async fn delete_record_by_id() {
 #[tokio::test]
 async fn delete_nonexistent_record_fails() {
     let (_, router) = engine_router(tiny_cfg());
-    let (status, _) = post_json(
-        router,
-        "/v1/delete",
-        serde_json::json!({"id": 9999u32}),
-    ).await;
-    assert_ne!(status, StatusCode::OK, "deleting a missing record must not return 200");
+    let (status, _) = post_json(router, "/v1/delete", serde_json::json!({"id": 9999u32})).await;
+    assert_ne!(
+        status,
+        StatusCode::OK,
+        "deleting a missing record must not return 200"
+    );
 }
 
 // ── /v1/records/:id ──────────────────────────────────────────────────────────
@@ -227,7 +241,8 @@ async fn patch_record_metadata_roundtrip() {
         router.clone(),
         &format!("/v1/records/{id}/metadata"),
         serde_json::json!({"author": "Alice", "year": 2025}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["ok"].as_bool().unwrap(), true);
 
@@ -244,7 +259,8 @@ async fn patch_metadata_not_found_returns_404() {
         router,
         "/v1/records/9999/metadata",
         serde_json::json!({"x": 1}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -260,7 +276,8 @@ async fn contradict_identical_vectors_above_threshold() {
         router,
         "/v1/memory/contradict",
         serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.5}),
-    ).await;
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["record_a"].as_u64().unwrap() as u32, id_a);
@@ -281,7 +298,8 @@ async fn contradict_orthogonal_vectors_below_threshold() {
         router,
         "/v1/memory/contradict",
         serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.9}),
-    ).await;
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["contradicts"].as_bool().unwrap(), false);
@@ -298,7 +316,8 @@ async fn meta_set_and_get_roundtrip() {
         router.clone(),
         "/v1/memory/meta/set",
         serde_json::json!({"target_id": "node:42", "metadata": {"role": "agent", "version": 3}}),
-    ).await;
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "set: {body}");
     assert_eq!(body["success"].as_bool().unwrap(), true);
 
@@ -325,12 +344,22 @@ async fn snapshot_download_returns_bytes() {
     insert_one(router.clone(), [0.1, 0.2, 0.3, 0.4]).await;
 
     let resp = router
-        .oneshot(Request::builder().uri("/v1/snapshot/download").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/v1/snapshot/download")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
-    assert!(!bytes.is_empty(), "snapshot download must return non-empty bytes");
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    assert!(
+        !bytes.is_empty(),
+        "snapshot download must return non-empty bytes"
+    );
 }
 
 // ── /v1/snapshot/restore ─────────────────────────────────────────────────────
@@ -348,7 +377,8 @@ async fn snapshot_restore_missing_path_returns_error() {
         router,
         "/v1/snapshot/restore",
         serde_json::json!({"path": snap_path.to_str().unwrap()}),
-    ).await;
+    )
+    .await;
     assert_ne!(status, StatusCode::OK, "restore of missing file must fail");
 }
 
@@ -378,7 +408,8 @@ async fn ingest_update_without_embed_provider_returns_error() {
         router,
         "/v1/ingest/update",
         serde_json::json!({"document_node_id": 1, "text": "updated", "source": "test.txt"}),
-    ).await;
+    )
+    .await;
     assert_ne!(status, StatusCode::OK);
 }
 
@@ -391,7 +422,8 @@ async fn extract_entities_without_embed_provider_returns_error() {
         router,
         "/v1/ingest/extract-entities",
         serde_json::json!({"text": "Alice works at Acme Corp."}),
-    ).await;
+    )
+    .await;
     assert_ne!(status, StatusCode::OK);
 }
 
@@ -412,10 +444,11 @@ async fn community_overview_before_detect_returns_empty_or_error() {
     let (status, body) = get(router, "/v1/community/overview").await;
     // Either 200 with empty communities or a 4xx — both are acceptable before detect runs
     if status == StatusCode::OK {
-        let communities = body["communities"].as_array()
-            .or_else(|| body.as_array());
-        assert!(communities.map(|c| c.is_empty()).unwrap_or(true),
-            "no communities should exist before detect: {body}");
+        let communities = body["communities"].as_array().or_else(|| body.as_array());
+        assert!(
+            communities.map(|c| c.is_empty()).unwrap_or(true),
+            "no communities should exist before detect: {body}"
+        );
     }
     // 4xx is also acceptable
 }
@@ -429,7 +462,8 @@ async fn community_search_before_detect_returns_empty_or_error() {
         router,
         "/v1/community/search",
         serde_json::json!({"vector": [1.0f32, 0.0, 0.0, 0.0], "k": 5}),
-    ).await;
+    )
+    .await;
     // Before community_detect has been run, the store is empty.
     // The server may return 200 with empty results or 4xx.
     assert!(

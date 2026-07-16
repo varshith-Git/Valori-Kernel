@@ -1,6 +1,6 @@
+use byteorder::{LittleEndian, ReadBytesExt};
 use std::fs::File;
 use std::io::{self, BufReader};
-use byteorder::{ReadBytesExt, LittleEndian};
 
 pub struct IvecsLoader {
     reader: BufReader<File>,
@@ -9,7 +9,9 @@ pub struct IvecsLoader {
 impl IvecsLoader {
     pub fn new(path: &str) -> io::Result<Self> {
         let f = File::open(path)?;
-        Ok(Self { reader: BufReader::new(f) })
+        Ok(Self {
+            reader: BufReader::new(f),
+        })
     }
 }
 

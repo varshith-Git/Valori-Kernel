@@ -54,15 +54,27 @@ pub fn execution_block(
 ) -> Value {
     match graph {
         Some(g) => {
-            let tasks: Vec<Value> = g.tasks.iter().map(|t| json!({
-                "id": t.id.0,
-                "kind": format!("{:?}", t.kind),
-                "shard": t.shard_id,
-            })).collect();
-            let edges: Vec<Value> = g.edges.iter().map(|e| json!({
-                "from": e.from.0,
-                "to": e.to.0,
-            })).collect();
+            let tasks: Vec<Value> = g
+                .tasks
+                .iter()
+                .map(|t| {
+                    json!({
+                        "id": t.id.0,
+                        "kind": format!("{:?}", t.kind),
+                        "shard": t.shard_id,
+                    })
+                })
+                .collect();
+            let edges: Vec<Value> = g
+                .edges
+                .iter()
+                .map(|e| {
+                    json!({
+                        "from": e.from.0,
+                        "to": e.to.0,
+                    })
+                })
+                .collect();
             json!({
                 "operation": operation,
                 "model": "INLINE",
@@ -102,23 +114,55 @@ pub fn with_execution<T: serde::Serialize>(body: T, execution: Option<Value>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind, ExecutionRetentionPolicy};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use valori_planner::context::{
+        CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
+    };
+    use valori_planner::graph::{
+        ExecutionGraph, ExecutionRetentionPolicy, TaskId, TaskKind, TaskSpec,
+    };
+    use valori_planner::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    };
 
     fn sample_graph() -> ExecutionGraph {
-        let op = compute_operation_hash(OperationKind::MemorySearch,
-            &OperationInputs::MemorySearch { k: 5, collection: "bench".into(), shard_id: 0, decay: false },
-            &ExecutionPolicy::default());
+        let op = compute_operation_hash(
+            OperationKind::MemorySearch,
+            &OperationInputs::MemorySearch {
+                k: 5,
+                collection: "bench".into(),
+                shard_id: 0,
+                decay: false,
+            },
+            &ExecutionPolicy::default(),
+        );
         let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
         let ctx = PlanningContextHash::compute(&PlanningContext {
-            capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count: 1 },
-            schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+            capability_set: CapabilitySet {
+                embed: false,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
+            schema_version: 1,
+            shard_count: 1,
+            cluster_epoch: 0,
+            cluster_mode: false,
         });
-        ExecutionGraph::build(op, fp, ctx,
-            vec![TaskSpec { id: TaskId(0), kind: TaskKind::MemorySearch, inputs_json: "{}".into(), shard_id: Some(0), topological_index: 0 }],
+        ExecutionGraph::build(
+            op,
+            fp,
+            ctx,
+            vec![TaskSpec {
+                id: TaskId(0),
+                kind: TaskKind::MemorySearch,
+                inputs_json: "{}".into(),
+                shard_id: Some(0),
+                topological_index: 0,
+            }],
             vec![],
-            ExecutionRetentionPolicy::default())
+            ExecutionRetentionPolicy::default(),
+        )
     }
 
     #[test]
@@ -145,8 +189,15 @@ mod tests {
     #[test]
     fn with_execution_adds_sibling_key_only_when_present() {
         #[derive(serde::Serialize)]
-        struct R { results: Vec<u32> }
-        let none = with_execution(R { results: vec![1, 2] }, None);
+        struct R {
+            results: Vec<u32>,
+        }
+        let none = with_execution(
+            R {
+                results: vec![1, 2],
+            },
+            None,
+        );
         assert!(none.get("_execution").is_none());
         assert_eq!(none["results"], json!([1, 2]));
 

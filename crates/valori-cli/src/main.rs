@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use valori_cli::commands::{cluster, diff, import, inspect, replay_query, timeline, verify, wizard};
+use valori_cli::commands::{
+    cluster, diff, import, inspect, replay_query, timeline, verify, wizard,
+};
 
 #[derive(Parser)]
 #[command(
@@ -277,22 +279,35 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Inspect { dir, snapshot, log }) => inspect::run(dir, snapshot, log),
         Some(Commands::Verify { snapshot }) => verify::run(&snapshot),
         Some(Commands::Timeline { log, limit }) => timeline::run(&log, limit),
-        Some(Commands::ReplayQuery { snapshot, log, at, query, top_k }) => {
-            replay_query::run(&snapshot, &log, at, query, top_k)
-        }
-        Some(Commands::Diff { snapshot, log, from, to, query, top_k }) => {
-            diff::run(&snapshot, &log, from, to, query, top_k)
-        }
+        Some(Commands::ReplayQuery {
+            snapshot,
+            log,
+            at,
+            query,
+            top_k,
+        }) => replay_query::run(&snapshot, &log, at, query, top_k),
+        Some(Commands::Diff {
+            snapshot,
+            log,
+            from,
+            to,
+            query,
+            top_k,
+        }) => diff::run(&snapshot, &log, from, to, query, top_k),
         Some(Commands::Cluster { action }) => match action {
             ClusterAction::Status { url } => cluster::status(&url),
             ClusterAction::Health { url } => cluster::health(&url),
-            ClusterAction::AddNode { url, id, raft_addr, api_addr } => {
-                cluster::add_node(&url, id, &raft_addr, &api_addr)
-            }
+            ClusterAction::AddNode {
+                url,
+                id,
+                raft_addr,
+                api_addr,
+            } => cluster::add_node(&url, id, &raft_addr, &api_addr),
             ClusterAction::RemoveNode { url, id } => cluster::remove_node(&url, id),
-            ClusterAction::Upgrade { url, target_version } => {
-                cluster::upgrade(&url, &target_version)
-            }
+            ClusterAction::Upgrade {
+                url,
+                target_version,
+            } => cluster::upgrade(&url, &target_version),
         },
 
         Some(Commands::Import { source }) => match source {

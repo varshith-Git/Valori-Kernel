@@ -14,7 +14,11 @@ use valori_mcp::mcp::McpServer;
 use valori_mcp::stdio;
 
 #[derive(Parser, Debug)]
-#[command(name = "valori-mcp", version, about = "MCP server for verifiable Valori agent memory")]
+#[command(
+    name = "valori-mcp",
+    version,
+    about = "MCP server for verifiable Valori agent memory"
+)]
 struct Args {
     /// Base URL of the Valori node to talk to.
     #[arg(long, env = "VALORI_URL", default_value = "http://localhost:3000")]

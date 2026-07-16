@@ -9,16 +9,16 @@
 //!   5. `GET /metrics` surfaces kernel-state gauges (non-empty Prometheus text)
 //!   6. `GET /metrics` is reachable without an auth token
 
-use valori_node::config::{NodeConfig, IndexKind};
-use valori_node::EngineFromNodeConfig;
+use valori_node::config::{IndexKind, NodeConfig};
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 
-use valori_node::server::{build_router, SharedEngine};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tower::ServiceExt; // for `.oneshot()`
+use tower::ServiceExt;
+use valori_node::server::{build_router, SharedEngine}; // for `.oneshot()`
 
 // ── Engine-level unit tests ───────────────────────────────────────────────────
 
@@ -73,8 +73,11 @@ fn test_health_degraded_at_90_pct() {
 
     let h = engine.health();
     assert_eq!(h.records.live, 9);
-    assert_eq!(h.status, "degraded",
-        "90 % full should report degraded; fill_pct = {}", h.records.fill_pct);
+    assert_eq!(
+        h.status, "degraded",
+        "90 % full should report degraded; fill_pct = {}",
+        h.records.fill_pct
+    );
 }
 
 #[test]
@@ -88,8 +91,11 @@ fn test_health_full_at_100_pct() {
 
     let h = engine.health();
     assert_eq!(h.records.live, 5);
-    assert_eq!(h.status, "full",
-        "100 % full should report full; fill_pct = {}", h.records.fill_pct);
+    assert_eq!(
+        h.status, "full",
+        "100 % full should report full; fill_pct = {}",
+        h.records.fill_pct
+    );
 }
 
 #[test]
@@ -122,7 +128,9 @@ fn test_health_persistence_field_event_log() {
 fn test_health_fill_pct_rounding() {
     // 1 of 3 ≈ 33.333 → should round to 33.3
     let mut engine = Engine::new(&tiny_cfg(3));
-    engine.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+    engine
+        .insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4])
+        .unwrap();
     let h = engine.health();
     assert_eq!(h.records.fill_pct, 33.3);
 }
@@ -136,14 +144,17 @@ fn test_insert_fails_at_max_records() {
 
     for i in 0u32..5 {
         let v: Vec<f32> = (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect();
-        engine.insert_record_from_f32(&v)
+        engine
+            .insert_record_from_f32(&v)
             .expect("inserts within capacity must succeed");
     }
 
     // 6th insert must fail — pool is full.
     let result = engine.insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0]);
-    assert!(result.is_err(),
-        "insert beyond max_records must return an error, not silently succeed");
+    assert!(
+        result.is_err(),
+        "insert beyond max_records must return an error, not silently succeed"
+    );
 }
 
 /// `insert_batch` must reject atomically if the batch would exceed capacity.
@@ -162,12 +173,17 @@ fn test_insert_batch_fails_if_would_exceed() {
         .map(|i| (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect())
         .collect();
     let result = engine.insert_batch(&batch);
-    assert!(result.is_err(),
-        "insert_batch that would exceed max_records must fail atomically");
+    assert!(
+        result.is_err(),
+        "insert_batch that would exceed max_records must fail atomically"
+    );
 
     // The engine must still have only 3 records — no partial writes.
-    assert_eq!(engine.health().records.live, 3,
-        "no records from the rejected batch must have been committed");
+    assert_eq!(
+        engine.health().records.live,
+        3,
+        "no records from the rejected batch must have been committed"
+    );
 }
 
 /// A batch that exactly fits must succeed; a batch one larger must fail.
@@ -178,7 +194,8 @@ fn test_insert_batch_exact_fit_succeeds() {
     let batch: Vec<Vec<f32>> = (0u32..4)
         .map(|i| (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect())
         .collect();
-    engine.insert_batch(&batch)
+    engine
+        .insert_batch(&batch)
         .expect("batch that exactly fills capacity must succeed");
 
     assert_eq!(engine.health().records.live, 4);
@@ -196,7 +213,12 @@ async fn test_http_health_returns_200_when_ok() {
     let app = build_router(shared, None, None);
 
     let resp = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -224,12 +246,20 @@ async fn test_http_health_returns_503_when_full() {
     let app = build_router(shared, None, None);
 
     let resp = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE,
-        "full engine must return 503");
+    assert_eq!(
+        resp.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "full engine must return 503"
+    );
 
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -253,8 +283,11 @@ async fn test_http_health_accessible_without_auth_token() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK,
-        "/health must be 200 even without auth token");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/health must be 200 even without auth token"
+    );
 }
 
 #[tokio::test]
@@ -264,12 +297,20 @@ async fn test_http_protected_route_blocked_without_auth() {
     let app = build_router(shared, Some("super-secret".to_string()), None);
 
     let resp = app
-        .oneshot(Request::builder().uri("/version").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/version")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED,
-        "/version must require auth when a token is configured");
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "/version must require auth when a token is configured"
+    );
 }
 
 #[tokio::test]
@@ -288,8 +329,11 @@ async fn test_http_metrics_accessible_without_auth_token() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK,
-        "/metrics must be 200 even without auth token");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/metrics must be 200 even without auth token"
+    );
 }
 
 /// `GET /metrics` returns 200 with a text body (endpoint reachability check).
@@ -303,7 +347,12 @@ async fn test_http_metrics_returns_200_with_body() {
     let app = build_router(shared, None, None);
 
     let resp = app
-        .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -363,7 +412,7 @@ fn test_update_prometheus_metrics_gauge_names_in_output() {
 
     // Build recorder + handle BEFORE consuming the recorder.
     let recorder = PrometheusBuilder::new().build_recorder();
-    let handle   = recorder.handle();
+    let handle = recorder.handle();
 
     // Try to install as the global recorder.  If another test beat us to it
     // this returns Err, meaning gauge writes below go to the pre-existing
@@ -381,18 +430,28 @@ fn test_update_prometheus_metrics_gauge_names_in_output() {
 
     if installed {
         let text = handle.render();
-        assert!(text.contains("valori_records_live"),
-            "must expose valori_records_live gauge; output: {}", &text[..text.len().min(500)]);
-        assert!(text.contains("valori_records_capacity"),
-            "must expose valori_records_capacity gauge");
-        assert!(text.contains("valori_record_fill_ratio"),
-            "must expose valori_record_fill_ratio gauge");
-        assert!(text.contains("valori_nodes_live"),
-            "must expose valori_nodes_live gauge");
-        assert!(text.contains("valori_edges_live"),
-            "must expose valori_edges_live gauge");
-        assert!(text.contains("valori_dim"),
-            "must expose valori_dim gauge");
+        assert!(
+            text.contains("valori_records_live"),
+            "must expose valori_records_live gauge; output: {}",
+            &text[..text.len().min(500)]
+        );
+        assert!(
+            text.contains("valori_records_capacity"),
+            "must expose valori_records_capacity gauge"
+        );
+        assert!(
+            text.contains("valori_record_fill_ratio"),
+            "must expose valori_record_fill_ratio gauge"
+        );
+        assert!(
+            text.contains("valori_nodes_live"),
+            "must expose valori_nodes_live gauge"
+        );
+        assert!(
+            text.contains("valori_edges_live"),
+            "must expose valori_edges_live gauge"
+        );
+        assert!(text.contains("valori_dim"), "must expose valori_dim gauge");
     }
     // If not installed: test still passes — the important thing is no panic.
 }

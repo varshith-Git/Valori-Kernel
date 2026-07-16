@@ -166,7 +166,11 @@ impl super::Migration for Migration001ProjectRegistry {
 
 /// Returns `Ok(true)` if newly imported, `Ok(false)` if it already existed
 /// (already-imported — not an error, just a no-op).
-fn import_one(home: &Path, projects: &dyn ProjectStore, entry: &LegacyProjectEntry) -> DaemonResult<bool> {
+fn import_one(
+    home: &Path,
+    projects: &dyn ProjectStore,
+    entry: &LegacyProjectEntry,
+) -> DaemonResult<bool> {
     if projects.get(&entry.name).is_ok() {
         return Ok(false); // already imported (or a same-named project already exists) — skip
     }
@@ -177,7 +181,11 @@ fn import_one(home: &Path, projects: &dyn ProjectStore, entry: &LegacyProjectEnt
             nodes: entry
                 .nodes
                 .iter()
-                .map(|n| ProjectNode { id: n.id, http_port: n.http_port, raft_port: n.raft_port })
+                .map(|n| ProjectNode {
+                    id: n.id,
+                    http_port: n.http_port,
+                    raft_port: n.raft_port,
+                })
                 .collect(),
             shard_count: entry.shard_count,
         })
@@ -204,10 +212,16 @@ fn import_one(home: &Path, projects: &dyn ProjectStore, entry: &LegacyProjectEnt
         workspace: DEFAULT_WORKSPACE.to_string(),
         restart_policy: RestartPolicy::Never,
         created_at: parse_iso8601_to_unix(&entry.created_at).unwrap_or(0),
-        last_opened_at: entry.last_opened_at.as_deref().and_then(parse_iso8601_to_unix),
+        last_opened_at: entry
+            .last_opened_at
+            .as_deref()
+            .and_then(parse_iso8601_to_unix),
         cluster,
         embedding,
-        storage: StorageConfig { max_records: entry.max_records, protect_at_rest: true },
+        storage: StorageConfig {
+            max_records: entry.max_records,
+            protect_at_rest: true,
+        },
     };
 
     projects.import(manifest)?;
@@ -257,7 +271,9 @@ mod tests {
         );
 
         let store = JsonProjectStore::new(home.path()).unwrap();
-        Migration001ProjectRegistry.run(home.path(), &store).unwrap();
+        Migration001ProjectRegistry
+            .run(home.path(), &store)
+            .unwrap();
 
         let project = store.get("healthcare").unwrap();
         assert_eq!(project.config.dim, 768);
@@ -270,7 +286,10 @@ mod tests {
         // Snapshot adopted via copy — legacy file untouched.
         assert!(dir.join("snapshot.val").exists());
         assert!(dir.join("current.snap").exists());
-        assert_eq!(std::fs::read(dir.join("snapshot.val")).unwrap(), b"fake-snapshot-bytes");
+        assert_eq!(
+            std::fs::read(dir.join("snapshot.val")).unwrap(),
+            b"fake-snapshot-bytes"
+        );
 
         // Source retired, never deleted.
         assert!(!home.path().join(LEGACY_MANIFEST_FILE).exists());
@@ -317,7 +336,9 @@ mod tests {
             }]"#,
         );
 
-        Migration001ProjectRegistry.run(home.path(), &store).unwrap();
+        Migration001ProjectRegistry
+            .run(home.path(), &store)
+            .unwrap();
         assert_eq!(store.get("finance").unwrap().config.dim, 1536); // untouched
     }
 
@@ -343,7 +364,9 @@ mod tests {
         );
 
         let store = JsonProjectStore::new(home.path()).unwrap();
-        Migration001ProjectRegistry.run(home.path(), &store).unwrap();
+        Migration001ProjectRegistry
+            .run(home.path(), &store)
+            .unwrap();
 
         let project = store.get("clustered").unwrap();
         let cluster = project.config.cluster.as_ref().unwrap();

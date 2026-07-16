@@ -13,9 +13,9 @@
 //! - The object-store backend is similarly injected.
 //! - The embed config is injected from `NodeConfig`'s embed env vars.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 
 /// Which vector index algorithm the engine should use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

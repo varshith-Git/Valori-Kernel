@@ -22,3 +22,6 @@ metrics   = "0.21"
 tempfile   = "3.23.0"
 valori-verify = { workspace = true }
 toml       = "0.8"
+
+[lints]
+workspace = true

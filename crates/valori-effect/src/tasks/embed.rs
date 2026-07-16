@@ -4,11 +4,11 @@
 //! Inputs:  `{"texts": ["chunk 1", "chunk 2", ...]}`
 //! Outputs: `{"embeddings": [[...], [...], ...]}`
 //! Effects: `Counter("embed_calls", texts.len())`   — ephemeral
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use crate::effect::{Effect, EffectId, EffectPayload};
 use crate::error::{EffectError, EffectResult};
 use crate::task::{Task, TaskContext, TaskOutput};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 struct EmbedInputs {
@@ -25,7 +25,9 @@ pub struct EmbedTask;
 
 #[async_trait]
 impl Task for EmbedTask {
-    fn name(&self) -> &'static str { "embed" }
+    fn name(&self) -> &'static str {
+        "embed"
+    }
 
     async fn run(
         &self,
@@ -43,7 +45,8 @@ impl Task for EmbedTask {
         }
 
         // Budget check.
-        if ctx.budget.max_embed_calls > 0 && inputs.texts.len() as u32 > ctx.budget.max_embed_calls {
+        if ctx.budget.max_embed_calls > 0 && inputs.texts.len() as u32 > ctx.budget.max_embed_calls
+        {
             return Err(EffectError::BudgetExceeded("max_embed_calls"));
         }
 
@@ -52,13 +55,22 @@ impl Task for EmbedTask {
 
         // Emit metrics (ephemeral — fire-and-forget).
         let metric_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 0);
-        let _ = ctx.bus.dispatch(Effect::ephemeral(
-            metric_id,
-            EffectPayload::Counter { name: "embed_calls".into(), value: embeddings.len() as f64 },
-        )).await;
+        let _ = ctx
+            .bus
+            .dispatch(Effect::ephemeral(
+                metric_id,
+                EffectPayload::Counter {
+                    name: "embed_calls".into(),
+                    value: embeddings.len() as f64,
+                },
+            ))
+            .await;
 
         let out = EmbedOutputs { embeddings, model };
         let json = serde_json::to_value(out).map_err(EffectError::Serde)?;
-        Ok(TaskOutput::with_value(json, ctx.capabilities.kernel.state_hash(0)))
+        Ok(TaskOutput::with_value(
+            json,
+            ctx.capabilities.kernel.state_hash(0),
+        ))
     }
 }

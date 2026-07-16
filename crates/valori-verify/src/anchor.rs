@@ -129,16 +129,25 @@ impl AnchorPayload {
         let event_count = json_u64(v, "event_count")?;
         let anchored_at_unix = json_u64(v, "anchored_at_unix")?;
 
-        let chain_head: [u8; 32] = chain_head_vec.try_into()
+        let chain_head: [u8; 32] = chain_head_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("chain_head must be 32 bytes"))?;
-        let state_hash: [u8; 32] = state_hash_vec.try_into()
+        let state_hash: [u8; 32] = state_hash_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("state_hash must be 32 bytes"))?;
-        let pk_bytes: [u8; 32] = pk_vec.try_into()
+        let pk_bytes: [u8; 32] = pk_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("public_key_ed25519 must be 32 bytes"))?;
-        let sig_bytes: [u8; 64] = sig_vec.try_into()
+        let sig_bytes: [u8; 64] = sig_vec
+            .try_into()
             .map_err(|_| anyhow::anyhow!("signature_ed25519 must be 64 bytes"))?;
 
-        let payload = Self { chain_head, event_count, state_hash, anchored_at_unix };
+        let payload = Self {
+            chain_head,
+            event_count,
+            state_hash,
+            anchored_at_unix,
+        };
 
         let vk = VerifyingKey::from_bytes(&pk_bytes).context("invalid Ed25519 public key")?;
         let sig = Signature::from_bytes(&sig_bytes);
@@ -188,7 +197,8 @@ pub fn load_signing_key(path: &Path) -> Result<SigningKey> {
         .with_context(|| format!("cannot read signing key from {}", path.display()))?;
     let bytes = from_hex(hex_str.trim())
         .with_context(|| format!("signing key at {} is not valid hex", path.display()))?;
-    let key_bytes: [u8; 32] = bytes.try_into()
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("signing key must be 32 bytes (64 hex chars)"))?;
     Ok(SigningKey::from_bytes(&key_bytes))
 }
@@ -199,7 +209,8 @@ pub fn load_verifying_key(path: &Path) -> Result<VerifyingKey> {
         .with_context(|| format!("cannot read public key from {}", path.display()))?;
     let bytes = from_hex(hex_str.trim())
         .with_context(|| format!("public key at {} is not valid hex", path.display()))?;
-    let key_bytes: [u8; 32] = bytes.try_into()
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("public key must be 32 bytes (64 hex chars)"))?;
     VerifyingKey::from_bytes(&key_bytes).context("invalid Ed25519 public key bytes")
 }

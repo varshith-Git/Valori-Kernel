@@ -85,12 +85,13 @@ pub struct Receipt {
 
 impl Receipt {
     /// Build a receipt from a recall result set and the node's proof fields.
-    pub fn build(
-        body: ReceiptBody,
-        recalled_at_unix: u64,
-    ) -> Self {
+    pub fn build(body: ReceiptBody, recalled_at_unix: u64) -> Self {
         let digest = compute_digest(&body);
-        Self { body, recalled_at_unix, receipt_digest: digest }
+        Self {
+            body,
+            recalled_at_unix,
+            receipt_digest: digest,
+        }
     }
 }
 
@@ -140,12 +141,19 @@ pub fn subgraph_fingerprint(subgraph: &Value) -> SubgraphFingerprint {
         let mut v: Vec<u64> = subgraph
             .get(key)
             .and_then(|a| a.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.get("id").and_then(|i| i.as_u64())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.get("id").and_then(|i| i.as_u64()))
+                    .collect()
+            })
             .unwrap_or_default();
         v.sort_unstable();
         v
     };
-    SubgraphFingerprint { node_ids: ids("nodes"), edge_ids: ids("edges") }
+    SubgraphFingerprint {
+        node_ids: ids("nodes"),
+        edge_ids: ids("edges"),
+    }
 }
 
 #[cfg(test)]
@@ -160,8 +168,16 @@ mod tests {
             query_dim: 4,
             k: 2,
             results: vec![
-                ResultFingerprint { memory_id: "m1".into(), record_id: 1, score_bits: "0".into() },
-                ResultFingerprint { memory_id: "m2".into(), record_id: 2, score_bits: "1".into() },
+                ResultFingerprint {
+                    memory_id: "m1".into(),
+                    record_id: 1,
+                    score_bits: "0".into(),
+                },
+                ResultFingerprint {
+                    memory_id: "m2".into(),
+                    record_id: 2,
+                    score_bits: "1".into(),
+                },
             ],
             subgraph: None,
         }
@@ -181,7 +197,10 @@ mod tests {
         let mut tampered = sample_body();
         tampered.results[0].record_id = 999; // swap a returned memory
         let after = compute_digest(&tampered);
-        assert_ne!(base, after, "tampering with the result set must change the digest");
+        assert_ne!(
+            base, after,
+            "tampering with the result set must change the digest"
+        );
     }
 
     #[test]
@@ -238,9 +257,15 @@ mod tests {
     fn subgraph_presence_changes_the_digest() {
         let plain = compute_digest(&sample_body());
         let mut with_graph = sample_body();
-        with_graph.subgraph = Some(SubgraphFingerprint { node_ids: vec![1, 2], edge_ids: vec![9] });
-        assert_ne!(plain, compute_digest(&with_graph),
-            "binding a subgraph must change the receipt digest");
+        with_graph.subgraph = Some(SubgraphFingerprint {
+            node_ids: vec![1, 2],
+            edge_ids: vec![9],
+        });
+        assert_ne!(
+            plain,
+            compute_digest(&with_graph),
+            "binding a subgraph must change the receipt digest"
+        );
     }
 
     #[test]

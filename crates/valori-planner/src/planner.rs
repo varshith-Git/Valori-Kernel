@@ -10,12 +10,12 @@ use tracing::{debug, instrument};
 use valori_metadata::db::MetadataDb;
 use valori_metadata::planner_cache::{PlannerCacheEntry, PlannerCacheKey};
 
-use crate::context::{PlanningContext, PlanningContextHash, PlannerFingerprint};
+use crate::context::{PlannerFingerprint, PlanningContext, PlanningContextHash};
 use crate::error::{PlannerError, PlannerResult};
-use crate::graph::{ExecutionGraph, TaskEdge, TaskSpec, TaskId, TaskKind};
+use crate::graph::ExecutionRetentionPolicy;
+use crate::graph::{ExecutionGraph, TaskEdge, TaskId, TaskKind, TaskSpec};
 use crate::operation::Operation;
 use crate::registry::{CacheKey, ExecutionCache};
-use crate::graph::ExecutionRetentionPolicy;
 
 // ── Planner trait ─────────────────────────────────────────────────────────────
 
@@ -28,7 +28,12 @@ pub trait Planner: Send + Sync + 'static {
     ///
     /// This is called only on cache miss — never call it directly; use
     /// `plan_with_cache()` instead.
-    fn plan(&self, op: &Operation, ctx: &PlanningContext, fp: &PlannerFingerprint) -> PlannerResult<ExecutionGraph>;
+    fn plan(
+        &self,
+        op: &Operation,
+        ctx: &PlanningContext,
+        fp: &PlannerFingerprint,
+    ) -> PlannerResult<ExecutionGraph>;
 }
 
 // ── plan_with_cache ───────────────────────────────────────────────────────────
@@ -98,7 +103,11 @@ pub async fn plan_with_cache(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            let entry = PlannerCacheEntry { graph_json, cached_at: now, expires_at: 0 };
+            let entry = PlannerCacheEntry {
+                graph_json,
+                cached_at: now,
+                expires_at: 0,
+            };
             let _ = db.cache_put(&db_key, &entry);
         }
     }
@@ -117,14 +126,22 @@ pub async fn plan_with_cache(
 pub struct NoOpPlanner;
 
 impl Planner for NoOpPlanner {
-    fn plan(&self, op: &Operation, _ctx: &PlanningContext, fp: &PlannerFingerprint) -> PlannerResult<ExecutionGraph> {
+    fn plan(
+        &self,
+        op: &Operation,
+        _ctx: &PlanningContext,
+        fp: &PlannerFingerprint,
+    ) -> PlannerResult<ExecutionGraph> {
         use crate::operation::OperationKind;
 
         let ctx_hash = PlanningContextHash::compute(_ctx);
 
         let (kind, inputs_json) = match op.kind {
             OperationKind::HealthCheck => (TaskKind::ProofFragment, r#"{"probe":true}"#.into()),
-            _ => (TaskKind::ReadIndex, format!(r#"{{"kind":"{:?}"}}"#, op.kind)),
+            _ => (
+                TaskKind::ReadIndex,
+                format!(r#"{{"kind":"{:?}"}}"#, op.kind),
+            ),
         };
 
         let task = TaskSpec {
@@ -158,49 +175,126 @@ impl Planner for NoOpPlanner {
 pub struct IngestPlanner;
 
 impl Planner for IngestPlanner {
-    fn plan(&self, op: &Operation, ctx: &PlanningContext, fp: &PlannerFingerprint) -> PlannerResult<ExecutionGraph> {
+    fn plan(
+        &self,
+        op: &Operation,
+        ctx: &PlanningContext,
+        fp: &PlannerFingerprint,
+    ) -> PlannerResult<ExecutionGraph> {
         use crate::operation::OperationInputs;
 
         let ctx_hash = PlanningContextHash::compute(ctx);
 
         let (embed_enabled, shard_id) = match &op.inputs {
-            OperationInputs::Ingest { embed_enabled, shard_id, .. } => (*embed_enabled, *shard_id),
-            _ => return Err(PlannerError::InvalidOperation("IngestPlanner received non-Ingest operation".into())),
+            OperationInputs::Ingest {
+                embed_enabled,
+                shard_id,
+                ..
+            } => (*embed_enabled, *shard_id),
+            _ => {
+                return Err(PlannerError::InvalidOperation(
+                    "IngestPlanner received non-Ingest operation".into(),
+                ))
+            }
         };
 
         let (tasks, edges) = if embed_enabled {
-            let embed = TaskSpec { id: TaskId(0), kind: TaskKind::Embed, inputs_json: "{}".into(), shard_id: None, topological_index: 0 };
-            let insert = TaskSpec { id: TaskId(1), kind: TaskKind::InsertRecord, inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
-            let node   = TaskSpec { id: TaskId(2), kind: TaskKind::InsertNode,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
-            let edge   = TaskSpec { id: TaskId(3), kind: TaskKind::InsertEdge,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
+            let embed = TaskSpec {
+                id: TaskId(0),
+                kind: TaskKind::Embed,
+                inputs_json: "{}".into(),
+                shard_id: None,
+                topological_index: 0,
+            };
+            let insert = TaskSpec {
+                id: TaskId(1),
+                kind: TaskKind::InsertRecord,
+                inputs_json: "{}".into(),
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            };
+            let node = TaskSpec {
+                id: TaskId(2),
+                kind: TaskKind::InsertNode,
+                inputs_json: "{}".into(),
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            };
+            let edge = TaskSpec {
+                id: TaskId(3),
+                kind: TaskKind::InsertEdge,
+                inputs_json: "{}".into(),
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            };
             let edges = vec![
-                TaskEdge { from: TaskId(0), to: TaskId(1) },
-                TaskEdge { from: TaskId(1), to: TaskId(2) },
-                TaskEdge { from: TaskId(2), to: TaskId(3) },
+                TaskEdge {
+                    from: TaskId(0),
+                    to: TaskId(1),
+                },
+                TaskEdge {
+                    from: TaskId(1),
+                    to: TaskId(2),
+                },
+                TaskEdge {
+                    from: TaskId(2),
+                    to: TaskId(3),
+                },
             ];
             (vec![embed, insert, node, edge], edges)
         } else {
-            let insert = TaskSpec { id: TaskId(0), kind: TaskKind::InsertRecord, inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
-            let node   = TaskSpec { id: TaskId(1), kind: TaskKind::InsertNode,   inputs_json: "{}".into(), shard_id: Some(shard_id), topological_index: 0 };
-            let edges  = vec![TaskEdge { from: TaskId(0), to: TaskId(1) }];
+            let insert = TaskSpec {
+                id: TaskId(0),
+                kind: TaskKind::InsertRecord,
+                inputs_json: "{}".into(),
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            };
+            let node = TaskSpec {
+                id: TaskId(1),
+                kind: TaskKind::InsertNode,
+                inputs_json: "{}".into(),
+                shard_id: Some(shard_id),
+                topological_index: 0,
+            };
+            let edges = vec![TaskEdge {
+                from: TaskId(0),
+                to: TaskId(1),
+            }];
             (vec![insert, node], edges)
         };
 
-        Ok(ExecutionGraph::build(op.hash, fp.clone(), ctx_hash, tasks, edges, ExecutionRetentionPolicy::default()))
+        Ok(ExecutionGraph::build(
+            op.hash,
+            fp.clone(),
+            ctx_hash,
+            tasks,
+            edges,
+            ExecutionRetentionPolicy::default(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation::{Operation, OperationKind, OperationInputs, ExecutionPolicy};
-    use crate::context::{PlanningContext, CapabilitySet};
+    use crate::context::{CapabilitySet, PlanningContext};
+    use crate::operation::{ExecutionPolicy, Operation, OperationInputs, OperationKind};
     use crate::registry::ExecutionCache;
 
     fn ctx() -> PlanningContext {
         PlanningContext {
-            capability_set: CapabilitySet { embed: true, llm: false, object_store: false, cluster: false, shard_count: 1 },
-            schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+            capability_set: CapabilitySet {
+                embed: true,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
+            schema_version: 1,
+            shard_count: 1,
+            cluster_epoch: 0,
+            cluster_mode: false,
         }
     }
 
@@ -210,7 +304,11 @@ mod tests {
 
     #[test]
     fn noop_planner_health_check() {
-        let op = Operation::new(OperationKind::HealthCheck, OperationInputs::HealthCheck, ExecutionPolicy::default());
+        let op = Operation::new(
+            OperationKind::HealthCheck,
+            OperationInputs::HealthCheck,
+            ExecutionPolicy::default(),
+        );
         let graph = NoOpPlanner.plan(&op, &ctx(), &fp()).unwrap();
         assert_eq!(graph.tasks.len(), 1);
         assert_eq!(graph.tasks[0].kind, crate::graph::TaskKind::ProofFragment);
@@ -219,8 +317,10 @@ mod tests {
     #[test]
     fn ingest_planner_with_embed() {
         let inputs = OperationInputs::Ingest {
-            strategy: "tree".into(), collection: "default".into(),
-            shard_id: 0, embed_enabled: true,
+            strategy: "tree".into(),
+            collection: "default".into(),
+            shard_id: 0,
+            embed_enabled: true,
         };
         let op = Operation::new(OperationKind::Ingest, inputs, ExecutionPolicy::default());
         let graph = IngestPlanner.plan(&op, &ctx(), &fp()).unwrap();
@@ -230,8 +330,10 @@ mod tests {
     #[test]
     fn ingest_planner_without_embed() {
         let inputs = OperationInputs::Ingest {
-            strategy: "auto".into(), collection: "default".into(),
-            shard_id: 0, embed_enabled: false,
+            strategy: "auto".into(),
+            collection: "default".into(),
+            shard_id: 0,
+            embed_enabled: false,
         };
         let op = Operation::new(OperationKind::Ingest, inputs, ExecutionPolicy::default());
         let graph = IngestPlanner.plan(&op, &ctx(), &fp()).unwrap();
@@ -241,8 +343,10 @@ mod tests {
     #[test]
     fn ingest_graph_hash_is_stable() {
         let inputs = OperationInputs::Ingest {
-            strategy: "tree".into(), collection: "default".into(),
-            shard_id: 0, embed_enabled: true,
+            strategy: "tree".into(),
+            collection: "default".into(),
+            shard_id: 0,
+            embed_enabled: true,
         };
         let op = Operation::new(OperationKind::Ingest, inputs, ExecutionPolicy::default());
         let fp = fp();
@@ -255,16 +359,22 @@ mod tests {
     #[tokio::test]
     async fn plan_with_cache_hit_on_second_call() {
         let inputs = OperationInputs::Ingest {
-            strategy: "auto".into(), collection: "default".into(),
-            shard_id: 0, embed_enabled: false,
+            strategy: "auto".into(),
+            collection: "default".into(),
+            shard_id: 0,
+            embed_enabled: false,
         };
         let op = Operation::new(OperationKind::Ingest, inputs, ExecutionPolicy::default());
         let fp = fp();
         let ctx = ctx();
         let cache = ExecutionCache::new(64);
 
-        let g1 = plan_with_cache(&IngestPlanner, &op, &ctx, &fp, &cache, None).await.unwrap();
-        let g2 = plan_with_cache(&IngestPlanner, &op, &ctx, &fp, &cache, None).await.unwrap();
+        let g1 = plan_with_cache(&IngestPlanner, &op, &ctx, &fp, &cache, None)
+            .await
+            .unwrap();
+        let g2 = plan_with_cache(&IngestPlanner, &op, &ctx, &fp, &cache, None)
+            .await
+            .unwrap();
         // Same Arc pointer — came from the cache.
         assert!(Arc::ptr_eq(&g1, &g2));
     }

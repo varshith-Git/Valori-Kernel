@@ -1,12 +1,12 @@
-pub mod brute_force;
 pub mod bq;
+pub mod brute_force;
 pub use bq::BinaryQuantizationIndex;
 pub use brute_force::BruteForceIndex;
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use crate::storage::pool::RecordPool;
-use crate::types::vector::FxpVector;
 use crate::types::id::RecordId;
+use crate::types::vector::FxpVector;
 use core::cmp::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

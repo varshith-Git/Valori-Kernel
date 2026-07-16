@@ -1,8 +1,8 @@
 //! Graph Node definition.
 
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use crate::types::id::{NodeId, RecordId, EdgeId, NS_LIST_NIL};
 use crate::types::enums::NodeKind;
+use crate::types::id::{EdgeId, NodeId, RecordId, NS_LIST_NIL};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GraphNode {

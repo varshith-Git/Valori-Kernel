@@ -1,12 +1,11 @@
-use valori_node::config::NodeConfig;
-use valori_effect;
-use valori_node::server::{build_router_with_keys, SharedEngine};
-use valori_node::api_keys::KeyStore;
-use valori_node::engine::Engine;
-use valori_node::EngineFromNodeConfig;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use valori_node::api_keys::KeyStore;
+use valori_node::config::NodeConfig;
+use valori_node::engine::Engine;
+use valori_node::server::{build_router_with_keys, SharedEngine};
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
@@ -55,14 +54,16 @@ async fn main() {
     // next source. A corrupt snapshot no longer kills the process.
     let mode = engine.try_recover();
     match mode {
-        valori_node::engine::RecoveryMode::EventLog(n) =>
-            tracing::info!("Recovered {} events from event log", n),
-        valori_node::engine::RecoveryMode::Snapshot =>
-            tracing::info!("Recovered from snapshot"),
-        valori_node::engine::RecoveryMode::Wal(n) =>
-            tracing::info!("Recovered {} commands from legacy WAL", n),
-        valori_node::engine::RecoveryMode::Fresh =>
-            tracing::info!("Starting fresh (no prior state found)"),
+        valori_node::engine::RecoveryMode::EventLog(n) => {
+            tracing::info!("Recovered {} events from event log", n)
+        }
+        valori_node::engine::RecoveryMode::Snapshot => tracing::info!("Recovered from snapshot"),
+        valori_node::engine::RecoveryMode::Wal(n) => {
+            tracing::info!("Recovered {} commands from legacy WAL", n)
+        }
+        valori_node::engine::RecoveryMode::Fresh => {
+            tracing::info!("Starting fresh (no prior state found)")
+        }
     }
 
     let shared_state: SharedEngine = Arc::new(RwLock::new(engine));
@@ -79,8 +80,12 @@ async fn main() {
                 let state_for_snap = state_clone.clone();
                 let path_for_snap = path.clone();
                 match tokio::task::spawn_blocking(move || {
-                    state_for_snap.blocking_read().save_snapshot(Some(&path_for_snap))
-                }).await {
+                    state_for_snap
+                        .blocking_read()
+                        .save_snapshot(Some(&path_for_snap))
+                })
+                .await
+                {
                     Ok(Ok(_)) => tracing::info!("Snapshot saved to {:?}", path),
                     Ok(Err(e)) => tracing::error!("Snapshot failed: {:?}", e),
                     Err(e) => tracing::error!("Snapshot task panicked: {:?}", e),
@@ -91,7 +96,13 @@ async fn main() {
 
     let key_store = Arc::new(KeyStore::new(cfg.keys_path.clone()));
     let receipt_store = Arc::new(valori_effect::ReceiptStore::new(256));
-    let app = build_router_with_keys(shared_state.clone(), cfg.auth_token.clone(), cfg.cors_origin.clone(), key_store, receipt_store);
+    let app = build_router_with_keys(
+        shared_state.clone(),
+        cfg.auth_token.clone(),
+        cfg.cors_origin.clone(),
+        key_store,
+        receipt_store,
+    );
 
     let addr = cfg.bind_addr;
     tracing::info!("Listening on {}", addr);
@@ -120,7 +131,10 @@ async fn main() {
         std::process::exit(1);
     });
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(shared_state.clone(), cfg.snapshot_path.clone()))
+        .with_graceful_shutdown(shutdown_signal(
+            shared_state.clone(),
+            cfg.snapshot_path.clone(),
+        ))
         .await
         .unwrap();
 }
@@ -136,8 +150,10 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
     #[cfg(unix)]
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut s) => { s.recv().await; }
-            Err(_)    => std::future::pending::<()>().await,
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
         }
     };
     #[cfg(not(unix))]
@@ -149,13 +165,18 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
     }
 
     if let Some(path) = snapshot_path {
-        tracing::info!("Shutdown signal received — saving final snapshot to {:?}", path);
+        tracing::info!(
+            "Shutdown signal received — saving final snapshot to {:?}",
+            path
+        );
         match tokio::task::spawn_blocking(move || {
             state.blocking_read().save_snapshot(Some(path.as_path()))
-        }).await {
-            Ok(Ok(_))  => tracing::info!("Final snapshot saved"),
+        })
+        .await
+        {
+            Ok(Ok(_)) => tracing::info!("Final snapshot saved"),
             Ok(Err(e)) => tracing::error!("Final snapshot failed (WAL still durable): {:?}", e),
-            Err(e)     => tracing::error!("Final snapshot task panicked: {:?}", e),
+            Err(e) => tracing::error!("Final snapshot task panicked: {:?}", e),
         }
     }
 }
@@ -239,8 +260,10 @@ async fn cluster_shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut s) => { s.recv().await; }
-            Err(_)    => std::future::pending::<()>().await,
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
         }
     };
     #[cfg(not(unix))]

@@ -7,9 +7,9 @@
 //! 3. Await all Durable effects dispatched through `ctx.bus`.
 //! 4. Mark task Done in `ExecutionContext`.
 //! 5. On failure: retry up to `policy.retry_limit` times, then fail the execution.
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 
 use valori_core::id::ExecutionId;
 use valori_planner::graph::TaskId;
@@ -36,11 +36,17 @@ pub struct TaskOutput {
 
 impl TaskOutput {
     pub fn empty(state_hash: String) -> Self {
-        TaskOutput { json: Value::Null, state_hash_after: state_hash }
+        TaskOutput {
+            json: Value::Null,
+            state_hash_after: state_hash,
+        }
     }
 
     pub fn with_value(json: Value, state_hash: String) -> Self {
-        TaskOutput { json, state_hash_after: state_hash }
+        TaskOutput {
+            json,
+            state_hash_after: state_hash,
+        }
     }
 }
 
@@ -72,7 +78,14 @@ impl TaskContext {
         bus: Arc<EffectBus>,
         budget: ResourceBudget,
     ) -> Self {
-        TaskContext { task_id, execution_id, topological_index, capabilities, bus, budget }
+        TaskContext {
+            task_id,
+            execution_id,
+            topological_index,
+            capabilities,
+            bus,
+            budget,
+        }
     }
 }
 
@@ -111,7 +124,9 @@ pub struct NoOpTask;
 
 #[async_trait]
 impl Task for NoOpTask {
-    fn name(&self) -> &'static str { "noop" }
+    fn name(&self) -> &'static str {
+        "noop"
+    }
 
     async fn run(
         &self,
@@ -121,7 +136,13 @@ impl Task for NoOpTask {
     ) -> EffectResult<TaskOutput> {
         use crate::effect::{Effect, EffectId, EffectPayload};
         let effect_id = EffectId::new(&ctx.execution_id, ctx.topological_index, 0);
-        let e = Effect::ephemeral(effect_id, EffectPayload::Counter { name: "noop_runs".into(), value: 1.0 });
+        let e = Effect::ephemeral(
+            effect_id,
+            EffectPayload::Counter {
+                name: "noop_runs".into(),
+                value: 1.0,
+            },
+        );
         ctx.bus.dispatch(e).await.ok();
         let state_hash = ctx.capabilities.kernel.state_hash(0);
         Ok(TaskOutput::empty(state_hash))
@@ -139,7 +160,12 @@ mod tests {
     fn make_ctx() -> TaskContext {
         let caps = Arc::new(CapabilityRegistry {
             kernel: Arc::new(NoOpKernelCapability { shard_count: 1 }),
-            embed: None, llm: None, storage: None, http: None, proof: None, scheduler: None,
+            embed: None,
+            llm: None,
+            storage: None,
+            http: None,
+            proof: None,
+            scheduler: None,
         });
         let bus = Arc::new(EffectBus::new(caps.clone()));
         let eid = ExecutionId { hi: 1, lo: 2 };

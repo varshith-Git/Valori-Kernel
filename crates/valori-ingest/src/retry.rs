@@ -23,7 +23,9 @@ pub enum RetryPolicy {
 }
 
 impl Default for RetryPolicy {
-    fn default() -> Self { Self::Never }
+    fn default() -> Self {
+        Self::Never
+    }
 }
 
 impl RetryPolicy {
@@ -46,7 +48,8 @@ impl RetryPolicy {
                         Err(e) => {
                             if attempt < *attempts {
                                 tracing::warn!("retry attempt {}/{attempts}: {e}", attempt + 1);
-                                tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(*delay_ms))
+                                    .await;
                             }
                             last_err = Some(e);
                         }
@@ -55,7 +58,11 @@ impl RetryPolicy {
                 Err(last_err.unwrap())
             }
 
-            RetryPolicy::Exponential { max_attempts, base_delay_ms, max_delay_ms } => {
+            RetryPolicy::Exponential {
+                max_attempts,
+                base_delay_ms,
+                max_delay_ms,
+            } => {
                 let mut last_err = None;
                 let mut delay = *base_delay_ms;
                 for attempt in 0..=*max_attempts {
@@ -101,12 +108,15 @@ mod tests {
     async fn fixed_retries_on_failure() {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        let result: Result<(), &str> = RetryPolicy::Fixed { attempts: 2, delay_ms: 0 }
-            .execute(|| async {
-                c.fetch_add(1, Ordering::Relaxed);
-                Err("boom")
-            })
-            .await;
+        let result: Result<(), &str> = RetryPolicy::Fixed {
+            attempts: 2,
+            delay_ms: 0,
+        }
+        .execute(|| async {
+            c.fetch_add(1, Ordering::Relaxed);
+            Err("boom")
+        })
+        .await;
         assert!(result.is_err());
         assert_eq!(count.load(Ordering::Relaxed), 3); // 1 initial + 2 retries
     }
@@ -115,12 +125,19 @@ mod tests {
     async fn fixed_succeeds_on_third_try() {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
-        let result: Result<u32, &str> = RetryPolicy::Fixed { attempts: 3, delay_ms: 0 }
-            .execute(|| async {
-                let n = c.fetch_add(1, Ordering::Relaxed);
-                if n < 2 { Err("not yet") } else { Ok(n) }
-            })
-            .await;
+        let result: Result<u32, &str> = RetryPolicy::Fixed {
+            attempts: 3,
+            delay_ms: 0,
+        }
+        .execute(|| async {
+            let n = c.fetch_add(1, Ordering::Relaxed);
+            if n < 2 {
+                Err("not yet")
+            } else {
+                Ok(n)
+            }
+        })
+        .await;
         assert!(result.is_ok());
         assert_eq!(count.load(Ordering::Relaxed), 3);
     }
@@ -130,7 +147,9 @@ mod tests {
         let count = Arc::new(AtomicU32::new(0));
         let c = count.clone();
         let result: Result<(), &str> = RetryPolicy::Exponential {
-            max_attempts: 2, base_delay_ms: 0, max_delay_ms: 0,
+            max_attempts: 2,
+            base_delay_ms: 0,
+            max_delay_ms: 0,
         }
         .execute(|| async {
             c.fetch_add(1, Ordering::Relaxed);

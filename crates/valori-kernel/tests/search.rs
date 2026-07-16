@@ -11,17 +11,14 @@ use valori_kernel::types::vector::FxpVector;
 const DIM: usize = 4;
 
 fn fxp(v: &[i32]) -> FxpVector {
-    FxpVector { data: v.iter().map(|&x| FxpScalar(x << 16)).collect() }
+    FxpVector {
+        data: v.iter().map(|&x| FxpScalar(x << 16)).collect(),
+    }
 }
 
 fn populated() -> KernelState {
     let mut state = KernelState::new();
-    let points: [&[i32]; 4] = [
-        &[0, 0, 0, 0],
-        &[1, 0, 0, 0],
-        &[0, 5, 0, 0],
-        &[9, 9, 9, 9],
-    ];
+    let points: [&[i32]; 4] = [&[0, 0, 0, 0], &[1, 0, 0, 0], &[0, 5, 0, 0], &[9, 9, 9, 9]];
     for (i, p) in points.iter().enumerate() {
         state
             .apply_event(&KernelEvent::InsertRecord {
@@ -36,7 +33,13 @@ fn populated() -> KernelState {
 }
 
 fn search(state: &KernelState, query: &FxpVector, k: usize, filter: Option<u64>) -> Vec<u32> {
-    let mut buf = vec![SearchResult { id: RecordId(0), score: i64::MAX }; k];
+    let mut buf = vec![
+        SearchResult {
+            id: RecordId(0),
+            score: i64::MAX
+        };
+        k
+    ];
     let found = state.search_l2(query, &mut buf, filter);
     buf.truncate(found);
     buf.iter().map(|r| r.id.0).collect()

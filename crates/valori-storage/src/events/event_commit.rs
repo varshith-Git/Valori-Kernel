@@ -1,24 +1,24 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! Event Commit - The Safety Wall
 
-use valori_kernel::state::kernel::KernelState;
-use valori_kernel::event::KernelEvent;
-use valori_kernel::error::KernelError;
-use crate::events::event_log::{EventLogWriter, EventLogError};
 use crate::events::event_journal::EventJournal;
+use crate::events::event_log::{EventLogError, EventLogWriter};
 use thiserror::Error;
+use valori_kernel::error::KernelError;
+use valori_kernel::event::KernelEvent;
+use valori_kernel::state::kernel::KernelState;
 
 #[derive(Error, Debug)]
 pub enum CommitError {
     #[error("Event log error: {0}")]
     EventLog(#[from] EventLogError),
-    
+
     #[error("Kernel error during shadow apply: {0:?}")]
     ShadowApply(KernelError),
-    
+
     #[error("Kernel error during live apply: {0:?}")]
     LiveApply(KernelError),
-    
+
     #[error("State verification failed")]
     VerificationFailed,
 }
@@ -30,7 +30,7 @@ pub type Result<T> = std::result::Result<T, CommitError>;
 pub enum CommitResult {
     /// Event committed successfully
     Committed,
-    
+
     /// Event rolled back (failed before commit boundary)
     RolledBack,
 }
@@ -95,11 +95,7 @@ pub struct EventCommitter {
 
 impl EventCommitter {
     /// Create a new event committer
-    pub fn new(
-        event_log: EventLogWriter,
-        journal: EventJournal,
-        live_state: KernelState,
-    ) -> Self {
+    pub fn new(event_log: EventLogWriter, journal: EventJournal, live_state: KernelState) -> Self {
         Self {
             event_log,
             journal,
@@ -152,12 +148,18 @@ impl EventCommitter {
     /// flattened all collections into the default namespace. Default-namespace
     /// commits keep writing the plain `Event` variant, so their logs stay
     /// byte-identical to pre-S15.
-    pub fn commit_event_ns(&mut self, event: KernelEvent, namespace_id: u16) -> Result<CommitResult> {
+    pub fn commit_event_ns(
+        &mut self,
+        event: KernelEvent,
+        namespace_id: u16,
+    ) -> Result<CommitResult> {
         // Step 1: Shadow apply — validate WITHOUT mutating live state.
         // If the event is invalid (dup ID, wrong dim, etc.) we bail here,
         // before touching the audit log.
         let mut shadow = self.live_state.clone();
-        shadow.apply_event_ns(&event, namespace_id).map_err(CommitError::ShadowApply)?;
+        shadow
+            .apply_event_ns(&event, namespace_id)
+            .map_err(CommitError::ShadowApply)?;
 
         // Step 2: Live apply — must succeed because shadow passed on an
         // identical state snapshot. Panic here is a programming error.
@@ -172,7 +174,10 @@ impl EventCommitter {
         let entry = if namespace_id == valori_kernel::types::id::DEFAULT_NS.0 {
             crate::events::event_log::LogEntry::Event(event.clone())
         } else {
-            crate::events::event_log::LogEntry::EventNs { namespace_id, event: event.clone() }
+            crate::events::event_log::LogEntry::EventNs {
+                namespace_id,
+                event: event.clone(),
+            }
         };
         self.write_buf.push(entry);
         if self.write_buf.len() >= self.flush_every {
@@ -232,11 +237,7 @@ impl EventCommitter {
         };
 
         match self.event_log.rotate(archive_path, Some(checkpoint)) {
-            Ok(_) => tracing::info!(
-                "Event log rotated at height {} ({} bytes)",
-                height,
-                limit,
-            ),
+            Ok(_) => tracing::info!("Event log rotated at height {} ({} bytes)", height, limit,),
             Err(e) => tracing::error!("Event log rotation failed: {}", e),
         }
     }
@@ -252,7 +253,11 @@ impl EventCommitter {
     /// Same shadow-first guarantee as `commit_event_ns`: all events are
     /// shadow-applied on a clone of live state before any log write. If any
     /// event fails shadow apply, the log is untouched.
-    pub fn commit_batch_ns(&mut self, events: Vec<KernelEvent>, namespace_id: u16) -> Result<CommitResult> {
+    pub fn commit_batch_ns(
+        &mut self,
+        events: Vec<KernelEvent>,
+        namespace_id: u16,
+    ) -> Result<CommitResult> {
         if events.is_empty() {
             return Ok(CommitResult::Committed);
         }
@@ -260,16 +265,24 @@ impl EventCommitter {
         // Step 1: Shadow apply the entire batch on a state clone.
         let mut shadow = self.live_state.clone();
         for event in &events {
-            shadow.apply_event_ns(event, namespace_id).map_err(CommitError::ShadowApply)?;
+            shadow
+                .apply_event_ns(event, namespace_id)
+                .map_err(CommitError::ShadowApply)?;
         }
 
         // Step 2: Persist all events (batch is now known-good).
         let default_ns = valori_kernel::types::id::DEFAULT_NS.0;
-        let log_entries: Vec<_> = events.iter()
-            .map(|e| if namespace_id == default_ns {
-                crate::events::event_log::LogEntry::Event(e.clone())
-            } else {
-                crate::events::event_log::LogEntry::EventNs { namespace_id, event: e.clone() }
+        let log_entries: Vec<_> = events
+            .iter()
+            .map(|e| {
+                if namespace_id == default_ns {
+                    crate::events::event_log::LogEntry::Event(e.clone())
+                } else {
+                    crate::events::event_log::LogEntry::EventNs {
+                        namespace_id,
+                        event: e.clone(),
+                    }
+                }
             })
             .collect();
         self.event_log.append_batch(&log_entries)?;
@@ -319,8 +332,8 @@ impl EventCommitter {
         // idempotent (write_buf will be empty) so no double-flush occurs.
         let mut this = std::mem::ManuallyDrop::new(self);
         unsafe {
-            let log   = std::ptr::read(&this.event_log);
-            let jour  = std::ptr::read(&this.journal);
+            let log = std::ptr::read(&this.event_log);
+            let jour = std::ptr::read(&this.journal);
             let state = std::ptr::read(&this.live_state);
             // Drop remaining fields that aren't returned.
             std::ptr::drop_in_place(&mut this.write_buf);
@@ -332,29 +345,32 @@ impl EventCommitter {
     pub fn rotate_log(
         &mut self,
         archive_path: impl AsRef<std::path::Path>,
-        checkpoint_entry: Option<crate::events::event_log::LogEntry>
+        checkpoint_entry: Option<crate::events::event_log::LogEntry>,
     ) -> crate::events::event_commit::Result<()> {
         self.flush_pending()?;
-        self.event_log.rotate(archive_path, checkpoint_entry)
+        self.event_log
+            .rotate(archive_path, checkpoint_entry)
             .map_err(crate::events::event_commit::CommitError::EventLog)
     }
 
     /// Subscribe to live event stream
-    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
+    pub fn subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::events::event_log::LogEntry> {
         self.journal.subscribe()
     }
 
     /// Write a checkpoint entry and align journal height
     pub fn write_checkpoint(
-        &mut self, 
-        entry: crate::events::event_log::LogEntry
+        &mut self,
+        entry: crate::events::event_log::LogEntry,
     ) -> Result<CommitResult> {
         self.event_log.append(&entry)?;
-        
+
         if let crate::events::event_log::LogEntry::Checkpoint { event_count, .. } = entry {
             self.journal.set_height(event_count);
         }
-        
+
         Ok(CommitResult::Committed)
     }
 }
@@ -368,9 +384,9 @@ impl Drop for EventCommitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use tempfile::tempdir;
 
     #[test]
     fn test_commit_success() {

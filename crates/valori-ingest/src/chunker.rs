@@ -50,7 +50,10 @@ pub fn chunk_document(
             if nodes.len() >= 2 {
                 return (nodes, "tree".into());
             }
-            (chunk_fixed(text, chunk_size, chunk_overlap), "tree->fixed".into())
+            (
+                chunk_fixed(text, chunk_size, chunk_overlap),
+                "tree->fixed".into(),
+            )
         }
         "conversation" => {
             let nodes = chunk_conversation(text);
@@ -84,13 +87,19 @@ fn detect_strategy(text: &str) -> &'static str {
     let total = lines.len().max(1);
 
     let header_lines = lines.iter().filter(|l| is_section_header(l)).count();
-    let ts_lines = lines.iter().filter(|l| {
-        let s = l.trim();
-        s.len() >= 4
-            && s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
-            && s.contains(':')
-            && s.len() <= 8
-    }).count();
+    let ts_lines = lines
+        .iter()
+        .filter(|l| {
+            let s = l.trim();
+            s.len() >= 4
+                && s.chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+                && s.contains(':')
+                && s.len() <= 8
+        })
+        .count();
     let question_lines = lines.iter().filter(|l| l.trim().ends_with('?')).count();
 
     if header_lines * 10 > total {
@@ -115,10 +124,17 @@ fn is_section_header(line: &str) -> bool {
     }
     let first = s.chars().next().unwrap_or(' ');
     if first.is_ascii_digit() {
-        let head: String = s.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        let head: String = s
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
         let rest = s[head.len()..].trim();
         return rest.len() >= 2
-            && rest.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+            && rest
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
             && rest.len() <= 80
             && !rest.ends_with('.');
     }
@@ -395,7 +411,8 @@ mod tests {
 
     #[test]
     fn auto_falls_back_to_fixed_for_prose() {
-        let prose = "This is a simple sentence. And another one. And yet another longer sentence here.";
+        let prose =
+            "This is a simple sentence. And another one. And yet another longer sentence here.";
         let (chunks, strategy) = chunk_document(prose, "auto", 1000, 200);
         assert!(strategy.contains("fixed") || strategy.contains("sentence"));
         assert!(!chunks.is_empty());
@@ -467,7 +484,11 @@ pub struct DefaultChunker {
 
 impl DefaultChunker {
     pub fn new(strategy: impl Into<String>, chunk_size: usize, chunk_overlap: usize) -> Self {
-        Self { strategy: strategy.into(), chunk_size, chunk_overlap }
+        Self {
+            strategy: strategy.into(),
+            chunk_size,
+            chunk_overlap,
+        }
     }
 }
 
@@ -479,7 +500,12 @@ impl Default for DefaultChunker {
 
 impl Chunker for DefaultChunker {
     fn chunk(&self, doc: &Document) -> Vec<Chunk> {
-        let (raw, _) = chunk_document(&doc.content, &self.strategy, self.chunk_size, self.chunk_overlap);
+        let (raw, _) = chunk_document(
+            &doc.content,
+            &self.strategy,
+            self.chunk_size,
+            self.chunk_overlap,
+        );
         raw.into_iter()
             .map(|ic| Chunk::new(ic.index, ic.title, ic.text))
             .collect()

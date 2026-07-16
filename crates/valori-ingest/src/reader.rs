@@ -25,7 +25,6 @@ impl Reader for TextReader {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

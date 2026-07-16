@@ -6,17 +6,8 @@
 //! Once the workspace is fully migrated, imports can switch to `valori_core::id`.
 
 pub use valori_core::{
-    RecordId,
-    NodeId,
-    EdgeId,
-    NamespaceId,
-    CollectionId,
-    ExecutionId,
-    ShardId,
-    ClusterEpoch,
-    DEFAULT_NS,
-    NS_LIST_NIL,
-    MAX_NAMESPACES,
+    ClusterEpoch, CollectionId, EdgeId, ExecutionId, NamespaceId, NodeId, RecordId, ShardId,
+    DEFAULT_NS, MAX_NAMESPACES, NS_LIST_NIL,
 };
 
 // Version lives here too for kernel consumers.

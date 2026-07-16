@@ -45,3 +45,6 @@ proptest = "1"
 tonic-build = "0.12"
 # Vendored protoc — no system install needed, on dev machines or CI.
 protoc-bin-vendored = "3"
+
+[lints]
+workspace = true

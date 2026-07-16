@@ -107,7 +107,10 @@ impl ValoriNetworkFactory {
     }
 
     pub fn with_tls(shard: ShardId, tls: RaftTlsConfig) -> Self {
-        Self { shard, tls: Some(tls) }
+        Self {
+            shard,
+            tls: Some(tls),
+        }
     }
 }
 
@@ -173,7 +176,10 @@ impl ValoriNetwork {
     ) -> Result<RaftRequest, RPCError<NodeId, ValoriNode, E>> {
         let payload =
             encode(req).map_err(|e| RPCError::Network(NetworkError::new(&StrError(e))))?;
-        Ok(RaftRequest { payload, shard_id: self.shard.0 })
+        Ok(RaftRequest {
+            payload,
+            shard_id: self.shard.0,
+        })
     }
 
     fn decode_reply<Resp, E>(
@@ -226,10 +232,8 @@ impl RaftNetwork<TypeConfig> for ValoriNetwork {
         &mut self,
         rpc: AppendEntriesRequest<TypeConfig>,
         _option: RPCOption,
-    ) -> Result<
-        AppendEntriesResponse<NodeId>,
-        RPCError<NodeId, ValoriNode, RaftError<NodeId>>,
-    > {
+    ) -> Result<AppendEntriesResponse<NodeId>, RPCError<NodeId, ValoriNode, RaftError<NodeId>>>
+    {
         let req = self.encode_req(&rpc)?;
         let result = self.client().await?.append_entries(req).await;
         match result {
@@ -289,15 +293,21 @@ impl RaftRpcService {
     /// it's logged at error level, not just returned quietly.
     fn get(&self, shard_id: u32) -> Result<&Raft, tonic::Status> {
         self.shards.get(&ShardId(shard_id)).ok_or_else(|| {
-            tracing::error!(shard_id, "raft rpc for unknown shard_id — shard_count mismatch?");
+            tracing::error!(
+                shard_id,
+                "raft rpc for unknown shard_id — shard_count mismatch?"
+            );
             tonic::Status::not_found(format!("unknown shard_id {shard_id}"))
         })
     }
 }
 
-fn reply<T: Serialize>(shard_id: u32, result: &T) -> Result<tonic::Response<RaftReply>, tonic::Status> {
-    let payload = encode(result)
-        .map_err(|e| tonic::Status::internal(format!("reply encode failed: {e}")))?;
+fn reply<T: Serialize>(
+    shard_id: u32,
+    result: &T,
+) -> Result<tonic::Response<RaftReply>, tonic::Status> {
+    let payload =
+        encode(result).map_err(|e| tonic::Status::internal(format!("reply encode failed: {e}")))?;
     Ok(tonic::Response::new(RaftReply { payload, shard_id }))
 }
 

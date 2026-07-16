@@ -70,11 +70,19 @@ pub fn system_health(store: &PackageStore, refs: &RefCounter) -> SystemHealth {
         let ref_count = refs.ref_count(&report.id);
 
         let status = match report.status {
-            IntegrityStatus::Verified              => { verified += 1; PackageHealthStatus::Verified }
-            IntegrityStatus::Remote
-            | IntegrityStatus::Unverified          => PackageHealthStatus::Installed,
-            IntegrityStatus::Corrupted             => { corrupted += 1; PackageHealthStatus::Corrupted }
-            IntegrityStatus::Missing               => { missing += 1; PackageHealthStatus::Missing }
+            IntegrityStatus::Verified => {
+                verified += 1;
+                PackageHealthStatus::Verified
+            }
+            IntegrityStatus::Remote | IntegrityStatus::Unverified => PackageHealthStatus::Installed,
+            IntegrityStatus::Corrupted => {
+                corrupted += 1;
+                PackageHealthStatus::Corrupted
+            }
+            IntegrityStatus::Missing => {
+                missing += 1;
+                PackageHealthStatus::Missing
+            }
         };
 
         disk_used_bytes += size;
@@ -112,13 +120,24 @@ mod tests {
 
     fn remote_manifest(id: &str) -> ModelManifest {
         ModelManifest {
-            id: id.into(), name: id.into(), version: None,
-            provider: ProviderKind::OpenAI, family: None,
-            task: ModelTask::Embedding, dimensions: 1536,
-            quantization: None, format: ModelFormat::Remote, sha256: None,
-            size_bytes: 0, installed_at: None, path: None,
-            status: ManifestStatus::Available, min_ram_mb: 0,
-            license: None, homepage: None, download_url: None,
+            id: id.into(),
+            name: id.into(),
+            version: None,
+            provider: ProviderKind::OpenAI,
+            family: None,
+            task: ModelTask::Embedding,
+            dimensions: 1536,
+            quantization: None,
+            format: ModelFormat::Remote,
+            sha256: None,
+            size_bytes: 0,
+            installed_at: None,
+            path: None,
+            status: ManifestStatus::Available,
+            min_ram_mb: 0,
+            license: None,
+            homepage: None,
+            download_url: None,
         }
     }
 

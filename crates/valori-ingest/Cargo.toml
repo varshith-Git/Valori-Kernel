@@ -26,3 +26,6 @@ infer = { version = "0.16", default-features = false }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

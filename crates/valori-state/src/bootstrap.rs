@@ -17,13 +17,13 @@
 //!    event log is not present.
 //! 4. **Fresh start** — no durable state found.
 
+use crate::error::{StateError, StateResult};
 use std::path::Path;
-use valori_kernel::state::kernel::KernelState;
 use valori_kernel::snapshot::decode::decode_state;
-use valori_storage::wal_reader::WalReader;
+use valori_kernel::state::kernel::KernelState;
 use valori_storage::events::event_replay::{recover_from_event_log, verify_snapshot_consistency};
 use valori_storage::events::EventJournal;
-use crate::error::{StateError, StateResult};
+use valori_storage::wal_reader::WalReader;
 
 /// Outcome of a bootstrap attempt.
 #[derive(Debug)]
@@ -45,9 +45,7 @@ pub enum BootstrapMode {
 ///
 /// Returns `StateError::InvalidInput` if the log is malformed.
 /// Returns `Ok((fresh_state, empty_journal, 0))` if the log exists but is empty.
-pub fn recover_from_events(
-    event_log_path: &Path,
-) -> StateResult<(KernelState, EventJournal, u64)> {
+pub fn recover_from_events(event_log_path: &Path) -> StateResult<(KernelState, EventJournal, u64)> {
     tracing::info!("Recovering from event log: {:?}", event_log_path);
 
     recover_from_event_log(event_log_path)
@@ -93,13 +91,15 @@ pub fn replay_wal(
     hasher.update(&0u32.to_le_bytes()); // crc_len placeholder
 
     for result in reader {
-        let (evt, ns) = result
-            .map_err(|e| StateError::InvalidInput(format!("WAL read error: {}", e)))?;
+        let (evt, ns) =
+            result.map_err(|e| StateError::InvalidInput(format!("WAL read error: {}", e)))?;
 
         state.apply_event_ns(&evt, ns).map_err(StateError::Kernel)?;
 
         let entry_bytes = bincode::serde::encode_to_vec(&(&evt, ns), bincode::config::standard())
-            .map_err(|e| StateError::InvalidInput(format!("Hash serialization failed: {}", e)))?;
+            .map_err(|e| {
+            StateError::InvalidInput(format!("Hash serialization failed: {}", e))
+        })?;
         hasher.update(&entry_bytes);
 
         commands_applied += 1;
@@ -159,11 +159,11 @@ pub(crate) fn validate_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     use valori_kernel::event::KernelEvent;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
     use valori_storage::wal_writer::WalWriter;
-    use tempfile::tempdir;
 
     #[test]
     fn test_replay_wal_round_trip() {
@@ -199,6 +199,8 @@ mod tests {
 
     #[test]
     fn test_has_event_log_missing() {
-        assert!(!has_event_log(std::path::Path::new("/nonexistent/events.log")));
+        assert!(!has_event_log(std::path::Path::new(
+            "/nonexistent/events.log"
+        )));
     }
 }

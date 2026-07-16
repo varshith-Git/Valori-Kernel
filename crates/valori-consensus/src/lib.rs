@@ -37,6 +37,4 @@ pub use network::{
     RaftTlsConfig, ValoriNetwork, ValoriNetworkFactory,
 };
 pub use state_machine::{AuditSink, MemoryAuditSink, NullAuditSink, ValoriStateMachine};
-pub use types::{
-    ClientRequest, ClientResponse, NodeId, ShardId, TypeConfig, ValoriNode,
-};
+pub use types::{ClientRequest, ClientResponse, NodeId, ShardId, TypeConfig, ValoriNode};

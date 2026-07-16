@@ -66,11 +66,16 @@ fn maybe_rotate(writer: &mut EventLogWriter, limit: Option<u64>) {
         _ => return,
     };
 
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     // Name archives by the monotonic segment sequence, never the wall clock:
     // two rotations in the same second would collide on a timestamp name and
     // `rename` would clobber the earlier archive (silent history loss).
-    let archive_path = writer.path().with_extension(format!("log.{:06}", writer.segment_seq()));
+    let archive_path = writer
+        .path()
+        .with_extension(format!("log.{:06}", writer.segment_seq()));
     let checkpoint = LogEntry::Checkpoint {
         event_count: writer.event_count(),
         snapshot_hash: *writer.chain_head(),
@@ -145,13 +150,19 @@ mod tests {
                     .unwrap_or(false)
             })
             .collect();
-        assert!(!archives.is_empty(), "audit sink should have rotated at least once");
+        assert!(
+            !archives.is_empty(),
+            "audit sink should have rotated at least once"
+        );
 
         // Every recorded event is still recoverable across the spliced segments.
         let (state, _journal, count) = recover_from_event_log(&path).unwrap();
         assert_eq!(count, 12, "all audited events must survive rotation");
         for i in 0..12 {
-            assert!(state.get_record(RecordId(i)).is_some(), "record {i} lost across audit rotation");
+            assert!(
+                state.get_record(RecordId(i)).is_some(),
+                "record {i} lost across audit rotation"
+            );
         }
     }
 }

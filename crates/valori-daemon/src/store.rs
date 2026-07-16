@@ -37,4 +37,3 @@ pub trait WorkspaceStore: Send + Sync {
     fn delete(&mut self, name: &str) -> DaemonResult<()>;
     fn count(&self) -> usize;
 }
-

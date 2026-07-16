@@ -35,8 +35,8 @@ pub mod raft;
 pub use audit::EventLogAuditSink;
 pub use raft::RaftCommitter;
 
-use valori_kernel::event::KernelEvent;
 use thiserror::Error;
+use valori_kernel::event::KernelEvent;
 
 /// Result of a successful commit.
 #[derive(Debug, Clone, Copy)]
@@ -55,7 +55,7 @@ pub enum CommitError {
     Capacity {
         pool: &'static str,
         used: usize,
-        cap:  usize,
+        cap: usize,
     },
 
     #[error("shadow application rejected event: {0:?}")]

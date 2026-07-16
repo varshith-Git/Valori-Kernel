@@ -20,16 +20,16 @@
 //!   upgrades the live segment to v3 and splices the chain.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write, BufWriter};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-pub use valori_wire::{DecodedEntry, EntryV2, EntryV3, LogEntry, SegmentHeader};
 use valori_wire::{
     chain_advance, decode_entry, encode_entry, encode_header_v3, encode_header_v4, parse_header,
     FORMAT_Q16_16, VERSION_V3, VERSION_V4,
 };
+pub use valori_wire::{DecodedEntry, EntryV2, EntryV3, LogEntry, SegmentHeader};
 
 #[derive(Error, Debug)]
 pub enum EventLogError {
@@ -66,7 +66,10 @@ pub(crate) enum SegmentWalkError {
     ChainBroken { offset: usize },
     /// Any wire-level decode failure other than a trailing truncation
     /// (CRC mismatch, invalid enum discriminant, oversized entry, ...).
-    Wire { offset: usize, source: valori_wire::WireError },
+    Wire {
+        offset: usize,
+        source: valori_wire::WireError,
+    },
 }
 
 /// Decode every entry in `buf[start_offset..]`, verifying per-entry chain
@@ -200,11 +203,15 @@ impl EventLogWriter {
             // final head (recorded in the header); v2 starts from zeros.
             chain_head = header.prev_segment_chain_head;
 
-            let (entries, final_head) = walk_segment_body(version, &buf, header.header_len, chain_head)
-                .map_err(|e| match e {
-                    SegmentWalkError::ChainBroken { offset } => EventLogError::ChainBroken { offset },
-                    SegmentWalkError::Wire { source, .. } => EventLogError::Wire(source),
-                })?;
+            let (entries, final_head) =
+                walk_segment_body(version, &buf, header.header_len, chain_head).map_err(
+                    |e| match e {
+                        SegmentWalkError::ChainBroken { offset } => {
+                            EventLogError::ChainBroken { offset }
+                        }
+                        SegmentWalkError::Wire { source, .. } => EventLogError::Wire(source),
+                    },
+                )?;
             chain_head = final_head;
             for decoded in &entries {
                 match &decoded.entry {
@@ -271,7 +278,11 @@ impl EventLogWriter {
         request_id: Option<[u8; 16]>,
     ) -> Result<()> {
         let now = Self::now_secs();
-        let request_id = if self.version >= VERSION_V3 { request_id } else { None };
+        let request_id = if self.version >= VERSION_V3 {
+            request_id
+        } else {
+            None
+        };
 
         let bytes = encode_entry(self.version, &self.chain_head, now, request_id, entry)?;
 
@@ -412,10 +423,10 @@ impl EventLogWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
     use valori_kernel::event::KernelEvent;
     use valori_kernel::types::id::RecordId;
     use valori_kernel::types::vector::FxpVector;
-    use tempfile::tempdir;
     use valori_wire::chain_advance_v3;
 
     fn event(i: u32) -> KernelEvent {
@@ -433,12 +444,20 @@ mod tests {
         let path = dir.path().join("events.log");
 
         let mut writer = EventLogWriter::open(&path, Some(16)).unwrap();
-        assert_eq!(writer.version(), valori_wire::VERSION_V4, "new files are v4");
+        assert_eq!(
+            writer.version(),
+            valori_wire::VERSION_V4,
+            "new files are v4"
+        );
         assert_eq!(writer.segment_seq(), 0);
 
         writer.append(&LogEntry::Event(event(1))).unwrap();
         assert_eq!(writer.event_count(), 1);
-        assert_ne!(writer.chain_head(), &[0u8; 32], "chain head must advance after first append");
+        assert_ne!(
+            writer.chain_head(),
+            &[0u8; 32],
+            "chain head must advance after first append"
+        );
     }
 
     #[test]
@@ -459,7 +478,8 @@ mod tests {
             let writer = EventLogWriter::open(&path, Some(16)).unwrap();
             assert_eq!(writer.event_count(), 5);
             assert_eq!(
-                writer.chain_head(), &chain_after_write,
+                writer.chain_head(),
+                &chain_after_write,
                 "chain head must be restored exactly on reopen"
             );
         }
@@ -569,19 +589,31 @@ mod tests {
         let build = || {
             let mut head = [0u8; 32];
             for i in 0..10u32 {
-                head = chain_advance_v3(&head, 1_750_000_000 + i as u64, None, &LogEntry::Event(event(i)));
+                head = chain_advance_v3(
+                    &head,
+                    1_750_000_000 + i as u64,
+                    None,
+                    &LogEntry::Event(event(i)),
+                );
             }
             head
         };
 
         let h1 = build();
         let h2 = build();
-        assert_eq!(h1, h2, "same (time, request_id, entry) sequence must give same chain head");
+        assert_eq!(
+            h1, h2,
+            "same (time, request_id, entry) sequence must give same chain head"
+        );
 
         // A different timestamp for one entry must change the head.
         let mut head = [0u8; 32];
         for i in 0..10u32 {
-            let t = if i == 5 { 999 } else { 1_750_000_000 + i as u64 };
+            let t = if i == 5 {
+                999
+            } else {
+                1_750_000_000 + i as u64
+            };
             head = chain_advance_v3(&head, t, None, &LogEntry::Event(event(i)));
         }
         assert_ne!(h1, head, "timestamp change must alter the chain head");
@@ -590,7 +622,12 @@ mod tests {
         let mut head = [0u8; 32];
         for i in 0..10u32 {
             let rid = if i == 5 { Some([7u8; 16]) } else { None };
-            head = chain_advance_v3(&head, 1_750_000_000 + i as u64, rid, &LogEntry::Event(event(i)));
+            head = chain_advance_v3(
+                &head,
+                1_750_000_000 + i as u64,
+                rid,
+                &LogEntry::Event(event(i)),
+            );
         }
         assert_ne!(h1, head, "request id must be covered by the chain");
     }

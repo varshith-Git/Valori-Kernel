@@ -46,7 +46,8 @@ impl Rng {
 }
 
 fn cluster_center(cluster: usize, dim: usize) -> Vec<f32> {
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15u64.wrapping_add(cluster as u64 * 0xBF58_476D_1CE4_E5B9));
+    let mut rng =
+        Rng(0x9E37_79B9_7F4A_7C15u64.wrapping_add(cluster as u64 * 0xBF58_476D_1CE4_E5B9));
     (0..dim).map(|_| rng.next_f32() * 5.0).collect()
 }
 
@@ -149,20 +150,42 @@ fn run_benchmark() -> anyhow::Result<()> {
     // ── Recall@K: brute-force's own exact search IS the ground truth ────
     let mut recall_sum = 0.0f64;
     for q in &queries {
-        let truth: HashSet<u32> = bf_engine.search_l2(q, K)?.into_iter().map(|(id, _)| id).collect();
-        let got: HashSet<u32> = bq_engine.search_l2(q, K)?.into_iter().map(|(id, _)| id).collect();
+        let truth: HashSet<u32> = bf_engine
+            .search_l2(q, K)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        let got: HashSet<u32> = bq_engine
+            .search_l2(q, K)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
         recall_sum += truth.intersection(&got).count() as f64 / K as f64;
     }
     let recall_at_k = recall_sum / QUERY_COUNT as f64;
 
-    println!("{:<12} | {:>10} | {:>10} | {:>12}", "Index", "p50", "p99", "Recall@10");
+    println!(
+        "{:<12} | {:>10} | {:>10} | {:>12}",
+        "Index", "p50", "p99", "Recall@10"
+    );
     println!("{}", "-".repeat(52));
-    println!("{:<12} | {:>7.3} ms | {:>7.3} ms | {:>12}", "bruteforce", bf_p50, bf_p99, "1.000 (truth)");
-    println!("{:<12} | {:>7.3} ms | {:>7.3} ms | {:>12.3}", "bq", bq_p50, bq_p99, recall_at_k);
+    println!(
+        "{:<12} | {:>7.3} ms | {:>7.3} ms | {:>12}",
+        "bruteforce", bf_p50, bf_p99, "1.000 (truth)"
+    );
+    println!(
+        "{:<12} | {:>7.3} ms | {:>7.3} ms | {:>12.3}",
+        "bq", bq_p50, bq_p99, recall_at_k
+    );
 
     // ── Memory bytes/vector: isolated child processes, two scales, slope ──
-    println!("\nMemory bytes/vector (peak RSS, isolated child process, slope over 20K→100K records):");
-    println!("{:<12} | {:>12} | {:>12} | {:>14}", "Index", "RSS @20K", "RSS @100K", "bytes/vector");
+    println!(
+        "\nMemory bytes/vector (peak RSS, isolated child process, slope over 20K→100K records):"
+    );
+    println!(
+        "{:<12} | {:>12} | {:>12} | {:>14}",
+        "Index", "RSS @20K", "RSS @100K", "bytes/vector"
+    );
     println!("{}", "-".repeat(58));
 
     for (label, kind_arg) in [("bruteforce", "bruteforce"), ("bq", "bq")] {

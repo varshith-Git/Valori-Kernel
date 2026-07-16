@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Used by snapshots, event logs, and wire formats to detect schema
 /// incompatibilities. `Version(0)` means "unversioned / legacy".
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
-         Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[repr(transparent)]
 pub struct Version(pub u64);
 

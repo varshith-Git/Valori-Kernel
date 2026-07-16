@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! ExecutionGraph — the deterministic DAG of Tasks produced by the Planner.
-use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use valori_core::id::ExecutionId;
 
-use crate::operation::{OperationHash};
 use crate::context::{PlannerFingerprint, PlanningContextHash};
+use crate::operation::OperationHash;
 
 /// How long to retain the logical `ExecutionGraph` after completion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,7 +176,12 @@ impl ExecutionGraph {
                 t.topological_index = idx as u32;
             }
         }
-        let graph_hash = compute_graph_hash(&operation_hash, &planner_fingerprint, &planning_context_hash, &topo);
+        let graph_hash = compute_graph_hash(
+            &operation_hash,
+            &planner_fingerprint,
+            &planning_context_hash,
+            &topo,
+        );
         ExecutionGraph {
             id: ExecutionId::new_random(),
             operation_hash,
@@ -204,7 +209,8 @@ impl ExecutionGraph {
 
     /// Return all `TaskId`s that `id` directly depends on (predecessors).
     pub fn predecessors(&self, id: TaskId) -> Vec<TaskId> {
-        self.edges.iter()
+        self.edges
+            .iter()
             .filter(|e| e.to == id)
             .map(|e| e.from)
             .collect()
@@ -220,14 +226,15 @@ fn topological_order(tasks: &[TaskSpec], edges: &[TaskEdge]) -> Vec<u32> {
 
     for edge in edges {
         let from = edge.from.0 as usize;
-        let to   = edge.to.0   as usize;
+        let to = edge.to.0 as usize;
         if from < n && to < n {
             adj[from].push(to as u32);
             in_degree[to] += 1;
         }
     }
 
-    let mut queue: std::collections::VecDeque<u32> = in_degree.iter()
+    let mut queue: std::collections::VecDeque<u32> = in_degree
+        .iter()
         .enumerate()
         .filter(|(_, &d)| d == 0)
         .map(|(i, _)| i as u32)
@@ -244,7 +251,11 @@ fn topological_order(tasks: &[TaskSpec], edges: &[TaskEdge]) -> Vec<u32> {
         }
     }
     // A cycle in a planner-produced graph is a bug, not a recoverable condition.
-    debug_assert_eq!(order.len(), n, "ExecutionGraph has a cycle — every planner must produce a DAG");
+    debug_assert_eq!(
+        order.len(),
+        n,
+        "ExecutionGraph has a cycle — every planner must produce a DAG"
+    );
     if order.len() < n {
         // Append remaining nodes so the graph can still execute partially rather than
         // panicking in release builds. The planner that produced this graph is broken.
@@ -277,21 +288,36 @@ fn compute_graph_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation::{OperationHash, compute_operation_hash, OperationKind, OperationInputs, ExecutionPolicy};
-    use crate::context::{PlannerFingerprint, PlanningContext, PlanningContextHash, CapabilitySet};
+    use crate::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
+    use crate::operation::{
+        compute_operation_hash, ExecutionPolicy, OperationHash, OperationInputs, OperationKind,
+    };
     fn fingerprint() -> PlannerFingerprint {
         PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1)
     }
 
     fn ctx_hash() -> PlanningContextHash {
         PlanningContextHash::compute(&PlanningContext {
-            capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count: 1 },
-            schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
+            capability_set: CapabilitySet {
+                embed: false,
+                llm: false,
+                object_store: false,
+                cluster: false,
+                shard_count: 1,
+            },
+            schema_version: 1,
+            shard_count: 1,
+            cluster_epoch: 0,
+            cluster_mode: false,
         })
     }
 
     fn op_hash() -> OperationHash {
-        compute_operation_hash(OperationKind::HealthCheck, &OperationInputs::HealthCheck, &ExecutionPolicy::default())
+        compute_operation_hash(
+            OperationKind::HealthCheck,
+            &OperationInputs::HealthCheck,
+            &ExecutionPolicy::default(),
+        )
     }
 
     #[test]
@@ -300,8 +326,22 @@ mod tests {
         let ctx = ctx_hash();
         let op = op_hash();
 
-        let g1 = ExecutionGraph::build(op, fp.clone(), ctx, vec![], vec![], ExecutionRetentionPolicy::default());
-        let g2 = ExecutionGraph::build(op, fp, ctx, vec![], vec![], ExecutionRetentionPolicy::default());
+        let g1 = ExecutionGraph::build(
+            op,
+            fp.clone(),
+            ctx,
+            vec![],
+            vec![],
+            ExecutionRetentionPolicy::default(),
+        );
+        let g2 = ExecutionGraph::build(
+            op,
+            fp,
+            ctx,
+            vec![],
+            vec![],
+            ExecutionRetentionPolicy::default(),
+        );
         assert_eq!(g1.graph_hash, g2.graph_hash);
     }
 
@@ -309,10 +349,25 @@ mod tests {
     fn topological_order_two_tasks() {
         // task 0 → task 1
         let tasks = vec![
-            TaskSpec { id: TaskId(0), kind: TaskKind::Embed, inputs_json: "{}".into(), shard_id: None, topological_index: 0 },
-            TaskSpec { id: TaskId(1), kind: TaskKind::InsertRecord, inputs_json: "{}".into(), shard_id: Some(0), topological_index: 0 },
+            TaskSpec {
+                id: TaskId(0),
+                kind: TaskKind::Embed,
+                inputs_json: "{}".into(),
+                shard_id: None,
+                topological_index: 0,
+            },
+            TaskSpec {
+                id: TaskId(1),
+                kind: TaskKind::InsertRecord,
+                inputs_json: "{}".into(),
+                shard_id: Some(0),
+                topological_index: 0,
+            },
         ];
-        let edges = vec![TaskEdge { from: TaskId(0), to: TaskId(1) }];
+        let edges = vec![TaskEdge {
+            from: TaskId(0),
+            to: TaskId(1),
+        }];
         let order = topological_order(&tasks, &edges);
         assert_eq!(order, vec![0, 1]);
     }

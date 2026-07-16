@@ -183,9 +183,8 @@ impl PackageStore {
     pub fn exists(&self, id: &str) -> bool {
         // Walk task dirs looking for a matching sanitized id.
         let target = sanitize(id);
-        self.iter_task_dirs().any(|task_dir| {
-            task_dir.join(&target).join("manifest.json").exists()
-        })
+        self.iter_task_dirs()
+            .any(|task_dir| task_dir.join(&target).join("manifest.json").exists())
     }
 
     /// Read a single package manifest by model id.
@@ -311,7 +310,9 @@ impl PackageStore {
         std::fs::create_dir_all(&pkg_dir)?;
 
         let dest = pkg_dir.join(
-            staged_file.file_name().unwrap_or(std::ffi::OsStr::new("model.bin")),
+            staged_file
+                .file_name()
+                .unwrap_or(std::ffi::OsStr::new("model.bin")),
         );
 
         // Verify SHA before committing.
@@ -384,7 +385,9 @@ impl PackageStore {
     }
 
     fn scan_dir(&self, task_dir: &Path) -> Vec<PackageManifest> {
-        let Ok(entries) = std::fs::read_dir(task_dir) else { return vec![] };
+        let Ok(entries) = std::fs::read_dir(task_dir) else {
+            return vec![];
+        };
         entries
             .filter_map(|e| e.ok())
             .filter(|e| e.path().is_dir())
@@ -410,12 +413,18 @@ impl PackageStore {
 
 /// Recursively sum bytes in a directory.
 pub(crate) fn dir_size(path: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
     entries
         .filter_map(|e| e.ok())
         .map(|e| {
             let p = e.path();
-            if p.is_dir() { dir_size(&p) } else { p.metadata().map(|m| m.len()).unwrap_or(0) }
+            if p.is_dir() {
+                dir_size(&p)
+            } else {
+                p.metadata().map(|m| m.len()).unwrap_or(0)
+            }
         })
         .sum()
 }
@@ -460,15 +469,19 @@ mod tests {
     fn register_and_exists() {
         let (mut s, _tmp) = make_store();
         assert!(!s.exists("openai/text-embedding-3-small"));
-        s.register(remote_manifest("openai/text-embedding-3-small")).unwrap();
+        s.register(remote_manifest("openai/text-embedding-3-small"))
+            .unwrap();
         assert!(s.exists("openai/text-embedding-3-small"));
     }
 
     #[test]
     fn duplicate_register_errors() {
         let (mut s, _tmp) = make_store();
-        s.register(remote_manifest("openai/text-embedding-3-small")).unwrap();
-        let err = s.register(remote_manifest("openai/text-embedding-3-small")).unwrap_err();
+        s.register(remote_manifest("openai/text-embedding-3-small"))
+            .unwrap();
+        let err = s
+            .register(remote_manifest("openai/text-embedding-3-small"))
+            .unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
@@ -483,7 +496,8 @@ mod tests {
     #[test]
     fn get_by_id() {
         let (mut s, _tmp) = make_store();
-        s.register(remote_manifest("openai/text-embedding-3-small")).unwrap();
+        s.register(remote_manifest("openai/text-embedding-3-small"))
+            .unwrap();
         let pkg = s.get("openai/text-embedding-3-small").unwrap();
         assert_eq!(pkg.model.id, "openai/text-embedding-3-small");
         assert_eq!(pkg.schema_version, 1);

@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::engine::Engine;
-use valori_node::EngineFromNodeConfig;
-use valori_node::server::build_router;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tempfile::tempdir;
+use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
+use valori_node::engine::Engine;
+use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 #[tokio::test]
 async fn test_replication_cluster() {
@@ -32,7 +32,10 @@ async fn test_replication_cluster() {
 
     {
         let mut engine = leader_state.write().await;
-        assert!(engine.event_committer().is_some(), "Leader must have event committer");
+        assert!(
+            engine.event_committer().is_some(),
+            "Leader must have event committer"
+        );
         let id0 = engine.insert_record_from_f32(&vec![0.1; 4]).unwrap();
         assert_eq!(id0, 0);
     }
@@ -42,7 +45,9 @@ async fn test_replication_cluster() {
     let leader_addr = leader_listener.local_addr().unwrap();
     let leader_url = format!("http://{}", leader_addr);
 
-    tokio::spawn(async move { axum::serve(leader_listener, leader_app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(leader_listener, leader_app).await.unwrap();
+    });
     println!("Leader running at {}", leader_url);
 
     // ── 2. Follower ───────────────────────────────────────────────────────────
@@ -51,7 +56,9 @@ async fn test_replication_cluster() {
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         wal_path: Some(follower_dir.path().join("wal.log")),
         event_log_path: Some(follower_dir.path().join("events.log")),
-        mode: valori_node::config::NodeMode::Follower { leader_url: leader_url.clone() },
+        mode: valori_node::config::NodeMode::Follower {
+            leader_url: leader_url.clone(),
+        },
         max_records: 128,
         dim: 4,
         max_nodes: 128,
@@ -70,7 +77,8 @@ async fn test_replication_cluster() {
 
     // ── 3. Verify initial sync ─────────────────────────────────────────────────
     let mut hits = vec![];
-    for _ in 0..50 { // wait up to 5 seconds
+    for _ in 0..50 {
+        // wait up to 5 seconds
         tokio::time::sleep(Duration::from_millis(100)).await;
         let engine = follower_state.read().await;
         hits = engine.search_l2(&vec![0.1; 4], 1).unwrap();
@@ -89,7 +97,8 @@ async fn test_replication_cluster() {
     }
 
     let mut hits = vec![];
-    for _ in 0..50 { // wait up to 5 seconds
+    for _ in 0..50 {
+        // wait up to 5 seconds
         tokio::time::sleep(Duration::from_millis(100)).await;
         let engine = follower_state.read().await;
         hits = engine.search_l2(&vec![0.2; 4], 1).unwrap();
