@@ -14,6 +14,10 @@
 # feature gates are still audited (replaces the old `--all-features` CLI flag).
 [graph]
 all-features = true
+# matmul_engine is an optional path dep (../../INT sibling repo) activated only by
+# the `int` feature of valori-embedded. It never ships in CI or production builds
+# and is not subject to our license/ban policy.
+exclude = ["matmul_engine"]
 
 [licenses]
 version = 2
@@ -60,26 +64,10 @@ ignore = [
     "RUSTSEC-2025-0141",  # bincode unmaintained (we use bincode 2.x directly)
     "RUSTSEC-2025-0119",  # number_prefix unmaintained (via indicatif progress bars)
     "RUSTSEC-2025-0134",  # rustls-pemfile unmaintained (via the rustls/tonic chain)
-    "RUSTSEC-2023-0089",  # atomic-polyfill unmaintained (via embedded cortex-m chain)
-    "RUSTSEC-2026-0110",  # bare-metal deprecated (via embedded cortex-m chain)
-
-    # ── pyo3 vulnerabilities — TRACKED DEBT, fix required ─────────────────────
-    # TODO(security): bump pyo3 0.23 → >=0.29 in crates/valori-ffi/Cargo.toml.
-    # This is a multi-release major upgrade that changes the Bound<'py, T> API,
-    # so it needs FFI code changes + a maturin build + the Python test suite —
-    # out of scope for the CI-config fix. Until then these ship in the wheel.
-    "RUSTSEC-2025-0020",  # pyo3 < 0.24.1: buffer overflow in PyString::from_object
-    "RUSTSEC-2026-0177",  # pyo3 < 0.29.0: missing Sync bound on PyCFunction::new_closure
-
-    # ── quick-xml advisories (transitive via opendal + reqsign) ───────────────
-    # Both versions (0.37.5 and 0.38.4) are pulled in by opendal v0.55.0 /
-    # reqsign v0.16.5. Neither crate has released a patched version in their
-    # current semver range, and `cargo update` cannot advance them. quick-xml is
-    # used only for S3 / object-store XML responses (internal, controlled input)
-    # — not for parsing untrusted user-supplied XML — so the CPU/DoS impact is low.
-    # TODO: remove once opendal bumps its quick-xml dep past the patched release.
-    "RUSTSEC-2026-0194",  # quick-xml: O(N²) duplicate-attribute check in start tags
-    "RUSTSEC-2026-0195",  # quick-xml: unbounded namespace-declaration allocation (DoS)
+    # RUSTSEC-2026-0192: ttf-parser 0.25.1 — author-declared unmaintained.
+    # Pulled in via lopdf → pdf-extract → valori-ingest. No maintained drop-in
+    # replacement exists that lopdf can switch to today.
+    "RUSTSEC-2026-0192",  # ttf-parser: upstream declared unmaintained
 
     # ── anyhow unsound advisory ────────────────────────────────────────────────
     # RUSTSEC-2026-0190: UB in Error::context + Error::downcast_mut borrow chain.
@@ -87,6 +75,16 @@ ignore = [
     # We never call downcast_mut on contexted errors — not in our hot path.
     # TODO: remove once anyhow ships a patched 1.x release.
     "RUSTSEC-2026-0190",  # anyhow: unsound borrow in Error::context + downcast_mut
+
+    # ── Locked transitive vulnerabilities — upgrade blocked by upstream ────────
+    # RUSTSEC-2026-0194 + RUSTSEC-2026-0195: quick-xml 0.37.5 — quadratic CPU in
+    # duplicate-attribute check and unbounded namespace-declaration heap in NsReader.
+    # Both require quick-xml >=0.41.0. Blocked by reqsign 0.16.5 which pins 0.37.5.
+    # We do not parse untrusted XML; reqsign uses it only for AWS credential
+    # response parsing from our own infrastructure endpoints.
+    # TODO: remove both once reqsign ships with quick-xml >=0.41.
+    "RUSTSEC-2026-0194",  # quick-xml: quadratic attribute duplicate check
+    "RUSTSEC-2026-0195",  # quick-xml: unbounded heap in NsReader namespace resolver
 ]
 
 [bans]

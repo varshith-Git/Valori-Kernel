@@ -1,0 +1,31 @@
+[package]
+name = "valori-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Valori Daemon — supervises valori-node instances and owns project/workspace lifecycle (the control plane behind Valori Desktop)"
+publish = false
+
+[[bin]]
+name = "valori-daemon"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Health-probing supervised nodes over HTTP. rustls avoids a system OpenSSL dep.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+valori-models = { path = "../valori-models" }
+# Parsing legacy ui/ manifest timestamps (`new Date().toISOString()`) during
+# the one-time project-registry migration (src/migration/).
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[dev-dependencies]
+tempfile = "3"
