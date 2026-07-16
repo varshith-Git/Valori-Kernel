@@ -137,6 +137,7 @@ field_reassign_with_default = "allow"
 bool_assert_comparison = "allow"
 int_plus_one = "allow"
 useless_vec = "allow"
+unnecessary_sort_by = "allow"
 
 # Firmware requires abort on panic (no unwinding support in no_std)
 # This also guarantees fail-closed behavior for the Node.

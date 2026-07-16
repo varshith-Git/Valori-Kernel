@@ -250,7 +250,7 @@ impl ObjectStoreBackend {
                 size_bytes,
             });
         }
-        snaps.sort_by(|a, b| b.epoch_secs.cmp(&a.epoch_secs)); // newest first
+        snaps.sort_by_key(|s| std::cmp::Reverse(s.epoch_secs)); // newest first
         Ok(snaps)
     }
 
