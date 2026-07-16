@@ -1,0 +1,29 @@
+[package]
+name = "valori-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stateful engine orchestrator for the Valori platform — coordinates KernelState, persistence, indexing, and caching"
+
+[dependencies]
+valori-kernel  = { workspace = true, features = ["std"] }
+valori-index   = { workspace = true }
+valori-search  = { workspace = true }
+valori-ingest  = { workspace = true }
+valori-rag     = { workspace = true }
+valori-metadata = { workspace = true }
+valori-storage = { workspace = true }
+valori-state   = { workspace = true }
+
+serde        = { version = "1.0", features = ["derive"] }
+serde_json   = "1.0"
+bincode      = { version = "2.0.1", features = ["serde"] }
+rustc-hash   = "2.1.1"
+thiserror    = "1.0"
+tracing      = "0.1"
+metrics      = "0.21"
+axum         = "0.7"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+tempfile = "3"
