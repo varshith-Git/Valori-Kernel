@@ -24,12 +24,14 @@ on:
       - "crates/valori-daemon/**"
       - "crates/valori-node/**"
       - "ui/**"
+      - "!**/*.md"
   pull_request:
     paths:
       - "desktop/**"
       - "crates/valori-daemon/**"
       - "crates/valori-node/**"
       - "ui/**"
+      - "!**/*.md"
   workflow_dispatch:
 
 jobs:
@@ -77,7 +79,8 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libfuse2 fuse
 
       - name: Install ui/ dependencies
         run: npm install

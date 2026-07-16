@@ -16,6 +16,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/kernel-abi.yml"
+      - "!**/*.md"
   pull_request:
     branches: ["main"]
     paths:
@@ -23,6 +24,7 @@ on:
       - "crates/valori-core/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "!**/*.md"
   workflow_dispatch:
 
 jobs:

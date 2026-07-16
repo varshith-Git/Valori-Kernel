@@ -19,6 +19,7 @@ on:
       - "benchmarks/write_regression.py"
       - "benchmarks/baseline/**"
       - ".github/workflows/write-regression.yml"
+      - "!**/*.md"
   workflow_dispatch:
 
 jobs:
