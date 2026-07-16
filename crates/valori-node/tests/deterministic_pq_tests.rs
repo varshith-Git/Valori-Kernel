@@ -1,6 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::structure::quant::Quantizer;
-use valori_node::structure::quant::pq::{ProductQuantizer, PqConfig};
+use valori_index::{Quantizer, ProductQuantizer, PqConfig};
 
 #[test]
 fn test_pq_roundtrip() {

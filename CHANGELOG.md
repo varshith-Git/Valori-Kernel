@@ -6,6 +6,238 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase P8 — CI hardening — 2026-07-16)
+
+- **`.github/workflows/ci.yml`** — two new parallel jobs:
+  - `coverage` — installs `cargo-llvm-cov` via `taiki-e/install-action` (prebuilt, no compile), runs `cargo llvm-cov --package valori-kernel --lcov`, uploads `lcov.info` as a 14-day artifact, writes a `--summary-only` table to `$GITHUB_STEP_SUMMARY`. Does not gate on a threshold (baseline tracked in K3 doc).
+  - `miri` — nightly toolchain + `miri` component; runs `cargo miri test -p valori-kernel --test fxp` (Q16.16 arithmetic UB) and `--test proof` (Merkle root + InsertReceipt UB) with `MIRIFLAGS=-Zmiri-disable-isolation`. Blocks merge on Miri errors.
+- **`.github/actions/rust-setup/action.yml`** — composite action extended with `toolchain` (default `stable`) and `components` inputs. Switches from `dtolnay/rust-toolchain@stable` to `@master` with the configurable channel. All existing callers are unaffected (they omit both new inputs and get the same stable/no-components behavior as before).
+
+### Added (Phase P6 — InsertReceipt cryptographic receipts — 2026-07-16)
+
+- **`valori-kernel/src/proof.rs`** — `InsertReceipt` struct: `{ record_id, old_root, new_root, proof, sequence, timestamp, state_hash }`. `build()` computes `proof` via `generate_proof_bytes` (Merkle root of Q16.16 FXP values) and `state_hash` as `BLAKE3("valori-insert-receipt-v1" ‖ fields)`. `verify()` recomputes the self-hash and returns `true` iff the receipt is unaltered.
+- **`valori-node/src/api.rs`** — `InsertReceiptJson` (hex-string HTTP form) + `From<InsertReceipt>` impl; `InsertRecordResponse { id, receipt }` (backward-compatible: old clients that only read `id` are unaffected).
+- **`valori-node/src/server.rs`** (standalone) — `POST /v1/records` now returns the full receipt: `old_root` captured before insert, FXP values converted from `payload.values`, `new_root` and `sequence` captured from a post-insert read lock.
+- **`valori-node/src/cluster_server.rs`** (cluster) — same receipt in `InsertResponse`; `sequence` = `resp.log_index`, `new_root` = `resp.state_hash` from `ClientResponse`.
+- **`python/valoricore/remote.py`** — `insert_with_receipt(vector, ...)` on both `SyncRemoteClient` and `AsyncRemoteClient`; returns the `receipt` dict from the HTTP response.
+- **Tests** — 5 new `InsertReceipt` tests in `crates/valori-kernel/tests/proof.rs`: `verify_roundtrip`, `verify_detects_tampering` (record_id / sequence / new_root), `deterministic`, `proof_field_matches_generate_proof_bytes`, `state_hash_differs_from_roots`. Kernel test count: 153 (was 148).
+
+### Added (Phase K4 — Snapshot version migration tests — 2026-07-16)
+
+- **`crates/valori-kernel/tests/snapshot_version_migration.rs`** (new) — 10 tests covering every `schema_ver` 1–6 backward-compat branch in `decode_state`, which were previously untested dead code under the test suite (the encoder always writes the current version). Includes: `v1_decodes_correctly`..`v6_decodes_correctly` (per-version field assertions), `v1_hole_slot_decodes_as_absent_without_shifting_ids`, `cross_version_decode_reencode_chain_is_hash_stable` (decode → hash vs. reference → reencode → decode → fixed-point for every V1–V7), `v6_out_of_range_namespace_head_is_rejected`, `schema_version_zero_is_rejected`. Mutation-tested: disabling the V1–V3 incoming-edge reconstruction block in `decode.rs` causes exactly the right 4 failures; `v4/v5/v6` stay green. Kernel test count: 148 (was 138).
+
+### Added (Phase D1.3 — Installers + clean-machine validation groundwork — 2026-07-13)
+
+- **Fixed**: two API route handlers (`api/records/[id]/route.ts`, `.../metadata/route.ts`) used Next.js 14's synchronous `params` signature, which blocked `next build` outright on this repo's Next.js version. Fixed to `params: Promise<...>` + `await`, matching the convention already used elsewhere.
+- **`ui/` bundled as a Node sidecar**: `desktop/scripts/prepare-ui-server.mjs` (new, packages `ui/`'s `next build --output standalone` as a Tauri bundle resource, including the manual `.next/static` copy Next's standalone output omits); `desktop/src-tauri/src/ui_server_manager.rs` (new, release-only — spawns the bundled `node` sidecar against it on a fixed loopback port, then navigates the main window from a "Starting Valori…" loading page to the real app once healthy). `tauri dev` is unaffected.
+- **First real `tauri build` in this project** — produced and verified `Valori.app` + `Valori_0.1.0_aarch64.dmg` (checksum-verified via `hdiutil verify`). All 4 sidecars (`valori-desktop`, `valori-daemon`, `valori-node`, `node`) and the bundled `ui-server` resource confirmed correctly placed; confirmed via real launch that the bundled ui-server actually serves the app (not just that the build succeeded).
+- **Fixed two real shutdown bugs found via launch-testing, not inspection**: (1) a raw SIGTERM (session logout, `killall`, force-quit) bypassed the graceful `ExitRequested` handler entirely, orphaning the bundled ui-server process and leaving its port held — fixed with a `#[cfg(unix)]` SIGTERM handler; (2) the existing `ExitRequested` handler's own call to `AppHandle::exit()` re-triggers `ExitRequested` (per Tauri's docs) — a real infinite-loop-on-quit risk that had never been exercised until now — fixed with a shared `Arc<AtomicBool>` shutdown guard.
+- **`.github/workflows/desktop-build.yml`** (new) — macOS/Windows/Linux matrix build producing each platform's installer (`.dmg`/`.msi`/`.AppImage`) as a CI artifact. Signing/notarization explicitly deferred to Phase D1.4.
+- **`docs/architecture/desktop-layout.md`** (new) — real app-bundle and workspace directory layout, startup sequence, fixed ports.
+- **`docs/DESKTOP_RELEASE_CHECKLIST.md`** (new) — manual clean-machine smoke test steps, deliberately not automated this phase.
+
+### Added (Phase D3.1 — Bundle the daemon and node as Tauri sidecars — 2026-07-13)
+
+- **`desktop/scripts/prepare-sidecars.mjs`** (new) — resolves host target triple, locates/builds `valori-daemon` + `valori-node`, copies them into `src-tauri/binaries/<name>-<triple>[.exe]` per Tauri's `externalBin` naming convention. `--release` always rebuilds in release mode; dev mode reuses whatever's already built.
+- **`desktop/scripts/dev.mjs`** (new) — new `beforeDevCommand`: preps sidecars synchronously, then starts `ui/`'s dev server. Required because Tauri's build script validates `externalBin` resource paths on every cargo build, not just `tauri build`.
+- **`bundle.externalBin`** in `tauri.conf.json` — bundles both binaries into the app; `beforeBuildCommand` now runs `prepare-sidecars.mjs --release`.
+- **`desktop/src-tauri/src/daemon_manager.rs`** — rewritten around exactly two code paths (per explicit user direction, no env-var override): dev-mode `target/{release,debug}` search vs. release-mode Tauri sidecar spawn (`tauri-plugin-shell`). Adds a version handshake (`GET /version` api-level check, `UnsupportedVersion` error on mismatch instead of a later mysterious failure) and `VALORI_NODE_BIN` wiring so the daemon sidecar can find its bundled `valori-node` sidecar with no Cargo/target-dir assumption on the end user's machine.
+- `tauri-plugin-shell = "2"` added to `desktop/src-tauri/Cargo.toml`.
+
+### Added (Phase D3 — Desktop launches and manages the daemon — 2026-07-13)
+
+- **`POST /v1/shutdown`** (`valori-daemon`) — graceful, cross-platform daemon shutdown over HTTP; snapshots every running project before the process exits. Exists because OS signal semantics aren't uniform across macOS/Linux/Windows for a process spawned and supervised by another process (the desktop app).
+- **Fixed:** `Runtime::stop_all()` previously hard-killed every supervised node with no snapshot on daemon shutdown (Ctrl-C or desktop close) — a real durability gap, since `stop()` for a single project always snapshotted first. Now `stop_all()` does the same snapshot-then-terminate for every node.
+- **`desktop/src-tauri/src/daemon_manager.rs`** — desktop now supervises the `valori-daemon` process directly: `start_daemon` (spawns it with `VALORI_HOME` from the user's chosen workspace, polls `/health`, no-ops if already running), `stop_daemon` (calls `POST /v1/shutdown`, falls back to a hard kill if it doesn't exit), `daemon_status`. An `ExitRequested` hook calls the graceful shutdown before the desktop window is allowed to close.
+- **`ui/src/lib/native.ts`** — `startDaemon`/`stopDaemon`/`daemonStatus` bridge functions.
+- Welcome wizard's workspace folder choice now actually becomes `VALORI_HOME` (`Welcome.tsx` calls `startDaemon(workspaceDir)` on finish); returning users get the daemon started automatically against their persisted workspace on every launch (`AppShellGate.tsx`).
+- **Fixed:** `crates/valori-daemon/tests/lifecycle.rs::supervisor_restarts_crashed_node` had a pre-existing race (asserted the crash would be visible on the very first `supervise_tick()` after `kill -9`, which isn't guaranteed) — now polls until the restart lands instead of asserting on a specific tick.
+
+### Added (Phases M5–M6 — Package Store + Integrity Manager — 2026-07-13)
+
+- **`PackageStore`** — on-disk package manager with `<root>/<task>/<sanitized-id>/manifest.json` layout; `register()` (remote/no-download), `install()` (atomic download + rename), `commit_staged()`, `remove()`, `repair()`, `list()`, `find_by_task()`, `disk_usage()`, `exists()`, `get()`, `acquired_lock()`.
+- **`PackageManifest`** (M5.3) — versioned per-package manifest: `schema_version`, `package_version`, `created`, `updated`, `size`; wraps `ModelManifest`.
+- **`InstallLock`** (M5.2) — RAII exclusive lock via `OpenOptions::create_new`; prevents concurrent installs from two processes; released on drop.
+- Atomic install (M5.1): download → `.tmp/<timestamp>/model.bin` → SHA-256 verify → `fs::rename` → write `manifest.json`; stale `.tmp/` entries cleaned on `PackageStore::new()`.
+- **`IntegrityManager`** (M6) — `verify(id)` + `verify_all()` → `Vec<IntegrityReport>` with `IntegrityStatus`: Verified / Remote / Missing / Unverified / Corrupted.
+- **`repair_package(store, id)`** (M6) — returns `RepairAction`: AlreadyHealthy / SizeRepaired / NeedsReinstall { download_url }.
+- **`RefCounter`** (M6.2) — in-memory model→project reference tracking; `add_ref`, `remove_ref`, `ref_count`, `can_delete`, `all_referenced_ids`, `referencing_projects`.
+- **`GarbageCollector`** (M6.1) — `scan(&refs)` → `GcReport { unreferenced, reclaimable_bytes }`; `clean(&refs)` → removes all unreferenced; `safe_delete(id, &refs)` → errors if model in use.
+- **`SystemHealth`** / **`PackageHealth`** (M6.3) — per-package health (Verified / Installed / Missing / Corrupted + size + ref_count); aggregate totals (total_installed, verified, corrupted, missing, disk_used_bytes, reclaimable_bytes).
+- **`GET /v1/models/health`** — added to both standalone and cluster routers; reads `VALORI_MODELS_DIR` (default: `~/.valori/models`); returns `SystemHealth` JSON.
+- `ModelError::InstallConflict` — new error variant for lock contention.
+- `dirs = "5"` added to `valori-node` deps for home-dir resolution.
+
+### Added (Phases M1–M4 — valori-models Package Manager — 2026-07-13)
+
+- **`ModelManifest`** — replaces `InstalledModel` + `ModelSpec`; 15 typed fields: `provider: ProviderKind`, `task: ModelTask`, `format: ModelFormat`, `status: ManifestStatus`, `family`, `quantization`, `min_ram_mb`, `license`, `homepage`, `download_url`.
+- **`ModelTask`** — `Embedding | Generation | Reranker | Vision | Speech`
+- **`ModelFormat`** — `Onnx | Gguf | Safetensors | Remote`
+- **`ProviderKind`** — `OpenAI | Ollama | Voyage | Anthropic | AzureOpenAI | Custom | Local | Dummy`; `as_str()` / `from_str()`.
+- **`ManifestStatus`** — `Available | Queued | Downloading { progress_bytes, total_bytes } | Paused | Verifying | Installed | Failed { reason }`
+- **`ProviderRegistry`** + **`ProviderFactory`** — eliminates all `match kind` dispatch; `register()`, `build()`, `build_from_manifest()`, `provider_kinds()`; pre-loaded with Ollama / OpenAI / Voyage / Custom / Dummy factories.
+- **`Resolver`** — `resolve(task, dim?)` selects best installed model; `compatible_embedding_models(dim)`, `resolve_for_embedding(dim)`.
+- **`DownloadJob`** + **`DownloadState`** + **`DownloadEvent`** — M4 download state machine with channel-based progress events and cancellation token.
+- **`ModelStore::update()`** — in-place manifest update (status, path, sha256 after install).
+- **Built-in catalog** enriched with `family`, `license`, `homepage`, `min_ram_mb`, `download_url` for all 11 entries.
+- **`ModelManager`** gains: `all_manifests()`, `disk_usage_bytes()`, `catalog_json()`, `resolve()`, `resolve_for_collection(dim)`, `provider_for(id)`, `provider_from_config()`.
+- `provider_from_config` now delegates to `ProviderRegistry` (backward compat shim for node env-var path).
+
+### Added (Phase E4 — Ingest Pipeline Observability — 2026-07-13)
+
+- **`CancellationToken`** — `Arc<AtomicBool>`-backed, `Clone`; `check()` returns `Err(IngestError::Cancelled)` when triggered; checked between each pipeline stage.
+- **`RetryPolicy`** — `Never | Fixed { attempts, delay_ms } | Exponential { max_attempts, base_delay_ms, max_delay_ms }`; async `execute(FnMut() -> Fut)`; applied to the embedder stage.
+- **`PipelineConfig`** — `{ batch_size, retry, timeout_secs }` with builder methods; default = original behavior (no retry, one batch, no timeout); `batch_size` enables streaming (embed+write N chunks before moving to the next N).
+- **`PipelineHook`** — observer trait with 6 default no-op methods (`after_read`, `before_chunk`, `after_chunk`, `before_embed`, `after_embed`, `after_write`); multiple hooks stack; `NoopHook` for tests.
+- **`ProgressEvent`** — typed channel events: `StageStarted`, `ChunkProgress { completed, total }`, `StageCompleted { stage, duration_ms }`, `Done`, `Failed`; optional `ProgressSender` passed to `run_observed`.
+- **`StageMetrics` / `StageResult` / `PipelineResult`** — per-stage timing, counters, and warnings; `PipelineResult::summary()`, `stage()`, `all_warnings()`.
+- **`IngestPipeline::run_observed()`** — full observable entry point; `run()` stays backward-compatible.
+- **`WriteResult`** — added `Serialize/Deserialize` (required by `PipelineResult`).
+
+### Added (Phases E3.1–E3.6 — Extractor Framework — 2026-07-13)
+
+- **`Extractor` trait** — bytes-in / `Document`-out; synchronous (no I/O); separates parsing from file access.
+- **Five `Extractor` impls** — `TextExtractor`, `MarkdownExtractor`, `HtmlExtractor`, `PdfExtractor`, `DocxExtractor` in `src/extractors/`.
+- **`ExtractorRegistry`** — `extractor_for_extension`, `extractor_for_mime`, `extractor_for_path`, `extractor_for_bytes` (magic-byte MIME detection via `infer`), `all_capabilities()`.
+- **`DocumentMetadata`** — typed struct replacing `metadata: Value` on `Document`; fields: `title`, `author`, `language`, `created_at`, `modified_at`, `page_count`. All readers updated.
+- **`DocumentValidator`** — checks: empty, too-large, page limit, malformed UTF-8, protected PDF. Standalone; not yet wired into pipeline.
+- **`DocumentSource`** — typed origin enum: `File`, `Url`, `Memory`, `GitHub { repo, branch, file }`, `S3 { bucket, key }`.
+- **`ReaderCapabilities`** — `extensions`, `mime_types`, `supports_streaming/metadata/images`; exposed on every `Extractor` via `capabilities()` and aggregated by `ExtractorRegistry::all_capabilities()`.
+
+### Added (Phase E3.5 — ReaderRegistry — 2026-07-13)
+
+- **`ReaderRegistry`** — `reader_for_extension(ext)` and `reader_for_path(path)` return `Arc<dyn Reader>`; all extension-to-reader mapping lives in one place; unknown extension returns `IngestError::Reader`.
+
+### Added (Phase E3 — Format Readers — 2026-07-13)
+
+- **`MarkdownReader`** — CommonMark → plain text via `pulldown-cmark`; H1 heading promoted to `metadata.title`.
+- **`HtmlReader`** — visible-text extraction via `scraper`; `<script>`/`<style>` subtrees pruned; `<title>` and `<meta name="author">` surfaced as metadata.
+- **`PdfReader`** — file-path input; text via `pdf-extract`, page count via `lopdf`; runs in `spawn_blocking`.
+- **`DocxReader`** — file-path input; unzips, parses `word/document.xml` `<w:t>` runs + `docProps/core.xml` core properties via `quick-xml`; runs in `spawn_blocking`.
+- All four readers implement the existing `Reader` trait and return the existing `Document` type — no pipeline changes required.
+
+### Changed (Phase E2.5 — KernelWriter wiring — 2026-07-13)
+
+- `POST /v1/ingest` sync and async paths now delegate to `IngestPipeline::run()` + `KernelWriter`; ~200 lines of inline `embed_batch → insert_batch_ns → nodes/edges/metadata` orchestration removed from the handler.
+- `KernelWriter` (in `valori-node`) implements `valori-ingest::Writer` — per-chunk vector insert, reranker index, chunk-node, parent edge, and chunk metadata in one place.
+- `provider_from_config()` factory added to `valori-models` — builds `Box<dyn ModelProvider>` from raw env-var strings without the `InstalledModel` registry.
+- HTTP API surface unchanged; `ingest_update` path untouched.
+
+### Added (Phase E2 — Composable Ingest Pipeline — 2026-07-13)
+
+- **`Document`** — shared data object (BLAKE3 id, source, mime_type, metadata, content) that flows through every ingest stage.
+- **`trait Reader`** + `TextReader` — first stage; converts raw input to `Document`. Format changes are local to this stage.
+- **`trait Chunker`** + `ValoriChunker` — wraps existing `chunk_document`; no logic changed.
+- **`trait Embedder`** + `ModelProviderEmbedder` — delegates to `Box<dyn ModelProvider>` (from `valori-models`); no Ollama/OpenAI awareness in the stage itself.
+- **`trait Writer`** + `NoopWriter` — final stage contract; `KernelWriter` implementation lives in `valori-node` (separate migration).
+- **`IngestPipeline`** — `Reader → Chunker → Embedder → Writer`, returns one record ID per chunk. Named `IngestPipeline` to leave room for `QueryPipeline`, `SearchPipeline`, etc.
+- `embed.rs` and `handler.rs` unchanged — existing node call sites unaffected.
+- **Tightened (E2 exit checklist)**: `ValoriChunker` renamed to `DefaultChunker` (names describe behavior, not brand); stage boundaries use typed objects (`Chunk`, `Embedding`, `WriteResult`) not raw primitives; `IngestError` is an enum with stage variants (`Reader`/`Chunk`/`Embed`/`Writer`); `IngestPipeline::builder()` fluent API replaces positional constructor.
+- 19 crate tests (was 13); `valori-node` still builds clean.
+
+### Added (Phase E1.1 — `valori-models` Standalone Crate — 2026-07-13)
+
+- **New `valori-models` crate** — shared model management subsystem used by the daemon, `valori-ingest`, the Python SDK, and the desktop without duplication.
+- **`ModelProvider` trait** (`kind`, `model_name`, `dim`, `embed`, `health`) with provider implementations: `OllamaProvider` (batch + legacy fallback), `OpenAIProvider` (OpenAI-compatible), `VoyageProvider`, `DummyProvider` (zero vectors for tests). `build()` factory dispatches by provider string.
+- **`ModelStore` DIP seam** — `JsonModelStore` backed by `<home>/models.json` (write-then-rename); `SqliteModelStore` drops in later with no change to `ModelManager`.
+- **Built-in registry** of 11 models: OpenAI ×3, Ollama ×3, Voyage ×2, BGE-ONNX ×3.
+- **`VerifyStatus`** (`Remote | Ok | Missing | Unverified | Corrupted`) + `verify_model()` for on-demand re-verification.
+- Fixed workspace `Cargo.toml` — added 7 missing `[workspace.dependencies]` entries for crates added in prior N/E sessions.
+- 5 crate tests: SHA-256 known-vector, dummy provider, storage CRUD, verifier (remote + local).
+- **E1.2**: Deleted `valori-daemon/src/model.rs` (351 lines, fully duplicated); daemon now imports from `valori-models`. Removed `ModelStore` trait from `daemon/store.rs`. Added `From<ModelError> for DaemonError` bridge. Removed `sha2`/`futures-util` from daemon deps. Single source of truth established; 11 daemon unit tests pass.
+
+### Added (Phase E1 lite — Model Manager — 2026-07-13)
+
+- **Daemon model catalog**: `GET /v1/models` (installed + available from a curated registry + total disk usage), `POST /v1/models/install` `{id}`, `GET|DELETE /v1/models/*id`. Replaces the previous `501` stubs.
+- **Two install paths**: remote-service models (OpenAI/Ollama/…) install by registering; local models (ONNX/…) stream-download to `<home>/models/<id>/` with **SHA-256 verification** (mismatch → delete + error) and disk accounting.
+- **`ModelStore` DIP seam** (impl `JsonModelStore`, `<home>/models.json`) alongside the project/workspace stores — a `SqliteModelStore` drops in later with no daemon change. `DaemonDeps` now injects the model store too.
+- Management only — the daemon orchestrates models; local inference is a future `ModelProvider` (E1-full). Each model's `provider` is the seam the document-pipeline embedder (E2) will dispatch on. New event: `model.installed` / `model.removed`.
+
+### Added (Phase D2.2 — Restart Loop & Health FSM — 2026-07-13)
+
+- **Self-healing supervision**: a background monitor detects crashed nodes and restarts them per an operator-set `RestartPolicy` (`never` (default) / `on_failure` / `always`) with capped exponential backoff (2→60s). Crash count and last crash reason are tracked and surfaced under `supervision` in project responses; `restart_policy` is settable on project create and persisted in the manifest.
+- **Operational/runtime split** (review point 3): the `Runtime` detects exits (`poll_exits`, via a new non-blocking `RunningProcess::has_exited`) and executes start/stop; a separate operational `Supervisor` decides *whether* to restart (policy + backoff) and owns crash bookkeeping. The daemon's monitor tick wires them.
+- **Richer `RuntimeState`**: adds `Recovering` (auto-restart after a crash — distinct from a fresh `Starting`, since Valori replays its event log on recovery), with the corresponding legal transitions.
+- Lifecycle events now include `project.crashed`, `project.recovering`, `project.restarted`.
+
+### Changed (Phase D2.1 — Dependency-Inversion Seams — 2026-07-13)
+
+- **The daemon now runs entirely on injected trait objects** (Dependency Inversion). `Daemon` holds `Box<dyn ProjectStore>`, `Box<dyn WorkspaceStore>`, `Box<dyn Runtime>`, `Box<dyn EventStore>` and constructs nothing durable itself — a `DaemonDeps` struct + `with_deps()` inject everything; `new()` wires the defaults. Swapping to a SQLite store or Docker runtime needs no daemon change.
+- **New seams**: `ProjectStore`/`WorkspaceStore` (impl `JsonProjectStore`/`JsonWorkspaceStore`), `EventStore` (impl `MemoryEventStore`), and `Launcher` + `RunningProcess` (impl `LocalLauncher`/`LocalProcess`). The `Runtime` now *orchestrates* (health, state, resources) while the `Launcher` *launches* — so a future `DockerLauncher` returns a container handle without the runtime touching `std::process`.
+- **`RuntimeState` state machine**: node lifecycle is now `Stopped → Starting → Running → Stopping → Stopped` (plus `Failed`) with illegal transitions returning an error instead of corrupting state; `NodeInfo.status` is the typed state, not a bespoke enum.
+- **`RestartPolicy` moved out of `runtime/`** to a top-level operational module — whether a node *should* exist is an operator decision, not the runtime's.
+
+### Added (Phase D2 — Node Runtime — 2026-07-13)
+
+- **`Runtime` trait + `LocalRuntime`**: the daemon now runs nodes through a pluggable `Box<dyn Runtime>` (async-trait) instead of a hard-coded supervisor, so `DockerRuntime` / `SshRuntime` / `RemoteRuntime` slot in later with no change to the daemon, API, or desktop. The monolithic `Supervisor` was decomposed (SRP) into focused components: `PortAllocator`, `ResourceMonitor`, `RestartPolicy`, plus health polling and log capture in `LocalRuntime`.
+- **`GET /v1/events`**: Docker-style lifecycle event stream (in-memory ring buffer) — `project.created`, `project.started`, `project.stopped`, `workspace.created/deleted`. Poll today; SSE/WebSocket push later (same shape).
+- **`GET /v1/projects/:name/runtime`**: live per-node resource stats (CPU %, resident MB, threads on Linux, uptime) sampled via `ps` — no platform crate.
+- **Stable resource IDs**: projects and workspaces now carry a UUID `id` (names become mutable labels). `GET /v1/config` reports the runtime descriptor (`kind: "local"`, binary, port range).
+
+### Added (Phase D1.1 — Stabilize the Daemon API — 2026-07-13)
+
+- **System / discovery endpoints**: `GET /v1/system` (version, platform, daemon PID, uptime, and live counts of projects/running/workspaces/models — the endpoint every client calls first), `GET /version`, `GET /v1/config`. Whole API is versioned under `/v1` from day one.
+- **Workspaces** — the grouping layer above projects (RFC-0006): `GET|POST /v1/workspaces`, `PATCH|DELETE /v1/workspaces/:name`. A `default` workspace always exists; deleting a workspace that still has projects is refused. Projects carry a `workspace` field (serde-defaulted, so older manifests still load).
+- **Collections** proxied through the running node: `GET|POST /v1/projects/:name/collections`, `DELETE …/:collection` → the node's `/v1/namespaces`.
+- **Node logs + uptime**: node stdout/stderr captured to `<project>/node.log`, exposed via `GET /v1/projects/:name/logs?tail=N`; node status now includes `uptime_secs`.
+- **Model manager stubs** (D4 placeholder): `GET /v1/models` (empty), `POST /v1/models/install` and `DELETE /v1/models/:id` return `501`.
+
+### Added (Phase D1 — Valori Daemon, Milestone 1 — 2026-07-13)
+
+- **New crate `valori-daemon`** + `valori-daemon` binary: the control-plane daemon that owns project lifecycle and supervises `valori-node` instances (RFC-0006 "Docker Desktop for AI Memory"). Rust successor to the TypeScript process manager in `ui/src/lib/server/`.
+- **Project lifecycle HTTP API** (Milestone 1): `GET /health`, `GET|POST /v1/projects`, `GET|DELETE /v1/projects/:name`, `POST /v1/projects/:name/{start,stop,restart}`. Projects are directories under `$VALORI_HOME/projects/<name>/` with a `project.json` manifest; one project → one supervised `valori-node`.
+- **Process supervision**: internal port allocation (8100–8999, hidden from clients — projects are addressed by name), `/health`-gated startup, best-effort graceful stop (snapshot then terminate; hard kill is still safe via event-log replay), and "no delete while running" enforcement.
+- **New crate `valori-daemon`** added to the workspace (members + default-members); the Tauri desktop shell (`desktop/`) is deliberately excluded from the Cargo workspace.
+- **`desktop/`** — Tauri 2 scaffold (native control-plane shell), separate from `ui/` so `cd ui && npm run dev` is unaffected. Runs in dev against the Next.js UI; production bundling waits on the daemon absorbing `ui/`'s server API routes.
+- **RFC-0006** (`rfcs/0006-desktop-daemon-architecture.md`): daemon architecture — three execution modes (embedded/supervised/remote), path-as-truth + project-scoped-token-as-sugar, workspace layer, collections-are-namespaces scaling model.
+- **`_execution` observability block** extended with `operation_hash` + measured `duration_ms` (opt-in via `?explain=true` on `POST /v1/memory/search_vector`).
+
+### Added (Phase N5 — valori-engine extraction — 2026-07-12)
+
+- **New crate `valori-engine`**: the `Engine` struct (1 743-line engine.rs) and all supporting types extracted from `valori-node` into a standalone orchestration crate. Five modules: `config` (`IndexKind`, `QuantizationKind`, `EngineConfig`), `error` (`EngineError`, `CommitError`), `metadata` (`MetadataStore`), `persistence` (`Persistence` enum — Phase E1 durability funnel), `engine` (`Engine::with_config`, `RecoveryMode`, `EngineHealth`, `PoolStats`, `ExecutionResources`).
+- **`EngineFromNodeConfig` extension trait**: defined in `valori-node/src/engine.rs`, bridges `NodeConfig → EngineConfig` so all existing `Engine::new(&cfg)` call sites in tests, main.rs, and examples keep compiling with one added `use valori_node::EngineFromNodeConfig;` per file.
+- **Dependency Inversion**: `EngineConfig` injects `Arc<dyn KeyVault>` and `Option<Arc<ObjectStoreBackend>>`; `valori-engine` never constructs `AesGcmVault` or calls `ObjectStoreBackend::from_env()` — those remain in `valori-node`.
+- **Re-export shims**: `valori-node/src/errors.rs`, `metadata.rs`, `commit/persistence.rs`, and `config.rs` (for `IndexKind`/`QuantizationKind`) now delegate to `valori-engine` via `pub use`, keeping all existing `crate::*` imports across server.rs, cluster_server.rs, routes/, etc. unchanged.
+
+### Added (Phase N4 — valori-ingest extraction — 2026-07-12)
+
+- **New crate `valori-ingest`**: embedding client and chunking logic extracted from `valori-node/src/embedder.rs` and `ingest.rs` into a standalone crate with zero `valori-*` dependencies. Three modules: `embed` (`EmbedConfig`, `embed_batch` supporting Ollama/OpenAI/custom), `chunker` (`chunk_document`, `chunk_content_hash`, 4 strategies + auto-detection, `MAX_INGEST_TEXT_BYTES`), `handler` (`ingest_document` stateless axum handler for `POST /v1/ingest/document`).
+- **`embed_config_from_node` helper**: added as `pub(crate)` in `engine.rs` — constructs `valori_ingest::EmbedConfig` from `NodeConfig` without requiring `valori-ingest` to depend on `valori-node`.
+- **Recursion bugfix in chunker**: tree strategy falling back to `"auto"` could infinite-recurse (auto re-detects tree → loop → SIGABRT). Fixed by falling back directly to `"fixed"` instead.
+
+### Added (Phase N3 — valori-rag extraction — 2026-07-12)
+
+- **New crate `valori-rag`**: GraphRAG, Tree-RAG, and Community Layer extracted from `valori-node` into a standalone crate. Three modules: `graph` (`resolve_seed_nodes`, `expand_subgraph`), `tree` (`TreeIndex`, `Receipt`, `verify_chain`, stateless axum handlers), `community` (Label Propagation, centroid ranking, request/response types). New `llm` module holds `LlmConfig` + `extract_entities_via_llm`, decoupled from `EmbedConfig` via a 4-field config struct.
+- **`LlmConfig`**: minimal credentials struct in `valori_rag::llm` that breaks the circular dependency between entity extraction and `valori-node`'s `EmbedConfig`. Node constructs `LlmConfig` at the call site; `valori-rag` has no `valori-node` dependency.
+
+### Added (Phase N2 — valori-index extraction — 2026-07-12)
+
+- **New crate `valori-index`**: all vector index structures extracted from `valori-node/src/structure/` into a standalone crate behind a single `VectorIndex` trait. Includes `BruteForceIndex`, `HnswIndex`, `IvfIndex`, `BqIndex`, quantizers (`NoQuantizer`, `ScalarQuantizer`, `ProductQuantizer`), and `deterministic_kmeans`. NEON SIMD kernels and determinism guarantees preserved.
+- **`VectorIndex` trait is now a public crate interface**: integration test files in `valori-node/tests/` and `engine.rs` import from `valori_index::` directly; the old `crate::structure::*` internal module is deleted.
+
+### Added (Phase N1 — valori-search extraction — 2026-07-12)
+
+- **New crate `valori-search`**: post-retrieval search primitives extracted from `valori-node` into a standalone crate with no kernel or node dependency. Three modules: `decay` (time-decay re-ranking), `reranker` (BM25 hybrid), `filter` (metadata predicate matching).
+- **O(1) IDF lookup in `ValoriReranker`**: added `doc_freq: HashMap<String, usize>` inverted index updated incrementally on every `insert`/`remove`. Previous implementation scanned the full corpus per query term — O(|corpus| × |query_terms|).
+- **`restore_corpus` is now deterministic**: rebuilds `doc_freq` from the restored corpus instead of trusting the snapshotted `total_tokens` value, which could be stale after tokeniser changes.
+
+
+### Fixed (Phase A14 — valori-node audit bug fixes — 2026-07-10)
+
+- **P0 — `RaftKernelCapability::state_hash()` always returned zeros**: Now uses `tokio::task::block_in_place` to call the async `ValoriStateMachine::with_state()` from a sync trait method, computing the real BLAKE3 hash per shard.
+- **P0 — `cluster_snapshot_save` only saved shard 0 and read wrong field**: Handler now loops all shards `0..shard_count` and reads `"state_hash"` (not `"hash"`) from `SnapshotArtifactTask` output.
+- **P0 — `/health` and `/metrics` gated behind `cluster_auth_guard`**: Middleware restructured so the public sub-router (health, metrics) is merged without auth; only the v1 protected sub-router gets the auth layer.
+- **P1 — Namespace truncation in standalone shard routing**: `(ns as u8).wrapping_rem(shard_count)` silently truncated 16-bit namespace IDs before modulo, misrouting namespaces ≥ 256. Fixed to `((ns as u32) % (shard_count as u32).max(1)) as u8` at all 3 callsites in `server.rs`.
+- **P1 — `cluster_community_search` hardcoded shard 0**: Handler now resolves `payload.namespace` via `s.sm.resolve_namespace()` and routes to the correct shard via `shard_for_namespace()`, matching `cluster_community_detect` behavior.
+- **P1 — `cluster_community_detect` swallowed planner errors with `.ok()`**: Return type changed to `Result<Json<DetectResponse>, (StatusCode, Json<Value>)>`; planner errors now surface as 500 INTERNAL_SERVER_ERROR.
+- **P1 — Decay sort inverted in `RaftKernelCapability::memory_search`**: `score * decay_factor` ascending ranked older records better; fixed to `score / decay_factor` ascending, matching the standalone `decay.rs::rerank` formula.
+
+### Added (Phase A13.1 — cluster planner wiring — 2026-07-10)
+
+- **`RaftKernelCapability` extended** with 8 new methods: `save_snapshot`, `graph_rag`, `memory_search`, `community_detect`, `community_search`, `tree_build`, `tree_query`, `tree_hybrid` — backed by `ValoriStateMachine` (`with_state()` / `with_state_and_timestamps()` / `get_meta_json()`).
+- **`CapabilityRegistryBuilder::build_cluster()`** now takes `tree_cache` and `community_store` to pass shared state into the cluster capability.
+- **7 cluster handlers wired through `run_graph_inline`**: `cluster_graphrag`, `cluster_snapshot_save`, `cluster_tree_build`, `cluster_tree_query`, `cluster_tree_hybrid`, `cluster_community_detect`, `cluster_community_search` in `cluster_server.rs`. Both execution paths now follow the identical `HTTP → ExecutionGraph → TaskRunner → KernelCapability → Response` contract.
+
 ### Added (Phase A13 — planner migration — 2026-07-10)
 
 - **8 new `KernelCapability` default methods** in `valori-effect`: `save_snapshot`, `graph_rag`, `memory_search`, `community_detect`, `community_search`, `tree_build`, `tree_query`, `tree_hybrid` — all default to `CapabilityUnavailable`.

@@ -4,6 +4,7 @@
 //! Inserts one record, then verifies /v1/replication/events yields
 //! the historical InsertRecord event and streams new ones live.
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 use valori_node::server::build_router;
 use std::sync::Arc;
 use tokio::sync::RwLock;

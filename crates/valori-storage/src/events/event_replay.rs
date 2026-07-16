@@ -79,30 +79,29 @@ fn read_segment_full(path: impl AsRef<Path>, expected_dim: Option<u32>) -> Resul
         }
     }
 
+    use crate::events::event_log::{walk_segment_body, SegmentWalkError, LogEntry};
+
+    let (decoded_entries, chain_head) = walk_segment_body(
+        header.version,
+        &buffer,
+        header.header_len,
+        header.prev_segment_chain_head,
+    )
+    .map_err(|e| match e {
+        SegmentWalkError::ChainBroken { offset } => ReplayError::Corrupted { offset },
+        SegmentWalkError::Wire { offset, .. } => ReplayError::Corrupted { offset },
+    })?;
+
     let mut events = Vec::new();
-    let mut offset = header.header_len;
-    let mut chain_head = header.prev_segment_chain_head;
-    while offset < buffer.len() {
-        match valori_wire::decode_entry(header.version, &buffer[offset..]) {
-            Ok((decoded, bytes_read)) => {
-                if decoded.prev_hash != chain_head {
-                    return Err(ReplayError::Corrupted { offset });
-                }
-                chain_head = valori_wire::chain_advance(header.version, &chain_head, &decoded)
-                    .map_err(|e| ReplayError::Deserialization(e.to_string()))?;
-                offset += bytes_read;
-                match decoded.entry {
-                    crate::events::event_log::LogEntry::Event(event) => {
-                        events.push((valori_kernel::types::id::DEFAULT_NS.0, event));
-                    }
-                    crate::events::event_log::LogEntry::EventNs { namespace_id, event } => {
-                        events.push((namespace_id, event));
-                    }
-                    _ => {}
-                }
+    for decoded in decoded_entries {
+        match decoded.entry {
+            LogEntry::Event(event) => {
+                events.push((valori_kernel::types::id::DEFAULT_NS.0, event));
             }
-            Err(_) if offset + 100 > buffer.len() => break, // trailing partial write
-            Err(_) => return Err(ReplayError::Corrupted { offset }),
+            LogEntry::EventNs { namespace_id, event } => {
+                events.push((namespace_id, event));
+            }
+            _ => {}
         }
     }
 

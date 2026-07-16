@@ -1,6 +1,5 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::structure::ivf::{IvfIndex, IvfConfig};
-use valori_node::structure::index::VectorIndex;
+use valori_index::{IvfIndex, IvfConfig, VectorIndex};
 
 // NOTE: This test verifies same-machine determinism only.
 // Cross-architecture determinism (x86 snapshot == ARM restore) must be

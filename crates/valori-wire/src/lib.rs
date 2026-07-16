@@ -132,6 +132,13 @@ pub enum WireError {
     DecodeLimitExceeded,
     #[error("metadata blob of {0} bytes exceeds the {METADATA_CAP}-byte cap — file is likely crafted or corrupted")]
     MetadataTooLarge(usize),
+    /// Fewer bytes remain than a complete entry needs — the shape a crash
+    /// mid-write leaves at the tail of a segment. Distinct from `Decode`
+    /// (enough bytes, wrong content — real corruption) so segment-replay
+    /// callers can tell "safe to stop here" from "must hard-error" without
+    /// a byte-offset heuristic.
+    #[error("not enough bytes remain to decode a complete entry — likely a truncated trailing write")]
+    Truncated,
 }
 
 pub type Result<T> = core::result::Result<T, WireError>;
@@ -348,6 +355,8 @@ fn cfg() -> impl bincode::config::Config {
 fn map_decode_err(e: bincode::error::DecodeError) -> WireError {
     match e {
         bincode::error::DecodeError::LimitExceeded => WireError::DecodeLimitExceeded,
+        // Not enough bytes to finish decoding — truncation, not corruption.
+        bincode::error::DecodeError::UnexpectedEnd { .. } => WireError::Truncated,
         other => WireError::Decode(other.to_string()),
     }
 }
@@ -416,9 +425,10 @@ pub fn decode_entry(version: u32, bytes: &[u8]) -> Result<(DecodedEntry, usize)>
             // Decode the bincode payload, then verify the 4-byte CRC32 suffix.
             let (e, n): (EntryV4, usize) =
                 bincode::serde::decode_from_slice(bytes, cfg()).map_err(map_decode_err)?;
-            // CRC32 suffix immediately follows the bincode bytes.
+            // CRC32 suffix immediately follows the bincode bytes. Missing
+            // suffix bytes is a truncation (not enough bytes), not corruption.
             if n + CRC32_SUFFIX_LEN > bytes.len() {
-                return Err(WireError::Decode("V4 entry truncated: missing CRC32 suffix".into()));
+                return Err(WireError::Truncated);
             }
             let stored_crc = u32::from_le_bytes(
                 bytes[n..n + CRC32_SUFFIX_LEN].try_into().unwrap()

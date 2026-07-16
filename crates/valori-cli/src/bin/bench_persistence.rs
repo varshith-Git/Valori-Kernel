@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use valori_kernel::adapters::sift_batch::SiftBatchLoader;
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
 
 const DIM: usize = 128;

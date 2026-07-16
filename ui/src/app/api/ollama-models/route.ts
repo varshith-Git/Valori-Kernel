@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 const OLLAMA = process.env.OLLAMA_URL ?? "http://localhost:11434";
 
@@ -13,7 +14,7 @@ function isEmbedModel(name: string): boolean {
 
 async function getOllamaDim(name: string): Promise<number> {
   try {
-    const res = await fetch(`${OLLAMA}/api/show`, {
+    const res = await fetchWithTimeout(`${OLLAMA}/api/show`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
   const type = req.nextUrl.searchParams.get("type") ?? "all";
 
   try {
-    const res = await fetch(`${OLLAMA}/api/tags`, { cache: "no-store" });
+    const res = await fetchWithTimeout(`${OLLAMA}/api/tags`, { cache: "no-store" });
     if (!res.ok) return NextResponse.json({ models: [], error: `ollama returned ${res.status}` });
     const data = await res.json() as { models?: { name: string }[] };
     let models = (data.models ?? []).map((m) => m.name);

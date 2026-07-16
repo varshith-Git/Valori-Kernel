@@ -62,23 +62,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-setup
         with:
           targets: ${{ matrix.target }}
+          cache-key: release-${{ matrix.target }}
 
       - name: Install cross (Linux cross-compilation)
         if: matrix.cross
         run: cargo install cross --locked
-
-      - name: Cache Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build (native)
         if: "!matrix.cross"
@@ -109,8 +100,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: sbom
 
       - name: Install cargo-sbom
         run: cargo install cargo-sbom --locked

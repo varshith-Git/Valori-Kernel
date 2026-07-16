@@ -7,6 +7,7 @@ description = "Raft consensus layer for Valori cluster mode (Phase 2)"
 
 [dependencies]
 valori-kernel = { workspace = true, features = ["std"] }
+valori-metadata = { workspace = true }
 
 # openraft 0.9 — the stable line (Databend runs it in production).
 # serde feature: log entries and vote types must serialize for the wire.

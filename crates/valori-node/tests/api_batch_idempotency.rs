@@ -2,6 +2,7 @@
 //! Phase 3.12 — Batch insert per-item idempotency tests.
 
 use valori_node::config::NodeConfig;
+use valori_node::EngineFromNodeConfig;
 use valori_node::server::build_router;
 use valori_node::engine::Engine;
 use valori_node::api::{BatchInsertRequest, BatchInsertResponse};

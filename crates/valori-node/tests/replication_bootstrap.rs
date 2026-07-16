@@ -4,6 +4,7 @@
 //! Populate leader → snapshot → fresh follower bootstraps from snapshot →
 //! verify record count → verify live replication continues.
 use valori_node::config::{NodeConfig, NodeMode};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use std::sync::Arc;

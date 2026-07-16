@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -11,7 +12,7 @@ function authHeaders() {
 
 export async function POST() {
   try {
-    const res = await fetch(`${getApiUrl()}/v1/storage/snapshots/upload`, {
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/storage/snapshots/upload`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({}),

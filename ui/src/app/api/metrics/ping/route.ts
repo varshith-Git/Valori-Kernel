@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -16,7 +17,7 @@ function h(json = false): Record<string, string> {
 export async function GET() {
   try {
     // 1. Get dimension from health
-    const healthRes = await fetch(`${getApiUrl()}/health`, { headers: h(), cache: "no-store" });
+    const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: h(), cache: "no-store" });
     if (!healthRes.ok) {
       return NextResponse.json({ error: "health check failed" }, { status: 502 });
     }
@@ -38,7 +39,7 @@ export async function GET() {
     // 2. Time a search request
     const query = new Array(dim).fill(0);
     const t0 = performance.now();
-    const searchRes = await fetch(`${getApiUrl()}/search`, {
+    const searchRes = await fetchWithTimeout(`${getApiUrl()}/search`, {
       method: "POST",
       headers: h(true),
       body: JSON.stringify({ query, k: 1 }),

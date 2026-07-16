@@ -1,26 +1,12 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use std::net::SocketAddr;
 use std::path::PathBuf;
-// Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use serde::{Serialize, Deserialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum IndexKind {
-    BruteForce,
-    Hnsw,
-    Ivf,
-    Bq,
-    /// Automatically selects the index based on live record count:
-    /// < 10 000 → BruteForce, 10 000–2 000 000 → BQ, > 2 000 000 → HNSW
-    Auto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum QuantizationKind {
-    None,
-    Scalar,
-    Product,
-}
+// IndexKind and QuantizationKind now live in valori-engine; re-export so all
+// existing `crate::config::IndexKind` / `crate::config::QuantizationKind`
+// call sites keep compiling without changes.
+pub use valori_engine::{IndexKind, QuantizationKind};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeMode {

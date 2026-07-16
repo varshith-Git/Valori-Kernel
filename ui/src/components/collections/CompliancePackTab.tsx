@@ -2,6 +2,8 @@
 
 import { useState, useCallback } from "react";
 import type { AnswerReceipt } from "@/lib/receipts";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -55,6 +57,10 @@ interface CompliancePack {
 async function sha256hex(text: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return "sha256:" + Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function numOr0(n: number | null | undefined): number {
+  return typeof n === "number" ? n : 0;
 }
 
 function shortHash(h: string | null | undefined, n = 16): string {
@@ -211,10 +217,10 @@ function printPack(pack: CompliancePack) {
 
   <h2>1 · Integrity Attestation</h2>
   <div class="grid">
-    <div><div class="lbl">Records</div><div class="val">${pack.attestation.record_count.toLocaleString()}</div></div>
-    <div><div class="lbl">Graph nodes</div><div class="val">${pack.attestation.node_count.toLocaleString()}</div></div>
-    <div><div class="lbl">Namespace events</div><div class="val">${pack.attestation.ns_event_count.toLocaleString()}</div></div>
-    <div><div class="lbl">Total events</div><div class="val">${pack.attestation.total_events.toLocaleString()}</div></div>
+    <div><div class="lbl">Records</div><div class="val">${numOr0(pack.attestation.record_count).toLocaleString()}</div></div>
+    <div><div class="lbl">Graph nodes</div><div class="val">${numOr0(pack.attestation.node_count).toLocaleString()}</div></div>
+    <div><div class="lbl">Namespace events</div><div class="val">${numOr0(pack.attestation.ns_event_count).toLocaleString()}</div></div>
+    <div><div class="lbl">Total events</div><div class="val">${numOr0(pack.attestation.total_events).toLocaleString()}</div></div>
   </div>
   <div class="lbl" style="margin-top:8px">SHA-256 Namespace Proof Hash</div>
   <div class="box">${pack.attestation.ns_proof_hash}</div>
@@ -255,17 +261,18 @@ function printPack(pack: CompliancePack) {
 
 // --- Section component --------------------------------------------------------
 
+const SECTION_TONE_MAP = {
+  good: "success",
+  warn: "warning",
+  bad: "error",
+  neutral: "neutral",
+} as const;
+
 function Section({
   num, title, status, children,
 }: {
   num: number; title: string; status?: { label: string; tone: "good" | "warn" | "bad" | "neutral" }; children: React.ReactNode;
 }) {
-  const toneClass = {
-    good: "border-emerald-800 bg-emerald-950/30 text-emerald-400",
-    warn: "border-amber-800 bg-amber-950/30 text-amber-400",
-    bad: "border-red-800 bg-red-950/30 text-red-400",
-    neutral: "border-input bg-accent text-muted-foreground",
-  };
   return (
     <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
@@ -276,9 +283,9 @@ function Section({
           <p className="text-sm font-medium text-card-foreground">{title}</p>
         </div>
         {status && (
-          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${toneClass[status.tone]}`}>
+          <StatusBadge tone={SECTION_TONE_MAP[status.tone]} className="font-mono text-[10px]">
             {status.label}
-          </span>
+          </StatusBadge>
         )}
       </div>
       {children}
@@ -323,7 +330,7 @@ export function CompliancePackTab({
   }, [pack, namespace]);
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl">
+    <TabShell>
       {/* Intro */}
       <div className="rounded-xl border border-border bg-card p-5 flex items-start justify-between gap-4">
         <div>
@@ -350,7 +357,7 @@ export function CompliancePackTab({
         <>
           {/* 1. Attestation */}
           <Section num={1} title="Integrity Attestation"
-            status={{ label: `${pack.attestation.record_count.toLocaleString()} records`, tone: "neutral" }}>
+            status={{ label: `${numOr0(pack.attestation.record_count).toLocaleString()} records`, tone: "neutral" }}>
             <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4 text-xs">
               {[
                 ["Records", pack.attestation.record_count],
@@ -360,7 +367,7 @@ export function CompliancePackTab({
               ].map(([k, v]) => (
                 <div key={k as string}>
                   <p className="text-[9px] text-muted-foreground uppercase tracking-widest">{k}</p>
-                  <p className="font-mono text-accent-foreground font-semibold">{(v as number).toLocaleString()}</p>
+                  <p className="font-mono text-accent-foreground font-semibold">{numOr0(v as number).toLocaleString()}</p>
                 </div>
               ))}
             </div>
@@ -474,6 +481,6 @@ export function CompliancePackTab({
           </div>
         </>
       )}
-    </div>
+    </TabShell>
   );
 }

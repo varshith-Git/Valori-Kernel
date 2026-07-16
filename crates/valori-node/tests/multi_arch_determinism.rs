@@ -10,6 +10,7 @@
 mod determinism_tests {
     use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
     use valori_node::engine::Engine;
+    use valori_node::EngineFromNodeConfig;
 
     const DIM: usize = 16;
     const MAX_RECORDS: usize = 1024;

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -8,7 +9,7 @@ export async function GET() {
     const headers: Record<string, string> = {};
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${getApiUrl()}/v1/cluster/status`, {
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/cluster/status`, {
       headers,
       cache: "no-store",
     });

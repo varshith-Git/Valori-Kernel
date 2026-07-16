@@ -51,6 +51,22 @@ pub enum WalReaderError {
 
 pub type WalResult<T> = Result<T, WalReaderError>;
 
+/// True when a bincode decode failure means "no more complete entries" —
+/// either the stream had nothing left (`Io` wrapping `UnexpectedEof`, what
+/// `decode_from_std_read` actually raises on a `BufReader<File>` at EOF) or
+/// bincode's own short-read signal (`UnexpectedEnd`, from a slice-based
+/// decode elsewhere). Distinct from every other `DecodeError` variant,
+/// which is a real (possibly mid-write) corruption and must propagate.
+fn is_clean_eof(e: &bincode::error::DecodeError) -> bool {
+    match e {
+        bincode::error::DecodeError::UnexpectedEnd { .. } => true,
+        bincode::error::DecodeError::Io { inner, .. } => {
+            inner.kind() == std::io::ErrorKind::UnexpectedEof
+        }
+        _ => false,
+    }
+}
+
 /// WAL reader. Transparently handles v1 (Command) and v2 (KernelEvent+ns) formats.
 /// The iterator always yields `(KernelEvent, namespace_id)` regardless of format.
 pub struct WalReader {
@@ -99,6 +115,11 @@ impl WalReader {
     }
 
     /// Read the next entry from the WAL, translated into `(KernelEvent, namespace_id)`.
+    ///
+    /// Returns `Ok(None)` at a clean end of stream — no more complete
+    /// entries remain (either nothing left to read, or a trailing partial
+    /// write from a crash mid-append). Safe to call directly in a loop;
+    /// does not require pre-checking EOF via `into_iter()`.
     pub fn read_entry(&mut self) -> WalResult<Option<(KernelEvent, u16)>> {
         if !self.header_read {
             self.read_header()?;
@@ -112,7 +133,7 @@ impl WalReader {
                     &mut self.reader, config,
                 ) {
                     Ok(cmd) => Ok(Some(legacy_to_event(cmd))),
-                    Err(bincode::error::DecodeError::UnexpectedEnd { .. }) => Ok(None),
+                    Err(e) if is_clean_eof(&e) => Ok(None),
                     Err(e) => Err(WalReaderError::Deserialization(e.to_string())),
                 }
             }
@@ -121,7 +142,7 @@ impl WalReader {
                     &mut self.reader, config,
                 ) {
                     Ok(pair) => Ok(Some(pair)),
-                    Err(bincode::error::DecodeError::UnexpectedEnd { .. }) => Ok(None),
+                    Err(e) if is_clean_eof(&e) => Ok(None),
                     Err(e) => Err(WalReaderError::Deserialization(e.to_string())),
                 }
             }

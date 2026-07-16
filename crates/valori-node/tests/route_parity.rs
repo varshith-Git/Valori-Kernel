@@ -30,9 +30,6 @@ const STANDALONE_ONLY: &[&str] = &[
     "/v1/replication/wal",
     "/v1/replication/events",
     "/v1/replication/state",
-    // Execution history is served from the standalone engine's metadata DB;
-    // cluster wiring is part of the planner/effect rollout (Phase A12+).
-    "/v1/operations/:id/execution",
     // Object-store offload is per-node standalone ops tooling today.
     "/v1/storage/snapshots",
     "/v1/storage/snapshots/upload",

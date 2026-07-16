@@ -4,6 +4,7 @@
 //! Leader → Follower replication → corrupt follower state directly → assert
 //! the divergence-check loop detects it and auto-heals.
 use valori_node::config::{NodeConfig, NodeMode};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use std::sync::Arc;

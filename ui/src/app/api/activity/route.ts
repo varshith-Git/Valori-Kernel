@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -19,7 +20,7 @@ export async function GET(req: NextRequest) {
     const headers: Record<string, string> = { "Cache-Control": "no-store" };
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
-    const res = await fetch(`${getApiUrl()}/timeline`, { headers, cache: "no-store" });
+    const res = await fetchWithTimeout(`${getApiUrl()}/timeline`, { headers, cache: "no-store" });
     if (res.status === 400) return NextResponse.json({ events: [], disabled: true });
     if (!res.ok) return NextResponse.json({ events: [] }, { status: res.status });
 

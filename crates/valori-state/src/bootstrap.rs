@@ -70,7 +70,11 @@ pub(crate) fn has_event_log(event_log_path: &Path) -> bool {
 /// Returns `(commands_applied, running_blake3_hasher)`.
 /// The hasher is initialised with the WAL header bytes so callers can verify
 /// chain continuity across WAL segments if needed.
-pub(crate) fn replay_wal(
+///
+/// Called by `Engine::try_recover` (valori-engine) as the legacy fallback
+/// when the deployment uses `Persistence::Wal` instead of the canonical
+/// event log — see that function's doc comment for the full priority order.
+pub fn replay_wal(
     state: &mut KernelState,
     wal_path: &Path,
 ) -> StateResult<(usize, blake3::Hasher)> {

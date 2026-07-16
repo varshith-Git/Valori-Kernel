@@ -9,6 +9,7 @@ system invariants in [`INVARIANTS.md`](INVARIANTS.md).
 
 ---
 
+
 ## Versioned boundaries
 
 | Boundary | Version type | Where published | Who reads it |

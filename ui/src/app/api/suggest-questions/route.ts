@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 interface SuggestRequest {
   chunks: string[];          // text previews from ingested document
@@ -24,7 +25,7 @@ async function callLLM(prompt: string, cfg: SuggestRequest["llm"]): Promise<stri
 
   if (cfg.provider === "ollama") {
     const base = cfg.endpoint?.replace(/\/$/, "") || "http://localhost:11434";
-    const res = await fetch(`${base}/api/chat`, {
+    const res = await fetchWithTimeout(`${base}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: cfg.model || "llama3.2", messages, stream: false }),
@@ -42,7 +43,7 @@ async function callLLM(prompt: string, cfg: SuggestRequest["llm"]): Promise<stri
   const base = cfg.endpoint?.replace(/\/$/, "") || baseMap[cfg.provider] || "";
   if (!base) throw new Error("No endpoint configured");
 
-  const res = await fetch(`${base}/v1/chat/completions`, {
+  const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

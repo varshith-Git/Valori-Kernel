@@ -12,6 +12,7 @@
 //!   4. Assert the specific section survived.
 
 use valori_node::config::NodeConfig;
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 
 fn make_cfg() -> NodeConfig {

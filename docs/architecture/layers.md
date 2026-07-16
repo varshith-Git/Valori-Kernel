@@ -8,6 +8,11 @@ primitive in the lower crate and the orchestration in the higher one.
 Changes to this document require explicit architectural reasoning. It is not a
 description of what exists — it is a contract for what is permitted.
 
+This page covers compile-time crate dependencies. For the runtime control
+plane — which process owns project lifecycle vs. data operations vs. the
+frontend (daemon / node / `ui`) — see
+[`control-plane.md`](control-plane.md).
+
 Referenced by: `CONTRIBUTING.md`, `CLAUDE.md`.
 
 ---

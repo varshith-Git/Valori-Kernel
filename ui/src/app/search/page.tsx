@@ -9,6 +9,7 @@ import { useHealth } from "@/lib/hooks/useHealth";
 import { useProof } from "@/lib/hooks/useProof";
 import type { SearchResult } from "@/types/valori";
 import type { ActivityEvent } from "@/app/api/activity/route";
+import { EVENT_COLORS } from "@/lib/event-types";
 
 // -- Helpers -------------------------------------------------------------------
 
@@ -21,18 +22,6 @@ function fmtTime(iso: string) {
   const d = new Date(iso);
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
-
-const EVENT_COLORS: Record<string, string> = {
-  InsertRecord:      "text-emerald-600 dark:text-emerald-400",
-  SoftDeleteRecord:  "text-amber-600   dark:text-amber-400",
-  DeleteRecord:      "text-red-600     dark:text-red-400",
-  CreateNode:        "text-blue-600    dark:text-blue-400",
-  CreateEdge:        "text-purple-600  dark:text-purple-400",
-  DeleteNode:        "text-red-600     dark:text-red-400",
-  DeleteEdge:        "text-red-600     dark:text-red-400",
-  CreateNamespace:   "text-sky-600     dark:text-sky-400",
-  DropNamespace:     "text-orange-600  dark:text-orange-400",
-};
 
 // -- Tab bar -------------------------------------------------------------------
 
@@ -269,6 +258,7 @@ export default function SearchPage() {
 
   // Enrich results with metadata
   useEffect(() => {
+    let ignore = false;
     setEnrichedResults(results);
     if (results.length === 0) return;
     Promise.all(
@@ -285,7 +275,8 @@ export default function SearchPage() {
           } satisfies SearchResult;
         } catch { return r; }
       })
-    ).then(setEnrichedResults);
+    ).then((enriched) => { if (!ignore) setEnrichedResults(enriched); });
+    return () => { ignore = true; };
   }, [results]);
 
   // Switch to Results tab automatically when a search completes

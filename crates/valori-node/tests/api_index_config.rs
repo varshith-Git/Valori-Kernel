@@ -2,6 +2,7 @@
 //! Phase 3.13 — HNSW parameter exposure tests.
 
 use valori_node::config::{NodeConfig, IndexKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::server::build_router;
 use valori_node::engine::Engine;
 use axum::{body::Body, http::{Request, StatusCode}};

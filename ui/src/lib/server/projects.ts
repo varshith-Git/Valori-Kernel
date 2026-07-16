@@ -1,3 +1,22 @@
+// NOTE (RFC-0006 Phase B.1): the manifest-file-backed functions in this
+// module (listProjects, getProject, createProject, deleteProject,
+// touchProject, reprotect, protectProject, unprotectProject, importFromTmp)
+// are `@deprecated` — valori-daemon is now the metadata source of truth for
+// both single-node and cluster projects (see `lib/server/daemon.ts` +
+// `project-adapter.ts`). Phase B.0.5's migration renames this file's backing
+// store (`ui-projects.json`) to `ui-projects.json.migrated` on first daemon
+// startup, so those functions now operate on an effectively-empty manifest.
+//
+// Still load-bearing and NOT deprecated: the pure, entry-based helpers
+// (allocateNodes, projectNodePaths, projectPaths, protectAll, unprotectAll,
+// isValidName) and the `ProjectEntry`/`ProjectEmbedConfig`/`ProjectNodeEntry`
+// types — the cluster (replication===3) lifecycle routes still use these,
+// since the daemon can't launch a cluster yet.
+//
+// Remove the deprecated functions once `grep -rn "from \"@/lib/server/
+// projects\""` shows no route still importing them (a follow-up cleanup
+// pass, not part of this migration).
+
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -103,6 +122,13 @@ function writeManifest(list: ProjectEntry[]): void {
   fs.writeFileSync(MANIFEST_FILE, JSON.stringify(list, null, 2));
 }
 
+/**
+ * @deprecated Replaced by valori-daemon's `GET /v1/projects` (see
+ * `ui/src/lib/server/daemon.ts` + `project-adapter.ts`). Reads
+ * `ui-projects.json`, which Phase B.0.5's migration renames to
+ * `ui-projects.json.migrated` on first daemon startup — this now returns an
+ * empty list in practice. Kept only until this file's cleanup pass.
+ */
 export function listProjects(): ProjectEntry[] {
   const list = readManifest();
   for (const p of list) {
@@ -124,13 +150,22 @@ export function listProjects(): ProjectEntry[] {
   return list;
 }
 
+/**
+ * @deprecated Replaced by valori-daemon's `GET /v1/projects/:name` (see
+ * `ui/src/lib/server/daemon.ts` + `project-adapter.ts`). Same caveat as
+ * {@link listProjects} — the backing file is gone post-migration.
+ */
 export function getProject(name: string): ProjectEntry | undefined {
   return readManifest().find(p => p.name === name);
 }
 
 // ─── port allocation ───────────────────────────────────────────────────────────
 
-function allocateNodes(existing: ProjectEntry[], replication: 1 | 3): ProjectNodeEntry[] {
+/** Exported for reuse by the daemon-backed `/api/projects` POST handler,
+ *  which still needs to allocate cluster (replication===3) ports itself —
+ *  the daemon can persist cluster metadata (RFC-0006 Phase B.0) but doesn't
+ *  invent port assignments, since it can't launch a cluster yet. */
+export function allocateNodes(existing: ProjectEntry[], replication: 1 | 3): ProjectNodeEntry[] {
   if (replication === 1) {
     const used = new Set(existing.flatMap(p => p.nodes.map(n => n.httpPort)));
     for (let port = PORT_BASE; port <= PORT_MAX; port++) {
@@ -196,7 +231,12 @@ function nodeDataFiles(entry: ProjectEntry, nodeId: number): string[] {
   return [snapshotPath, eventLogPath];
 }
 
-function protectAll(entry: ProjectEntry): void {
+/** Exported for reuse by the daemon-backed `/open`/`/close` routes, which
+ *  already have a project entry in hand (from the daemon, not this file's
+ *  now-largely-retired manifest) — calling `protectProject`/`unprotectProject`
+ *  by name would re-look-up via `getProject()` here, which no longer finds
+ *  anything once `ui-projects.json` is renamed by the daemon's migration. */
+export function protectAll(entry: ProjectEntry): void {
   for (const n of entry.nodes) {
     for (const p of nodeDataFiles(entry, n.id)) {
       if (fs.existsSync(p)) protect(p);
@@ -204,7 +244,7 @@ function protectAll(entry: ProjectEntry): void {
   }
 }
 
-function unprotectAll(entry: ProjectEntry): void {
+export function unprotectAll(entry: ProjectEntry): void {
   for (const n of entry.nodes) {
     for (const p of nodeDataFiles(entry, n.id)) {
       if (fs.existsSync(p)) unprotect(p);
@@ -237,7 +277,12 @@ export function projectPaths(entry: ProjectEntry): { snapshotPath: string; event
   return projectNodePaths(entry, entry.nodes[0].id);
 }
 
-/** Re-apply the immutable flag to a project's data files (call after a snapshot write). */
+/**
+ * @deprecated Takes a name and re-reads the (now largely empty, post-
+ * migration) manifest file internally. Routes now call {@link protectAll}
+ * directly with an already-loaded entry instead. Kept only until this file's
+ * cleanup pass.
+ */
 export function reprotect(name: string): void {
   const entry = getProject(name);
   if (entry) protectAll(entry);
@@ -256,6 +301,13 @@ export interface CreateProjectInput {
   embed?:       ProjectEmbedConfig;
 }
 
+/**
+ * @deprecated Replaced by valori-daemon's `POST /v1/projects` (see
+ * `ui/src/app/api/projects/route.ts`, which now calls `daemon.createProject`
+ * for both single-node and cluster projects — reusing only {@link
+ * allocateNodes} from here for cluster port assignment). Kept only until
+ * this file's cleanup pass.
+ */
 export function createProject(input: CreateProjectInput): ProjectEntry {
   if (!isValidName(input.name)) {
     throw new Error("Invalid project name (use letters, digits, - or _, max 63 chars)");
@@ -294,7 +346,14 @@ export function createProject(input: CreateProjectInput): ProjectEntry {
   return entry;
 }
 
-/** Patch mutable fields (lastOpenedAt, records). No-op if project is gone. */
+/**
+ * @deprecated No daemon equivalent exists yet (recording `lastOpenedAt`/
+ * `records` would need a daemon "touch" endpoint — new backend surface, out
+ * of scope for the route migration). Still called from `/open`/`/close` as a
+ * harmless no-op (the manifest file it patches no longer exists post-
+ * migration) — remove those call sites together with this function in the
+ * cleanup pass, or wire up a real daemon endpoint first.
+ */
 export function touchProject(name: string, patch: Partial<Pick<ProjectEntry, "lastOpenedAt" | "records">>): void {
   const list = readManifest();
   const idx = list.findIndex(p => p.name === name);
@@ -304,6 +363,11 @@ export function touchProject(name: string, patch: Partial<Pick<ProjectEntry, "la
 }
 
 /**
+ * @deprecated Replaced by valori-daemon's `DELETE /v1/projects/:name` (see
+ * `ui/src/app/api/projects/[name]/route.ts`), which removes the same
+ * directory this function does (both use `~/.valori/projects/<name>/`) via
+ * its own manifest. Kept only until this file's cleanup pass.
+ *
  * Permanently remove a project: clear protection, delete the data dir, drop the
  * manifest entry. The caller MUST stop the node first. This is the only code
  * path that may delete project data.
@@ -324,6 +388,11 @@ export function deleteProject(name: string): boolean {
 }
 
 /**
+ * @deprecated Takes a name and re-reads the (now largely empty, post-
+ * migration) manifest file internally — routes now call {@link protectAll}
+ * directly with an already-loaded entry instead. Kept only until this file's
+ * cleanup pass.
+ *
  * Apply the immutable flag to a project's data files. Call when a project is at
  * rest (node stopped). The flag blocks ALL writes — including the node's own WAL
  * appends — so it must be cleared via {@link unprotectProject} before the node runs.
@@ -332,7 +401,12 @@ export function protectProject(name: string): void {
   reprotect(name);
 }
 
-/** Clear protection so a project's node can write its WAL/snapshot while open. */
+/**
+ * @deprecated Same as {@link protectProject} — routes now call {@link
+ * unprotectAll} directly with an already-loaded entry instead.
+ *
+ * Clear protection so a project's node can write its WAL/snapshot while open.
+ */
 export function unprotectProject(name: string): void {
   const entry = getProject(name);
   if (entry) unprotectAll(entry);
@@ -341,6 +415,10 @@ export function unprotectProject(name: string): void {
 // ─── import existing /tmp data (one-time convenience) ────────────────────────────
 
 /**
+ * @deprecated Already unused (zero call sites) before this migration, and
+ * depends on the now-deprecated {@link createProject}. Kept only until this
+ * file's cleanup pass.
+ *
  * Copy legacy /tmp/valori-n1.{snap,events.log} into a new named project. Returns
  * the created entry, or null if no legacy files are present.
  */

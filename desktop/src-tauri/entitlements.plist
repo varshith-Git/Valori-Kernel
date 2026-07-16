@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime (on by default for this bundle) blocks JavaScriptCore's
+	     JIT from allocating executable memory unless explicitly entitled — the
+	     root cause found via testing: WKWebView's WebContent process was
+	     terminating immediately at launch ("web content process terminated"
+	     in tauri_runtime_wry's own debug log, before any of our own code even
+	     ran), producing a window that never showed content. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<!-- Bundled sidecars (valori-daemon, valori-node, node) are separately
+	     ad-hoc signed from the main app — without this, hardened runtime's
+	     library validation refuses to load/execute them. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+</dict>
+</plist>

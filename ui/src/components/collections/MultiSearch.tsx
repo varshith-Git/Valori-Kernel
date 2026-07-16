@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { CodePanel } from "@/components/codegen/CodePanel";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 import { markSearched } from "@/lib/onboarding";
+import { toast } from "@/lib/toast";
 
 export type SearchMode =
   | "semantic"
@@ -291,6 +292,8 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
     try {
       await onDelete(id);
       setResults((prev) => prev?.filter((r) => r.id !== id) ?? null);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : `Failed to delete record #${id}`, "error");
     } finally {
       setDeletingId(null);
     }

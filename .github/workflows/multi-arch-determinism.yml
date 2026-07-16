@@ -73,7 +73,7 @@ jobs:
 
       - name: Extract hash
         run: |
-          grep "HASH:" output.txt | head -1 | cut -d':' -f2 | tr -d '[:space:]' \
+          awk -F'HASH: ' '/HASH:/{print $2; exit}' output.txt | tr -d '[:space:]' \
             > ${{ matrix.hash_file }}
           [ -s "${{ matrix.hash_file }}" ] || {
             echo "ERROR: no HASH line in test output"; cat output.txt; exit 1

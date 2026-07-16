@@ -74,20 +74,6 @@ impl TaskRegistry {
         TaskRegistry { tasks, jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())) }
     }
 
-    pub fn get(&self, kind: &TaskKind) -> Option<Arc<dyn Task>> {
-        let key = format!("{:?}", kind).to_lowercase()
-            .replace("insertrecord", "insert_record")
-            .replace("insertnode", "insert_node")
-            .replace("insertedge", "insert_edge")
-            .replace("softdeleterecord", "soft_delete_record")
-            .replace("graphrag", "graph_rag")
-            .replace("llmcomplete", "llm_complete")
-            .replace("httpfetch", "http_fetch")
-            .replace("readindex", "read_index")
-            .replace("snapshotartifact", "snapshot_artifact")
-            .replace("prooffragment", "proof_fragment");
-        self.tasks.get(&key).cloned()
-    }
 }
 
 fn kind_to_key(kind: &TaskKind) -> &'static str {
@@ -216,12 +202,11 @@ impl TaskRunner {
         ctx: &TaskContext,
     ) -> EffectResult<TaskOutput> {
         let mut attempts = 0u8;
-        let max_attempts = self.policy.retry_limit + 1;
 
         loop {
             match task.run(inputs_json, predecessors, ctx).await {
                 Ok(output) => return Ok(output),
-                Err(EffectError::TaskFailed(_reason)) if attempts < max_attempts => {
+                Err(EffectError::TaskFailed(_reason)) if attempts < self.policy.retry_limit => {
                     attempts += 1;
                     warn!(attempts, "task failed — retrying");
                 }

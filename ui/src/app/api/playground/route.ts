@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -38,12 +39,13 @@ export async function POST(req: NextRequest) {
 
   const started = Date.now();
   try {
-    const res = await fetch(`${getApiUrl()}${path}`, init);
+    const res = await fetchWithTimeout(`${getApiUrl()}${path}`, init);
     const latencyMs = Date.now() - started;
     const text = await res.text();
     let data: unknown;
     try { data = JSON.parse(text); } catch { data = text; }
-    return NextResponse.json({ status: res.status, latencyMs, data });
+    const resHeaders = Object.fromEntries(res.headers.entries());
+    return NextResponse.json({ status: res.status, latencyMs, data, headers: resHeaders });
   } catch {
     return NextResponse.json({ error: "backend unreachable" }, { status: 503 });
   }

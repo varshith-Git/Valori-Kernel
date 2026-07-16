@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 use valori_node::config::NodeConfig;
+use valori_node::EngineFromNodeConfig;
 use valori_node::server::build_router;
 use valori_node::engine::Engine;
 use valori_node::api::{BatchInsertRequest, BatchInsertResponse};

@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 //! ExecutionGraph — the deterministic DAG of Tasks produced by the Planner.
+use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use valori_core::id::ExecutionId;
 
@@ -242,11 +243,15 @@ fn topological_order(tasks: &[TaskSpec], edges: &[TaskEdge]) -> Vec<u32> {
             }
         }
     }
-    // If cycle detected, append remaining nodes (should not happen with valid graphs)
+    // A cycle in a planner-produced graph is a bug, not a recoverable condition.
+    debug_assert_eq!(order.len(), n, "ExecutionGraph has a cycle — every planner must produce a DAG");
     if order.len() < n {
-        for i in 0..n {
-            if !order.contains(&(i as u32)) {
-                order.push(i as u32);
+        // Append remaining nodes so the graph can still execute partially rather than
+        // panicking in release builds. The planner that produced this graph is broken.
+        let seen: HashSet<u32> = order.iter().copied().collect();
+        for i in 0..n as u32 {
+            if !seen.contains(&i) {
+                order.push(i);
             }
         }
     }

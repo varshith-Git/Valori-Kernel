@@ -13,6 +13,7 @@
 //!   5. The reverse index survives a snapshot round-trip.
 
 use valori_node::config::{NodeConfig, IndexKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_kernel::types::id::{NodeId, EdgeId};
 

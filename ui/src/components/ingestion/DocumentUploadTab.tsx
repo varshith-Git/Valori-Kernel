@@ -2,9 +2,10 @@
 
 import { useRef, useState, useEffect } from "react";
 import Link from "next/link";
-import { useEmbeddingConfig, PROVIDER_DEFAULTS, getModelDim } from "@/lib/hooks/useEmbeddingConfig";
+import { useEmbeddingConfig, PROVIDER_DEFAULTS } from "@/lib/hooks/useEmbeddingConfig";
 import { useLLMConfig } from "@/lib/hooks/useLLMConfig";
-import { useHealth } from "@/lib/hooks/useHealth";
+
+import { TabShell } from "@/components/collections/TabShell";
 
 interface ChunkResult {
   record_id: number;
@@ -23,6 +24,9 @@ interface IngestResult {
   pipeline?: "server" | "client";
   embed_provider?: string;
   strategy_used?: string;
+  /** Only present for the server pipeline — fetch `/operations/:id` for the
+   *  full per-stage execution trace (Execution Explorer). */
+  operation_id?: string;
 }
 
 interface TreeStructureNode {
@@ -60,9 +64,6 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const { config } = useEmbeddingConfig();
   const { config: llmCfg } = useLLMConfig();
-  const { dim: serverDim } = useHealth();
-  const providerDim = getModelDim(config.provider, config.model);
-  const dimMismatch = serverDim !== null && providerDim > 0 && serverDim !== providerDim;
 
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<"idle" | "ingesting" | "done" | "error">("idle");
@@ -184,7 +185,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
       : !!config.apiKey;
 
   return (
-    <div className="flex flex-col gap-5 max-w-2xl">
+    <TabShell>
       {/* Config summary */}
       <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
         <div className="flex items-center gap-3 text-xs">
@@ -228,24 +229,6 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
         </div>
       )}
 
-      {/* Dimension mismatch warning */}
-      {dimMismatch && (
-        <div className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 px-4 py-3">
-          <p className="text-sm font-medium text-red-700 dark:text-red-400">Dimension mismatch — ingestion will fail</p>
-          <p className="text-xs text-red-600 dark:text-red-500 mt-1">
-            Server is configured for{" "}
-            <span className="font-mono text-red-700 dark:text-red-400">{serverDim} dims</span> but{" "}
-            <span className="font-mono text-red-700 dark:text-red-400">{config.provider}/{config.model}</span> produces{" "}
-            <span className="font-mono text-red-700 dark:text-red-400">{providerDim} dims</span>.
-          </p>
-          <p className="text-xs text-red-600 dark:text-red-600 mt-1.5">
-            Fix: restart the server with{" "}
-            <code className="font-mono text-red-700 dark:text-red-400">VALORI_DIM={providerDim}</code>, or choose an embedding model that outputs{" "}
-            <span className="font-mono">{serverDim}</span> dims in{" "}
-            <Link href="/settings" className="text-red-700 dark:text-red-400 hover:text-red-500 dark:hover:text-red-300 underline">Settings</Link>.
-          </p>
-        </div>
-      )}
 
       {/* Chunking strategy */}
       <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
@@ -411,12 +394,22 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
                 )}
               </p>
             </div>
-            <button
-              onClick={() => setShowChunks((v) => !v)}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {showChunks ? "hide chunks" : "show chunks"}
-            </button>
+            <div className="flex items-center gap-3 shrink-0">
+              {result.operation_id && (
+                <Link
+                  href={`/operations/${result.operation_id}`}
+                  className="rounded-lg border border-[var(--v-accent)]/40 bg-[var(--v-accent-muted)] px-2.5 py-1 text-xs font-medium text-[var(--v-accent)] hover:brightness-110 transition-all"
+                >
+                  View execution →
+                </Link>
+              )}
+              <button
+                onClick={() => setShowChunks((v) => !v)}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showChunks ? "hide chunks" : "show chunks"}
+              </button>
+            </div>
           </div>
 
           {showChunks && (
@@ -563,6 +556,6 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           </ol>
         </div>
       )}
-    </div>
+    </TabShell>
   );
 }

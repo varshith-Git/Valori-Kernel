@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -15,7 +16,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const res = await fetch(`${getApiUrl()}/graph/edges/${id}`, {
+    const res = await fetchWithTimeout(`${getApiUrl()}/graph/edges/${id}`, {
       headers: authHeaders(),
       cache: "no-store",
     });

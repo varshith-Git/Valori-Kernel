@@ -5,6 +5,7 @@
 
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
 use valori_node::engine::{Engine, RecoveryMode};
+use valori_node::EngineFromNodeConfig;
 use tempfile::tempdir;
 
 const DIM: usize = 16;

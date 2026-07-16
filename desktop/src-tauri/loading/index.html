@@ -1,0 +1,82 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Valori</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0a0a0a;
+        color: #a0a0b0;
+        user-select: none;
+      }
+      @media (prefers-color-scheme: light) {
+        html, body { background: #f4f4f7; color: #6b7280; }
+        .logo { filter: none; }
+      }
+      .center {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+      }
+      .logo {
+        width: 56px;
+        height: 56px;
+        filter: invert(1);
+        animation: pulse 2s ease-in-out infinite;
+      }
+      .wordmark {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: inherit;
+      }
+      .status {
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        opacity: 0.5;
+      }
+      .status.error {
+        color: #e05252;
+        opacity: 0.9;
+        max-width: 320px;
+        text-align: center;
+        white-space: pre-wrap;
+      }
+      .logo.error {
+        animation: none;
+        opacity: 0.6;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="center">
+      <img class="logo" id="logo" src="./logo.png" alt="Valori" width="56" height="56" />
+      <div class="wordmark">Valori</div>
+      <div class="status" id="status">Starting services&hellip;</div>
+    </div>
+    <script>
+      // Called via `window.eval()` from the Rust side (`lib.rs`) when the
+      // bundled daemon/ui-server sidecar fails to become healthy — without
+      // this, a failed startup left the user staring at a frozen "Starting
+      // services…" spinner forever with no indication anything went wrong.
+      window.showStartupError = function (message) {
+        document.getElementById("logo").classList.add("error");
+        var status = document.getElementById("status");
+        status.classList.add("error");
+        status.textContent = "Startup failed — quit and reopen Valori.\n" + message;
+      };
+    </script>
+  </body>
+</html>

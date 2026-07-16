@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import { resolveProjectsDir } from "@/lib/server/project-adapter";
 
 export interface LocalFile {
   name: string;
@@ -35,6 +36,17 @@ function statFile(filePath: string): LocalFile | null {
       exists: false,
     };
   }
+}
+
+// `files=`/`dirs=` are client-supplied — without this check any caller could
+// stat/enumerate arbitrary filesystem paths (size, mtime, existence) outside
+// the daemon's own project data. Only the projects root (and paths under it)
+// may be queried; the no-params env-var mode is unaffected since those paths
+// come from server config, not client input.
+function isUnderRoot(target: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
+  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep);
 }
 
 function scanDir(dir: string): LocalFile[] {
@@ -78,24 +90,30 @@ export async function GET(req: NextRequest) {
   let files: LocalFile[] = [];
   const scanned: string[] = [];
 
-  if (rawFiles) {
-    // Mode 1: stat specific file paths directly
-    const paths = rawFiles.split(",").map((p) => p.trim()).filter(Boolean);
-    // Deduplicate
-    const seen = new Set<string>();
-    for (const p of paths) {
-      if (seen.has(p)) continue;
-      seen.add(p);
-      const f = statFile(p);
-      if (f) files.push(f);
-    }
-    scanned.push(...paths);
-  } else if (rawDirs) {
-    // Mode 2: scan specific directories (power user — may show unrelated files)
-    const dirs = [...new Set(rawDirs.split(",").map((d) => d.trim()).filter(Boolean))];
-    for (const dir of dirs) {
-      scanned.push(dir);
-      files.push(...scanDir(dir));
+  if (rawFiles || rawDirs) {
+    const projectsRoot = await resolveProjectsDir();
+
+    if (rawFiles) {
+      // Mode 1: stat specific file paths directly
+      const paths = rawFiles.split(",").map((p) => p.trim()).filter(Boolean)
+        .filter((p) => isUnderRoot(p, projectsRoot));
+      // Deduplicate
+      const seen = new Set<string>();
+      for (const p of paths) {
+        if (seen.has(p)) continue;
+        seen.add(p);
+        const f = statFile(p);
+        if (f) files.push(f);
+      }
+      scanned.push(...paths);
+    } else if (rawDirs) {
+      // Mode 2: scan specific directories (power user — may show unrelated files)
+      const dirs = [...new Set(rawDirs.split(",").map((d) => d.trim()).filter(Boolean))]
+        .filter((d) => isUnderRoot(d, projectsRoot));
+      for (const dir of dirs) {
+        scanned.push(dir);
+        files.push(...scanDir(dir));
+      }
     }
   } else {
     // Mode 3: no params — read env vars and stat those exact paths only

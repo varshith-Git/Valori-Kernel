@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -17,7 +18,7 @@ export async function GET(req: NextRequest) {
       const v = params.get(key);
       if (v !== null) url.searchParams.set(key, v);
     }
-    const res = await fetch(url.toString(), {
+    const res = await fetchWithTimeout(url.toString(), {
       headers: authHeaders(),
       cache: "no-store",
     });

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from "react";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -330,7 +331,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
   };
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl">
+    <TabShell>
 
       {/* Explainer */}
       <div className="rounded-xl border border-border bg-card px-4 py-3">
@@ -484,6 +485,6 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
           ))}
         </div>
       )}
-    </div>
+    </TabShell>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
+import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
 
@@ -391,7 +392,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
   }, [pairs, k, namespace, embedCfg, running]);
 
   return (
-    <div className="flex flex-col gap-6 max-w-3xl">
+    <TabShell>
 
       {/* -- Ground truth input ------------------------------------------ */}
       <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">
@@ -648,6 +649,6 @@ export function EvalTab({ namespace }: { namespace: string }) {
           )}
         </>
       )}
-    </div>
+    </TabShell>
   );
 }

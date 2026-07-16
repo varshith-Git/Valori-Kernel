@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
-use valori_node::structure::deterministic::kmeans::deterministic_kmeans;
-use valori_node::structure::ivf::{IvfIndex, IvfConfig};
-use valori_node::structure::index::VectorIndex;
+use valori_index::{deterministic_kmeans, IvfIndex, IvfConfig, VectorIndex};
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
 
 /// Q16.16 conversion — matches what the kernel does internally.
@@ -75,7 +74,7 @@ fn test_engine_insert_out_of_range() {
 
 #[test]
 fn test_pq_overflow_handling() {
-    use valori_node::structure::quant::pq::{ProductQuantizer, PqConfig};
+    use valori_index::{ProductQuantizer, PqConfig};
 
     let dim = 4;
     let records = vec![

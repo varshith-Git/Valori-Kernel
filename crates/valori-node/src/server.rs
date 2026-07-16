@@ -24,6 +24,14 @@ use serde::{Deserialize, Serialize};
 /// Read handlers call `.read().await`; write handlers call `.write().await`.
 pub type SharedEngine = Arc<RwLock<Engine>>;
 
+/// A single long-lived HTTP client shared across all handlers.
+/// `reqwest::Client` internally manages a connection pool; creating one per
+/// request wastes sockets and bypasses keep-alive.
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+pub(crate) fn shared_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+
 use valori_kernel::types::enums::{NodeKind, EdgeKind};
 use axum::extract::Query;
 use axum::response::IntoResponse;
@@ -51,7 +59,7 @@ fn apply_metadata_filter(
             .filter(|(id, _)| {
                 let key = format!("rec:{id}");
                 match meta_store.get(&key) {
-                    Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                    Some(meta) => valori_search::matches_metadata_filter(&meta, f),
                     None => false,
                 }
             })
@@ -217,9 +225,11 @@ pub fn build_router_with_keys(
     use crate::runner::TaskRegistry;
     let sc = if let Ok(eng) = state.try_read() { eng.shard_count as u8 } else { 1 };
     let capability_registry: Arc<valori_effect::capability::CapabilityRegistry> = Arc::new(
-        CapabilityRegistryBuilder::new(state.clone(), sc, reqwest::Client::new()).build()
+        CapabilityRegistryBuilder::new(state.clone(), sc, shared_http_client().clone()).build()
     );
     let task_registry: Arc<TaskRegistry> = Arc::new(TaskRegistry::default_registry());
+    let execution_registry: Arc<crate::execution_registry::ExecutionRegistry> =
+        Arc::new(crate::execution_registry::ExecutionRegistry::default());
     // ── Public routes — no auth required ─────────────────────────────────────
     let public = Router::new()
         .route("/health",  axum::routing::get(health_check))
@@ -286,7 +296,7 @@ pub fn build_router_with_keys(
         .route("/v1/index/config",              axum::routing::get(index_config_handler))
         .route("/v1/index/rebuild",             post(index_rebuild_handler))
         .route("/v1/shard/routing",             axum::routing::get(shard_routing_handler))
-        .route("/v1/ingest/document",           post(crate::ingest::ingest_document))
+        .route("/v1/ingest/document",           post(valori_ingest::ingest_document))
         .route("/v1/ingest",                    post(crate::ingest::ingest))
         .route("/v1/ingest/status/:job_id",     get(crate::ingest::get_ingest_status))
         .route("/v1/ingest/update",             post(crate::ingest::ingest_update))
@@ -294,11 +304,12 @@ pub fn build_router_with_keys(
         .route("/v1/tree/build",                post(tree_build))
         .route("/v1/tree/query",                post(tree_query))
         .route("/v1/tree/hybrid",               post(tree_hybrid))
-        .route("/v1/tree/verify",               post(crate::tree_rag::tree_verify))
-        .route("/v1/tree/chain-verify",         post(crate::tree_rag::tree_chain_verify))
+        .route("/v1/tree/verify",               post(valori_rag::tree::tree_verify))
+        .route("/v1/tree/chain-verify",         post(valori_rag::tree::tree_chain_verify))
         .route("/v1/community/detect",          post(community_detect))
         .route("/v1/community/search",          post(community_search))
         .route("/v1/community/overview",        get(community_overview))
+        .route("/v1/models/health",             axum::routing::get(models_health))
         .merge(key_routes);
 
     // ── Deprecated legacy routes — same handlers, deprecation headers added ───
@@ -345,7 +356,8 @@ pub fn build_router_with_keys(
         .layer(Extension(auth))
         .layer(Extension(receipt_store))
         .layer(Extension(capability_registry))
-        .layer(Extension(task_registry));
+        .layer(Extension(task_registry))
+        .layer(Extension(execution_registry));
 
     // H-2: Global body size limit — prevent OOM via unbounded request bodies.
     // Snapshot upload (binary) legitimately needs more room; everything else
@@ -646,7 +658,7 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
         let results = if half_life == 0 {
             let use_rerank = req.rerank && req.query_text.is_some() && !engine.reranker.is_empty();
             let fetch_k = if use_rerank {
-                (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
+                (base_k * valori_search::POOL_FACTOR).max(base_k)
             } else {
                 base_k
             };
@@ -676,12 +688,12 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs()).unwrap_or(0);
-            let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
-                .map(|(id, score)| crate::decay::DecayHit {
+            let candidates: Vec<valori_search::DecayHit> = raw.into_iter()
+                .map(|(id, score)| valori_search::DecayHit {
                     id, distance: score, created_at: engine.record_created_at(id),
                 })
                 .collect();
-            crate::decay::rerank(candidates, now, half_life, base_k)
+            valori_search::decay_rerank(candidates, now, half_life, base_k)
                 .into_iter()
                 .filter(|h| {
                     match mf {
@@ -689,7 +701,7 @@ impl crate::routes::memory::MemoryOps for SharedEngine {
                         Some(f) => {
                             let key = format!("rec:{}", h.id);
                             engine.metadata.get(&key)
-                                .map(|m| crate::api::matches_metadata_filter(&m, f))
+                                .map(|m| valori_search::matches_metadata_filter(&m, f))
                                 .unwrap_or(false)
                         }
                     }
@@ -835,16 +847,21 @@ async fn insert_record(
 
     // Resolve namespace under a short read lock (no write needed yet — insert
     // goes through the effect bus / EngineKernelCapability below).
-    let (ns, state_before, shard_count) = {
+    let (ns, old_root, state_before, shard_count) = {
         let eng = state.read().await;
         let ns = eng.resolve_collection(payload.collection.as_deref())?;
-        let sb = hash_state_blake3(&eng.state).iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let or: [u8; 32] = hash_state_blake3(&eng.state);
+        let sb = or.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         let sc = eng.shard_count as u8;
-        (ns, sb, sc)
+        (ns, or, sb, sc)
     };
 
+    let fxp_values: Vec<i32> = payload.values.iter()
+        .map(|&f| valori_kernel::fxp::ops::from_f32(f).0)
+        .collect();
+
     let collection_name = payload.collection.clone().unwrap_or_else(|| "default".into());
-    let shard_id = (ns as u8).wrapping_rem(shard_count.max(1));
+    let shard_id = ((ns as u32) % (shard_count as u32).max(1)) as u8;
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "namespace_id": ns,
@@ -891,19 +908,29 @@ async fn insert_record(
         .and_then(|o| o.json.get("record_id").and_then(|v| v.as_u64()))
         .unwrap_or(0) as u32;
 
-    let state_after = {
+    let (new_root, state_after, sequence) = {
         let eng = state.read().await;
-        hash_state_blake3(&eng.state).iter().map(|b| format!("{:02x}", b)).collect::<String>()
+        let nr: [u8; 32] = hash_state_blake3(&eng.state);
+        let sa = nr.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let seq = eng.event_committer().map(|c| c.journal().committed_height()).unwrap_or(0);
+        (nr, sa, seq)
     };
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
 
     crate::receipt_bridge::emit_write(&receipts, OperationKind::Ingest, &OperationInputs::Ingest {
         strategy: "direct".into(),
         collection: collection_name,
         shard_id,
         embed_enabled: false,
-    }, ns, 0, 0, false, state_before, state_after);
+    }, ns, 0, sequence, false, state_before, state_after);
 
-    Ok(Json(InsertRecordResponse { id: record_id }))
+    let receipt = valori_kernel::proof::InsertReceipt::build(
+        record_id, old_root, &fxp_values, new_root, sequence, timestamp,
+    );
+    Ok(Json(InsertRecordResponse { id: record_id, receipt: receipt.into() }))
 }
 
 async fn batch_insert(
@@ -991,7 +1018,7 @@ async fn search(
         let use_rerank = payload.rerank && payload.query_text.is_some()
             && !engine.reranker.is_empty();
         let fetch_k = if use_rerank {
-            (base_k * crate::valori_reranker::POOL_FACTOR).max(base_k)
+            (base_k * valori_search::POOL_FACTOR).max(base_k)
         } else {
             base_k
         };
@@ -1040,20 +1067,20 @@ async fn search(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs()).unwrap_or(0);
-    let candidates: Vec<crate::decay::DecayHit> = raw.into_iter()
-        .map(|(id, score)| crate::decay::DecayHit {
+    let candidates: Vec<valori_search::DecayHit> = raw.into_iter()
+        .map(|(id, score)| valori_search::DecayHit {
             id,
             distance: score,
             created_at: engine.record_created_at(id),
         })
         .collect();
-    let decayed = crate::decay::rerank(candidates, now, half_life, pool);
+    let decayed = valori_search::decay_rerank(candidates, now, half_life, pool);
     let results: Vec<SearchHit> = decayed.into_iter()
         .filter(|h| {
             if let Some(f) = mf {
                 let key = format!("rec:{}", h.id);
                 match engine.metadata.get(&key) {
-                    Some(meta) => crate::api::matches_metadata_filter(&meta, f),
+                    Some(meta) => valori_search::matches_metadata_filter(&meta, f),
                     None => false,
                 }
             } else {
@@ -1340,7 +1367,7 @@ impl crate::routes::graph::GraphOps for SharedEngine {
         depth: u32,
     ) -> Result<(serde_json::Value, serde_json::Value), Response> {
         let engine = self.read().await;
-        let (nodes, edges) = crate::graph_rag::expand_subgraph(&engine.state, &[root], depth);
+        let (nodes, edges) = valori_rag::graph::expand_subgraph(&engine.state, &[root], depth);
         Ok((serde_json::Value::Array(nodes), serde_json::Value::Array(edges)))
     }
 }
@@ -1430,7 +1457,7 @@ async fn graphrag(
         let ns = eng.resolve_collection(payload.collection.as_deref())?;
         (ns, eng.shard_count as u8)
     };
-    let shard_id = (ns as u8).wrapping_rem(shard_count.max(1));
+    let shard_id = ((ns as u32) % (shard_count as u32).max(1)) as u8;
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "shard_id": shard_id,
@@ -1494,8 +1521,9 @@ async fn memory_search_vector(
     State(state): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
+    axum::extract::Query(explain): axum::extract::Query<crate::routes::explain::ExplainParams>,
     Json(payload): Json<MemorySearchVectorRequest>,
-) -> Result<Json<MemorySearchResponse>, Response> {
+) -> Result<Json<serde_json::Value>, Response> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
@@ -1509,7 +1537,7 @@ async fn memory_search_vector(
             .map_err(|e| (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
         (ns, eng.shard_count as u8)
     };
-    let shard_id = (ns as u8).wrapping_rem(shard_count.max(1));
+    let shard_id = ((ns as u32) % (shard_count as u32).max(1)) as u8;
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "shard_id": shard_id,
@@ -1540,16 +1568,27 @@ async fn memory_search_vector(
         ExecutionRetentionPolicy::default(),
     ));
 
-    let outputs = run_graph_inline(graph, caps, task_reg, ExecutionPolicy::default())
+    // Retain the graph past execution so `?explain=true` can report its
+    // content-addressed hash + task/edge structure. run_graph_inline consumes
+    // its Arc, so hand it a clone. Time the run for `_execution.duration_ms`.
+    let exec_started = std::time::Instant::now();
+    let outputs = run_graph_inline(graph.clone(), caps, task_reg, ExecutionPolicy::default())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": e.to_string()}))).into_response())?;
+    let exec_ms = exec_started.elapsed().as_secs_f64() * 1000.0;
 
     let raw = outputs.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Array(vec![]));
     let results: Vec<MemorySearchHit> = raw.as_array()
         .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
         .unwrap_or_default();
 
-    Ok(Json(MemorySearchResponse { results }))
+    let execution = if explain.on() {
+        let state_hash = { state.read().await.get_proof().final_state_hash };
+        Some(crate::routes::explain::execution_block("MemorySearch", Some(&graph), &state_hash, Some(exec_ms)))
+    } else {
+        None
+    };
+    Ok(Json(crate::routes::explain::with_execution(MemorySearchResponse { results }, execution)))
 }
 
 async fn get_proof(
@@ -1953,93 +1992,24 @@ async fn get_operation_by_id(
     }))
 }
 
-async fn get_operation_execution(
+/// Real per-stage execution data for an ingest operation — "Make Execution
+/// Explorer Real". Looks up `id` (the `operation_id` returned by
+/// `POST /v1/ingest`) in the in-process [`crate::execution_registry::ExecutionRegistry`].
+/// No fabricated DAG: an id that never ran through the pipeline (including
+/// every WAL-event `op-N` id from `GET /v1/operations`, which is a different,
+/// finer-grained id space — one per committed kernel event, not per ingest
+/// call) 404s honestly instead of returning fake data.
+pub async fn get_operation_execution(
     axum::extract::Path(id): axum::extract::Path<String>,
-    State(state): State<SharedEngine>,
-) -> Result<Json<valori_planner::graph::ExecutionGraph>, (StatusCode, Json<serde_json::Value>)> {
-    use valori_kernel::event::KernelEvent;
-    use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind, TaskEdge};
-    use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
-    use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
-    use valori_planner::graph::ExecutionRetentionPolicy;
-
-    let engine = state.read().await;
-    let Some(committer) = engine.event_committer() else {
-        return Err((StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Event log not enabled"}))));
-    };
-
-    let idx_str = id.strip_prefix("op-").unwrap_or(&id);
-    let log_index: usize = idx_str.parse().map_err(|_| {
-        (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": format!("invalid operation ID format: {}", id)})))
-    })?;
-
-    let journal = committer.journal();
-    let (event, _) = journal.committed_with_timestamps().nth(log_index).ok_or_else(|| {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": format!("operation '{}' not found", id)})))
-    })?;
-
-    let (task_kind, shard_id) = match event {
-        KernelEvent::InsertRecord { .. } | KernelEvent::AutoInsertRecord { .. } => (TaskKind::InsertRecord, Some(0)),
-        KernelEvent::DeleteRecord { .. } | KernelEvent::SoftDeleteRecord { .. } => (TaskKind::SoftDeleteRecord, Some(0)),
-        KernelEvent::CreateNode { .. } | KernelEvent::AutoCreateNode { .. } => (TaskKind::InsertNode, None),
-        KernelEvent::DeleteNode { .. } => (TaskKind::InsertNode, None), // simplified
-        KernelEvent::CreateEdge { .. } | KernelEvent::AutoCreateEdge { .. } => (TaskKind::InsertEdge, None),
-        KernelEvent::DeleteEdge { .. } => (TaskKind::InsertEdge, None), // simplified
-        _ => (TaskKind::Search, None) // generic fallback
-    };
-
-    let op_hash = compute_operation_hash(
-        OperationKind::Ingest, 
-        &OperationInputs::HealthCheck, // mock
-        &ExecutionPolicy::default()
-    );
-    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
-    let ctx_hash = PlanningContextHash::compute(&PlanningContext {
-        capability_set: CapabilitySet { embed: false, llm: false, object_store: false, cluster: false, shard_count: 1 },
-        schema_version: 1, shard_count: 1, cluster_epoch: 0, cluster_mode: false,
-    });
-
-    let mut tasks = Vec::new();
-    let mut edges = Vec::new();
-    
-    // Create a mock DAG for demonstration of the Execution Explorer feature
-    // In a real execution, this would be fetched from the ExecutionRegistry or MetadataDb
-    tasks.push(TaskSpec {
-        id: TaskId(0),
-        kind: TaskKind::Search, // pretend we have an initial lookup
-        inputs_json: serde_json::json!({"info": "setup context"}).to_string(),
-        shard_id: None,
-        topological_index: 0,
-    });
-    
-    tasks.push(TaskSpec {
-        id: TaskId(1),
-        kind: task_kind,
-        inputs_json: serde_json::json!({"info": "main execution"}).to_string(),
-        shard_id,
-        topological_index: 0,
-    });
-    
-    edges.push(TaskEdge { from: TaskId(0), to: TaskId(1) });
-    
-    // Add an optional cleanup/finalize task
-    tasks.push(TaskSpec {
-        id: TaskId(2),
-        kind: TaskKind::ProofFragment,
-        inputs_json: serde_json::json!({"info": "finalize"}).to_string(),
-        shard_id: None,
-        topological_index: 0,
-    });
-    edges.push(TaskEdge { from: TaskId(1), to: TaskId(2) });
-
-    let graph = ExecutionGraph::build(
-        op_hash, fp, ctx_hash,
-        tasks,
-        edges,
-        ExecutionRetentionPolicy::default(),
-    );
-
-    Ok(Json(graph))
+    axum::Extension(executions): axum::Extension<Arc<crate::execution_registry::ExecutionRegistry>>,
+) -> Result<Json<crate::execution_registry::ExecutionRecord>, (StatusCode, Json<serde_json::Value>)> {
+    match executions.get(&id) {
+        Some(record) => Ok(Json((*record).clone())),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("no execution record for operation '{}'", id)})),
+        )),
+    }
 }
 
 
@@ -2540,8 +2510,8 @@ async fn tree_build(
     State(engine): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
-    Json(payload): Json<crate::tree_rag::BuildRequest>,
-) -> Json<crate::tree_rag::BuildResponse> {
+    Json(payload): Json<valori_rag::tree::BuildRequest>,
+) -> Json<valori_rag::tree::BuildResponse> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
@@ -2576,12 +2546,12 @@ async fn tree_build(
         .unwrap_or(serde_json::json!({}));
 
     // Reconstruct the BuildResponse from the task output JSON.
-    let tree: crate::tree_rag::TreeIndex = result.get("tree")
+    let tree: valori_rag::tree::TreeIndex = result.get("tree")
         .and_then(|t| serde_json::from_value(t.clone()).ok())
-        .unwrap_or_else(|| crate::tree_rag::TreeIndex::from_markdown(&payload.text, &doc_name));
+        .unwrap_or_else(|| valori_rag::tree::TreeIndex::from_markdown(&payload.text, &doc_name));
     let cache_key = result.get("cache_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-    Json(crate::tree_rag::BuildResponse {
+    Json(valori_rag::tree::BuildResponse {
         cache_key,
         doc_name: tree.doc_name.clone(),
         node_count: tree.nodes.len(),
@@ -2597,8 +2567,8 @@ async fn tree_query(
     State(engine): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
-    Json(payload): Json<crate::tree_rag::QueryRequest>,
-) -> Result<Json<crate::tree_rag::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
+    Json(payload): Json<valori_rag::tree::QueryRequest>,
+) -> Result<Json<valori_rag::tree::AnswerResult>, (StatusCode, Json<serde_json::Value>)> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
@@ -2648,7 +2618,7 @@ async fn tree_query(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     let out_val = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::Value::Null);
-    let answer: crate::tree_rag::AnswerResult = serde_json::from_value(out_val)
+    let answer: valori_rag::tree::AnswerResult = serde_json::from_value(out_val)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     Ok(Json(answer))
@@ -2671,14 +2641,14 @@ async fn tree_hybrid(
     State(engine): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
-    Json(payload): Json<crate::tree_rag::HybridRequest>,
-) -> Result<Json<crate::tree_rag::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
+    Json(payload): Json<valori_rag::tree::HybridRequest>,
+) -> Result<Json<valori_rag::tree::HybridResponse>, (StatusCode, Json<serde_json::Value>)> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
     use valori_planner::graph::ExecutionRetentionPolicy;
     use crate::runner::run_graph_inline;
-    use crate::tree_rag::{HybridResponse, TreeIndex, GENESIS};
+    use valori_rag::tree::{HybridResponse, TreeIndex, GENESIS};
 
     // ── Resolve tree and optional query vector before dispatching ─────────────
     let (tree_json, cache_key_opt) = if let Some(t) = payload.tree {
@@ -2706,8 +2676,8 @@ async fn tree_hybrid(
 
     let mut query_vec: Option<Vec<f32>> = None;
     if let Some(ref ecfg) = embed_cfg {
-        let http = reqwest::Client::new();
-        if let Ok(vecs) = crate::embedder::embed_batch(&[payload.query.clone()], ecfg, &http).await {
+        let http = shared_http_client();
+        if let Ok(vecs) = valori_ingest::embed_batch(&[payload.query.clone()], ecfg, http).await {
             if !vecs.is_empty() { query_vec = Some(vecs.into_iter().next().unwrap()); }
         }
     }
@@ -2735,7 +2705,7 @@ async fn tree_hybrid(
         &OperationInputs::TreeHybrid { k: payload.k as u32, shard_id: 0, embed_enabled: embed_cfg.is_some() },
         &ExecutionPolicy::default(),
     );
-    let fp = PlannerFingerprint::compute(env!("CARGO_PKG_VERSION"), [0u8; 32], [0u8; 32], 1);
+    let fp = PlannerFingerprint::compute("0.2.4", [0u8; 32], [0u8; 32], 1);
     let ctx_hash = PlanningContextHash::compute(&PlanningContext {
         capability_set: CapabilitySet {
             embed: embed_cfg.is_some(), llm: false, object_store: false, cluster: false, shard_count: 1,
@@ -2775,8 +2745,8 @@ async fn community_detect(
     State(engine): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
-    Json(payload): Json<crate::community::DetectRequest>,
-) -> Json<crate::community::DetectResponse> {
+    Json(payload): Json<valori_rag::community::DetectRequest>,
+) -> Json<valori_rag::community::DetectResponse> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
@@ -2788,7 +2758,7 @@ async fn community_detect(
         let ns = payload.namespace.as_deref().and_then(|n| eng.namespaces.resolve(Some(n))).unwrap_or(0);
         (ns, eng.shard_count as u8)
     };
-    let max_iter = payload.max_iter.unwrap_or(crate::community::DEFAULT_MAX_ITER);
+    let max_iter = payload.max_iter.unwrap_or(valori_rag::community::DEFAULT_MAX_ITER);
 
     let inputs_json = serde_json::to_string(&serde_json::json!({
         "shard_id": 0u8,
@@ -2819,7 +2789,7 @@ async fn community_detect(
         .map(|o| o.json)
         .unwrap_or(serde_json::json!({}));
 
-    Json(crate::community::DetectResponse {
+    Json(valori_rag::community::DetectResponse {
         community_count: result["community_count"].as_u64().unwrap_or(0) as usize,
         node_count: result["node_count"].as_u64().unwrap_or(0) as usize,
         communities: result["communities"].as_array()
@@ -2838,8 +2808,8 @@ async fn community_search(
     State(engine): State<SharedEngine>,
     axum::Extension(caps): axum::Extension<Arc<valori_effect::capability::CapabilityRegistry>>,
     axum::Extension(task_reg): axum::Extension<Arc<crate::runner::TaskRegistry>>,
-    Json(payload): Json<crate::community::SearchRequest>,
-) -> Result<Json<crate::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
+    Json(payload): Json<valori_rag::community::SearchRequest>,
+) -> Result<Json<valori_rag::community::SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
     use valori_planner::graph::{ExecutionGraph, TaskSpec, TaskId, TaskKind};
     use valori_planner::operation::{ExecutionPolicy, OperationKind, OperationInputs, compute_operation_hash};
     use valori_planner::context::{CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash};
@@ -2877,12 +2847,12 @@ async fn community_search(
         .map_err(|e| (StatusCode::PRECONDITION_FAILED, Json(serde_json::json!({"error": e.to_string()}))))?;
 
     let out = result.into_iter().next().flatten().map(|o| o.json).unwrap_or(serde_json::json!({}));
-    let communities: Vec<crate::community::CommunityHit> = out["communities"].as_array()
+    let communities: Vec<valori_rag::community::CommunityHit> = out["communities"].as_array()
         .map(|arr| arr.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect())
         .unwrap_or_default();
     let total = out["total_communities_searched"].as_u64().unwrap_or(0) as usize;
 
-    Ok(Json(crate::community::SearchResponse { communities, total_communities_searched: total }))
+    Ok(Json(valori_rag::community::SearchResponse { communities, total_communities_searched: total }))
 }
 
 /// `GET /v1/community/overview`
@@ -2936,8 +2906,8 @@ async fn community_overview(
 /// and adds relationship edges. Requires `VALORI_EMBED_PROVIDER` to be set.
 async fn extract_entities(
     State(engine): State<SharedEngine>,
-    Json(payload): Json<crate::community::ExtractEntitiesRequest>,
-) -> Result<Json<crate::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    Json(payload): Json<valori_rag::community::ExtractEntitiesRequest>,
+) -> Result<Json<valori_rag::community::ExtractEntitiesResponse>, (StatusCode, Json<serde_json::Value>)> {
     // Validate embed config available.
     let embed_cfg = {
         let eng = engine.read().await;
@@ -2946,13 +2916,19 @@ async fn extract_entities(
         "error": "VALORI_EMBED_PROVIDER not configured — entity extraction requires an LLM provider"
     }))))?;
 
-    let http = reqwest::Client::new();
+    let http = shared_http_client();
 
     // Call LLM to extract entities + relationships.
-    let extracted = crate::community::extract_entities_via_llm(
+    let llm_cfg = valori_rag::LlmConfig {
+        provider: embed_cfg.provider.clone(),
+        model: embed_cfg.model.clone(),
+        url: embed_cfg.url.clone(),
+        api_key: embed_cfg.api_key.clone(),
+    };
+    let extracted = valori_rag::extract_entities_via_llm(
         &payload.text,
         &payload.entity_types,
-        &embed_cfg,
+        &llm_cfg,
         payload.model.as_deref(),
         &http,
     ).await.map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e}))))?;
@@ -2967,12 +2943,12 @@ async fn extract_entities(
     let descriptions: Vec<String> = extracted.entities.iter()
         .map(|e| e.description.clone())
         .collect();
-    let vecs = crate::embedder::embed_batch(&descriptions, &embed_cfg, &http)
+    let vecs = valori_ingest::embed_batch(&descriptions, &embed_cfg, &http)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": e.0}))))?;
 
     let mut entity_name_to_node_id: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut inserted_entities: Vec<crate::community::InsertedEntity> = Vec::new();
+    let mut inserted_entities: Vec<valori_rag::community::InsertedEntity> = Vec::new();
 
     {
         let mut eng = engine.write().await;
@@ -2987,7 +2963,7 @@ async fn extract_entities(
             ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
 
             entity_name_to_node_id.insert(entity.name.clone(), node_id);
-            inserted_entities.push(crate::community::InsertedEntity {
+            inserted_entities.push(valori_rag::community::InsertedEntity {
                 name: entity.name.clone(),
                 kind: entity.kind.clone(),
                 description: entity.description.clone(),
@@ -2998,7 +2974,7 @@ async fn extract_entities(
     }
 
     // Create edges for relationships.
-    let mut inserted_rels: Vec<crate::community::InsertedRelationship> = Vec::new();
+    let mut inserted_rels: Vec<valori_rag::community::InsertedRelationship> = Vec::new();
     let mut skipped = 0usize;
 
     {
@@ -3011,7 +2987,7 @@ async fn extract_entities(
                     use valori_kernel::types::enums::EdgeKind;
                     let edge_id = eng.create_edge(from_id, to_id, EdgeKind::Relation as u8)
                         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))))?;
-                    inserted_rels.push(crate::community::InsertedRelationship {
+                    inserted_rels.push(valori_rag::community::InsertedRelationship {
                         source_name: rel.source.clone(),
                         target_name: rel.target.clone(),
                         description: rel.description.clone(),
@@ -3026,7 +3002,7 @@ async fn extract_entities(
     let entity_count = inserted_entities.len();
     let relationship_count = inserted_rels.len();
 
-    Ok(Json(crate::community::ExtractEntitiesResponse {
+    Ok(Json(valori_rag::community::ExtractEntitiesResponse {
         entities: inserted_entities,
         relationships: inserted_rels,
         entity_count,
@@ -3063,5 +3039,32 @@ async fn shard_routing_handler(
         "shard_count": shard_count,
         "shards": shards,
     }))
+}
+
+/// `GET /v1/models/health`
+///
+/// Returns integrity status of all installed model packages.
+/// The models directory is read from `VALORI_MODELS_DIR` (defaults to
+/// `~/.valori/models`).  Reference counts are always 0 until M6.2 wiring
+/// lands; "reclaimable_bytes" reflects unreferenced-in-terms-of-projects.
+async fn models_health() -> axum::Json<serde_json::Value> {
+    let models_dir = std::env::var("VALORI_MODELS_DIR").ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            dirs::home_dir().map(|h| h.join(".valori").join("models"))
+        });
+
+    let Some(dir) = models_dir else {
+        return axum::Json(serde_json::json!({ "error": "models directory not configured" }));
+    };
+
+    match valori_models::PackageStore::new(&dir) {
+        Ok(store) => {
+            let refs = valori_models::RefCounter::new();
+            let health = valori_models::system_health(&store, &refs);
+            axum::Json(serde_json::to_value(health).unwrap_or_default())
+        }
+        Err(e) => axum::Json(serde_json::json!({ "error": e.to_string() })),
+    }
 }
 

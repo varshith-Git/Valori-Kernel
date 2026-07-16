@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -9,7 +10,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
 
     const { id } = await params;
-    const res = await fetch(`${getApiUrl()}/v1/operations/${id}/execution`, { 
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/operations/${id}/execution`, { 
         headers, 
         cache: "no-store" 
     });

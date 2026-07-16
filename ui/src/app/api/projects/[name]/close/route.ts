@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFileSync } from "child_process";
-import { getProject, projectNodePaths, protectProject, touchProject } from "@/lib/server/projects";
+import * as daemon from "@/lib/server/daemon";
+import { projectNodePaths, protectAll, touchProject } from "@/lib/server/projects";
+import { toLegacyEntry, resolveProjectsDir } from "@/lib/server/project-adapter";
 import { pm } from "@/lib/server/process-manager";
+import { errorResponse } from "@/lib/server/http";
 
 async function probePort(port: number): Promise<boolean> {
   try {
@@ -29,61 +32,78 @@ async function snapshotViaHttp(port: number, snapshotPath: string): Promise<void
   } catch { /* WAL is durable regardless */ }
 }
 
-// POST — snapshot-on-close: ask every node to write a final snapshot, stop it,
-// wait for the process to fully exit, then re-apply the immutable flag so the
-// data is protected at rest.
+interface HealthBody {
+  records?: { live?: number } | number;
+}
+
+// POST — snapshot-on-close.
+//
+// Single-node (replication 1, RFC-0006 Phase B.1): `daemon.stopProject()`
+// sends a graceful stop; `valori-node` snapshots on graceful shutdown itself
+// whenever VALORI_SNAPSHOT_PATH is set, which the daemon always sets — no
+// separate HTTP snapshot call needed, unlike the orphan-recovery path below.
+//
+// Cluster (replication 3): unchanged from the pre-migration implementation —
+// still stops each node itself and falls back to an HTTP snapshot + SIGTERM
+// for orphaned processes the daemon never supervised.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
 ) {
   const { name } = await params;
-  const entry = getProject(name);
-  if (!entry) {
-    return NextResponse.json({ error: `Project "${name}" not found` }, { status: 404 });
+
+  let daemonProject: daemon.DaemonProject;
+  try {
+    daemonProject = await daemon.getProject(name);
+  } catch (e) {
+    if (e instanceof daemon.DaemonError && e.status === 404) {
+      return NextResponse.json({ error: `Project "${name}" not found` }, { status: 404 });
+    }
+    return errorResponse(e, 503);
   }
 
-  // Capture the final record count before stopping, so the Home card shows
-  // accurate info while the project is at rest. Best-effort — cluster nodes
-  // have a different /health shape without a records field.
+  const entry = toLegacyEntry(daemonProject, await resolveProjectsDir());
+
   let finalRecords: number | undefined;
   try {
-    const r = await fetch(`http://127.0.0.1:${entry.nodes[0].httpPort}/health`, {
-      signal: AbortSignal.timeout(1500),
-    });
+    const r = await fetch(`http://127.0.0.1:${entry.nodes[0].httpPort}/health`, { signal: AbortSignal.timeout(1500) });
     if (r.ok) {
-      const h = await r.json() as { records?: { live?: number } | number };
+      const h = (await r.json()) as HealthBody;
       finalRecords = typeof h.records === "number" ? h.records : h.records?.live;
     }
   } catch { /* node may already be down */ }
 
-  await Promise.all(entry.nodes.map(async (n) => {
-    const { snapshotPath } = projectNodePaths(entry, n.id);
-
-    // Happy path: PM owns the process and can SIGTERM it directly.
-    if (pm.isRunning(n.httpPort)) {
-      await pm.snapshotThenStop(n.httpPort, snapshotPath);
-      await pm.waitForExit(n.httpPort);
-      return;
+  if (entry.replication === 1) {
+    try {
+      await daemon.stopProject(name);
+    } catch (e) {
+      return errorResponse(e, 503);
     }
+  } else {
+    await Promise.all(entry.nodes.map(async (n) => {
+      const { snapshotPath } = projectNodePaths(entry, n.id);
 
-    // Orphan path: node was started in a previous Next.js session. The PM has
-    // no proc handle, so snapshot via HTTP and kill by PID from the port.
-    const alive = await probePort(n.httpPort);
-    if (!alive) return;
+      if (pm.isRunning(n.httpPort)) {
+        await pm.snapshotThenStop(n.httpPort, snapshotPath);
+        await pm.waitForExit(n.httpPort);
+        return;
+      }
 
-    await snapshotViaHttp(n.httpPort, snapshotPath);
+      const alive = await probePort(n.httpPort);
+      if (!alive) return;
 
-    const pid = findPidOnPort(n.httpPort);
-    if (pid) {
-      try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-      // Give it a moment to flush, then force-kill if still alive.
-      await new Promise(r => setTimeout(r, 2000));
-      try { process.kill(pid, 0); process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-    }
-  }));
+      await snapshotViaHttp(n.httpPort, snapshotPath);
 
-  // Re-lock the files now that no process is writing them.
-  protectProject(name);
+      const pid = findPidOnPort(n.httpPort);
+      if (pid) {
+        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+        await new Promise((r) => setTimeout(r, 2000));
+        try { process.kill(pid, 0); process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+      }
+    }));
+  }
+
+  protectAll(entry);
   touchProject(name, {
     lastOpenedAt: new Date().toISOString(),
     ...(finalRecords != null ? { records: finalRecords } : {}),

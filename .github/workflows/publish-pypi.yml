@@ -18,169 +18,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ── Linux x86-64 ──────────────────────────────────────────────────────────
-  # This is the most important target — Google Colab, most cloud servers,
-  # and Docker containers all run on x86-64 Linux.
-  build-linux-x86:
-    name: Build Linux x86-64 wheel
-    runs-on: ubuntu-latest
+  # ── maturin-action wheels (Linux x86, macOS arm/intel, Windows) ───────────────
+  # Add a new platform by adding one row to the matrix.
+  build-wheels:
+    name: Build wheel (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64,   os: ubuntu-latest,  target: x86_64,               manylinux: auto, artifact: wheels-linux-x86_64  }
+          - { name: macos-arm64,    os: macos-latest,   target: aarch64-apple-darwin,  manylinux: auto, artifact: wheels-macos-arm64    }
+          - { name: macos-intel,    os: macos-latest,   target: x86_64-apple-darwin,   manylinux: auto, artifact: wheels-macos-intel    }
+          - { name: windows-x86_64, os: windows-latest, target: x86_64-pc-windows-msvc, manylinux: auto, artifact: wheels-windows-x86_64 }
+
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Build wheel (manylinux — works on all glibc Linux)
+      - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          target: x86_64
-          manylinux: auto
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
           working-directory: python
           args: --release --out dist --find-interpreter
-
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-x86_64
+          name: ${{ matrix.artifact }}
           path: python/dist/
           if-no-files-found: error
 
+  # ── Linux ARM64 — requires native docker cross-compilation ────────────────────
+  # Different mechanism (raw docker run) so kept as a separate job.
   build-linux-arm64:
-    name: Build Linux ARM64 wheel
+    name: Build wheel (linux-aarch64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # QEMU allows the x86_64 runner to transparently run the ARM64 manylinux docker container
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
-
       - name: Build wheel natively in ARM64 container
         run: |
-          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/io quay.io/pypa/manylinux2014_aarch64 bash -c "
-            # Install Rust
-            curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
-            source \$HOME/.cargo/env
-            
-            # Install Maturin using the Python 3.9 interpreter (for ABI3 wheel)
-            /opt/python/cp39-cp39/bin/pip install maturin
-            
-            # Build the wheel inside the container
-            cd /io/python
-            /opt/python/cp39-cp39/bin/maturin build --release --out dist
-          "
-
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}:/io \
+            quay.io/pypa/manylinux2014_aarch64 bash -c "
+              curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+              source \$HOME/.cargo/env
+              /opt/python/cp39-cp39/bin/pip install maturin
+              cd /io/python
+              /opt/python/cp39-cp39/bin/maturin build --release --out dist
+            "
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-aarch64
           path: python/dist/
           if-no-files-found: error
 
-  # ── macOS ARM64 (M1/M2/M3) ───────────────────────────────────────────────
-  build-macos-arm:
-    name: Build macOS ARM64 wheel
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          target: aarch64-apple-darwin
-          working-directory: python
-          args: --release --out dist --find-interpreter
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-arm64
-          path: python/dist/
-          if-no-files-found: error
-
-  # ── macOS Intel ───────────────────────────────────────────────────────────
-  build-macos-intel:
-    name: Build macOS Intel wheel
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64-apple-darwin
-          working-directory: python
-          args: --release --out dist --find-interpreter
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-macos-intel
-          path: python/dist/
-          if-no-files-found: error
-
-  # ── Windows x86-64 ────────────────────────────────────────────────────────
-  build-windows:
-    name: Build Windows wheel
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          target: x86_64-pc-windows-msvc
-          working-directory: python
-          args: --release --out dist --find-interpreter
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-x86_64
-          path: python/dist/
-          if-no-files-found: error
-
-  # ── Source distribution ───────────────────────────────────────────────────
-  # Fallback for exotic platforms. Requires Rust on the end user's machine.
+  # ── Source distribution (fallback for exotic platforms) ───────────────────────
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
           working-directory: python
           args: --out dist
-
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-sdist
           path: python/dist/
           if-no-files-found: error
 
-  # ── Upload all to PyPI ────────────────────────────────────────────────────
+  # ── Upload all to PyPI ────────────────────────────────────────────────────────
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs:
-      - build-linux-x86
-      - build-linux-arm64
-      - build-macos-arm
-      - build-macos-intel
-      - build-windows
-      - build-sdist
-
+    needs: [build-wheels, build-linux-arm64, build-sdist]
     permissions:
       id-token: write   # required for PyPI Trusted Publishers (OIDC)
 
@@ -194,7 +112,7 @@ jobs:
 
       - name: Show packages about to be uploaded
         run: |
-          echo "📦 Uploading to PyPI:"
+          echo "Uploading to PyPI:"
           ls -lh dist/
           echo "Total: $(ls dist/ | wc -l) files"
 

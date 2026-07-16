@@ -1,3 +1,18 @@
+// NOTE (RFC-0006 Phase B.1): this file spawns `valori-node` directly —
+// intentionally, still — for two things the daemon does NOT own:
+//   1. The 3-node Raft cluster lifecycle (`/api/projects/[name]/open`+`close`
+//      when replication===3, and `/api/launch/join`) — `valori-daemon` can
+//      persist cluster metadata (Phase B.0) but can't launch a cluster yet.
+//   2. The standalone "advanced/manual launch" playground
+//      (`ui/src/app/launch/page.tsx`, `/api/launch*`) — an ad-hoc, unnamed
+//      node/cluster sandbox with no project manifest at all, structurally
+//      outside anything a project-oriented daemon API could represent.
+// Everything else that used to spawn nodes through this file (single-node
+// project create/open/close) now goes through `valori-daemon` instead — see
+// `ui/src/lib/server/daemon.ts`. Don't add new callers here for anything
+// that fits the daemon's project model; this file is scoped down to the two
+// cases above, not a general-purpose node launcher going forward.
+
 import { spawn, execFileSync, ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -50,6 +65,16 @@ export interface LaunchConfig {
 const MAX_LOGS = 800;
 
 function resolveBinary(repoRoot: string): { cmd: string; args: string[]; label: string } {
+  // Packaged desktop app: `ui/` runs as a bundled standalone server, not from
+  // inside a git checkout, so `repoRoot` (derived from this process's own
+  // cwd) never contains a `target/` directory. The desktop passes the
+  // bundled `valori-node` sidecar's real path this way instead — same
+  // pattern already used for the daemon-managed single-node path
+  // (`VALORI_NODE_BIN`, wired in `desktop/src-tauri/src/daemon_manager.rs`).
+  const bundled = process.env.VALORI_NODE_BIN;
+  if (bundled && fs.existsSync(bundled)) {
+    return { cmd: bundled, args: [], label: "valori-node (bundled sidecar)" };
+  }
   const release = path.join(repoRoot, "target", "release", "valori-node");
   const debug   = path.join(repoRoot, "target", "debug",   "valori-node");
   if (fs.existsSync(release)) return { cmd: release,   args: [],                                    label: "valori-node (release)" };
@@ -217,16 +242,31 @@ class ProcessManager {
   }
 
   /** Resolves once the process for `id` has actually exited, or immediately
-   *  if it's already stopped. Bounded by `timeoutMs` so a hung process can't
-   *  wedge a caller forever — after the timeout the caller proceeds anyway
-   *  (matches the existing "best effort" durability posture: WAL is already
-   *  durable regardless of whether the snapshot/exit completes in time). */
+   *  if it's already stopped. Bounded by `timeoutMs`, but a timeout does NOT
+   *  mean "give up" — a process that ignores SIGTERM (or is just slow) gets
+   *  SIGKILLed so the caller's "stopped" report is never a lie. Previously
+   *  the timeout just resolved anyway, best-effort, leaving the process
+   *  running while everything downstream (the close endpoint, the project
+   *  list's live status, which reads this same tracked state) reported it
+   *  as stopped. */
   async waitForExit(id: number, timeoutMs = 10_000): Promise<void> {
     const node = this.nodes.get(id);
     if (!node?.proc || !node.exitPromise) return;
+
+    const exited = await Promise.race([
+      node.exitPromise.then(() => true),
+      new Promise<boolean>(res => setTimeout(() => res(false), timeoutMs)),
+    ]);
+    if (exited) return;
+
+    this.pushLog(node, `[launcher] did not exit within ${timeoutMs}ms after SIGTERM — sending SIGKILL`);
+    try { node.proc?.kill("SIGKILL"); } catch { /* already gone */ }
+
+    // SIGKILL cannot be ignored — this is just waiting for the OS to report
+    // the exit, bounded so a wedged wait promise can't hang the caller.
     await Promise.race([
       node.exitPromise,
-      new Promise<void>(res => setTimeout(res, timeoutMs)),
+      new Promise<void>(res => setTimeout(res, 3000)),
     ]);
   }
 
@@ -311,7 +351,9 @@ class ProcessManager {
       this.pushLog(node, "[launcher] snapshot-on-close failed for orphan (WAL still durable)");
     }
 
-    // Find PID by port and send SIGTERM
+    // Find PID by port, send SIGTERM, then verify it's actually gone before
+    // declaring victory — a bare SIGTERM-and-forget here previously reported
+    // "stopped" regardless of whether the orphaned process actually exited.
     try {
       const pidStr = execFileSync("lsof", ["-ti", `:${port}`], { encoding: "utf8", timeout: 3000 }).trim();
       const pids = pidStr.split("\n").map(s => parseInt(s, 10)).filter(n => !isNaN(n));
@@ -319,6 +361,16 @@ class ProcessManager {
         try { process.kill(pid, "SIGTERM"); } catch {}
       }
       this.pushLog(node, `[launcher] SIGTERM sent to orphan PID(s): ${pids.join(", ")}`);
+
+      await new Promise((r) => setTimeout(r, 2000));
+
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 0); // still alive — probe throws once it's gone
+          process.kill(pid, "SIGKILL");
+          this.pushLog(node, `[launcher] orphan PID ${pid} ignored SIGTERM — sent SIGKILL`);
+        } catch { /* already exited */ }
+      }
     } catch {
       this.pushLog(node, "[launcher] could not find orphan PID — may already be stopped");
     }

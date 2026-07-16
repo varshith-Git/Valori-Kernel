@@ -10,6 +10,7 @@
 //!   6. `GET /metrics` is reachable without an auth token
 
 use valori_node::config::{NodeConfig, IndexKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 
 use valori_node::server::{build_router, SharedEngine};

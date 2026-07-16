@@ -2,6 +2,7 @@
 //! Collection (namespace) management — create, scope, isolate, drop, snapshot.
 
 use valori_node::api::{validate_collection, DEFAULT_COLLECTION};
+use valori_node::EngineFromNodeConfig;
 use valori_node::config::{IndexKind, NodeConfig};
 use valori_node::engine::Engine;
 use valori_node::server::{build_router, SharedEngine};

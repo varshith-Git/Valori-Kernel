@@ -2,6 +2,7 @@
 
 import { use, useState, useEffect } from "react";
 import Link from "next/link";
+import { Layers } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CollectionList } from "@/components/collections/CollectionList";
 import { useCollections } from "@/lib/hooks/useCollections";
@@ -15,29 +16,49 @@ export default function ProjectPage({
 }) {
   const { name } = use(params);
   const project = decodeURIComponent(name);
+  const { online } = useHealth();
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-[1600px]">
+    <div className="flex flex-col gap-5 w-full max-w-[1600px]">
+      {/* Project header card */}
+      <div className="rounded-xl border border-border bg-card px-5 py-4 flex items-center gap-4">
+        <div className="w-12 h-12 rounded-xl bg-[var(--v-accent-muted)] flex items-center justify-center shrink-0">
+          <Layers size={22} className="text-[var(--v-accent)]" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-semibold text-foreground">{project}</h1>
+            <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full border ${
+              online
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                : "border-border bg-muted text-muted-foreground"
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-emerald-500" : "bg-zinc-400"}`} />
+              {online ? "Running" : "Stopped"}
+            </span>
+          </div>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Manage collections, metrics, and settings for this project.
+          </p>
+        </div>
+      </div>
+
+      {/* Tabs */}
       <Tabs defaultValue="collections">
-        <TabsList className="bg-card border border-border">
-          <TabsTrigger
-            value="collections"
-            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
-          >
-            Collections
-          </TabsTrigger>
-          <TabsTrigger
-            value="metrics"
-            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
-          >
-            Metrics
-          </TabsTrigger>
-          <TabsTrigger
-            value="settings"
-            className="data-[state=active]:bg-muted data-[state=active]:text-foreground text-muted-foreground"
-          >
-            Settings
-          </TabsTrigger>
+        <TabsList className="border-b border-border bg-transparent rounded-none p-0 h-auto gap-0 w-full justify-start">
+          {[
+            { value: "collections", label: "Collections" },
+            { value: "metrics",     label: "Metrics" },
+            { value: "settings",    label: "Settings" },
+          ].map(({ value, label }) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--v-accent)] data-[state=active]:text-foreground text-muted-foreground bg-transparent px-4 py-2.5 text-sm font-medium hover:text-foreground transition-colors"
+            >
+              {label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="collections" className="mt-5">

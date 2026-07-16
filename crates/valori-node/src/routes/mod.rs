@@ -31,6 +31,7 @@
 //! canonical `{"error": …}` body shape.
 
 pub mod collections;
+pub mod explain;
 pub mod graph;
 pub mod memory;
 pub mod meta;

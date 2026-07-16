@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use valori_consensus::types::ValoriNode;
 use valori_node::cluster::{bootstrap_cluster, ClusterConfig};
+use valori_node::EngineFromNodeConfig;
 use valori_node::cluster_server::build_cluster_router;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;

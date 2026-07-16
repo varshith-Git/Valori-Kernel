@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use valori_node::{config::NodeConfig, engine::Engine, server::build_router};
+use valori_node::EngineFromNodeConfig;
 
 fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();

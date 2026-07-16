@@ -3,6 +3,7 @@ use valori_effect;
 use valori_node::server::{build_router_with_keys, SharedEngine};
 use valori_node::api_keys::KeyStore;
 use valori_node::engine::Engine;
+use valori_node::EngineFromNodeConfig;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::net::TcpListener;
@@ -48,7 +49,8 @@ async fn main() {
     let mut engine = Engine::new(&cfg);
 
     // ── Crash Recovery ────────────────────────────────────────────────────────
-    // Priority order: event log (canonical truth) → snapshot → fresh start.
+    // Priority order: event log (canonical truth) → snapshot → legacy WAL
+    // (replayed on top of the snapshot, if any) → fresh start.
     // try_recover() never panics; on failure it logs and continues with the
     // next source. A corrupt snapshot no longer kills the process.
     let mode = engine.try_recover();
@@ -57,6 +59,8 @@ async fn main() {
             tracing::info!("Recovered {} events from event log", n),
         valori_node::engine::RecoveryMode::Snapshot =>
             tracing::info!("Recovered from snapshot"),
+        valori_node::engine::RecoveryMode::Wal(n) =>
+            tracing::info!("Recovered {} commands from legacy WAL", n),
         valori_node::engine::RecoveryMode::Fresh =>
             tracing::info!("Starting fresh (no prior state found)"),
     }

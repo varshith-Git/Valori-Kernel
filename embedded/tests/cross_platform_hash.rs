@@ -12,7 +12,8 @@ use valori_kernel::event::KernelEvent;
 use valori_kernel::types::vector::FxpVector;
 use valori_kernel::types::scalar::FxpScalar;
 use valori_kernel::types::id::{RecordId, DEFAULT_NS};
-use valori_kernel::verify::{kernel_state_hash, snapshot_hash};
+use valori_kernel::verify::snapshot_hash;
+use valori_kernel::snapshot::blake3::hash_state_blake3 as kernel_state_hash;
 use valori_kernel::snapshot::encode::encode_state;
 use valori_kernel::snapshot::decode::decode_state;
 use valori_kernel::index::SearchResult;
@@ -95,11 +96,10 @@ fn snapshot_roundtrip_preserves_state_hash() {
     let mut state = KernelState::new();
     apply_self_test_event(&mut state);
 
-    let mut buf = vec![0u8; 64 * 1024];
-    let len = encode_state(&state, &mut buf).expect("encode_state failed");
-    let snap = &buf[0..len];
+    let mut buf = Vec::new();
+    encode_state(&state, &mut buf).expect("encode_state failed");
 
-    let restored = decode_state(snap).expect("decode_state failed");
+    let restored = decode_state(&buf).expect("decode_state failed");
 
     assert_eq!(
         kernel_state_hash(&state),
@@ -113,16 +113,16 @@ fn snapshot_hash_is_stable() {
     let mut state = KernelState::new();
     apply_self_test_event(&mut state);
 
-    let mut buf1 = vec![0u8; 64 * 1024];
-    let len1 = encode_state(&state, &mut buf1).unwrap();
+    let mut buf1 = Vec::new();
+    encode_state(&state, &mut buf1).unwrap();
 
-    let mut buf2 = vec![0u8; 64 * 1024];
-    let len2 = encode_state(&state, &mut buf2).unwrap();
+    let mut buf2 = Vec::new();
+    encode_state(&state, &mut buf2).unwrap();
 
-    assert_eq!(len1, len2);
+    assert_eq!(buf1.len(), buf2.len());
     assert_eq!(
-        snapshot_hash(&buf1[0..len1]),
-        snapshot_hash(&buf2[0..len2]),
+        snapshot_hash(&buf1),
+        snapshot_hash(&buf2),
         "snapshot encoding must be deterministic"
     );
 }
@@ -140,7 +140,7 @@ fn search_returns_inserted_vector_as_top1() {
     assert_eq!(found, 1, "should find the one inserted record");
     assert_eq!(results[0].id, RecordId(0), "top-1 must be the inserted record");
     // Exact match: L2-squared distance to itself is 0.
-    assert_eq!(results[0].score.0, 0, "self-query must return score=0");
+    assert_eq!(results[0].score, 0, "self-query must return score=0");
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn search_result_paired_with_state_hash_is_verifiable() {
     // A verifier that knows the event log can recompute state_hash and confirm.
     println!("state_hash:    {}", hex::encode(post_search_hash));
     println!("top-1 id:      {}", results[0].id.0);
-    println!("top-1 score:   {}", results[0].score.0);
+    println!("top-1 score:   {}", results[0].score);
 }
 
 // ── Proof anchor test — pin the expected hash ─────────────────────────────────

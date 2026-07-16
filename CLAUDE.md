@@ -491,6 +491,7 @@ Every UI change must work in **both** dark and light mode. The app ships with a 
 | Path | What it covers |
 |---|---|
 | `docs/README.md` | Full documentation map |
+| `docs/architecture/control-plane.md` | Who owns what: daemon (lifecycle) vs. node (data) vs. `ui/` (the one frontend) — read before adding a route or spawning a process anywhere in the stack |
 | `docs/THREAT_MODEL.md` | Security model, keyed BLAKE3 MAC analysis |
 | `docs/CAPACITY.md` | Vectors/GB, RAM, WAL growth, S3 cost |
 | `docs/DR.md` | Snapshot-to-S3, restore, cross-region runbook |

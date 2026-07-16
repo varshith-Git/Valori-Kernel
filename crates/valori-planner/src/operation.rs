@@ -263,6 +263,32 @@ impl Operation {
 ///
 /// Uses bincode v2 with standard config for deterministic encoding.
 /// `created_at` and `id` are excluded — they must not affect the hash.
+/// Explicit, stable byte discriminants for `OperationKind`.
+///
+/// These values are committed to in the `OperationHash` and must never change
+/// without bumping the hash format. Adding a new variant always appends a new
+/// value; never reassign an existing one.
+fn kind_discriminant(kind: OperationKind) -> u8 {
+    match kind {
+        OperationKind::Ingest          => 0,
+        OperationKind::Search          => 1,
+        OperationKind::MemoryUpsert    => 2,
+        OperationKind::Consolidate     => 3,
+        OperationKind::Contradict      => 4,
+        OperationKind::HealthCheck     => 5,
+        OperationKind::Delete          => 6,
+        OperationKind::BatchInsert     => 7,
+        OperationKind::GraphRag        => 8,
+        OperationKind::MemorySearch    => 9,
+        OperationKind::CommunityDetect => 10,
+        OperationKind::CommunitySearch => 11,
+        OperationKind::TreeBuild       => 12,
+        OperationKind::TreeQuery       => 13,
+        OperationKind::TreeHybrid      => 14,
+        OperationKind::Snapshot        => 15,
+    }
+}
+
 pub fn compute_operation_hash(
     kind: OperationKind,
     inputs: &OperationInputs,
@@ -270,9 +296,7 @@ pub fn compute_operation_hash(
 ) -> OperationHash {
     let mut hasher = blake3::Hasher::new();
 
-    // Stable kind discriminant: serialize as a single byte via serde_json.
-    let kind_byte = kind as u8;
-    hasher.update(&[kind_byte]);
+    hasher.update(&[kind_discriminant(kind)]);
 
     // Deterministic bincode encoding of inputs and policy.
     if let Ok(b) = bincode::serde::encode_to_vec(inputs, bincode::config::standard()) {

@@ -783,6 +783,18 @@ extracted crates (`valori-storage`, `valori-state`, `valori-metadata`) —
 dead copies left behind by an extraction are a test failure, not a code
 review hope.
 
+**Extracted crates (Phase N-series):**
+
+| Logic | Crate | Phase |
+|-------|-------|-------|
+| Decay re-rank, BM25 reranker, metadata filter | `valori-search` | N1 |
+| BruteForce, HNSW, IVF, BQ, quantizers, deterministic k-means | `valori-index` | N2 |
+| GraphRAG, Tree-RAG, Community Layer, LLM entity extraction | `valori-rag` | N3 |
+| Embedding client (Ollama/OpenAI/custom), chunker (4 strategies), `POST /v1/ingest/document` handler | `valori-ingest` | N4 |
+| `Engine` struct, `EngineConfig`, `EngineHealth`, `Persistence`, `MetadataStore`, `EngineError`, `CommitError` | `valori-engine` | N5 |
+
+`valori-node` retains ownership of all HTTP routes, `NodeConfig`, `AesGcmVault` construction, and the `EngineFromNodeConfig` bridge trait. Extracted crates contain pure computation logic.
+
 ## Testing
 
 ```bash

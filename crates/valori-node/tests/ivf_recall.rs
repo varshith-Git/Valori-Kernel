@@ -8,8 +8,9 @@
 //!   4. `rebuild_index()` reproduces the same search results as direct insert.
 
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
-use valori_node::structure::index::VectorIndex;
+use valori_index::VectorIndex;
 
 const DIM: usize = 8;
 const N_VECTORS: usize = 200;
@@ -142,7 +143,7 @@ fn test_ivf_excludes_soft_deleted_records() {
 
 #[test]
 fn test_ivf_autoscale_centroid_count() {
-    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+    use valori_index::{IvfIndex, IvfConfig};
 
     let cfg = IvfConfig::default(); // auto_scale = true
 
@@ -170,7 +171,7 @@ fn test_ivf_autoscale_centroid_count() {
 
 #[test]
 fn test_ivf_autoscale_disabled_by_manual_override() {
-    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+    use valori_index::{IvfIndex, IvfConfig};
 
     let cfg = IvfConfig { n_list: 5, n_probe: 2, auto_scale: false };
     let n: usize = 400;
@@ -187,7 +188,7 @@ fn test_ivf_autoscale_disabled_by_manual_override() {
 
 #[test]
 fn test_ivf_needs_rebuild_after_2x_growth() {
-    use valori_node::structure::ivf::{IvfIndex, IvfConfig};
+    use valori_index::{IvfIndex, IvfConfig};
 
     let cfg = IvfConfig::default();
     let dim = 4;

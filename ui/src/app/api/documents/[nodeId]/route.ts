@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 const TOKEN = process.env.VALORI_AUTH_TOKEN;
@@ -14,7 +15,7 @@ function h(): Record<string, string> {
 // causes the kernel to return InvalidOperation and roll back the WAL buffer.
 async function nodeExists(nodeId: number): Promise<boolean> {
   try {
-    const res = await fetch(`${getApiUrl()}/graph/node/${nodeId}`, { headers: h() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/graph/node/${nodeId}`, { headers: h() });
     return res.ok;
   } catch {
     return false;
@@ -25,7 +26,7 @@ async function nodeExists(nodeId: number): Promise<boolean> {
 // Returns true on success or if the node was already gone (idempotent).
 async function deleteNode(nodeId: number): Promise<boolean> {
   if (!(await nodeExists(nodeId))) return true; // already gone — skip
-  const res = await fetch(`${getApiUrl()}/graph/node/${nodeId}`, {
+  const res = await fetchWithTimeout(`${getApiUrl()}/graph/node/${nodeId}`, {
     method: "DELETE",
     headers: h(),
   });
@@ -51,7 +52,7 @@ export async function DELETE(
 
   try {
     // 1. Get chunk edges for this document
-    const edgesRes = await fetch(`${getApiUrl()}/graph/edges/${docNodeId}`, { headers: h() });
+    const edgesRes = await fetchWithTimeout(`${getApiUrl()}/graph/edges/${docNodeId}`, { headers: h() });
     const edgesData = edgesRes.ok
       ? await edgesRes.json().catch(() => ({ edges: [] })) as { edges?: { to_node: number }[] }
       : { edges: [] };
@@ -60,7 +61,7 @@ export async function DELETE(
     const chunkNodeIds = [...new Set((edgesData.edges ?? []).map((e) => e.to_node))];
 
     // 2. Build chunk_node → record_id map from the namespace's node list
-    const nodesRes = await fetch(
+    const nodesRes = await fetchWithTimeout(
       `${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(collection)}`,
       { headers: h() }
     );
@@ -81,7 +82,7 @@ export async function DELETE(
 
     await Promise.all(
       recordIds.map(async (recordId) => {
-        const res = await fetch(`${getApiUrl()}/v1/delete`, {
+        const res = await fetchWithTimeout(`${getApiUrl()}/v1/delete`, {
           method: "POST",
           headers: h(),
           body: JSON.stringify({ id: recordId }),

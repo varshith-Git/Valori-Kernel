@@ -8,6 +8,7 @@
 //!      identical BLAKE3 state hash (full determinism across restarts).
 
 use valori_node::config::{NodeConfig, IndexKind, QuantizationKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::{Engine, RecoveryMode};
 use tempfile::tempdir;
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 import { extractText } from "@/lib/server/extract-text";
 
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
     if (!rawText.trim()) return NextResponse.json({ error: "No text extracted from file" }, { status: 400 });
 
     const strategy = chunkMode === "tree" ? "auto" : chunkMode;
-    const nodeRes = await fetch(`${getApiUrl()}/v1/ingest/update`, {
+    const nodeRes = await fetchWithTimeout(`${getApiUrl()}/v1/ingest/update`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({

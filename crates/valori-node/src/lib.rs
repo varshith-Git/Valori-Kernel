@@ -1,20 +1,17 @@
 // Copyright (c) 2025 Varshith Gudur. Dual-licensed under MIT OR Apache-2.0.
 pub mod config;
 pub mod errors;
-/// BM25 post-retrieval reranker — hybrid vector + term-frequency scoring.
-pub mod valori_reranker;
 pub mod api;
 pub mod engine;
-pub mod graph_rag;
-pub mod decay;
+pub use engine::EngineFromNodeConfig;
 pub mod server;
-/// Server-side document ingestion with built-in chunking strategies.
+/// Server-side document ingestion: full pipeline (chunk+embed+insert) handlers.
+/// Chunking logic and EmbedConfig live in valori-ingest; this module owns the
+/// engine-coupled handlers (ingest, ingest_update, get_ingest_status).
 pub mod ingest;
-/// Tree-RAG — hierarchical retrieval with breadcrumb citations + replayable receipts.
-pub mod tree_rag;
-/// HTTP embedding client — drives VALORI_EMBED_PROVIDER for on-node embedding.
-pub mod embedder;
-pub mod structure;
+pub mod execution_registry;
+pub mod kernel_writer;
+// embedder and chunking logic now live in the valori-ingest crate.
 pub mod metadata;
 pub mod persistence;
 pub mod telemetry;
@@ -45,7 +42,7 @@ pub mod cluster_server;
 pub mod api_keys;
 /// Phase 3.6: AES-256-GCM vault for crypto-shredding (GDPR erasure).
 pub mod crypto_vault;
-pub mod community;
+// graph_rag, tree_rag, and community now live in the valori-rag crate.
 /// Phase A7: Concrete capability implementations (EngineKernelCapability, HttpEmbedCapability).
 pub mod capabilities;
 /// Phase A10: Receipt bridge — emits ReceiptAssembler receipts from existing HTTP handlers.

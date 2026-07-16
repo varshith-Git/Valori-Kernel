@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 import crypto from "crypto";
 
 import { getApiUrl } from "@/lib/server/connection";
@@ -64,9 +65,9 @@ export async function GET(req: NextRequest) {
 
   // Parallel fetch: nodes in namespace + full timeline + global proof
   const [nodesRes, timelineRes, proofRes] = await Promise.allSettled([
-    fetch(`${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(namespace)}`, { headers: h() }),
-    fetch(`${getApiUrl()}/timeline`, { headers: h() }),
-    fetch(`${getApiUrl()}/v1/proof/event-log`, { headers: h() }),
+    fetchWithTimeout(`${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(namespace)}`, { headers: h() }),
+    fetchWithTimeout(`${getApiUrl()}/timeline`, { headers: h() }),
+    fetchWithTimeout(`${getApiUrl()}/v1/proof/event-log`, { headers: h() }),
   ]);
 
   // -- Parse nodes --------------------------------------------------------------

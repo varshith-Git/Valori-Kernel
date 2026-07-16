@@ -116,10 +116,10 @@ const GOALS = [
         where: "Sidebar → Proof",
       },
       {
-        label: "Auditor Portal (/auditor)",
+        label: "Audit → Third-Party tab",
         when: "A third party (auditor, regulator) needs to independently verify the audit trail.",
-        why: "Self-service portal — paste an event log, get a verification report. Requires no access to internal tooling.",
-        where: "Sidebar → Auditor Portal",
+        why: "Read-only view — state proof, event lookup, and provenance search. Requires no access to internal tooling.",
+        where: "Sidebar → Audit Trail → Third-Party",
       },
     ],
   },

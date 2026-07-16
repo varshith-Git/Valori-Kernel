@@ -56,14 +56,14 @@ Use `plan_with_cache()` to run either planner with automatic two-layer cache loo
 | `InsertRecord` | ✅ | Kernel write + WAL |
 | `InsertNode` / `InsertEdge` | ✅ | Graph mutations |
 | `Search` | ✅ | Vector kNN |
-| `SnapshotArtifact` | ✅ standalone | Calls `engine.save_snapshot()` |
-| `GraphRag` | ✅ standalone | kNN + subgraph expansion |
-| `MemorySearch` | ✅ standalone | Decay + rerank + filter |
-| `CommunityDetect` | ✅ standalone | Label propagation |
-| `CommunitySearch` | ✅ standalone | Centroid ranking |
-| `TreeBuild` | ✅ standalone | `TreeIndex::from_markdown` |
-| `TreeQuery` | ✅ standalone | `TreeIndex::answer` |
-| `TreeHybrid` | ✅ standalone | Tree + vector fusion |
+| `SnapshotArtifact` | ✅ standalone + cluster | Standalone: `engine.save_snapshot()`. Cluster: BLAKE3 hash of cloned shard state. |
+| `GraphRag` | ✅ standalone + cluster | kNN + subgraph expansion |
+| `MemorySearch` | ✅ standalone | Decay + rerank + filter (cluster: via `MemoryOps` trait, not planner) |
+| `CommunityDetect` | ✅ standalone + cluster | Label propagation |
+| `CommunitySearch` | ✅ standalone + cluster | Centroid ranking |
+| `TreeBuild` | ✅ standalone + cluster | `TreeIndex::from_markdown` |
+| `TreeQuery` | ✅ standalone + cluster | `TreeIndex::answer` |
+| `TreeHybrid` | ✅ standalone + cluster | Tree + vector fusion |
 | `SoftDeleteRecord` / `LlmComplete` / `HttpFetch` / `ReadIndex` / `ProofFragment` | stub | `NoOpTask` |
 
 ## Usage

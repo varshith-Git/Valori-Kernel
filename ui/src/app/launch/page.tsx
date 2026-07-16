@@ -8,6 +8,7 @@ import {
 import type { LaunchConfig, NodeCfg, NodeState, NodeStatus } from "@/lib/server/process-manager";
 import { buildMembers, makeDefaultNodes as makeDefaultNodesShared, nextNodeConfig as nextNodeConfigShared } from "@/lib/server/cluster-config";
 import { DIMENSIONS } from "@/lib/dimensions";
+import { timeAgo } from "@/lib/time";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -274,16 +275,6 @@ interface ConnData {
   history: HistoryEntry[];
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1)  return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24)  return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
 function ConnectPanel() {
   const [data, setData]       = useState<ConnData | null>(null);
   const [input, setInput]     = useState("");
@@ -380,7 +371,7 @@ function ConnectPanel() {
                 <div className="flex-1 min-w-0">
                   <code className="text-sm font-mono text-foreground truncate block" title={h.url}>{h.url}</code>
                   <div className="flex items-center gap-3 mt-0.5 text-[11px] text-muted-foreground">
-                    <span>{relativeTime(h.lastConnected)}</span>
+                    <span>{timeAgo(h.lastConnected)}</span>
                     {h.dim     && <span>dim={h.dim}</span>}
                     {h.records != null && <span>{h.records.toLocaleString()} records</span>}
                     {isActive(h.url) && <span className="text-[var(--v-accent)] font-medium">● active</span>}

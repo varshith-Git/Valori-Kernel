@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
+import { CopyBtn } from "@/components/ui/CopyBtn";
 
 // -- Types ---------------------------------------------------------------------
 
@@ -65,28 +66,6 @@ function fmtRelative(epochSecs: number) {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
-}
-
-// -- Copy button ---------------------------------------------------------------
-function CopyBtn({ text }: { text: string }) {
-  const [done, setDone] = useState(false);
-  return (
-    <button
-      onClick={async (e) => {
-        e.stopPropagation();
-        await navigator.clipboard.writeText(text);
-        setDone(true);
-        setTimeout(() => setDone(false), 1400);
-      }}
-      className={`text-[10px] px-1.5 py-0.5 rounded border transition-all shrink-0 ${
-        done
-          ? "border-emerald-500 text-emerald-600 dark:text-emerald-400"
-          : "border-input text-muted-foreground hover:text-accent-foreground hover:border-ring"
-      }`}
-    >
-      {done ? "✓" : "copy"}
-    </button>
-  );
 }
 
 // -- Toast ---------------------------------------------------------------------

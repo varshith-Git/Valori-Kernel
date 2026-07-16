@@ -49,14 +49,17 @@ jobs:
           # Catch any `use std::` in kernel or core source before it reaches the WASM build.
           # The WASM build above is the real gate; this makes the failure message clearer.
           #
-          # Excluded paths are modules already gated with #[cfg(feature = "std")] in lib.rs
+          # Anchored to real `use` statements (optionally indented, e.g. inside a
+          # #[cfg(test)] mod) so this doesn't also flag the word "use std::"
+          # appearing inside a comment, like the invariant reminder atop lib.rs.
+          #
+          # Excluded path is a module already gated with #[cfg(feature = "std")] in lib.rs
           # and therefore never compiled for WASM:
           #   crates/valori-kernel/src/adapters/ — #[cfg(feature = "std")] pub mod adapters
-          #   crates/valori-kernel/src/hnsw.rs   — #[cfg(feature = "std")] pub mod hnsw
-          leaks=$(grep -rn "use std::" \
+          leaks=$(grep -rnE "^\s*use std::" \
                crates/valori-kernel/src/ \
                crates/valori-core/src/ 2>/dev/null \
-             | grep -Ev "valori-kernel/src/adapters/|valori-kernel/src/hnsw\.rs")
+             | grep -Ev "valori-kernel/src/adapters/")
           if [ -n "$leaks" ]; then
             echo "$leaks"
             echo ""

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use valori_node::api_keys::KeyStore;
+use valori_node::EngineFromNodeConfig;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router_with_keys;

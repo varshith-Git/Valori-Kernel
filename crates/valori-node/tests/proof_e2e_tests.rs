@@ -10,6 +10,7 @@
 
 use tempfile::tempdir;
 use valori_node::config::NodeConfig;
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::events::event_log::EventLogWriter;
 use valori_node::events::event_journal::EventJournal;

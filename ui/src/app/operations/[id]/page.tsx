@@ -22,7 +22,9 @@ import {
   AlertCircle,
   Network,
 } from "lucide-react";
-import ExecutionGraph from "@/components/operations/ExecutionGraph";
+import ExecutionExplorer from "@/components/operations/ExecutionExplorer";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PageSkeleton } from "@/components/ui/Skeleton";
 
 interface OperationDetail {
   id: string;
@@ -40,8 +42,15 @@ interface OperationDetail {
 export default function OperationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const unwrappedParams = use(params);
   const router = useRouter();
+  // Two different id spaces share this route: "op-N" (a single committed WAL
+  // event, read from the journal — the pre-existing behavior below) and
+  // "ingest-<hex>" (a whole ingest call's real execution record — RFC "Make
+  // Execution Explorer Real"). The latter has no WAL-journal entry of its
+  // own, so it skips fetchDetail entirely and renders straight from the
+  // execution record instead of erroring out.
+  const isIngestOperation = unwrappedParams.id.startsWith("ingest-");
   const [op, setOp] = useState<OperationDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!isIngestOperation);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "results" | "proof" | "metrics" | "execution">("overview");
   const [copied, setCopied] = useState(false);
@@ -71,10 +80,8 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
     setLoadingExecution(true);
     try {
       const res = await fetch(`/api/operations/${encodeURIComponent(unwrappedParams.id)}/execution`);
-      if (res.ok) {
-        const data = await res.json();
-        setExecutionData(data);
-      }
+      const data = await res.json();
+      setExecutionData(data);
     } catch (err) {
       console.error("Failed to fetch execution data", err);
     } finally {
@@ -83,8 +90,9 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
   };
 
   useEffect(() => {
-    fetchDetail();
+    if (!isIngestOperation) fetchDetail();
     fetchExecution();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unwrappedParams.id]);
 
   const copyJson = (data: unknown) => {
@@ -94,11 +102,48 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
   };
 
   if (loading) {
+    return <PageSkeleton />;
+  }
+
+  // Ingest-level operations render straight from the execution record — no
+  // WAL journal entry backs them, so there's no "overview/results/metrics"
+  // tab content to show. One screen, one operation: just the Execution
+  // Explorer (which itself has the friendly "not available" empty state for
+  // an evicted/unknown id).
+  if (isIngestOperation) {
     return (
       <div className="flex flex-col gap-6 w-full max-w-[1400px]">
-        <div className="h-8 w-40 animate-pulse rounded-lg bg-accent/60" />
-        <div className="h-32 animate-pulse rounded-2xl bg-accent/40 border border-border/40" />
-        <div className="h-96 animate-pulse rounded-2xl bg-accent/30 border border-border/40" />
+        <div className="flex items-center justify-between">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push("/operations")}
+            className="w-fit gap-2 text-muted-foreground hover:text-foreground -ml-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Operations
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchExecution}
+            className="gap-2 border-border/80 text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </Button>
+        </div>
+
+        <div className="relative overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-br from-card via-card/90 to-[var(--v-accent-muted)]/30 p-6 shadow-sm">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <span className="font-mono text-xl font-bold text-foreground">{unwrappedParams.id}</span>
+          </div>
+          <h1 className="mt-1 text-lg font-medium text-muted-foreground">Ingest execution</h1>
+        </div>
+
+        <div className="rounded-2xl border border-border/80 bg-card/60 p-6 shadow-sm min-h-[360px]">
+          <ExecutionExplorer loading={loadingExecution} data={executionData} />
+        </div>
       </div>
     );
   }
@@ -115,19 +160,16 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
           <ArrowLeft className="h-4 w-4" />
           Back to Operations
         </Button>
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-8 text-center">
-          <AlertCircle className="h-8 w-8 text-red-600 dark:text-red-400 mx-auto mb-2" />
-          <h2 className="text-lg font-semibold text-foreground">Operation Unavailable</h2>
-          <p className="mt-1 text-sm text-red-600 dark:text-red-400 max-w-md mx-auto">{error || "Could not retrieve operation trail."}</p>
-          <Button
-            onClick={fetchDetail}
-            variant="outline"
-            size="sm"
-            className="mt-4 border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/20"
-          >
-            Retry Fetch
-          </Button>
-        </div>
+        <EmptyState
+          icon={AlertCircle}
+          title="Operation unavailable"
+          description={error || "Could not retrieve operation trail."}
+          action={
+            <Button onClick={fetchDetail} variant="outline" size="sm">
+              Retry fetch
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -269,22 +311,12 @@ export default function OperationDetailPage({ params }: { params: Promise<{ id: 
           <div className="flex flex-col gap-6">
             <div className="flex items-center justify-between border-b border-border/60 pb-4">
               <div>
-                <h3 className="text-base font-semibold text-foreground">Execution Graph</h3>
-                <p className="text-xs text-muted-foreground">Deterministic DAG of tasks planned and executed for this operation.</p>
+                <h3 className="text-base font-semibold text-foreground">Execution Explorer</h3>
+                <p className="text-xs text-muted-foreground">Per-stage timing, metrics, and receipt for this operation, if it ran through the ingest pipeline.</p>
               </div>
             </div>
-            
-            {loadingExecution ? (
-              <div className="flex justify-center items-center h-[500px]">
-                <RefreshCw className="h-8 w-8 animate-spin text-[var(--v-accent)]" />
-              </div>
-            ) : executionData ? (
-              <ExecutionGraph executionData={executionData} />
-            ) : (
-              <div className="flex justify-center items-center h-[300px] border border-dashed border-border/60 rounded-xl bg-muted/20">
-                <p className="text-muted-foreground text-sm">Execution graph not available for this operation.</p>
-              </div>
-            )}
+
+            <ExecutionExplorer loading={loadingExecution} data={executionData} />
           </div>
         )}
 

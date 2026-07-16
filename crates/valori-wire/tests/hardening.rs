@@ -62,26 +62,26 @@ fn dim_one_is_accepted() {
 // ── Decode limit ──────────────────────────────────────────────────────────────
 
 #[test]
-fn truncated_entry_returns_decode_error_not_panic() {
+fn truncated_entry_returns_truncated_error_not_panic() {
     let header = encode_header_v3(4, 1, 0, &[0u8; 32]);
     let seg = parse_header(&header).unwrap();
     // Pass only 3 bytes after the header — not enough for any valid entry.
     let body = [0xAA, 0xBB, 0xCC];
     let err = valori_wire::decode_entry(seg.version, &body).unwrap_err();
     assert!(
-        matches!(err, WireError::Decode(_)),
-        "truncated body should be Decode error, got {err:?}"
+        matches!(err, WireError::Truncated),
+        "too few bytes for any entry should be Truncated, got {err:?}"
     );
 }
 
 #[test]
-fn empty_body_returns_decode_error_not_panic() {
+fn empty_body_returns_truncated_error_not_panic() {
     let header = encode_header_v3(4, 1, 0, &[0u8; 32]);
     let seg = parse_header(&header).unwrap();
     let err = valori_wire::decode_entry(seg.version, &[]).unwrap_err();
     assert!(
-        matches!(err, WireError::Decode(_)),
-        "empty body should be Decode error, got {err:?}"
+        matches!(err, WireError::Truncated),
+        "empty body should be Truncated, got {err:?}"
     );
 }
 
@@ -164,8 +164,11 @@ fn v4_truncated_crc_suffix_is_caught() {
     let (_, mut bytes) = v4_entry();
     // Remove the last byte of the CRC suffix.
     bytes.pop();
-    let result = decode_entry(VERSION_V4, &bytes);
-    assert!(result.is_err(), "a truncated CRC suffix must be caught");
+    let err = decode_entry(VERSION_V4, &bytes).unwrap_err();
+    assert!(
+        matches!(err, WireError::Truncated),
+        "a missing CRC suffix byte is a truncation, not corruption: got {err:?}"
+    );
 }
 
 #[test]

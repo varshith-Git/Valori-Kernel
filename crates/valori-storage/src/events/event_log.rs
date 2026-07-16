@@ -47,9 +47,67 @@ pub enum EventLogError {
 
     #[error("Wire format error: {0}")]
     Wire(#[from] valori_wire::WireError),
+
+    #[error("event log corrupted: chain link broken at byte offset {offset}")]
+    ChainBroken { offset: usize },
 }
 
 pub type Result<T> = std::result::Result<T, EventLogError>;
+
+/// Error from [`walk_segment_body`] — version-independent so both callers
+/// (`EventLogWriter::open`, `event_replay::read_segment_full`) can map it
+/// into their own error type instead of each carrying its own copy of the
+/// parsing loop.
+#[derive(Debug)]
+pub(crate) enum SegmentWalkError {
+    /// A decoded entry's `prev_hash` didn't match the running chain head —
+    /// tampering, a substituted entry, or a corrupted-but-still-decodable
+    /// byte range.
+    ChainBroken { offset: usize },
+    /// Any wire-level decode failure other than a trailing truncation
+    /// (CRC mismatch, invalid enum discriminant, oversized entry, ...).
+    Wire { offset: usize, source: valori_wire::WireError },
+}
+
+/// Decode every entry in `buf[start_offset..]`, verifying per-entry chain
+/// continuity against `initial_chain_head`. Tolerates EXACTLY a trailing
+/// truncated entry — `valori_wire::WireError::Truncated` is a structural
+/// signal (too few bytes remain), not a byte-offset heuristic — by stopping
+/// cleanly there; any other decode failure (corruption, a broken chain
+/// link) is a hard error, never silently skipped.
+///
+/// Shared by `EventLogWriter::open` (needs only the event count and final
+/// chain head) and `event_replay::read_segment_full` (needs every decoded
+/// entry plus namespace routing) so the truncation-tolerance policy is
+/// defined exactly once instead of drifting between two call sites.
+pub(crate) fn walk_segment_body(
+    version: u32,
+    buf: &[u8],
+    start_offset: usize,
+    initial_chain_head: [u8; 32],
+) -> std::result::Result<(Vec<DecodedEntry>, [u8; 32]), SegmentWalkError> {
+    let mut entries = Vec::new();
+    let mut chain_head = initial_chain_head;
+    let mut offset = start_offset;
+
+    while offset < buf.len() {
+        match decode_entry(version, &buf[offset..]) {
+            Ok((decoded, bytes_read)) => {
+                if decoded.prev_hash != chain_head {
+                    return Err(SegmentWalkError::ChainBroken { offset });
+                }
+                chain_head = chain_advance(version, &chain_head, &decoded)
+                    .map_err(|source| SegmentWalkError::Wire { offset, source })?;
+                offset += bytes_read;
+                entries.push(decoded);
+            }
+            Err(valori_wire::WireError::Truncated) => break,
+            Err(source) => return Err(SegmentWalkError::Wire { offset, source }),
+        }
+    }
+
+    Ok((entries, chain_head))
+}
 
 /// Append-Only Event Log Writer
 ///
@@ -142,24 +200,20 @@ impl EventLogWriter {
             // final head (recorded in the header); v2 starts from zeros.
             chain_head = header.prev_segment_chain_head;
 
-            let mut offset = header.header_len;
-            while offset < buf.len() {
-                match decode_entry(version, &buf[offset..]) {
-                    Ok((decoded, bytes_read)) => {
-                        chain_head = chain_advance(version, &chain_head, &decoded)?;
-                        match decoded.entry {
-                            LogEntry::Event(_) => event_count += 1,
-                            // S15: namespace-scoped events count identically.
-                            LogEntry::EventNs { .. } => event_count += 1,
-                            LogEntry::Checkpoint { event_count: c, .. } => event_count = c,
-                            // Admin events are chained but not kernel events.
-                            LogEntry::Admin(_) => {}
-                        }
-                        offset += bytes_read;
-                    }
-                    // Trailing partial entry from a mid-write crash — replay
-                    // stops here; the unacknowledged tail is ignored.
-                    Err(_) => break,
+            let (entries, final_head) = walk_segment_body(version, &buf, header.header_len, chain_head)
+                .map_err(|e| match e {
+                    SegmentWalkError::ChainBroken { offset } => EventLogError::ChainBroken { offset },
+                    SegmentWalkError::Wire { source, .. } => EventLogError::Wire(source),
+                })?;
+            chain_head = final_head;
+            for decoded in &entries {
+                match &decoded.entry {
+                    LogEntry::Event(_) => event_count += 1,
+                    // S15: namespace-scoped events count identically.
+                    LogEntry::EventNs { .. } => event_count += 1,
+                    LogEntry::Checkpoint { event_count: c, .. } => event_count = *c,
+                    // Admin events are chained but not kernel events.
+                    LogEntry::Admin(_) => {}
                 }
             }
         } else {

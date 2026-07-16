@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "node-launcher"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "node-launcher"
+path = "src/main.rs"
+
+# No extra dependencies needed — we call CoreGraphics/CoreFoundation via
+# raw extern "C" links (frameworks always present on macOS).

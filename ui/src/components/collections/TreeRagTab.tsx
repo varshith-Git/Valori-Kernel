@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { TabShell } from "@/components/collections/TabShell";
 
 // ── Types mirroring the Rust structs ────────────────────────────────────────
 
@@ -130,7 +131,7 @@ export function TreeRagTab({ namespace }: { namespace: string }) {
   const hasTree = !!buildResult;
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
+    <TabShell>
 
       {/* Step 1 — Document input */}
       <section className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">
@@ -292,7 +293,7 @@ export function TreeRagTab({ namespace }: { namespace: string }) {
           <ReceiptPanel receipt={queryResult.receipt} />
         </section>
       )}
-    </div>
+    </TabShell>
   );
 }
 

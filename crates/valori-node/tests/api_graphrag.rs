@@ -5,6 +5,7 @@
 //! subgraph BFS, all from a single read against one consistent kernel snapshot.
 
 use valori_node::config::{IndexKind, NodeConfig};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::Engine;
 use valori_node::server::build_router;
 use axum::{body::Body, http::{Request, StatusCode}};

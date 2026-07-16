@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import useSWR from "swr";
 import { toast } from "@/lib/toast";
+import { nativeAvailable } from "@/lib/native";
 
 export interface ManifestProjectNode {
   id:        number;
@@ -115,7 +116,7 @@ export function useProjectManifest() {
   /** Ensure the project's node is running and point the UI proxy at it. */
   const open = async (name: string): Promise<boolean> => {
     const res = await fetch(`/api/projects/${encodeURIComponent(name)}/open`, { method: "POST" });
-    const d = await res.json().catch(() => ({})) as { reachable?: boolean; error?: string };
+    const d = await res.json().catch(() => ({})) as { reachable?: boolean; error?: string; dir?: string };
     await mutate();
     if (!res.ok) {
       toast(d.error ?? `Failed to open "${name}"`, "error");
@@ -124,7 +125,32 @@ export function useProjectManifest() {
     if (!d.reachable) {
       toast(`"${name}" started but is not responding yet — retry in a moment`, "warning");
     }
+    // Tell macOS to add this project to the Dock "Open Recent" list.
+    if (nativeAvailable() && d.dir) {
+      import("@tauri-apps/api/core")
+        .then(({ invoke }) => invoke("add_recent_document", { path: d.dir }))
+        .catch(() => {});
+    }
     return true;
+  };
+
+  /** Rename a stopped project. Returns the new name on success, null on error. */
+  const rename = async (oldName: string, newName: string): Promise<string | null> => {
+    const res = await fetch(`/api/projects/${encodeURIComponent(oldName)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+    const d = await res.json().catch(() => ({})) as { project?: { name: string }; error?: string };
+    if (!res.ok) {
+      toast(d.error ?? `Failed to rename "${oldName}"`, "error");
+      return null;
+    }
+    // Evict old cache entry so the renamed project doesn't ghost.
+    const cached = readProjectCache();
+    if (cached) writeProjectCache(cached.filter((p) => p.name !== oldName));
+    await mutate();
+    return d.project?.name ?? newName;
   };
 
   /** Snapshot + stop the project's node, then re-lock its files at rest. */
@@ -156,6 +182,7 @@ export function useProjectManifest() {
     create,
     open,
     close,
+    rename,
     remove,
     refresh: mutate,
   };

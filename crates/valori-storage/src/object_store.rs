@@ -124,8 +124,7 @@ impl ObjectStoreBackend {
             }
 
             let op = Operator::new(builder)
-                .map_err(|e| ObjectStoreError::Build(e.to_string()))?
-                .finish();
+                .map_err(|e| ObjectStoreError::Build(e.to_string()))?;
             Ok(Self { op, prefix })
         } else if let Some(root) = url.strip_prefix("file://") {
             std::fs::create_dir_all(root)
@@ -134,8 +133,7 @@ impl ObjectStoreBackend {
             let builder = opendal::services::Fs::default().root(root);
 
             let op = Operator::new(builder)
-                .map_err(|e| ObjectStoreError::Build(e.to_string()))?
-                .finish();
+                .map_err(|e| ObjectStoreError::Build(e.to_string()))?;
             Ok(Self { op, prefix: String::new() })
         } else {
             Err(ObjectStoreError::Build(format!(

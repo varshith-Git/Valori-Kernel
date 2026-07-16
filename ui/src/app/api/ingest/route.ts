@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { fetchWithTimeout } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
 import { extractText } from "@/lib/server/extract-text";
@@ -135,7 +136,7 @@ interface EmbedConfig {
 async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]> {
   switch (cfg.provider) {
     case "openai": {
-      const res = await fetch(cfg.endpoint || "https://api.openai.com/v1/embeddings", {
+      const res = await fetchWithTimeout(cfg.endpoint || "https://api.openai.com/v1/embeddings", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
         body: JSON.stringify({ input: texts, model: cfg.model || "text-embedding-3-small" }),
@@ -148,7 +149,7 @@ async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]
       return data.data.map((d) => d.embedding);
     }
     case "cohere": {
-      const res = await fetch(cfg.endpoint || "https://api.cohere.ai/v1/embed", {
+      const res = await fetchWithTimeout(cfg.endpoint || "https://api.cohere.ai/v1/embed", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
         body: JSON.stringify({
@@ -179,7 +180,7 @@ async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]
         const safeText = text.slice(0, 1800);
 
         // Try /api/embed first (Ollama ≥ 0.1.36)
-        let res = await fetch(`${base}/api/embed`, {
+        let res = await fetchWithTimeout(`${base}/api/embed`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model, input: safeText }),
@@ -187,7 +188,7 @@ async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]
 
         if (res.status === 404) {
           // Fall back to /api/embeddings (Ollama < 0.1.36)
-          res = await fetch(`${base}/api/embeddings`, {
+          res = await fetchWithTimeout(`${base}/api/embeddings`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ model, prompt: safeText }),
@@ -218,7 +219,7 @@ async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]
       return results;
     }
     case "custom": {
-      const res = await fetch(cfg.endpoint, {
+      const res = await fetchWithTimeout(cfg.endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -268,7 +269,7 @@ async function generateContextSentence(
   try {
     if (llm.provider === "ollama") {
       const base = (llm.endpoint || "http://localhost:11434").replace(/\/$/, "");
-      const res = await fetch(`${base}/api/generate`, {
+      const res = await fetchWithTimeout(`${base}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: llm.model || "llama3.2", prompt, stream: false, options: { temperature: 0 } }),
@@ -283,7 +284,7 @@ async function generateContextSentence(
     };
     const base = (llm.endpoint || baseMap[llm.provider] || "").replace(/\/$/, "");
     if (!base) return null;
-    const res = await fetch(`${base}/v1/chat/completions`, {
+    const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${llm.apiKey}` },
       body: JSON.stringify({
@@ -335,7 +336,7 @@ async function extractEntities(
     let raw: string | null = null;
     if (llm.provider === "ollama") {
       const base = (llm.endpoint || "http://localhost:11434").replace(/\/$/, "");
-      const res = await fetch(`${base}/api/generate`, {
+      const res = await fetchWithTimeout(`${base}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: llm.model || "llama3.2", prompt, stream: false, options: { temperature: 0 } }),
@@ -350,7 +351,7 @@ async function extractEntities(
       };
       const base = (llm.endpoint || baseMap[llm.provider] || "").replace(/\/$/, "");
       if (!base) return [];
-      const res = await fetch(`${base}/v1/chat/completions`, {
+      const res = await fetchWithTimeout(`${base}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${llm.apiKey}` },
         body: JSON.stringify({
@@ -380,7 +381,7 @@ async function extractEntities(
 async function lookupEntityNode(label: string, collection: string): Promise<number | null> {
   const key = `entity:${collection}:${label.toLowerCase().trim()}`;
   try {
-    const res = await fetch(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
     if (!res.ok) return null;
     const d = await res.json() as { metadata?: Record<string, unknown> };
     const nodeId = d.metadata?.node_id;
@@ -393,7 +394,7 @@ async function lookupEntityNode(label: string, collection: string): Promise<numb
 async function registerEntityNode(label: string, collection: string, nodeId: number): Promise<void> {
   const key = `entity:${collection}:${label.toLowerCase().trim()}`;
   try {
-    await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+    await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({
@@ -415,7 +416,7 @@ async function sha256hex(text: string): Promise<string> {
 async function lookupContentRecord(sha: string, collection: string): Promise<number | null> {
   const key = `content:${collection}:${sha}`;
   try {
-    const res = await fetch(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
     if (!res.ok) return null;
     const d = await res.json() as { metadata?: Record<string, unknown> };
     const rid = d.metadata?.record_id;
@@ -428,7 +429,7 @@ async function lookupContentRecord(sha: string, collection: string): Promise<num
 async function registerContentRecord(sha: string, collection: string, recordId: number, source: string): Promise<void> {
   const key = `content:${collection}:${sha}`;
   try {
-    await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+    await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({
@@ -451,7 +452,7 @@ async function detectContradictions(
 ): Promise<void> {
   for (let i = 0; i < vectors.length; i++) {
     try {
-      const res = await fetch(`${getApiUrl()}/v1/search`, {
+      const res = await fetchWithTimeout(`${getApiUrl()}/v1/search`, {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({ vector: vectors[i], k: 5, collection }),
@@ -464,7 +465,7 @@ async function detectContradictions(
         if (score < 0.92) continue;                   // not similar enough
 
         // Check if this hit is from a different source document
-        const metaRes = await fetch(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${hit.id}`, { headers: apiHeaders() });
+        const metaRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${hit.id}`, { headers: apiHeaders() });
         if (!metaRes.ok) continue;
         const m = await metaRes.json() as { metadata?: Record<string, unknown> };
         const hitSource = m.metadata?.source as string | undefined;
@@ -472,7 +473,7 @@ async function detectContradictions(
 
         // Queue the contradiction
         const contradictionId = `${Date.now()}-${recordIds[i]}-${hit.id}`;
-        await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+        await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({
@@ -501,7 +502,7 @@ async function detectContradictions(
 
 async function probeServerIngest(): Promise<{ enabled: boolean; provider?: string }> {
   try {
-    const res = await fetch(`${getApiUrl()}/health`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: apiHeaders() });
     if (!res.ok) return { enabled: false };
     const h = await res.json() as { embed_enabled?: boolean; embed_provider?: string };
     return { enabled: !!h.embed_enabled, provider: h.embed_provider };
@@ -530,7 +531,7 @@ export async function POST(req: NextRequest) {
 
     // Ensure the collection exists on the node before inserting.
     if (collection !== "default") {
-      await fetch(`${getApiUrl()}/v1/namespaces`, {
+      await fetchWithTimeout(`${getApiUrl()}/v1/namespaces`, {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({ name: collection }),
@@ -548,7 +549,7 @@ export async function POST(req: NextRequest) {
     const serverCapability = await probeServerIngest();
     if (serverCapability.enabled) {
       const strategy = chunkMode === "tree" ? "auto" : chunkMode; // auto lets the node pick best strategy
-      const nodeRes = await fetch(`${getApiUrl()}/v1/ingest`, {
+      const nodeRes = await fetchWithTimeout(`${getApiUrl()}/v1/ingest`, {
         method: "POST",
         headers: apiHeaders(),
         body: JSON.stringify({
@@ -574,6 +575,7 @@ export async function POST(req: NextRequest) {
         chunk_count: number;
         record_ids: number[];
         collection: string;
+        operation_id?: string;
       };
       // Normalise to the same shape the client-side path returns so the UI
       // doesn't need to distinguish between the two pipelines.
@@ -586,6 +588,10 @@ export async function POST(req: NextRequest) {
         pipeline: "server",
         embed_provider: serverCapability.provider,
         strategy_used: r.strategy_used,
+        // Only the server pipeline produces a real execution trace (the
+        // client-side embedding path below doesn't run through
+        // IngestPipeline::run_observed(), so it has nothing to link to).
+        operation_id: r.operation_id,
         chunks: r.record_ids.map((id, i) => ({
           record_id: id,
           chunk_node_id: -1,    // graph nodes are created server-side; not exposed in this response
@@ -629,7 +635,7 @@ export async function POST(req: NextRequest) {
     if (chunks.length === 0) return NextResponse.json({ error: "No chunks produced" }, { status: 400 });
 
     // 3. Create Document graph node
-    const docRes = await fetch(`${getApiUrl()}/graph/node`, {
+    const docRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({ kind: 0, record_id: null, collection }),
@@ -641,7 +647,7 @@ export async function POST(req: NextRequest) {
     const { node_id: documentNodeId } = await docRes.json() as { node_id: number };
 
     // Store document-level metadata
-    await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+    await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
       headers: apiHeaders(),
       body: JSON.stringify({
@@ -691,7 +697,7 @@ export async function POST(req: NextRequest) {
     // Fetch server dimension so we can detect mismatches before inserting
     let serverDim: number | null = null;
     try {
-      const healthRes = await fetch(`${getApiUrl()}/health`, { headers: apiHeaders() });
+      const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: apiHeaders() });
       if (healthRes.ok) {
         const h = await healthRes.json() as { dim?: number };
         serverDim = h.dim ?? null;
@@ -751,7 +757,7 @@ export async function POST(req: NextRequest) {
       // Insert only the non-duplicate vectors
       let freshIds: number[] = [];
       if (newVectors.length > 0) {
-        const insertRes = await fetch(`${getApiUrl()}/v1/vectors/batch_insert`, {
+        const insertRes = await fetchWithTimeout(`${getApiUrl()}/v1/vectors/batch_insert`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({ batch: newVectors, collection, metadata: newMetadata, texts: newTexts }),
@@ -804,7 +810,7 @@ export async function POST(req: NextRequest) {
         // Create chunk node
         let chunkNodeId = -1;
         let chunkEntities: string[] = [];
-        const chunkRes = await fetch(`${getApiUrl()}/graph/node`, {
+        const chunkRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({ kind: 1, record_id: recordId, collection }),
@@ -814,7 +820,7 @@ export async function POST(req: NextRequest) {
           chunkNodeId = d.node_id;
 
           // Document → Chunk edge (EdgeKind::ParentOf = 6)
-          await fetch(`${getApiUrl()}/graph/edge`, {
+          await fetchWithTimeout(`${getApiUrl()}/graph/edge`, {
             method: "POST",
             headers: apiHeaders(),
             body: JSON.stringify({ from: documentNodeId, to: chunkNodeId, kind: 6, collection }),
@@ -833,7 +839,7 @@ export async function POST(req: NextRequest) {
               }
               if (conceptNodeId === undefined) {
                 // New entity: create Concept node + register globally
-                const nodeRes = await fetch(`${getApiUrl()}/graph/node`, {
+                const nodeRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
                   method: "POST",
                   headers: apiHeaders(),
                   body: JSON.stringify({ kind: 1, record_id: null, collection }),
@@ -842,7 +848,7 @@ export async function POST(req: NextRequest) {
                   const { node_id } = await nodeRes.json() as { node_id: number };
                   conceptNodeId = node_id;
                   entityNodeMap.set(label, node_id);
-                  await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+                  await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
                     method: "POST",
                     headers: apiHeaders(),
                     body: JSON.stringify({
@@ -855,7 +861,7 @@ export async function POST(req: NextRequest) {
                 }
               }
               if (conceptNodeId !== undefined) {
-                await fetch(`${getApiUrl()}/graph/edge`, {
+                await fetchWithTimeout(`${getApiUrl()}/graph/edge`, {
                   method: "POST",
                   headers: apiHeaders(),
                   body: JSON.stringify({ from: chunkNodeId, to: conceptNodeId, kind: 4, collection }),
@@ -867,7 +873,7 @@ export async function POST(req: NextRequest) {
 
         const ctx = contextSentences[chunkIndex] ?? null;
         const sectionTitle = chunkTitles[chunkIndex] ?? null;
-        await fetch(`${getApiUrl()}/v1/memory/meta/set`, {
+        await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({

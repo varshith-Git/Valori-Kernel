@@ -15,6 +15,13 @@ members = [
     "crates/valori-cli",
     "crates/valori-consensus",
     "crates/valori-mcp",
+    "crates/valori-search",
+    "crates/valori-index",
+    "crates/valori-rag",
+    "crates/valori-ingest",
+    "crates/valori-engine",
+    "crates/valori-daemon",
+    "crates/valori-models",
     # embedded is intentionally excluded from the workspace — it has a path
     # dependency on the INT sibling repo (../../INT) which is not checked in.
     # Build locally: cargo build --manifest-path embedded/Cargo.toml --target thumbv7em-none-eabihf
@@ -68,6 +75,13 @@ valori-wire      = { path = "crates/valori-wire",      version = "0.2.1" }
 valori-consensus = { path = "crates/valori-consensus", version = "0.2.1" }
 valori-node      = { path = "crates/valori-node",      version = "0.2.1" }
 valori-verify    = { path = "crates/valori-verify",    version = "0.2.1" }
+valori-search    = { path = "crates/valori-search",    version = "0.2.4" }
+valori-index     = { path = "crates/valori-index",     version = "0.2.4" }
+valori-rag       = { path = "crates/valori-rag",       version = "0.2.4" }
+valori-ingest    = { path = "crates/valori-ingest",    version = "0.2.4" }
+valori-engine    = { path = "crates/valori-engine",    version = "0.2.4" }
+valori-daemon    = { path = "crates/valori-daemon",    version = "0.2.4" }
+valori-models    = { path = "crates/valori-models",    version = "0.1.0" }
 
 # Firmware requires abort on panic (no unwinding support in no_std)
 # This also guarantees fail-closed behavior for the Node.

@@ -9,7 +9,7 @@
 //! `BLAKE3(kind_discriminant ‖ bincode(inputs) ‖ bincode(policy))`
 //! which is reproducible from the planning parameters alone (no data, no time).
 use valori_core::id::ExecutionId;
-use valori_effect::{ReceiptAssembler, ReceiptFragment, ReceiptStore};
+use valori_effect::{Receipt, ReceiptAssembler, ReceiptFragment, ReceiptStore};
 use valori_planner::operation::{
     compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
 };
@@ -53,6 +53,11 @@ fn make_assembler(
 /// `state_before` and `state_after` are lowercase hex BLAKE3 digests of the
 /// kernel state before and after the write. `committed_height` is the WAL
 /// event count (standalone) or Raft log index (cluster).
+///
+/// Returns the assembled [`Receipt`] (already inserted into `store`) so
+/// callers that need its `receipt_id` — e.g. to correlate with an
+/// `ExecutionRegistry` entry — don't have to race a separate `store.latest()`
+/// call against other concurrent requests.
 pub fn emit_write(
     store: &ReceiptStore,
     kind: OperationKind,
@@ -63,7 +68,7 @@ pub fn emit_write(
     cluster_mode: bool,
     state_before: String,
     state_after: String,
-) {
+) -> Receipt {
     let asm = make_assembler(kind, inputs, ns_id, shard_id, committed_height, cluster_mode);
     asm.push(ReceiptFragment {
         task_index: 0,
@@ -72,7 +77,9 @@ pub fn emit_write(
         mutated: true,
         fragment_hash: String::new(),
     });
-    store.insert(asm.assemble());
+    let receipt = asm.assemble();
+    store.insert(receipt.clone());
+    receipt
 }
 
 /// Emit a receipt for a **read-only** operation (search, proof queries).

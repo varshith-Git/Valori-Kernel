@@ -44,6 +44,7 @@ use tokio::sync::Mutex;
 
 use crate::log_store_redb::SM_META;
 
+use valori_metadata::CollectionRegistry;
 use valori_kernel::event::KernelEvent;
 use valori_kernel::snapshot::blake3::hash_state_blake3;
 use valori_kernel::types::id::RecordId as KRecordId;
@@ -143,66 +144,8 @@ struct SnapshotPayload {
     text_corpus: Vec<(u64, String)>,
     /// Phase S2: namespace name -> id registry (map entries, next_id), so a
     /// restored follower agrees with the leader on every collection name's
-    /// id. Not part of `state_hash` — see `ClusterNamespaceRegistry` doc.
+    /// id. Not part of `state_hash` — names are not kernel state.
     namespace_registry: (Vec<(String, u16)>, u16),
-}
-
-/// Cluster-wide name -> `NamespaceId` registry (Phase S2). Replicated
-/// (identical on every node, because every mutation is applied inside the
-/// single Raft-ordered `apply()` loop) and snapshotted (travels in
-/// `SnapshotPayload`), but — like `created_at`/`text_corpus` — deliberately
-/// NOT part of the BLAKE3 state hash: `hash_state_blake3` only ever sees
-/// `&KernelState`, which has no concept of names, only integer namespace
-/// ids. Two nodes can never disagree on this map in practice because it is
-/// mutated by the same deterministic, Raft-ordered code path as everything
-/// else — the same reasoning that already backs `dedup_set`.
-///
-/// Deliberately a near-duplicate of `valori_node::engine::NamespaceRegistry`
-/// rather than a shared type: `valori-consensus` must not depend on
-/// `valori-node` (the dependency direction is the reverse), and this struct
-/// is small and self-contained enough that duplicating it is the right call.
-struct ClusterNamespaceRegistry {
-    /// name -> id. "default" is never stored; `resolve` special-cases it to 0.
-    map: HashMap<String, u16>,
-    next_id: u16,
-}
-
-impl ClusterNamespaceRegistry {
-    fn new() -> Self {
-        Self { map: HashMap::new(), next_id: 1 }
-    }
-
-    fn resolve(&self, name: Option<&str>) -> Option<u16> {
-        match name {
-            None | Some("default") => Some(0),
-            Some(n) => self.map.get(n).copied(),
-        }
-    }
-
-    /// Idempotent: a name already registered returns its existing id.
-    fn create(&mut self, name: &str) -> Result<u16, &'static str> {
-        if name == "default" {
-            return Ok(0);
-        }
-        if let Some(&id) = self.map.get(name) {
-            return Ok(id);
-        }
-        if self.next_id as usize >= valori_kernel::types::id::MAX_NAMESPACES {
-            return Err("namespace limit reached");
-        }
-        let id = self.next_id;
-        self.next_id += 1;
-        self.map.insert(name.to_string(), id);
-        Ok(id)
-    }
-
-    fn list(&self) -> Vec<(String, u16)> {
-        let mut out = vec![("default".to_string(), 0u16)];
-        let mut rest: Vec<(String, u16)> = self.map.iter().map(|(k, &v)| (k.clone(), v)).collect();
-        rest.sort_by_key(|&(_, id)| id);
-        out.extend(rest);
-        out
-    }
 }
 
 struct StateMachineInner {
@@ -224,8 +167,8 @@ struct StateMachineInner {
     /// locally after fetching vector candidates. Avoids a valori-node dep.
     text_corpus: std::collections::HashMap<u64, String>,
     /// Phase S2: cluster-wide, Raft-replicated name -> NamespaceId registry.
-    /// See `ClusterNamespaceRegistry` doc comment for the hashing rationale.
-    namespace_registry: ClusterNamespaceRegistry,
+    /// Not part of the BLAKE3 state hash — replicated via Raft, converges identically.
+    namespace_registry: CollectionRegistry,
     /// Set when a redb database is shared with the log store. Persists
     /// `last_applied`, `membership`, and snapshot data across restarts so
     /// openraft does not replay already-applied log entries through the
@@ -349,7 +292,7 @@ impl ValoriStateMachine {
                 replay_until: None,
                 created_at: HashMap::new(),
                 text_corpus: std::collections::HashMap::new(),
-                namespace_registry: ClusterNamespaceRegistry::new(),
+                namespace_registry: CollectionRegistry::new(),
             })),
         }
     }
@@ -438,7 +381,7 @@ impl ValoriStateMachine {
                 let created_at: HashMap<u32, u64> = payload.created_at.into_iter().collect();
                 let text_corpus: std::collections::HashMap<u64, String> = payload.text_corpus.into_iter().collect();
                 // S2: restore the namespace registry from the snapshot.
-                let namespace_registry = ClusterNamespaceRegistry {
+                let namespace_registry = CollectionRegistry {
                     map: payload.namespace_registry.0.into_iter().collect(),
                     next_id: payload.namespace_registry.1,
                 };
@@ -452,7 +395,7 @@ impl ValoriStateMachine {
                 // tells openraft to replay the full committed log so the
                 // in-memory KernelState is rebuilt from real entries rather than
                 // being left empty with a stale last_applied pointer.
-                (KernelState::with_dim(dim), HashSet::new(), VecDeque::new(), HashMap::new(), std::collections::HashMap::new(), ClusterNamespaceRegistry::new(), None, None)
+                (KernelState::with_dim(dim), HashSet::new(), VecDeque::new(), HashMap::new(), std::collections::HashMap::new(), CollectionRegistry::new(), None, None)
             }
         };
 
@@ -677,9 +620,9 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     let resolved_namespace_id: Option<u16> = match &req.event {
                         KernelEvent::AutoCreateNamespace { name } => {
                             match inner.namespace_registry.create(name) {
-                                Ok(id) => Some(id),
-                                Err(e) => {
-                                    ns_registry_err = Some(e);
+                                Some(id) => Some(id),
+                                None => {
+                                    ns_registry_err = Some("namespace limit reached");
                                     None
                                 }
                             }
@@ -854,7 +797,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
         inner.created_at = payload.created_at.into_iter().collect();
         inner.text_corpus = payload.text_corpus.into_iter().collect();
         // S2: restore the namespace registry from the snapshot.
-        inner.namespace_registry = ClusterNamespaceRegistry {
+        inner.namespace_registry = CollectionRegistry {
             map: payload.namespace_registry.0.into_iter().collect(),
             next_id: payload.namespace_registry.1,
         };

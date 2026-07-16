@@ -9,6 +9,7 @@
 //! BLAKE3 state hash that drives the deterministic proof system.
 
 use valori_node::config::{NodeConfig, IndexKind};
+use valori_node::EngineFromNodeConfig;
 use valori_node::engine::{Engine, RecoveryMode};
 use tempfile::tempdir;
 
@@ -270,6 +271,118 @@ fn test_collections_persist_through_event_log_recovery() {
         // Names must still resolve to the same ids (so existing records map back).
         assert!(engine2.namespaces.resolve(Some("proj--docs")).is_some(),
             "'proj--docs' must resolve after recovery");
+    }
+}
+
+// ── Test 7: legacy WAL recovery (P7 — previously dead code, never called
+// from try_recover; a restart under Persistence::Wal silently lost every
+// command written since the last snapshot) ─────────────────────────────────
+
+#[test]
+fn test_wal_recovery_basic() {
+    let dir = tempdir().unwrap();
+    let mut cfg = NodeConfig::default();
+    cfg.dim = 4;
+    cfg.max_records = 64;
+    cfg.max_nodes = 64;
+    cfg.max_edges = 128;
+    cfg.index_kind = IndexKind::BruteForce;
+    // WAL-only: no event log, no snapshot — the legacy persistence backend.
+    cfg.event_log_path = None;
+    cfg.snapshot_path = None;
+    cfg.wal_path = Some(dir.path().join("legacy.wal"));
+
+    let pre_crash_hash;
+    let n_inserted = 25usize;
+
+    {
+        let mut engine = Engine::new(&cfg);
+        assert_eq!(engine.try_recover(), RecoveryMode::Fresh, "should start fresh");
+
+        for i in 0..n_inserted {
+            let v: Vec<f32> = (0..4).map(|j| (i * 10 + j) as f32 * 0.01).collect();
+            engine.insert_record_from_f32(&v).expect("insert failed");
+        }
+        assert_eq!(engine.record_count(), n_inserted);
+        pre_crash_hash = engine.get_proof().final_state_hash;
+        // Drop → WalWriter has already flushed on every append_event call.
+    }
+
+    {
+        let mut engine2 = Engine::new(&cfg);
+        let mode = engine2.try_recover();
+
+        assert!(
+            matches!(mode, RecoveryMode::Wal(n) if n == n_inserted),
+            "expected Wal({n_inserted}) recovery, got {mode:?}"
+        );
+        assert_eq!(engine2.record_count(), n_inserted, "record count must match after WAL recovery");
+        assert_eq!(
+            pre_crash_hash,
+            engine2.get_proof().final_state_hash,
+            "state hash must be identical after legacy WAL recovery"
+        );
+
+        // Search index must have been rebuilt too (WAL replay bypasses the
+        // normal insert path's incremental index update).
+        let hits = engine2.search_l2(&[0.0, 0.01, 0.02, 0.03], 1).unwrap();
+        assert!(!hits.is_empty(), "search index must be rebuilt after WAL recovery");
+    }
+}
+
+#[test]
+fn test_snapshot_wins_over_wal_when_both_present() {
+    // `save_snapshot()` never truncates or rotates the WAL (unlike
+    // `EventLogWriter::rotate`, which splices the chain at a checkpoint),
+    // so with both configured the WAL can contain the FULL history,
+    // duplicate ids and all, relative to the snapshot. Replaying it after
+    // a snapshot restore would hit an immediate duplicate-id rejection on
+    // the first pre-snapshot record — so recovery must treat snapshot and
+    // WAL as either/or, not layered: snapshot wins outright, WAL is never
+    // attempted once the snapshot has already recovered a state.
+    let dir = tempdir().unwrap();
+    let mut cfg = NodeConfig::default();
+    cfg.dim = 4;
+    cfg.max_records = 64;
+    cfg.max_nodes = 64;
+    cfg.max_edges = 128;
+    cfg.index_kind = IndexKind::BruteForce;
+    cfg.event_log_path = None;
+    cfg.snapshot_path = Some(dir.path().join("snapshot.bin"));
+    cfg.wal_path = Some(dir.path().join("legacy.wal"));
+
+    let pre_crash_hash;
+
+    {
+        let mut engine = Engine::new(&cfg);
+        engine.try_recover(); // Fresh
+
+        for i in 0..15u32 {
+            let v: Vec<f32> = (0..4).map(|j| (i + j) as f32 * 0.05).collect();
+            engine.insert_record_from_f32(&v).unwrap();
+        }
+        engine.save_snapshot(None).unwrap();
+
+        assert_eq!(engine.record_count(), 15);
+        pre_crash_hash = engine.get_proof().final_state_hash;
+        // The WAL on disk now has all 15 inserts too (never truncated).
+    }
+
+    {
+        let mut engine2 = Engine::new(&cfg);
+        let mode = engine2.try_recover();
+
+        assert_eq!(
+            mode,
+            RecoveryMode::Snapshot,
+            "snapshot must win outright — replaying the untruncated WAL on top would duplicate-id-reject"
+        );
+        assert_eq!(engine2.record_count(), 15);
+        assert_eq!(
+            pre_crash_hash,
+            engine2.get_proof().final_state_hash,
+            "state hash must match the pre-crash snapshot"
+        );
     }
 }
 
