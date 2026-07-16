@@ -39,11 +39,18 @@ COPY crates/valori-consensus/Cargo.toml crates/valori-consensus/
 # for workspace resolution even though valori-node never depends on them.
 COPY crates/valori-ffi/Cargo.toml       crates/valori-ffi/
 COPY crates/valori-mcp/Cargo.toml       crates/valori-mcp/
+COPY crates/valori-search/Cargo.toml    crates/valori-search/
+COPY crates/valori-index/Cargo.toml     crates/valori-index/
+COPY crates/valori-rag/Cargo.toml       crates/valori-rag/
+COPY crates/valori-ingest/Cargo.toml    crates/valori-ingest/
+COPY crates/valori-engine/Cargo.toml    crates/valori-engine/
+COPY crates/valori-daemon/Cargo.toml    crates/valori-daemon/
+COPY crates/valori-models/Cargo.toml    crates/valori-models/
 COPY embedded/Cargo.toml                embedded/
 
 # Stub src files to allow `cargo build` to populate the dep cache.
 # valori-ffi / valori-mcp / embedded stubs are inert (not in valori-node's dep graph).
-RUN for crate in valori-core valori-kernel valori-node valori-wire valori-storage valori-state valori-metadata valori-planner valori-effect valori-cli valori-verify valori-consensus valori-ffi valori-mcp; do \
+RUN for crate in valori-core valori-kernel valori-node valori-wire valori-storage valori-state valori-metadata valori-planner valori-effect valori-cli valori-verify valori-consensus valori-ffi valori-mcp valori-search valori-index valori-rag valori-ingest valori-engine valori-daemon valori-models; do \
         mkdir -p crates/$crate/src && \
         printf 'pub fn stub() {}\n' > crates/$crate/src/lib.rs && \
         printf 'fn main() {}\n' > crates/$crate/src/main.rs; \
