@@ -50,19 +50,59 @@ const CLUSTER_ONLY: &[&str] = &[
 /// `KernelEvent::DeleteNode` via Raft).
 const METHOD_GAPS: &[(&str, &str)] = &[];
 
-/// Extract `(path, methods)` from every single-line `.route("…", …)` call.
-/// Route declarations in both files are one per line by convention; if that
-/// ever changes, the count sanity-checks below will catch a parser miss.
+/// Extract `(path, methods)` from every `.route("…", …)` call.
+/// Handles both single-line and rustfmt-expanded multi-line forms:
+///   .route("/path", get(handler))
+///   .route(
+///       "/path",
+///       get(handler),
+///   )
 fn extract_routes(src: &str) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for line in src.lines() {
-        let Some(idx) = line.find(".route(\"") else {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        // Both forms start with .route( somewhere on the line.
+        let Some(idx) = line.find(".route(") else {
+            i += 1;
             continue;
         };
-        let rest = &line[idx + ".route(\"".len()..];
-        let Some(end) = rest.find('"') else { continue };
-        let path = &rest[..end];
-        let handler_part = &rest[end..];
+        let after_paren = &line[idx + ".route(".len()..];
+
+        // Accumulate the handler text across lines until we have the closing ).
+        // We gather at most 4 lines (enough for the multi-line form).
+        let mut chunk = after_paren.to_string();
+        let mut extra = 0usize;
+        // If the path string isn't on this line yet, pull in the next line.
+        while !chunk.contains('"') && extra < 3 {
+            extra += 1;
+            if i + extra < lines.len() {
+                chunk.push(' ');
+                chunk.push_str(lines[i + extra].trim());
+            }
+        }
+        // Pull in one more line to get the handler if needed.
+        if chunk.matches('"').count() < 2 || !chunk.contains('(') {
+            extra += 1;
+            if i + extra < lines.len() {
+                chunk.push(' ');
+                chunk.push_str(lines[i + extra].trim());
+            }
+        }
+
+        // Extract the path string.
+        let Some(q1) = chunk.find('"') else {
+            i += 1;
+            continue;
+        };
+        let rest = &chunk[q1 + 1..];
+        let Some(q2) = rest.find('"') else {
+            i += 1;
+            continue;
+        };
+        let path = &rest[..q2];
+        let handler_part = &rest[q2..];
 
         let mut methods = BTreeSet::new();
         for m in ["get", "post", "delete", "put", "patch"] {
@@ -70,8 +110,6 @@ fn extract_routes(src: &str) -> BTreeMap<String, BTreeSet<String>> {
             let mut search = 0;
             while let Some(pos) = handler_part[search..].find(&needle) {
                 let abs = search + pos;
-                // Word boundary: preceding char must not be part of an ident
-                // (avoids matching `budget(` etc.).
                 let boundary = abs == 0
                     || !handler_part.as_bytes()[abs - 1].is_ascii_alphanumeric()
                         && handler_part.as_bytes()[abs - 1] != b'_';
@@ -83,6 +121,7 @@ fn extract_routes(src: &str) -> BTreeMap<String, BTreeSet<String>> {
             }
         }
         out.entry(path.to_string()).or_default().extend(methods);
+        i += 1;
     }
     out
 }

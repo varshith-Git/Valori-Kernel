@@ -393,7 +393,10 @@ pub fn build_cluster_router_with_keys(
             get(crate::ingest::get_ingest_status),
         )
         .route("/v1/ingest/update", post(cluster_ingest_update))
-        .route("/v1/ingest/extract-entities", post(cluster_extract_entities))
+        .route(
+            "/v1/ingest/extract-entities",
+            post(cluster_extract_entities),
+        )
         .route("/v1/tree/build", post(cluster_tree_build))
         .route("/v1/tree/query", post(cluster_tree_query))
         .route("/v1/tree/hybrid", post(cluster_tree_hybrid))
@@ -419,7 +422,10 @@ pub fn build_cluster_router_with_keys(
         .route("/v1/timeline", get(cluster_timeline))
         .route("/v1/operations", get(cluster_get_operations))
         .route("/v1/operations/:id", get(cluster_get_operation_by_id))
-        .route("/v1/operations/:id/execution", get(crate::server::get_operation_execution))
+        .route(
+            "/v1/operations/:id/execution",
+            get(crate::server::get_operation_execution),
+        )
         .route("/v1/snapshot/save", post(cluster_snapshot_save))
         .route("/v1/snapshot/restore", post(cluster_snapshot_restore))
         .route("/v1/snapshot/download", get(cluster_snapshot_download));
