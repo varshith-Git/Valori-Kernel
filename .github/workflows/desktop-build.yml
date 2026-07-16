@@ -79,8 +79,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libfuse2 fuse
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
 
       - name: Install ui/ dependencies
         run: npm install
@@ -93,6 +92,10 @@ jobs:
       - name: Build installer
         run: npm run build
         working-directory: desktop
+        env:
+          # linuxdeploy runs as an AppImage; GitHub runners don't expose the FUSE
+          # kernel module, so extract-and-run is the standard CI workaround.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
