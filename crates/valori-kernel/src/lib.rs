@@ -14,8 +14,6 @@ pub mod types;
 pub mod snapshot;
 #[cfg(feature = "std")]
 pub mod adapters;
-#[cfg(feature = "std")]
-pub mod hnsw;
 pub mod index;
 pub mod math;
 pub mod proof;
