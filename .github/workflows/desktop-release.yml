@@ -38,11 +38,6 @@ jobs:
             args: "--target aarch64-apple-darwin"
             rust_target: aarch64-apple-darwin
 
-          # macOS Intel
-          - platform: macos-13
-            args: "--target x86_64-apple-darwin"
-            rust_target: x86_64-apple-darwin
-
           # Linux x86_64 — AppImage skipped (linuxdeploy needs FUSE, unavailable
           # on GitHub runners); deb + rpm cover all major Linux distros.
           - platform: ubuntu-22.04
