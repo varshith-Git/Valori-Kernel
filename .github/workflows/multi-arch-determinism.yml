@@ -18,6 +18,7 @@ on:
       - "embedded/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "!**/*.md"
   workflow_dispatch:
 
 jobs:

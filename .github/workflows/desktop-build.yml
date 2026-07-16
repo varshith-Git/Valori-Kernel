@@ -24,12 +24,14 @@ on:
       - "crates/valori-daemon/**"
       - "crates/valori-node/**"
       - "ui/**"
+      - "!**/*.md"
   pull_request:
     paths:
       - "desktop/**"
       - "crates/valori-daemon/**"
       - "crates/valori-node/**"
       - "ui/**"
+      - "!**/*.md"
   workflow_dispatch:
 
 jobs:
