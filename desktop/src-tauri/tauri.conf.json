@@ -29,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "externalBin": ["binaries/valori-daemon", "binaries/valori-node"],
     "resources": {
       "resources/ui-server/": "ui-server/",
