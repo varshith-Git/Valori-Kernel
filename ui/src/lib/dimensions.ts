@@ -20,3 +20,17 @@ export const DIMENSIONS: DimensionOption[] = [
 ];
 
 export const DEFAULT_DIMENSION = 768;
+
+// Cloud CreateProjectDialog's index-type picker (app/cloud/CreateProjectDialog.tsx)
+// — the local one keeps its own inline INDEX_META instead, unaffected by this.
+export type IndexType = "brute" | "hnsw" | "ivf" | "bq" | "auto";
+
+export const INDEX_TYPES: { value: IndexType; label: string; title: string }[] = [
+  { value: "auto",  label: "Auto",  title: "Auto: brute-force < 10k · BQ 10k–2M · HNSW > 2M" },
+  { value: "brute", label: "Brute", title: "Exact nearest neighbor — no approximation" },
+  { value: "hnsw",  label: "HNSW",  title: "Graph-based ANN — best for large, high-recall workloads" },
+  { value: "ivf",   label: "IVF",   title: "Inverted file index — clusters vectors for faster search" },
+  { value: "bq",    label: "BQ",    title: "Binary quantization — compact, fast, mid-size collections" },
+];
+
+export const DEFAULT_INDEX_TYPE = "brute" as const;

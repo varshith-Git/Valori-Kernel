@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Dialog,
   DialogContent,
@@ -29,12 +30,11 @@ type SignInState = "checking" | "signed-out" | "signed-in" | "unavailable";
  * signed-in-or-redirected-to-login), so this picker is really a desktop
  * concern, but the component doesn't hard-fail in a browser tab either.
  *
- * Cloud project creation itself (org/region resolution, the actual
- * provision call) isn't wired yet — see PROGRESS.md task list. This is
- * honest about that rather than faking a create button that would 404 or
- * silently fail against real RLS policies.
+ * Cloud project creation itself lives at /cloud (ported from valori-ui) —
+ * signed-in users are sent straight there instead of creating inline here.
  */
 export function ProjectModePicker({ open, onClose, onLocal }: Props) {
+  const router = useRouter();
   const [signIn, setSignIn] = useState<SignInState>("checking");
 
   useEffect(() => {
@@ -112,9 +112,14 @@ export function ProjectModePicker({ open, onClose, onLocal }: Props) {
             )}
 
             {signIn === "signed-in" && (
-              <p className="text-[11px] text-muted-foreground">
-                Signed in — cloud project creation is coming in the next update.
-              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full text-xs"
+                onClick={() => { onClose(); router.push("/cloud"); }}
+              >
+                <Cloud size={13} className="mr-1.5" /> Go to Valori Cloud
+              </Button>
             )}
 
             {signIn === "unavailable" && (
