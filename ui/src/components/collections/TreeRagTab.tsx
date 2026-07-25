@@ -57,7 +57,7 @@ interface AnswerResult {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function TreeRagTab({ namespace }: { namespace: string }) {
+export function TreeRagTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const [text, setText] = useState("");
   const [docName, setDocName] = useState("document");
   const [buildResult, setBuildResult] = useState<BuildResult | null>(null);
@@ -80,7 +80,7 @@ export function TreeRagTab({ namespace }: { namespace: string }) {
     setQueryResult(null);
     setPrevHash(undefined);
     try {
-      const res = await fetch("/api/tree/build", {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/tree/build` : `/api/tree/build`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, doc_name: docName || "document" }),
@@ -103,7 +103,7 @@ export function TreeRagTab({ namespace }: { namespace: string }) {
     setQuerying(true);
     setQueryError(null);
     try {
-      const res = await fetch("/api/tree/query", {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/tree/query` : `/api/tree/query`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

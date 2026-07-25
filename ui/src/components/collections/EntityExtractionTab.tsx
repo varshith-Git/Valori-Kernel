@@ -40,10 +40,11 @@ function kindColor(k: string) {
 }
 
 interface Props {
+  projectId?: string;
   namespace: string;
 }
 
-export function EntityExtractionTab({ namespace }: Props) {
+export function EntityExtractionTab({ projectId, namespace }: Props) {
   const { config: llmCfg } = useLLMConfig();
   const [text, setText] = useState("");
   const [model, setModel] = useState("");
@@ -68,7 +69,7 @@ export function EntityExtractionTab({ namespace }: Props) {
         url: llmCfg.endpoint,
         api_key: llmCfg.apiKey,
       };
-      const res = await fetch("/api/extract-entities", {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/extract-entities` : `/api/extract-entities`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

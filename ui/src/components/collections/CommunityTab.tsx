@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { CopyBtn } from "@/components/ui/copy-btn";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 import Link from "next/link";
 
@@ -31,10 +32,11 @@ interface SearchResult {
 }
 
 interface Props {
+  projectId?: string;
   namespace: string;
 }
 
-export function CommunityTab({ namespace }: Props) {
+export function CommunityTab({ projectId, namespace }: Props) {
   const { config: embedCfg } = useEmbeddingConfig();
   const hasEmbed = embedCfg.provider === "ollama" ? !!embedCfg.model : !!embedCfg.apiKey;
 
@@ -43,7 +45,6 @@ export function CommunityTab({ namespace }: Props) {
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [maxIter, setMaxIter] = useState(20);
-  const [receiptCopied, setReceiptCopied] = useState(false);
 
   // ── Search state ─────────────────────────────────────────────────
   const [query, setQuery] = useState("");
@@ -56,7 +57,7 @@ export function CommunityTab({ namespace }: Props) {
     setDetecting(true);
     setDetectError(null);
     try {
-      const res = await fetch("/api/community?action=detect", {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/community?action=detect` : `/api/community?action=detect`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ namespace, max_iter: maxIter }),
@@ -95,7 +96,7 @@ export function CommunityTab({ namespace }: Props) {
       const { vector } = await embedRes.json() as { vector: number[] };
 
       // 2. Search communities with the embedded vector
-      const res = await fetch("/api/community?action=search", {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/community?action=search` : `/api/community?action=search`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vector, k, namespace }),
@@ -108,13 +109,6 @@ export function CommunityTab({ namespace }: Props) {
     } finally {
       setSearching(false);
     }
-  }
-
-  function copyReceipt() {
-    if (!detectResult) return;
-    navigator.clipboard.writeText(detectResult.receipt);
-    setReceiptCopied(true);
-    setTimeout(() => setReceiptCopied(false), 1500);
   }
 
   const maxSize = detectResult
@@ -192,12 +186,7 @@ export function CommunityTab({ namespace }: Props) {
                   {detectResult.receipt.slice(0, 48)}…
                 </code>
               </div>
-              <button
-                onClick={copyReceipt}
-                className="shrink-0 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 transition-colors"
-              >
-                {receiptCopied ? "✓ copied" : "copy"}
-              </button>
+              <CopyBtn text={detectResult.receipt} label="copy" />
             </div>
 
             {/* Community bars */}

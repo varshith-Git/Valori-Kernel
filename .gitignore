@@ -83,3 +83,4 @@ CLAUDE.md
 
 # UI (Next.js) — un-ignore what Python rules above would catch
 !ui/src/lib/
+!ui/src/app/api/cloud/projects/\[id\]/tree/build/

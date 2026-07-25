@@ -9,9 +9,12 @@ const fetcher = (url: string) =>
     return r.json() as Promise<ProofResponse>;
   });
 
-export function useProof() {
+// See useHealth.ts for the projectId?: string convention shared across
+// these dual-mode hooks — omitted preserves the exact prior local behavior.
+export function useProof(projectId?: string) {
+  const path = projectId ? `/api/cloud/projects/${projectId}/proof` : "/api/proof";
   const { data, error, isLoading } = useSWR<ProofResponse>(
-    "/api/proof",
+    path,
     fetcher,
     { refreshInterval: 2000, revalidateOnFocus: true }
   );

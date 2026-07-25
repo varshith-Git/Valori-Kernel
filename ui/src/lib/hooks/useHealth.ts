@@ -9,8 +9,14 @@ const fetcher = (url: string) =>
     return r.json() as Promise<HealthResponse>;
   });
 
-export function useHealth() {
-  const { data, error } = useSWR<HealthResponse>("/api/health", fetcher, {
+// `projectId` is optional — omitted (every local call site, unchanged) polls
+// the single globally-connected daemon at /api/health. Passed (the cloud
+// workspace, /cloud/projects/[id]/*) polls that specific project's node
+// through the cloud-mode proxy instead, since cloud has many projects with
+// no single "current" connection the way local does.
+export function useHealth(projectId?: string) {
+  const path = projectId ? `/api/cloud/projects/${projectId}/health` : "/api/health";
+  const { data, error } = useSWR<HealthResponse>(path, fetcher, {
     refreshInterval: 5000,
     shouldRetryOnError: true,
     errorRetryCount: 3,

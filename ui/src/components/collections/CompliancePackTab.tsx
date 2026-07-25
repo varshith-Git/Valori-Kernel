@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import type { AnswerReceipt } from "@/lib/receipts";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
@@ -86,11 +86,11 @@ const STANDARD_REFS = [
 
 // --- Pack builder -------------------------------------------------------------
 
-async function buildPack(collection: string, namespace: string): Promise<CompliancePack> {
+async function buildPack(collection: string, namespace: string, projectId?: string): Promise<CompliancePack> {
   // Attestation + live state
   const [auditRes, healthRes] = await Promise.all([
-    fetch(`/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`, { cache: "no-store" }),
-    fetch("/api/health", { cache: "no-store" }).catch(() => null),
+    fetch(`${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`, { cache: "no-store" }),
+    fetch(`${projectId ? `/api/cloud/projects/${projectId}/health` : `/api/health`}`, { cache: "no-store" }).catch(() => null),
   ]);
   if (!auditRes.ok) throw new Error(`Audit fetch failed (${auditRes.status})`);
   const audit = await auditRes.json() as {
@@ -296,9 +296,11 @@ function Section({
 // --- Main tab -----------------------------------------------------------------
 
 export function CompliancePackTab({
+  projectId,
   namespace,
   collection,
 }: {
+  projectId?: string;
   namespace: string;
   collection: string;
 }) {
@@ -310,13 +312,13 @@ export function CompliancePackTab({
     setBusy(true);
     setError(null);
     try {
-      setPack(await buildPack(collection, namespace));
+      setPack(await buildPack(collection, namespace, projectId));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to build pack");
     } finally {
       setBusy(false);
     }
-  }, [collection, namespace]);
+  }, [projectId, collection, namespace]);
 
   const downloadJSON = useCallback(() => {
     if (!pack) return;

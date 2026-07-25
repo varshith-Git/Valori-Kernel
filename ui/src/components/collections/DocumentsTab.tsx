@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import useSWR, { useSWRConfig } from "swr";
+import { CopyBtn } from "@/components/ui/copy-btn";
 
 const ACCEPT = ".pdf,.txt,.md,.docx";
 
@@ -28,28 +29,6 @@ interface ChunkMeta {
   total_chunks: number;
   text: string;
   source: string;
-}
-
-// -- Copy button ---------------------------------------------------------------
-function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  };
-  return (
-    <button
-      onClick={copy}
-      className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-all ${
-        copied
-          ? "border-[var(--v-accent)] bg-[var(--v-accent-muted)] text-[var(--v-accent)]"
-          : "border-input bg-card text-muted-foreground hover:text-accent-foreground hover:border-ring"
-      }`}
-    >
-      {copied ? "✓ copied" : label}
-    </button>
-  );
 }
 
 // -- Single chunk --------------------------------------------------------------
@@ -103,12 +82,14 @@ interface UpdateResult {
 
 // -- Document card -------------------------------------------------------------
 function DocumentCard({
+  projectId,
   nodeId,
   meta,
   namespace,
   onDeleted,
   onUpdated,
 }: {
+  projectId?: string;
   nodeId: number;
   meta: DocMeta;
   namespace: string;
@@ -132,13 +113,13 @@ function DocumentCard({
     setError(null);
     try {
       // 1. Get chunk node IDs from document edges
-      const edgesRes = await fetch(`/api/graph/edges/${nodeId}`);
+      const edgesRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/graph/edges/${nodeId}` : `/api/graph/edges/${nodeId}`}`);
       if (!edgesRes.ok) throw new Error(`edges ${edgesRes.status}`);
       const edgesData = await edgesRes.json() as { edges?: { to_node: number }[] };
       const edgeList = edgesData.edges ?? [];
 
       // 2. Get all nodes in namespace to map chunk_node_id → record_id
-      const nodesRes = await fetch(`/api/graph/nodes?collection=${encodeURIComponent(namespace)}`);
+      const nodesRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/graph/nodes?collection=${encodeURIComponent(namespace)}` : `/api/graph/nodes?collection=${encodeURIComponent(namespace)}`}`);
       const nodesData = nodesRes.ok
         ? await nodesRes.json() as { nodes?: GraphNode[] }
         : { nodes: [] };
@@ -153,7 +134,7 @@ function DocumentCard({
         edgeList.slice(0, 100).map(async (e) => {
           const rid = nodeToRecord.get(e.to_node);
           if (rid === undefined) return;
-          const mr = await fetch(`/api/meta?target_id=record:${rid}`);
+          const mr = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/meta?target_id=record:${rid}` : `/api/meta?target_id=record:${rid}`}`);
           if (!mr.ok) return;
           const d = await mr.json().catch(() => ({})) as { metadata?: Record<string, unknown> };
           const m = d.metadata;
@@ -218,7 +199,7 @@ function DocumentCard({
       form.append("document_node_id", String(nodeId));
       form.append("collection", namespace);
       form.append("chunkMode", "tree");
-      const res = await fetch("/api/ingest/update", { method: "POST", body: form });
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/ingest/update` : `/api/ingest/update`}`, { method: "POST", body: form });
       const data = await res.json() as UpdateResult & { error?: string };
       if (!res.ok || data.error) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -383,13 +364,13 @@ function DocumentCard({
 // -- Tab root ------------------------------------------------------------------
 const PAGE_SIZE = 20;
 
-export function DocumentsTab({ namespace }: { namespace: string }) {
+export function DocumentsTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const { mutate } = useSWRConfig();
   // kind=0 filters to Document nodes server-side — the node no longer has to
   // ship every chunk/concept node in the namespace just so the UI can pick
   // out the handful of documents.
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const swrKey = `/api/graph/nodes?collection=${encodeURIComponent(namespace)}&kind=0&limit=${visibleCount}`;
+  const swrKey = `${projectId ? `/api/cloud/projects/${projectId}/graph/nodes?collection=${encodeURIComponent(namespace)}&kind=0&limit=${visibleCount}` : `/api/graph/nodes?collection=${encodeURIComponent(namespace)}&kind=0&limit=${visibleCount}`}`;
   const { data, isLoading } = useSWR<{ nodes: GraphNode[]; count: number }>(swrKey, fetcher, {
     refreshInterval: 15000,
   });
@@ -419,7 +400,7 @@ export function DocumentsTab({ namespace }: { namespace: string }) {
 
     Promise.all(
       missing.map(async (n) => {
-        const res = await fetch(`/api/meta?target_id=document:${n.node_id}`);
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/meta?target_id=document:${n.node_id}` : `/api/meta?target_id=document:${n.node_id}`}`);
         if (!res.ok) return [n.node_id, {}] as [number, DocMeta];
         const d = await res.json().catch(() => ({})) as { metadata?: DocMeta };
         return [n.node_id, d.metadata ?? {}] as [number, DocMeta];
@@ -463,6 +444,7 @@ export function DocumentsTab({ namespace }: { namespace: string }) {
       {docNodes.map((n) => (
         <DocumentCard
           key={n.node_id}
+          projectId={projectId}
           nodeId={n.node_id}
           meta={docMetas.get(n.node_id) ?? {}}
           namespace={namespace}

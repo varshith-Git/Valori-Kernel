@@ -22,9 +22,15 @@ export interface DocumentTree {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-export function useGraph(namespace: string) {
+// `projectId` optional and trailing (unlike valori-ui's version, which has
+// it first) so every existing local call site (namespace only) is
+// unaffected — see useHealth.ts for the same convention.
+export function useGraph(namespace: string, projectId?: string) {
+  const path = projectId
+    ? `/api/cloud/projects/${projectId}/graph/nodes?collection=${encodeURIComponent(namespace)}`
+    : `/api/graph/nodes?collection=${encodeURIComponent(namespace)}`;
   const { data, error, isLoading, mutate } = useSWR<{ nodes: GraphNode[]; count: number }>(
-    `/api/graph/nodes?collection=${encodeURIComponent(namespace)}`,
+    path,
     fetcher,
     { refreshInterval: 10_000 }
   );
@@ -44,10 +50,12 @@ export function useGraph(namespace: string) {
   };
 }
 
-export function useNodeEdges(nodeId: number | null) {
-  const { data, isLoading } = useSWR<{ edges: GraphEdge[] }>(
-    nodeId !== null ? `/api/graph/edges/${nodeId}` : null,
-    fetcher
-  );
+export function useNodeEdges(nodeId: number | null, projectId?: string) {
+  const path = nodeId === null
+    ? null
+    : projectId
+      ? `/api/cloud/projects/${projectId}/graph/edges/${nodeId}`
+      : `/api/graph/edges/${nodeId}`;
+  const { data, isLoading } = useSWR<{ edges: GraphEdge[] }>(path, fetcher);
   return { edges: data?.edges ?? [], isLoading };
 }

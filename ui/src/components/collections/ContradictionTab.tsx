@@ -52,6 +52,7 @@ function barColor(s: number): string {
 // --- Scan engine --------------------------------------------------------------
 
 interface ScanOpts {
+  projectId?: string;
   namespace: string;
   scanLimit: number;
   strengthThreshold: number;
@@ -86,7 +87,7 @@ async function embedText(text: string, opts: {
 
 async function runScan(opts: ScanOpts): Promise<{ scanned: number; skipped: number }> {
   const {
-    namespace, scanLimit, strengthThreshold, signal,
+    projectId, namespace, scanLimit, strengthThreshold, signal,
     onProgress, onPair,
     embedProvider, embedModel, embedApiKey, embedEndpoint,
   } = opts;
@@ -96,7 +97,7 @@ async function runScan(opts: ScanOpts): Promise<{ scanned: number; skipped: numb
 
   // 1. Fetch record IDs from namespace-audit
   const auditRes = await fetch(
-    `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`,
+    `${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`,
     { cache: "no-store", signal }
   );
   if (!auditRes.ok) throw new Error(`Audit fetch failed (${auditRes.status})`);
@@ -111,7 +112,7 @@ async function runScan(opts: ScanOpts): Promise<{ scanned: number; skipped: numb
 
   // 2. Fetch metadata text for all records in parallel (capped at 50)
   const metaFetches = ids.map((id) =>
-    fetch(`/api/meta?target_id=record:${id}`, { cache: "no-store", signal })
+    fetch(`${projectId ? `/api/cloud/projects/${projectId}/meta?target_id=record:${id}` : `/api/meta?target_id=record:${id}`}`, { cache: "no-store", signal })
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         const text =
@@ -152,7 +153,7 @@ async function runScan(opts: ScanOpts): Promise<{ scanned: number; skipped: numb
 
     let searchResults: { id: number; score: number }[];
     try {
-      const searchRes = await fetch("/api/search", {
+      const searchRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: negated, k: 10, collection: namespace }),
@@ -178,7 +179,7 @@ async function runScan(opts: ScanOpts): Promise<{ scanned: number; skipped: numb
       if (!bMeta) {
         // Fetch if not in our scan set
         try {
-          const mr = await fetch(`/api/meta?target_id=record:${hit.id}`, { cache: "no-store", signal });
+          const mr = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/meta?target_id=record:${hit.id}` : `/api/meta?target_id=record:${hit.id}`}`, { cache: "no-store", signal });
           const md = mr.ok ? await mr.json() : null;
           const bText =
             (md?.metadata?.text as string | undefined) ??
@@ -266,7 +267,7 @@ function PairCard({ pair }: { pair: ContradictionPair }) {
 
 // --- Main tab -----------------------------------------------------------------
 
-export function ContradictionTab({ namespace }: { namespace: string }) {
+export function ContradictionTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const { config: embedCfg } = useEmbeddingConfig();
 
   const [scanLimit, setScanLimit] = useState(30);
@@ -294,6 +295,7 @@ export function ContradictionTab({ namespace }: { namespace: string }) {
 
     try {
       const result = await runScan({
+        projectId,
         namespace,
         scanLimit,
         strengthThreshold,

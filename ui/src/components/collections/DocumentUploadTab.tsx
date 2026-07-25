@@ -1,0 +1,474 @@
+"use client";
+
+// Ported from valori-kernel/ui's components/ingestion/DocumentUploadTab.tsx,
+// adapted for multi-tenancy AND trimmed to match this app's "backend owns
+// the logic" architecture: kernel's version has a client-side fallback
+// pipeline (~700 lines of chunking/embedding/entity-extraction/dedup
+// reimplemented in Next.js) for nodes with no server embed provider
+// configured. That fallback is deliberately not ported — see
+// app/api/projects/[id]/ingest/route.ts for why. This tab only drives the
+// server pipeline (and the embedding-free Tree-RAG path), and shows the
+// node's real 501 if server embedding isn't configured, rather than
+// silently reimplementing the dropped pipeline here.
+
+import { useRef, useState, useEffect } from "react";
+import Link from "next/link";
+import { useLLMConfig } from "@/lib/hooks/useLLMConfig";
+import { TabShell } from "@/components/collections/TabShell";
+
+interface ChunkResult {
+  record_id: number;
+  chunk_node_id: number;
+  chunk_index: number;
+  preview: string;
+}
+
+interface IngestResult {
+  ok: boolean;
+  document_node_id: number;
+  ingested: number;
+  total_chunks: number;
+  chunks: ChunkResult[];
+  error?: string;
+  pipeline?: "server";
+  embed_provider?: string;
+  strategy_used?: string;
+  operation_id?: string;
+}
+
+interface TreeStructureNode {
+  id: string;
+  title: string;
+  depth: number;
+  child_count: number;
+}
+
+interface TreeBuildResult {
+  cache_key: string;
+  doc_name: string;
+  node_count: number;
+  structure_map: TreeStructureNode[];
+}
+
+function treeKey(namespace: string) {
+  return `valori:tree:${namespace}`;
+}
+
+function saveTreeCache(namespace: string, data: TreeBuildResult) {
+  try {
+    localStorage.setItem(treeKey(namespace), JSON.stringify(data));
+  } catch {}
+}
+
+const DEFAULT_CHUNK_SIZE = 1000;
+const DEFAULT_CHUNK_OVERLAP = 200;
+
+interface Props {
+  projectId?: string;
+  namespace: string;
+  onAskQuestion?: (question: string) => void;
+}
+
+const ACCEPT = ".pdf,.txt,.md,.docx";
+
+export function DocumentUploadTab({ projectId, namespace, onAskQuestion }: Props) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const { config: llmCfg } = useLLMConfig();
+
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<"idle" | "ingesting" | "done" | "error">("idle");
+  const [ingestStep, setIngestStep] = useState<string>("");
+  const [result, setResult] = useState<IngestResult | null>(null);
+  const [treeResult, setTreeResult] = useState<TreeBuildResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showChunks, setShowChunks] = useState(false);
+  const [chunkMode, setChunkMode] = useState<"fixed" | "tree">("fixed");
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[] | null>(null);
+  const [suggestingQuestions, setSuggestingQuestions] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [serverEmbed, setServerEmbed] = useState<{ enabled: boolean; provider?: string } | null>(null);
+
+  useEffect(() => {
+    fetch(`${projectId ? `/api/cloud/projects/${projectId}/health` : `/api/health`}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h: { embed_enabled?: boolean; embed_provider?: string } | null) => {
+        if (h) setServerEmbed({ enabled: !!h.embed_enabled, provider: h.embed_provider });
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  const handleFile = (f: File) => {
+    setFile(f);
+    setResult(null);
+    setError(null);
+    setStatus("idle");
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  };
+
+  const ingest = async () => {
+    if (!file) return;
+    setStatus("ingesting");
+    setIngestStep("Reading file…");
+    setError(null);
+    setResult(null);
+    setTreeResult(null);
+
+    if (chunkMode === "tree") {
+      try {
+        setIngestStep("Parsing document structure…");
+        const form = new FormData();
+        form.append("file", file);
+        form.append("doc_name", file.name);
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/tree/build` : `/api/tree/build`}`, {
+          method: "POST",
+          body: form,
+        });
+        const data = (await res.json()) as TreeBuildResult & { error?: string };
+        if (!res.ok || data.error) {
+          setError(data.error ?? `HTTP ${res.status}`);
+          setStatus("error");
+        } else {
+          saveTreeCache(namespace, data);
+          setTreeResult(data);
+          setStatus("done");
+          setFile(null);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Tree build failed");
+        setStatus("error");
+      }
+      return;
+    }
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("collection", namespace);
+    form.append("chunkSize", String(DEFAULT_CHUNK_SIZE));
+    form.append("chunkOverlap", String(DEFAULT_CHUNK_OVERLAP));
+    form.append("chunkMode", "fixed");
+
+    try {
+      const stepTimer1 = setTimeout(() => setIngestStep("Splitting into chunks…"), 800);
+      const stepTimer2 = setTimeout(() => setIngestStep("Embedding chunks…"), 2500);
+      const stepTimer3 = setTimeout(() => setIngestStep("Storing vectors…"), 6000);
+
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/ingest` : `/api/ingest`}`, { method: "POST", body: form });
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      clearTimeout(stepTimer3);
+      const data: IngestResult = await res.json();
+      if (!res.ok || data.error) {
+        setError(data.error ?? `HTTP ${res.status}`);
+        setStatus("error");
+      } else {
+        setResult(data);
+        setStatus("done");
+        setFile(null);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ingestion failed");
+      setStatus("error");
+    }
+  };
+
+  return (
+    <TabShell>
+      {serverEmbed && !serverEmbed.enabled && chunkMode === "fixed" && (
+        <div className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <span className="text-amber-500 text-sm">⚠</span>
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            This project&apos;s node has no embedding provider configured, so fixed-chunk ingest isn&apos;t available.
+            Use Tree-RAG below (no embedding needed) or Bulk Insert with pre-computed vectors.
+          </p>
+        </div>
+      )}
+
+      {serverEmbed?.enabled && (
+        <div className="flex items-center gap-3 rounded-lg border border-[var(--v-accent)]/30 bg-[var(--v-accent-muted)] px-4 py-3">
+          <span className="text-[var(--v-accent)] text-sm">⚡</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-[var(--v-accent)]">Server-side pipeline active</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Node handles chunk + embed + insert via <span className="font-mono">{serverEmbed.provider}</span>.
+            </p>
+          </div>
+          <span className="rounded border border-[var(--v-accent)]/30 px-2 py-0.5 text-[10px] font-mono text-[var(--v-accent)]">
+            /v1/ingest
+          </span>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
+        <div className="flex flex-col gap-0.5">
+          <p className="text-xs font-medium text-card-foreground">Chunking strategy</p>
+          <p className="text-[11px] text-muted-foreground">
+            {chunkMode === "tree"
+              ? "Tree-RAG — builds a ToC index for section-cited retrieval. Works with PDF, DOCX, TXT, MD. No embedding needed."
+              : "Fixed-size — overlapping windows with embedding. Works with PDF, DOCX, TXT, MD."}
+          </p>
+        </div>
+        <div className="flex gap-1 ml-4">
+          {(["fixed", "tree"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setChunkMode(m)}
+              className={`px-2.5 py-1 rounded text-[11px] font-mono transition-colors ${
+                chunkMode === m ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-card-foreground"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div
+        onDrop={handleDrop}
+        onDragOver={(e) => e.preventDefault()}
+        onClick={() => fileRef.current?.click()}
+        className={`flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed py-12 text-center cursor-pointer transition-colors ${
+          file ? "border-blue-700 bg-blue-950/20" : "border-border hover:border-muted"
+        }`}
+      >
+        <span className="text-3xl">{file ? "📄" : "↑"}</span>
+        {file ? (
+          <>
+            <p className="text-sm font-medium text-card-foreground">{file.name}</p>
+            <p className="text-xs text-muted-foreground">
+              {(file.size / 1024).toFixed(1)} KB · {file.type || "text"}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">Drop file or click to browse</p>
+            <p className="text-xs text-muted-foreground">PDF · DOCX · TXT · Markdown</p>
+          </>
+        )}
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept={ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleFile(f);
+          e.target.value = "";
+        }}
+      />
+
+      {file && status !== "done" && (
+        <button
+          onClick={ingest}
+          disabled={status === "ingesting"}
+          className="rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
+        >
+          {status === "ingesting" ? (
+            <span className="flex items-center gap-2">
+              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+              {ingestStep || "Ingesting…"}
+            </span>
+          ) : (
+            "Ingest document →"
+          )}
+        </button>
+      )}
+
+      {status === "done" && treeResult && (
+        <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3">
+          <div>
+            <p className="font-medium text-[var(--v-accent)]">✓ Tree index built — {treeResult.node_count} sections</p>
+            <p className="text-xs text-muted-foreground mt-1 font-mono">
+              {treeResult.doc_name} · Ask tab will use Tree-RAG for this collection
+            </p>
+          </div>
+          <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
+            {treeResult.structure_map.map((node) => (
+              <div key={node.id} className="flex items-center gap-2 py-0.5 text-sm" style={{ paddingLeft: `${node.depth * 14 + 4}px` }}>
+                <span className="text-[10px] text-muted-foreground">›</span>
+                <span className="text-xs text-foreground truncate">{node.title}</span>
+                {node.child_count > 0 && <span className="text-[10px] text-muted-foreground shrink-0">{node.child_count} sub</span>}
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              setTreeResult(null);
+              setStatus("idle");
+            }}
+            className="mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors self-start"
+          >
+            + index another
+          </button>
+        </div>
+      )}
+
+      {status === "done" && result && (
+        <div className="rounded-xl border border-border bg-card p-5">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="font-medium text-[var(--v-accent)]">
+                ✓ Ingested {result.ingested} chunk{result.ingested !== 1 ? "s" : ""}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1 font-mono">
+                document node: #{result.document_node_id}
+                {result.strategy_used && <span className="ml-2">· {result.strategy_used}</span>}
+                {result.pipeline === "server" && <span className="ml-2">· server pipeline ⚡</span>}
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              {result.operation_id && (
+                <Link
+                  href={`/dashboard/projects/${projectId}/operations/${result.operation_id}`}
+                  className="rounded-lg border border-[var(--v-accent)]/40 bg-[var(--v-accent-muted)] px-2.5 py-1 text-xs font-medium text-[var(--v-accent)] hover:brightness-110 transition-all"
+                >
+                  View execution →
+                </Link>
+              )}
+              <button onClick={() => setShowChunks((v) => !v)} className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                {showChunks ? "hide chunks" : "show chunks"}
+              </button>
+            </div>
+          </div>
+
+          {showChunks && (
+            <div className="mt-4 flex flex-col gap-2">
+              {result.chunks.slice(0, 10).map((c) => (
+                <div key={c.record_id} className="rounded-lg border border-border bg-background px-3 py-2">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                      chunk {c.chunk_index} · rec #{c.record_id} · node #{c.chunk_node_id}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2">{c.preview}</p>
+                </div>
+              ))}
+              {result.chunks.length > 10 && <p className="text-xs text-muted-foreground text-center">+{result.chunks.length - 10} more chunks</p>}
+            </div>
+          )}
+
+          {onAskQuestion && (
+            <div className="mt-4 pt-4 border-t border-border">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-medium text-foreground">AI-suggested questions</p>
+                {!suggestedQuestions && !suggestingQuestions && (
+                  <button
+                    onClick={async () => {
+                      setSuggestingQuestions(true);
+                      setSuggestError(null);
+                      try {
+                        const res = await fetch("/api/suggest-questions", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            chunks: result.chunks.map((c) => c.preview),
+                            source: file?.name,
+                            llm: {
+                              provider: llmCfg.provider,
+                              model: llmCfg.model,
+                              apiKey: llmCfg.apiKey,
+                              endpoint: llmCfg.endpoint,
+                            },
+                          }),
+                        });
+                        const d = (await res.json()) as { questions?: string[]; error?: string };
+                        if (d.error) throw new Error(d.error);
+                        setSuggestedQuestions(d.questions ?? []);
+                      } catch (e) {
+                        setSuggestError(e instanceof Error ? e.message : "Failed");
+                      } finally {
+                        setSuggestingQuestions(false);
+                      }
+                    }}
+                    className="text-xs px-3 py-1.5 rounded border border-input text-muted-foreground hover:text-foreground hover:border-ring transition-all"
+                  >
+                    ✦ Generate 8 questions
+                  </button>
+                )}
+                {suggestingQuestions && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-border border-t-foreground" />
+                    Thinking…
+                  </span>
+                )}
+                {suggestedQuestions && (
+                  <button onClick={() => setSuggestedQuestions(null)} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                    regenerate
+                  </button>
+                )}
+              </div>
+
+              {suggestError && <p className="text-xs text-red-400 font-mono mb-2">{suggestError}</p>}
+
+              {suggestedQuestions && (
+                <div className="flex flex-col gap-1.5">
+                  {suggestedQuestions.map((q, i) => (
+                    <div key={i} className="flex items-start justify-between gap-3 rounded-lg bg-background border border-border px-3 py-2.5 group">
+                      <p className="text-xs text-muted-foreground leading-relaxed flex-1">{q}</p>
+                      <button
+                        onClick={() => onAskQuestion(q)}
+                        className="flex-shrink-0 text-[10px] font-mono px-2 py-0.5 rounded border border-input text-muted-foreground hover:border-ring hover:text-foreground hover:bg-muted transition-all whitespace-nowrap opacity-0 group-hover:opacity-100"
+                      >
+                        Ask →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={() => {
+              setResult(null);
+              setStatus("idle");
+              setSuggestedQuestions(null);
+              setSuggestError(null);
+            }}
+            className="mt-4 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            + ingest another
+          </button>
+        </div>
+      )}
+
+      {status === "error" && error && (
+        <div className="rounded-xl border border-red-900 bg-red-950/40 p-4">
+          <p className="text-sm font-medium text-red-400">Ingestion failed</p>
+          <p className="text-xs text-red-600 mt-1 font-mono">{error}</p>
+          <button
+            onClick={() => {
+              setError(null);
+              setStatus("idle");
+            }}
+            className="mt-3 text-xs text-red-600 hover:text-red-400 transition-colors"
+          >
+            retry
+          </button>
+        </div>
+      )}
+
+      {status === "idle" && !file && (
+        <div className="rounded-lg border border-border bg-card/40 px-4 py-3 text-xs text-muted-foreground">
+          <p className="font-medium text-muted-foreground mb-1">How ingestion works</p>
+          <ol className="list-decimal list-inside space-y-0.5">
+            <li>
+              <strong>Tree-RAG</strong> (PDF/DOCX/TXT/MD): extracts text, builds a ToC section tree — Ask tab navigates it by term
+              frequency, returns cited sections + BLAKE3 receipt. No embedding needed.
+            </li>
+            <li>
+              <strong>Fixed</strong> (PDF/DOCX/TXT/MD): splits into overlapping windows, embeds each chunk server-side, stores vectors.
+              Ask tab uses semantic vector search + LLM synthesis.
+            </li>
+          </ol>
+        </div>
+      )}
+    </TabShell>
+  );
+}

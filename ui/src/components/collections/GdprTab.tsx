@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { sha256hex } from "@/lib/receipts";
 import { fetchGlobalHash } from "@/lib/proof";
-import { CopyBtn } from "@/components/ui/CopyBtn";
+import { CopyBtn } from "@/components/ui/copy-btn";
 import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
@@ -121,14 +121,6 @@ function ErasureCertificate({
   json: string;
   onClose: () => void;
 }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(json);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [json]);
-
   const download = useCallback(() => {
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -204,16 +196,7 @@ function ErasureCertificate({
       </div>
 
       <div className="flex gap-2">
-        <button
-          onClick={copy}
-          className={`text-xs px-3 py-1.5 rounded border transition-all ${
-            copied
-              ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
-              : "border-input text-muted-foreground hover:text-foreground hover:border-ring bg-card"
-          }`}
-        >
-          {copied ? "✓ copied" : "copy JSON"}
-        </button>
+        <CopyBtn text={json} label="copy JSON" />
         <button
           onClick={download}
           className="text-xs px-3 py-1.5 rounded border border-input text-muted-foreground hover:text-foreground hover:border-ring bg-card transition-all"
@@ -235,7 +218,7 @@ function ErasureCertificate({
 
 // --- Main tab -----------------------------------------------------------------
 
-export function GdprTab({ namespace }: { namespace: string }) {
+export function GdprTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const [records, setRecords] = useState<RecordEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -254,7 +237,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
     setConfirmed(false);
     try {
       const auditRes = await fetch(
-        `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`,
+        `${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`,
         { cache: "no-store" }
       );
       if (!auditRes.ok) throw new Error(`Audit fetch failed (${auditRes.status})`);
@@ -286,7 +269,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
       // Build record list (limit meta fetches to first 50 to avoid flooding)
       const ids = audit.ns_record_ids;
       const metaFetches = ids.slice(0, 50).map((id) =>
-        fetch(`/api/meta?target_id=record:${id}`, { cache: "no-store" })
+        fetch(`${projectId ? `/api/cloud/projects/${projectId}/meta?target_id=record:${id}` : `/api/meta?target_id=record:${id}`}`, { cache: "no-store" })
           .then((r) => r.ok ? r.json() : null)
           .then((d) => {
             const val = d?.metadata ?? d?.value ?? d?.text ?? null;
@@ -350,7 +333,7 @@ export function GdprTab({ namespace }: { namespace: string }) {
     setErasingProgress({ done: 0, total: ids.length });
     for (let i = 0; i < ids.length; i++) {
       try {
-        await fetch("/api/delete", {
+        await fetch(`${projectId ? `/api/cloud/projects/${projectId}/delete` : `/api/delete`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: ids[i], collection: namespace }),

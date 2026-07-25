@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { CopyBtn } from "@/components/ui/copy-btn";
 import useSWR from "swr";
 import type { NsAuditResponse, NsEvent } from "@/app/api/namespace-audit/route";
 
@@ -15,28 +16,6 @@ function kindColor(kind: string): string {
   if (/CreateEdge|AutoCreateEdge/.test(kind))      return "#a78bfa";
   if (/DeleteEdge/.test(kind))                     return "#fbbf24";
   return "#71717a";
-}
-
-// -- Copy button --------------------------------------------------------------
-function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
-  const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 1500);
-  }, [text]);
-  return (
-    <button
-      onClick={copy}
-      className={`text-[10px] px-2 py-0.5 rounded border transition-all flex-shrink-0 ${
-        done
-          ? "border-emerald-700 bg-emerald-950/40 text-emerald-400"
-          : "border-input bg-card text-muted-foreground hover:text-card-foreground hover:border-ring"
-      }`}
-    >
-      {done ? "✓" : label}
-    </button>
-  );
 }
 
 // -- Hash display -------------------------------------------------------------
@@ -90,13 +69,13 @@ function EventLine({ ev, idx }: { ev: NsEvent; idx: number }) {
 }
 
 // -- Main tab -----------------------------------------------------------------
-export function VerifyTab({ namespace }: { namespace: string }) {
+export function VerifyTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const [filter, setFilter] = useState("");
   const [activeKinds, setActiveKinds] = useState<Set<string>>(new Set());
   const [showIds, setShowIds] = useState(false);
 
   const { data, isLoading, error, mutate } = useSWR<NsAuditResponse>(
-    `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`,
+    `${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`,
     fetcher,
     { revalidateOnFocus: false }
   );

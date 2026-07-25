@@ -26,9 +26,12 @@ const fetcher = (url: string) =>
     return r.json() as Promise<ClusterStatusResponse>;
   });
 
-export function useCluster() {
+// See useHealth.ts for the projectId?: string convention shared across
+// these dual-mode hooks — omitted preserves the exact prior local behavior.
+export function useCluster(projectId?: string) {
+  const path = projectId ? `/api/cloud/projects/${projectId}/cluster` : "/api/cluster";
   const { data, error, isLoading, mutate } = useSWR<ClusterStatusResponse>(
-    "/api/cluster",
+    path,
     fetcher,
     { refreshInterval: 5000 }
   );

@@ -52,7 +52,7 @@ function parseInput(raw: string, expectedDim: number | null): ParsedRow[] {
   return rows;
 }
 
-export function BulkInsertTab({ namespace, dim }: { namespace: string; dim: number | null }) {
+export function BulkInsertTab({ projectId, namespace, dim }: { projectId?: string; namespace: string; dim: number | null }) {
   const [raw, setRaw] = useState("");
   const [parsed, setParsed] = useState<ParsedRow[] | null>(null);
   const [results, setResults] = useState<InsertResult[] | null>(null);
@@ -91,7 +91,7 @@ export function BulkInsertTab({ namespace, dim }: { namespace: string; dim: numb
     const out: InsertResult[] = [];
     for (const row of validRows) {
       try {
-        const res = await fetch("/api/insert", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/insert` : `/api/insert`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ vector: row.vector, collection: namespace }),

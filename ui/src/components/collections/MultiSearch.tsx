@@ -29,7 +29,7 @@ function closenessPct(score: number): number {
   return Math.max(0, Math.min(100, (1 - score / 2) * 100));
 }
 
-/** Extract a readable message from a failed /api/search response — the
+/** Extract a readable message from a failed /api/projects/${projectId}/search response — the
  *  backend returns `{ error }` JSON, so dumping the raw body (as this file
  *  used to) showed the user a literal `{"error":"..."}` string. */
 async function searchErrorMessage(res: Response): Promise<string> {
@@ -38,6 +38,7 @@ async function searchErrorMessage(res: Response): Promise<string> {
 }
 
 interface Props {
+  projectId?: string;
   namespace: string;
   dim: number | null;
   onDelete?: (id: number) => Promise<void>;
@@ -53,7 +54,7 @@ const MODES: { key: SearchMode; label: string; icon: string }[] = [
   { key: "metadata", label: "Metadata", icon: "⌗" },
 ];
 
-export function MultiSearch({ namespace, dim, onDelete }: Props) {
+export function MultiSearch({ projectId, namespace, dim, onDelete }: Props) {
   const [mode, setMode] = useState<SearchMode>("semantic");
   const [query, setQuery] = useState("");
   const [k, setK] = useState(10);
@@ -133,7 +134,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
           setBusyLabel("Searching…");
         }
 
-        const res = await fetch("/api/search", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -154,7 +155,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         if (dim == null) throw new Error("Server dimension not known yet — wait for health to load");
         // Zero-vec to get all, then filter
         const zeroVec = Array(dim).fill(0);
-        const res = await fetch("/api/search", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: zeroVec, k: 1000, collection: namespace }),
@@ -171,14 +172,14 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         if (isNaN(idNum)) throw new Error("Enter a valid integer ID");
         setBusyLabel("Fetching record…");
         const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
-        const recRes = await fetch(`/api/records/${idNum}${qs}`);
+        const recRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/records/${idNum}${qs}` : `/api/records/${idNum}${qs}`}`);
         if (!recRes.ok) {
           const body = await recRes.json().catch(() => ({})) as { error?: string };
           throw new Error(body.error ?? `Record not found (${recRes.status})`);
         }
         const rec = await recRes.json() as { vector: number[] };
         setBusyLabel("Searching…");
-        const res = await fetch("/api/search", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: rec.vector, k, collection: namespace }),
@@ -199,7 +200,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
         }
         if (dim == null) throw new Error("Server dimension not known yet — wait for health to load");
         const zeroVec = Array(dim).fill(0);
-        const res = await fetch("/api/search", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query: zeroVec, k, collection: namespace }),
@@ -226,13 +227,13 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
     setError(null);
     try {
       const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
-      const recRes = await fetch(`/api/records/${id}${qs}`);
+      const recRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/records/${id}${qs}` : `/api/records/${id}${qs}`}`);
       if (!recRes.ok) {
         const body = await recRes.json().catch(() => ({})) as { error?: string };
         throw new Error(body.error ?? `Record not found (${recRes.status})`);
       }
       const rec = await recRes.json() as { vector: number[] };
-      const searchRes = await fetch("/api/search", {
+      const searchRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: rec.vector, k, collection: namespace }),
@@ -253,7 +254,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
   const startEdit = async (id: number) => {
     // Fetch current metadata to pre-fill the editor
     const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
-    const res = await fetch(`/api/records/${id}${qs}`).catch(() => null);
+    const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/records/${id}${qs}` : `/api/records/${id}${qs}`}`).catch(() => null);
     const rec = res?.ok ? await res.json().catch(() => null) as { metadata?: unknown } | null : null;
     const current = rec?.metadata != null ? JSON.stringify(rec.metadata, null, 2) : "{}";
     setEditBuf(current);
@@ -269,7 +270,7 @@ export function MultiSearch({ namespace, dim, onDelete }: Props) {
     setSavingId(id);
     try {
       const qs = namespace ? `?collection=${encodeURIComponent(namespace)}` : "";
-      const res = await fetch(`/api/records/${id}/metadata${qs}`, {
+      const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/records/${id}/metadata${qs}` : `/api/records/${id}/metadata${qs}`}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsed),

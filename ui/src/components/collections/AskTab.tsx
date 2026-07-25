@@ -6,7 +6,7 @@ import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 import { useLLMConfig, LLM_PROVIDER_DEFAULTS } from "@/lib/hooks/useLLMConfig";
 import { finalizeReceipt, type AnswerReceipt, type ServerReceiptPart } from "@/lib/receipts";
 import { printHtml } from "@/lib/print";
-import { CopyBtn } from "@/components/ui/CopyBtn";
+import { CopyBtn } from "@/components/ui/copy-btn";
 import { Send, FileText, File, ChevronDown, ChevronUp, Clock, Trash2, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +38,7 @@ interface AskResult {
   llmModel?: string | null;
   topK?: number;
   collection?: string;
+  answerMode?: "extractive" | "llm";
 }
 
 const MAX_HISTORY = 50;
@@ -104,9 +105,11 @@ function timeLabel(iso: string) {
 }
 
 export function AskTab({
+  projectId,
   namespace,
   initialQuestion,
 }: {
+  projectId?: string;
   namespace: string;
   initialQuestion?: string;
 }) {
@@ -181,7 +184,7 @@ export function AskTab({
     if (treeCache) {
       setStatus("searching");
       try {
-        const res = await fetch("/api/tree/query", {
+        const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/tree/query` : `/api/tree/query`}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ cache_key: treeCache.cache_key, query: q, k, prev_hash: treePrevHash }),
@@ -232,7 +235,7 @@ export function AskTab({
 
       if (signal.aborted) return;
       setStatus("searching");
-      const whyRes = await fetch("/api/why", {
+      const whyRes = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/why` : `/api/why`}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal,
@@ -245,51 +248,92 @@ export function AskTab({
       });
       if (!whyRes.ok) throw new Error(`Search failed (${whyRes.status})`);
 
+      // Switch to answering immediately — sources will appear when the first SSE event arrives
       if (useLLM && llmReady) setStatus("answering");
 
-      const whyData = await whyRes.json() as {
-        results: { record_id: number; score?: number; metadata: Record<string, unknown> | null }[];
-        synthesis?: string | null; synthesis_error?: string | null;
-        graph_context?: GraphContextChunk[]; receipt?: ServerReceiptPart;
-      };
+      // Consume SSE stream
+      const reader = whyRes.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let accumulated = "";
+      let serverReceipt: ServerReceiptPart | null = null;
+      let partialResult: AskResult | null = null;
+      let answerMode: AskResult["answerMode"];
+      const embedModel = `${embedCfg.provider}/${embedCfg.model || "—"}`;
+      const llmModel = useLLM && llmReady ? `${llmCfg.provider}/${llmCfg.model || "—"}` : null;
 
-      const sources: SourceChunk[] = (whyData.results ?? []).map((r) => {
-        const m = r.metadata ?? {};
-        return {
-          record_id: r.record_id, score: r.score ?? 0,
-          text: (m.text as string) ?? null, source: (m.source as string) ?? null,
-          chunk_index: m.chunk_index !== undefined ? (m.chunk_index as number) : null,
-          total_chunks: m.total_chunks !== undefined ? (m.total_chunks as number) : null,
-        };
-      });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (signal.aborted) { reader.cancel(); return; }
 
-      const answer: string | null = whyData.synthesis ?? null;
-      const answerError: string | null = whyData.synthesis_error ?? null;
-      const graphContext: GraphContextChunk[] = whyData.graph_context ?? [];
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
 
-      let receipt: AnswerReceipt | undefined;
-      if (whyData.receipt) {
-        try {
-          receipt = await finalizeReceipt({
-            server: whyData.receipt, collection: namespace, question: q, answer, k,
-            embedModel: `${embedCfg.provider}/${embedCfg.model}`,
-            llmModel: useLLM && llmReady ? `${llmCfg.provider}/${llmCfg.model}` : null,
-          });
-        } catch { /* best-effort */ }
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6);
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(payload); } catch { continue; }
+
+          if (event.type === "results") {
+            const rawResults = (event.results as { record_id: number; score?: number; metadata: Record<string, unknown> | null }[]) ?? [];
+            const sources: SourceChunk[] = rawResults.map((r) => {
+              const m = r.metadata ?? {};
+              return {
+                record_id: r.record_id, score: r.score ?? 0,
+                text: (m.text as string) ?? null, source: (m.source as string) ?? null,
+                chunk_index: m.chunk_index !== undefined ? (m.chunk_index as number) : null,
+                total_chunks: m.total_chunks !== undefined ? (m.total_chunks as number) : null,
+              };
+            });
+            serverReceipt = (event.receipt as ServerReceiptPart) ?? null;
+            partialResult = {
+              question: q, answer: null, answerError: null,
+              sources, graphContext: (event.graph_context as GraphContextChunk[]) ?? [],
+              askedAt: new Date().toISOString(),
+              embedModel, llmModel, topK: k, collection: namespace,
+            };
+            setResult(partialResult);
+            if (!useLLM || !llmReady) setStatus("done");
+
+          } else if (event.type === "mode") {
+            answerMode = event.mode as AskResult["answerMode"];
+            const mode = answerMode;
+            setResult((prev) => prev ? { ...prev, answerMode: mode } : null);
+
+          } else if (event.type === "token") {
+            accumulated += event.content as string;
+            const snap = accumulated;
+            setResult((prev) => prev ? { ...prev, answer: snap } : null);
+
+          } else if (event.type === "llm_error") {
+            setResult((prev) => prev ? { ...prev, answerError: event.message as string } : null);
+
+          } else if (event.type === "done") {
+            let receipt: AnswerReceipt | undefined;
+            if (serverReceipt) {
+              try {
+                receipt = await finalizeReceipt({
+                  server: serverReceipt, collection: namespace, question: q,
+                  answer: accumulated || null, k, embedModel, llmModel,
+                });
+              } catch { /* best-effort */ }
+            }
+            const finalResult: AskResult = {
+              ...(partialResult ?? { question: q, answer: null, answerError: null, sources: [], graphContext: [], askedAt: new Date().toISOString() }),
+              answer: accumulated || null,
+              embedModel, llmModel, topK: k, collection: namespace,
+              receipt, answerMode,
+            };
+            setResult(finalResult);
+            setHistory((h) => [finalResult, ...h].slice(0, MAX_HISTORY));
+            setStatus("done");
+            setQuestion("");
+          }
+        }
       }
-
-      if (signal.aborted) return;
-      const r: AskResult = {
-        question: q, answer, answerError, sources, graphContext,
-        askedAt: new Date().toISOString(), receipt,
-        embedModel: `${embedCfg.provider}/${embedCfg.model || "—"}`,
-        llmModel: useLLM && llmReady ? `${llmCfg.provider}/${llmCfg.model || "—"}` : null,
-        topK: k, collection: namespace,
-      };
-      setResult(r);
-      setHistory((h) => [r, ...h].slice(0, MAX_HISTORY));
-      setStatus("done");
-      setQuestion("");
     } catch (e) {
       if (signal.aborted) return;
       const r: AskResult = {
@@ -683,11 +727,15 @@ function ResultBlock({ result }: { result: AskResult }) {
               )}
             </div>
             <div className="flex items-center gap-3">
-              {result.llmModel && (
+              {result.answerMode === "extractive" ? (
+                <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                  ⚡ Quoted from source — no LLM call
+                </span>
+              ) : result.llmModel ? (
                 <span className="text-xs text-muted-foreground">
                   Generated by <span className="font-mono">{result.llmModel}</span>
                 </span>
-              )}
+              ) : null}
               {result.answer && <CopyBtn text={result.answer} label="Copy" />}
             </div>
           </div>

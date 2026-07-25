@@ -114,9 +114,10 @@ async function searchVec(
   vector: number[],
   k: number,
   namespace: string,
-  queryText?: string
+  queryText?: string,
+  projectId?: string
 ): Promise<{ id: number; score: number }[]> {
-  const res = await fetch("/api/search", {
+  const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/search` : `/api/search`}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ query: vector, k, collection: namespace, query_text: queryText }),
@@ -133,7 +134,8 @@ async function runEvaluation(
   namespace: string,
   cfg: EmbedCfg,
   onProgress: ProgressFn,
-  signal: AbortSignal
+  signal: AbortSignal,
+  projectId?: string
 ): Promise<EvalRun> {
   const oracleK = Math.max(k * 3, 15); // oracle is wider than question K
   const results: EvalResult[] = [];
@@ -151,12 +153,12 @@ async function runEvaluation(
       onProgress(`Embedding: "${qlabel}"`, ++step, totalSteps);
       const qVec = await embedOne(pair.question, cfg);
       anyVec ??= qVec;
-      const retrieved = await searchVec(qVec, k, namespace, pair.question);
+      const retrieved = await searchVec(qVec, k, namespace, pair.question, projectId);
 
       // 2. Embed expected answer → oracle
       onProgress(`Scoring oracle: "${qlabel}"`, ++step, totalSteps);
       const aVec = await embedOne(pair.expectedAnswer, cfg);
-      const oracleResults = await searchVec(aVec, oracleK, namespace);
+      const oracleResults = await searchVec(aVec, oracleK, namespace, undefined, projectId);
       const oracleSet = new Set(oracleResults.map((r) => r.id));
 
       const chunks: ChunkResult[] = retrieved.map((r) => ({
@@ -188,7 +190,7 @@ async function runEvaluation(
   if (anyVec) {
     try {
       const zeroVec = Array(anyVec.length).fill(0);
-      const all = await searchVec(zeroVec, 10_000, namespace);
+      const all = await searchVec(zeroVec, 10_000, namespace, undefined, projectId);
       allKnownIds = all.map((r) => r.id);
     } catch { /* non-fatal */ }
   }
@@ -345,7 +347,7 @@ What is the refund policy?,Items can be returned within 30 days for a full refun
 How do I track my order?,Use the tracking link sent in your confirmation email.
 What payment methods are accepted?,We accept Visa, Mastercard, PayPal, and Apple Pay.`;
 
-export function EvalTab({ namespace }: { namespace: string }) {
+export function EvalTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const { config: embedCfg } = useEmbeddingConfig();
   const [pasteText, setPasteText] = useState("");
   const [pairs, setPairs] = useState<QAPair[]>([]);
@@ -379,7 +381,7 @@ export function EvalTab({ namespace }: { namespace: string }) {
       const result = await runEvaluation(
         pairs, k, namespace, embedCfg,
         (label, step, total) => setProgress({ label, step, total }),
-        ctrl.signal
+        ctrl.signal, projectId
       );
       setEvalRun(result);
     } catch (e) {

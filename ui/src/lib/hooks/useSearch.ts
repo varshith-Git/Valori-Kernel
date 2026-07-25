@@ -19,7 +19,9 @@ export interface SearchState {
   latencyMs: number | null;
 }
 
-export function useSearch() {
+// See useHealth.ts for the projectId?: string convention shared across
+// these dual-mode hooks — omitted preserves the exact prior local behavior.
+export function useSearch(projectId?: string) {
   const [state, setState] = useState<SearchState>({
     results: [],
     stateHash: null,
@@ -44,7 +46,8 @@ export function useSearch() {
         body.metadata_filter = q.metadataFilter;
       }
 
-      const res = await fetch("/api/search", {
+      const path = projectId ? `/api/cloud/projects/${projectId}/search` : "/api/search";
+      const res = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

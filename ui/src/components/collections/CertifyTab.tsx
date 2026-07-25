@@ -5,8 +5,8 @@ import { sha256hex } from "@/lib/receipts";
 import { fetchGlobalHash } from "@/lib/proof";
 import { timeAgo } from "@/lib/time";
 import { printHtml } from "@/lib/print";
-import { CopyBtn } from "@/components/ui/CopyBtn";
-import { StatusPanel } from "@/components/ui/StatusPanel";
+import { CopyBtn } from "@/components/ui/copy-btn";
+import { StatusPanel } from "@/components/ui/status-panel";
 import { TabShell } from "@/components/collections/TabShell";
 
 // --- Types --------------------------------------------------------------------
@@ -80,8 +80,8 @@ interface AuditSnap {
   error?: string;
 }
 
-async function fetchAudit(namespace: string): Promise<AuditSnap> {
-  const res = await fetch(`/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`, {
+async function fetchAudit(namespace: string, projectId?: string): Promise<AuditSnap> {
+  const res = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`, {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Audit fetch failed (${res.status})`);
@@ -91,10 +91,11 @@ async function fetchAudit(namespace: string): Promise<AuditSnap> {
 async function buildCertificate(
   collection: string,
   namespace: string,
-  version: string
+  version: string,
+  projectId?: string
 ): Promise<{ cert: CertData; json: string }> {
   const [audit, blake3] = await Promise.all([
-    fetchAudit(namespace),
+    fetchAudit(namespace, projectId),
     fetchGlobalHash(),
   ]);
   if (audit.error) throw new Error(audit.error);
@@ -210,9 +211,11 @@ function printCertificate(cert: CertData) {
 // --- Certificate section ------------------------------------------------------
 
 function CertSection({
+  projectId,
   collection,
   namespace,
 }: {
+  projectId?: string;
   collection: string;
   namespace: string;
 }) {
@@ -226,17 +229,17 @@ function CertSection({
     setError(null);
     try {
       // Detect version from health
-      const h = await fetch("/api/health", { cache: "no-store" }).then((r) =>
+      const h = await fetch(`${projectId ? `/api/cloud/projects/${projectId}/health` : `/api/health`}`, { cache: "no-store" }).then((r) =>
         r.ok ? r.json() : {}
       ) as { version?: string };
-      const res = await buildCertificate(collection, namespace, h.version ?? "unknown");
+      const res = await buildCertificate(collection, namespace, h.version ?? "unknown", projectId);
       setResult(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to generate certificate");
     } finally {
       setBusy(false);
     }
-  }, [collection, namespace]);
+  }, [projectId, collection, namespace]);
 
   const downloadJSON = useCallback(() => {
     if (!result) return;
@@ -414,7 +417,7 @@ function CertSection({
 
 // --- Tamper detection section -------------------------------------------------
 
-function TamperSection({ namespace }: { namespace: string }) {
+function TamperSection({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const [baseline, setBaseline] = useState<Baseline | null>(() =>
     loadBaseline(namespace)
   );
@@ -434,7 +437,7 @@ function TamperSection({ namespace }: { namespace: string }) {
     setLoading(true);
     try {
       const [audit, blake3] = await Promise.all([
-        fetchAudit(namespace).catch(() => null),
+        fetchAudit(namespace, projectId).catch(() => null),
         fetchGlobalHash(),
       ]);
       setCurrent({
@@ -447,7 +450,7 @@ function TamperSection({ namespace }: { namespace: string }) {
     } finally {
       setLoading(false);
     }
-  }, [namespace]);
+  }, [projectId, namespace]);
 
   // Poll every 5s
   useEffect(() => {
@@ -661,16 +664,18 @@ function TamperSection({ namespace }: { namespace: string }) {
 // --- Main tab -----------------------------------------------------------------
 
 export function CertifyTab({
+  projectId,
   namespace,
   collection,
 }: {
+  projectId?: string;
   namespace: string;
   collection: string;
 }) {
   return (
     <TabShell>
-      <CertSection collection={collection} namespace={namespace} />
-      <TamperSection namespace={namespace} />
+      <CertSection projectId={projectId} collection={collection} namespace={namespace} />
+      <TamperSection projectId={projectId} namespace={namespace} />
     </TabShell>
   );
 }

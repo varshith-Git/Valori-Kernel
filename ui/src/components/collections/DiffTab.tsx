@@ -33,9 +33,9 @@ interface DiffResult {
 
 // --- Fetch helpers ------------------------------------------------------------
 
-async function fetchSnapshot(namespace: string): Promise<NsSnapshot> {
+async function fetchSnapshot(namespace: string, projectId?: string): Promise<NsSnapshot> {
   const res = await fetch(
-    `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`,
+    `${projectId ? `/api/cloud/projects/${projectId}/namespace-audit?namespace=${encodeURIComponent(namespace)}` : `/api/namespace-audit?namespace=${encodeURIComponent(namespace)}`}`,
     { cache: "no-store" }
   );
   if (!res.ok) throw new Error(`Audit failed for "${namespace}" (${res.status})`);
@@ -292,7 +292,7 @@ function downloadDiff(diff: DiffResult) {
 
 // --- Main tab -----------------------------------------------------------------
 
-export function DiffTab({ namespace }: { namespace: string }) {
+export function DiffTab({ projectId, namespace }: { projectId?: string; namespace: string }) {
   const [namespaces, setNamespaces] = useState<string[]>([]);
   const [nsA, setNsA] = useState(namespace);
   const [nsB, setNsB] = useState("");
@@ -303,7 +303,7 @@ export function DiffTab({ namespace }: { namespace: string }) {
 
   // Load namespace list
   useEffect(() => {
-    fetch("/api/namespaces", { cache: "no-store" })
+    fetch(`${projectId ? `/api/cloud/projects/${projectId}/namespaces` : `/api/namespaces`}`, { cache: "no-store" })
       .then((r) => r.ok ? r.json() : [])
       .then((d) => {
         const list: string[] = Array.isArray(d)
@@ -323,8 +323,8 @@ export function DiffTab({ namespace }: { namespace: string }) {
     setDiff(null);
     try {
       const [snapA, snapB] = await Promise.all([
-        fetchSnapshot(nsA),
-        fetchSnapshot(nsB),
+        fetchSnapshot(nsA, projectId),
+        fetchSnapshot(nsB, projectId),
       ]);
       setDiff(computeDiff(snapA, snapB));
     } catch (e) {
