@@ -168,6 +168,32 @@ CI builds all three platforms on every push touching `desktop/`,
 artifact. Code signing and notarization are not done yet (Phase D1.4) — all
 current builds are unsigned.
 
+### Updater signing
+
+Separate from the code signing/notarization gap above — this is Tauri's
+*updater* signature (a minisign keypair), which proves an update artifact
+actually came from this project before the app applies it. The public half
+lives in `src-tauri/tauri.conf.json`'s `updater.pubkey`; the private half
+must never be committed. To build locally with a real signature (rather
+than hitting `Error: A public key has been found, but no private key`):
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="<the private key string>"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""   # empty if generated without one
+npm run build
+```
+
+In CI, the same two values are read from this repo's
+Settings -> Secrets and variables -> Actions as `TAURI_SIGNING_PRIVATE_KEY`
+/ `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (see `desktop-build.yml`).
+
+To rotate to a brand new keypair (only do this if the current private key
+is genuinely lost — anyone who already installed a build signed with the
+old key won't trust updates signed with a new one until they reinstall):
+`npx tauri signer generate --ci -w /path/to/key`, then update
+`tauri.conf.json`'s `pubkey` with the printed public key and replace both
+GitHub secrets.
+
 **Before calling a build shippable**, run through
 [`docs/DESKTOP_RELEASE_CHECKLIST.md`](../docs/DESKTOP_RELEASE_CHECKLIST.md) —
 install → launch → Welcome → create a project/collection → insert/search →

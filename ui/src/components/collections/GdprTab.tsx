@@ -52,7 +52,7 @@ function StatusPill({
   if (encrypted) {
     return (
       <span
-        className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-400 border border-amber-800"
+        className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-950/60 dark:text-amber-400 dark:border-amber-800"
         title={`Encrypted with key ${keyId ?? "unknown"} — ShredKey not yet implemented`}
       >
         encrypted · {keyId ?? "?"}
@@ -82,7 +82,7 @@ function RecordRow({
         disabled
           ? "opacity-40 cursor-not-allowed"
           : checked
-          ? "bg-red-950/20 border border-red-900/40"
+          ? "bg-red-100 border border-red-300 dark:bg-red-950/20 dark:border-red-900/40"
           : "border border-transparent hover:bg-accent/60"
       }`}
     >
@@ -396,15 +396,15 @@ export function GdprTab({ projectId, namespace }: { projectId?: string; namespac
     <TabShell>
 
       {/* Info banner */}
-      <div className="rounded-xl border border-amber-900/50 bg-amber-950/20 px-4 py-3 flex gap-3">
-        <span className="text-amber-500 text-lg flex-shrink-0">⚠</span>
-        <div className="text-xs text-amber-700 leading-relaxed">
-          <strong className="text-amber-500">GDPR Right to Erasure:</strong> Selecting and erasing
+      <div className="rounded-xl border border-amber-300 bg-amber-100 dark:border-amber-900/50 dark:bg-amber-950/20 px-4 py-3 flex gap-3">
+        <span className="text-amber-600 dark:text-amber-500 text-lg flex-shrink-0">⚠</span>
+        <div className="text-xs text-amber-800 dark:text-amber-400 leading-relaxed">
+          <strong className="text-amber-700 dark:text-amber-500">GDPR Right to Erasure:</strong> Selecting and erasing
           records permanently removes their vector data from the Valori store. The{" "}
-          <code className="font-mono bg-amber-950/40 px-1 rounded">DeleteRecord</code> event is
+          <code className="font-mono bg-amber-200 dark:bg-amber-950/40 px-1 rounded">DeleteRecord</code> event is
           recorded in the BLAKE3 audit chain (proof of erasure), but the vectors cannot be recovered.
           For per-record crypto-erasure (ShredKey), records must be inserted via{" "}
-          <code className="font-mono bg-amber-950/40 px-1 rounded">InsertRecordEncrypted</code>.
+          <code className="font-mono bg-amber-200 dark:bg-amber-950/40 px-1 rounded">InsertRecordEncrypted</code>.
         </div>
       </div>
 
@@ -492,7 +492,7 @@ export function GdprTab({ projectId, namespace }: { projectId?: string; namespac
 
       {/* Error */}
       {loadError && (
-        <p className="text-sm text-red-400 font-mono px-1">{loadError}</p>
+        <p className="text-sm text-red-600 dark:text-red-400 font-mono px-1">{loadError}</p>
       )}
 
       {/* Loading skeleton */}
@@ -537,14 +537,14 @@ export function GdprTab({ projectId, namespace }: { projectId?: string; namespac
 
       {/* Erase action */}
       {selectedCount > 0 && (
-        <div className="rounded-xl border-2 border-red-900/60 bg-red-950/20 p-4 flex flex-col gap-3">
+        <div className="rounded-xl border-2 border-red-300 bg-red-100 dark:border-red-900/60 dark:bg-red-950/20 p-4 flex flex-col gap-3">
           <div className="flex items-start gap-3">
-            <span className="text-red-500 text-lg flex-shrink-0">⚠</span>
+            <span className="text-red-600 dark:text-red-500 text-lg flex-shrink-0">⚠</span>
             <div>
-              <p className="text-sm font-semibold text-red-400">
+              <p className="text-sm font-semibold text-red-700 dark:text-red-400">
                 Permanently erase {selectedCount} record{selectedCount !== 1 ? "s" : ""}?
               </p>
-              <p className="text-xs text-red-800 mt-0.5">
+              <p className="text-xs text-red-800 dark:text-red-300 mt-0.5">
                 This cannot be undone. Vector data will be permanently removed. The deletion events
                 will be recorded in the BLAKE3 audit chain.
               </p>
@@ -559,7 +559,7 @@ export function GdprTab({ projectId, namespace }: { projectId?: string; namespac
               onChange={(e) => setConfirmed(e.target.checked)}
               className="accent-red-500 w-4 h-4"
             />
-            <span className="text-xs text-red-700">
+            <span className="text-xs text-red-800 dark:text-red-300">
               I understand this is irreversible and confirm the right-to-erasure request
             </span>
           </label>
@@ -568,7 +568,7 @@ export function GdprTab({ projectId, namespace }: { projectId?: string; namespac
           <button
             onClick={erase}
             disabled={!confirmed || erasing}
-            className="self-start px-4 py-2 rounded-lg text-sm font-medium bg-red-700 text-foreground hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="self-start px-4 py-2 rounded-lg text-sm font-medium bg-red-700 text-white hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {erasing
               ? `Erasing… ${erasingProgress?.done ?? 0} / ${erasingProgress?.total ?? 0}`

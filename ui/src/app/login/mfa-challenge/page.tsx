@@ -4,9 +4,9 @@ import { verifyMfaChallenge } from './actions'
 export default async function MfaChallengePage({
     searchParams,
 }: {
-    searchParams: Promise<{ next?: string; error?: string }>
+    searchParams: Promise<{ next?: string; error?: string; desktop?: string }>
 }) {
-    const { next, error } = await searchParams
+    const { next, error, desktop } = await searchParams
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-4">
@@ -23,6 +23,7 @@ export default async function MfaChallengePage({
 
                 <form action={verifyMfaChallenge} className="space-y-4">
                     <input type="hidden" name="next" value={next ?? '/dashboard'} />
+                    {desktop === '1' && <input type="hidden" name="desktop" value="1" />}
                     <input
                         name="code"
                         inputMode="numeric"

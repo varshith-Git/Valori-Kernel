@@ -30,6 +30,7 @@ import {
   Activity,
   BarChart2,
   SquareTerminal,
+  Cloud,
 } from "lucide-react";
 
 /* --- Helpers -------------------------------------------------------- */
@@ -234,6 +235,36 @@ export function Sidebar() {
     if (nativeAvailable()) {
       getPreference<string>("workspaceDir").then(setWorkspaceDir).catch(() => {});
     }
+  }, []);
+
+  // Cloud projects — shown alongside local ones so there's one place to see
+  // "everything", even though they're served by an entirely separate /cloud
+  // route tree under the hood (see ProjectModePicker/CLAUDE.md notes on why
+  // local and cloud aren't a single unified data layer).
+  const [cloudProjects, setCloudProjects] = useState<{ id: string; name: string; status: string }[]>([]);
+  useEffect(() => {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+    (async () => {
+      const { createClient } = await import("@/utils/supabase/client");
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const { data: memberships } = await supabase
+        .from("org_members")
+        .select("organizations(id)")
+        .eq("user_id", session.user.id)
+        .limit(1);
+      const org = (memberships?.[0] as { organizations: { id: string } } | undefined)?.organizations;
+      if (!org) return;
+      const { data: cloudProjectRows } = await supabase
+        .from("projects")
+        .select("id, name, status")
+        .eq("org_id", org.id)
+        .neq("status", "deleted")
+        .neq("status", "archived")
+        .order("created_at", { ascending: false });
+      setCloudProjects(cloudProjectRows ?? []);
+    })();
   }, []);
 
   const isActive = (href: string) =>
@@ -450,6 +481,49 @@ export function Sidebar() {
               })
             )}
           </div>
+
+          {/* Cloud projects — only rendered once a session + at least one
+              project resolves, so a signed-out or local-only user never sees
+              an empty section. */}
+          {!collapsed && cloudProjects.length > 0 && (
+            <>
+              <div className="flex items-center justify-between px-2.5 mb-1.5 mt-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.10em] text-muted-foreground select-none">
+                  Cloud Projects
+                </p>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {cloudProjects.map((p) => {
+                  const href = `/cloud/projects/${p.id}`;
+                  const active = path === href || path.startsWith(href + "/");
+                  return (
+                    <Link
+                      key={p.id}
+                      href={href}
+                      className={cn(
+                        "group flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-all duration-150",
+                        active
+                          ? "bg-[var(--v-accent-muted)] text-foreground [box-shadow:inset_2px_0_0_var(--v-accent)]"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-card-foreground"
+                      )}
+                    >
+                      <span className="flex items-center gap-1.5 truncate">
+                        <Cloud
+                          size={11}
+                          className={active ? "text-[var(--v-accent)]" : "text-muted-foreground group-hover:text-muted-foreground"}
+                        />
+                        <span className="truncate">{p.name}</span>
+                      </span>
+                      <span
+                        className={cn("ml-1 h-2 w-2 rounded-full shrink-0", p.status === "active" ? "bg-emerald-400" : "bg-muted-foreground/40")}
+                        title={p.status}
+                      />
+                    </Link>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         <StatusFooter

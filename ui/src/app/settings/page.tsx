@@ -3,15 +3,17 @@
 import { useState, useEffect, useRef } from "react";
 import {
   Database, BrainCircuit, Network, Cloud, ArrowRight,
-  Layers, FolderOpen, FolderInput, Wrench, Check,
+  Layers, FolderOpen, FolderInput, Wrench, Check, LogIn, LogOut,
 } from "lucide-react";
 import { EmbeddingSelector } from "@/components/ingestion/EmbeddingSelector";
 import { LLMSelector } from "@/components/ingestion/LLMSelector";
 import {
-  getPreference, nativeAvailable, pickFolder,
+  getPreference, nativeAvailable, openCloudLogin, pickFolder,
   resetOnboarding, revealPath, setPreference,
 } from "@/lib/native";
 import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { createClient } from "@/utils/supabase/client";
 
 /* ─── Nav definition ─────────────────────────────────────────────────── */
 
@@ -22,6 +24,7 @@ const NAV = [
   { id: "backend",    label: "Backend",            Icon: Network      },
   { id: "reranker",   label: "Tier-2 Reranker",   Icon: Layers       },
   { id: "objstore",   label: "Object Store",       Icon: Cloud        },
+  { id: "cloudsync",  label: "Cloud Sync",         Icon: LogIn        },
   { id: "developer",  label: "Developer",          Icon: Wrench       },
 ] as const;
 
@@ -68,15 +71,16 @@ function Row({
 }
 
 function Badge({ children, variant = "neutral" }: { children: React.ReactNode; variant?: "neutral" | "success" | "warning" }) {
+  const toneMap: Record<string, Parameters<typeof StatusBadge>[0]["tone"]> = {
+    success: "success",
+    warning: "warning",
+    neutral: "neutral",
+  };
+  const tone = toneMap[variant] ?? "neutral";
   return (
-    <span className={cn(
-      "inline-flex items-center px-2 py-0.5 text-[11px] font-mono rounded-full border",
-      variant === "success" && "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400",
-      variant === "warning" && "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400",
-      variant === "neutral" && "bg-accent border-border text-muted-foreground",
-    )}>
+    <StatusBadge tone={tone}>
       {children}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -183,11 +187,41 @@ export default function SettingsPage() {
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [modelDir,     setModelDir]     = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<NavId>("general");
+  const [cloudEmail, setCloudEmail] = useState<string | null | undefined>(undefined); // undefined = checking, null = signed out
+  const [cloudMode, setCloudMode] = useState<"local" | "cloud" | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     getPreference<string>("workspaceDir").then(setWorkspaceDir).catch(() => {});
     getPreference<string>("modelDir").then(setModelDir).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) { setCloudEmail(null); return; }
+    createClient().auth.getSession().then(({ data: { session } }) => {
+      setCloudEmail(session?.user.email ?? null);
+    });
+    fetch("/api/mode").then((r) => r.ok ? r.json() : null).then((d) => {
+      if (d) setCloudMode(d.mode);
+    }).catch(() => {});
+  }, []);
+
+  const signOutOfSync = async () => {
+    setSigningOut(true);
+    try {
+      if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+        await createClient().auth.signOut();
+      }
+      await fetch("/api/mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "local" }),
+      });
+      window.location.reload();
+    } finally {
+      setSigningOut(false);
+    }
+  };
 
   useEffect(() => {
     fetch("/api/health").then(r => r.ok ? r.json() : null).then(d => {
@@ -489,6 +523,37 @@ export default function SettingsPage() {
                 <p><span className="text-[var(--v-accent)]">VALORI_OBJECT_STORE_KEEP</span>=7</p>
               </div>
             </div>
+          </Card>
+        </section>
+
+        {/* Cloud Sync */}
+        <section id="cloudsync" className="scroll-mt-4">
+          <SectionTitle>Cloud Sync</SectionTitle>
+          <Card>
+            <Row
+              label={cloudEmail ? "Signed in" : "Not signed in"}
+              description={
+                cloudEmail
+                  ? `${cloudEmail} — this app is in ${cloudMode === "cloud" ? "cloud" : "local"} mode.`
+                  : "Sign in to create and manage projects hosted on Valori Cloud."
+              }
+            >
+              {cloudEmail === undefined ? null : cloudEmail ? (
+                <Btn variant="danger" onClick={signOutOfSync} disabled={signingOut}>
+                  <span className="flex items-center gap-1.5">
+                    <LogOut size={12} />
+                    {signingOut ? "Signing out…" : "Sign out"}
+                  </span>
+                </Btn>
+              ) : (
+                <Btn onClick={() => openCloudLogin()} disabled={!nativeAvailable()}>
+                  <span className="flex items-center gap-1.5">
+                    <LogIn size={12} />
+                    Sign in to sync
+                  </span>
+                </Btn>
+              )}
+            </Row>
           </Card>
         </section>
 

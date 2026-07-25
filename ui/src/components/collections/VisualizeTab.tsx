@@ -203,8 +203,25 @@ export function VisualizeTab({ projectId, namespace, dim }: Props) {
   const [showLabels,   setShowLabels]   = useState(false);
   const [showCluster,  setShowCluster]  = useState(true);
   const [zoom,         setZoom]         = useState(1);
+  const [menuOpen,     setMenuOpen]     = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Scrollpad/wheel zoom. React attaches its synthetic wheel listener as
+  // passive by default, so e.preventDefault() in an onWheel prop wouldn't
+  // actually stop the page from scrolling — a native listener with
+  // { passive: false } is required to trade the pad gesture for zoom.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.001);
+      setZoom((z) => Math.min(Math.max(z * factor, 0.2), 5));
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, []);
 
   // ── Load ──────────────────────────────────────────────────────────────────
 
@@ -453,8 +470,48 @@ export function VisualizeTab({ projectId, namespace, dim }: Props) {
               ? progress ? `${progress.done}/${progress.total}…` : "Loading…"
               : hasPoints ? "Reload" : "Load"}
           </Button>
-          <button style={iconBtnStyle}><Maximize2 size={14} /></button>
-          <button style={iconBtnStyle}><MoreHorizontal size={14} /></button>
+          <button style={iconBtnStyle} onClick={() => setZoom(1)} title="Reset zoom"><Maximize2 size={14} /></button>
+          <div style={{ position: "relative" }}>
+            <button style={iconBtnStyle} onClick={() => setMenuOpen((v) => !v)} title="More options">
+              <MoreHorizontal size={14} />
+            </button>
+            {menuOpen && (
+              <>
+                <div
+                  style={{ position: "fixed", inset: 0, zIndex: 9 }}
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 10,
+                  background: "var(--background)", border: "1px solid var(--border)",
+                  borderRadius: 8, minWidth: 160, padding: 4,
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+                }}>
+                  <button
+                    style={menuItemStyle}
+                    onClick={() => { setZoom(1); setMenuOpen(false); }}
+                  >
+                    Reset view
+                  </button>
+                  <button
+                    style={menuItemStyle}
+                    onClick={() => {
+                      const canvas = canvasRef.current;
+                      if (canvas) {
+                        const a = document.createElement("a");
+                        a.download = `${namespace || "visualize"}.png`;
+                        a.href = canvas.toDataURL("image/png");
+                        a.click();
+                      }
+                      setMenuOpen(false);
+                    }}
+                  >
+                    Download as PNG
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -558,7 +615,7 @@ export function VisualizeTab({ projectId, namespace, dim }: Props) {
                   { icon: <Plus      size={13} />, action: () => setZoom((z) => Math.min(z * 1.3, 5)) },
                   { icon: <Minus     size={13} />, action: () => setZoom((z) => Math.max(z / 1.3, 0.2)) },
                   { icon: <Maximize2 size={12} />, action: () => setZoom(1) },
-                  { icon: <Crosshair size={12} />, action: () => {} },
+                  { icon: <Crosshair size={12} />, action: () => setZoom(1) },
                 ] as const).map((btn, i) => (
                   <button key={i} onClick={btn.action} style={zoomBtnStyle}>
                     {btn.icon}
@@ -766,6 +823,13 @@ export function VisualizeTab({ projectId, namespace, dim }: Props) {
 }
 
 // ─── Style constants ──────────────────────────────────────────────────────────
+
+const menuItemStyle: React.CSSProperties = {
+  display: "block", width: "100%", textAlign: "left",
+  padding: "6px 10px", borderRadius: 6, border: "none",
+  background: "transparent", color: "var(--foreground)",
+  fontSize: 13, cursor: "pointer",
+};
 
 const iconBtnStyle: React.CSSProperties = {
   width: 30, height: 30, borderRadius: 6,

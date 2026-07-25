@@ -96,6 +96,13 @@ jobs:
           # linuxdeploy runs as an AppImage; GitHub runners don't expose the FUSE
           # kernel module, so extract-and-run is the standard CI workaround.
           APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Signs the updater artifact (.sig file) so installed apps can
+          # verify an update actually came from us before applying it — see
+          # desktop/README.md's "Updater signing" section. Both secrets must
+          # be set in this repo's Settings -> Secrets -> Actions or `tauri
+          # build` fails with "public key found but no private key".
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
