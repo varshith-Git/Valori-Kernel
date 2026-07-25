@@ -19,6 +19,7 @@
     "allow-node-health",
     "allow-add-recent-document",
     "allow-install-update",
+    "allow-open-cloud-login",
     "updater:default"
   ]
 }

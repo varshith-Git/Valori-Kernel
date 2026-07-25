@@ -41,3 +41,10 @@ description = "Allow the install_update command — downloads and applies a pend
 
 [permission.commands]
 allow = ["install_update"]
+
+[[permission]]
+identifier = "allow-open-cloud-login"
+description = "Allow the open_cloud_login command — opens Valori Cloud's login page in the system browser."
+
+[permission.commands]
+allow = ["open_cloud_login"]
