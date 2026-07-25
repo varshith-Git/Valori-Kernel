@@ -11,6 +11,7 @@ import { forgetProject, getFavoriteProjects, toggleFavoriteProject, touchRecentP
 import { useProjectManifest, type ManifestProject } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
+import { ProjectModePicker } from "@/components/projects/ProjectModePicker";
 import { GettingStarted } from "@/components/home/GettingStarted";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import { useRelativeTime } from "@/lib/hooks/useRelativeTime";
@@ -18,6 +19,9 @@ import { timeAgo } from "@/lib/time";
 import { EVENT_DOT } from "@/lib/event-types";
 import { cn } from "@/lib/utils";
 import type { ActivityEvent } from "@/app/api/activity/route";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { MetricCard } from "@/components/ui/metric-card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // ── Count-up hook ─────────────────────────────────────────────────────────────
 
@@ -83,22 +87,29 @@ function StatusPill({ status, nodesRunning, nodesTotal }: {
   nodesRunning?: number;
   nodesTotal?: number;
 }) {
-  const map: Record<string, { cls: string; dot: string; label: string }> = {
-    running:  { cls: "border-emerald-500/30 bg-emerald-500/12 text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-400", label: "Running" },
-    starting: { cls: "border-amber-500/30 bg-amber-500/12 text-amber-700 dark:text-amber-400", dot: "bg-amber-400 animate-pulse", label: "Starting" },
-    error:    { cls: "border-red-500/30 bg-red-500/12 text-red-700 dark:text-red-400", dot: "bg-red-400", label: "Error" },
-    stopped:  { cls: "border-border bg-accent text-muted-foreground", dot: "bg-muted-foreground/50", label: "Stopped" },
-    archived: { cls: "border-border bg-accent text-muted-foreground", dot: "bg-muted-foreground/30", label: "Archived" },
+  const toneMap: Record<string, Parameters<typeof StatusBadge>[0]["tone"]> = {
+    running:  "success",
+    starting: "warning",
+    error:    "error",
+    stopped:  "neutral",
+    archived: "neutral",
   };
-  const s = map[status] ?? map.stopped;
+  const tone = toneMap[status] ?? "neutral";
+  const labelMap: Record<string, string> = {
+    running: "Running",
+    starting: "Starting",
+    error: "Error",
+    stopped: "Stopped",
+    archived: "Archived",
+  };
   const label = (nodesTotal && nodesTotal > 1 && status !== "stopped")
     ? `${nodesRunning}/${nodesTotal} nodes`
-    : s.label;
+    : (labelMap[status] ?? "Stopped");
+
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-0.5 rounded-full border ${s.cls}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
+    <StatusBadge tone={tone} pulse={status === "starting"}>
       {label}
-    </span>
+    </StatusBadge>
   );
 }
 
@@ -183,17 +194,16 @@ function OverviewCard({ projects }: { projects: ManifestProject[] }) {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {(stats as { label: string; value: string; accent?: boolean; glow?: boolean }[]).map((s, i) => (
-          <div
+          <MetricCard
             key={s.label}
+            label={s.label}
+            value={s.value}
             className={cn(
-              "animate-stat-pop rounded-xl bg-background border border-border/70 px-4 py-3 flex flex-col gap-1",
-              s.glow && "animate-chain-glow",
+              "animate-stat-pop",
+              s.glow && "animate-chain-glow"
             )}
             style={{ animationDelay: `${i * 40}ms`, animationFillMode: "both" }}
-          >
-            <p className="text-[11px] text-muted-foreground">{s.label}</p>
-            <p className="text-xl font-bold tracking-tight leading-none tabular-nums text-foreground">{s.value}</p>
-          </div>
+          />
         ))}
       </div>
 
@@ -239,14 +249,16 @@ function OverviewCard({ projects }: { projects: ManifestProject[] }) {
 
 type TabFilter = "all" | "running" | "stopped";
 
+const ACTIVITY_PAGE_SIZE = 7;
+
 function RecentActivityPanel() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [events,   setEvents]   = useState<ActivityEvent[]>([]);
+  const [loading,  setLoading]  = useState(true);
   const [disabled, setDisabled] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const [page,     setPage]     = useState(1);
 
   useEffect(() => {
-    fetch("/api/activity?limit=20")
+    fetch("/api/activity?limit=100")
       .then(r => r.json())
       .then((d: { events?: ActivityEvent[]; disabled?: boolean }) => {
         setDisabled(d.disabled === true);
@@ -256,13 +268,21 @@ function RecentActivityPanel() {
       .finally(() => setLoading(false));
   }, []);
 
-  const getStatus = (eventType: string) => {
-    if (/delete/i.test(eventType))
-      return { label: "Deleted", cls: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20" };
-    return { label: "Success", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20" };
-  };
+  const totalPages = Math.max(1, Math.ceil(events.length / ACTIVITY_PAGE_SIZE));
+  const shown = events.slice((page - 1) * ACTIVITY_PAGE_SIZE, page * ACTIVITY_PAGE_SIZE);
 
-  const shown = showAll ? events : events.slice(0, 8);
+  // Page numbers to show: always show first, last, current ±1, with "…" gaps
+  function pageNumbers(): (number | "…")[] {
+    if (totalPages <= 5) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const set = new Set([1, totalPages, page, page - 1, page + 1].filter(p => p >= 1 && p <= totalPages));
+    const sorted = Array.from(set).sort((a, b) => a - b);
+    const result: (number | "…")[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+      if (i > 0 && sorted[i] - sorted[i - 1] > 1) result.push("…");
+      result.push(sorted[i]);
+    }
+    return result;
+  }
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden flex flex-col">
@@ -273,7 +293,7 @@ function RecentActivityPanel() {
         </Link>
       </div>
 
-      <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+      <div className="divide-y divide-border/60">
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <div className="h-4 w-4 rounded-full border-2 border-[var(--v-accent)] border-t-transparent animate-spin" />
@@ -286,7 +306,6 @@ function RecentActivityPanel() {
         ) : (
           shown.map(e => {
             const dot = EVENT_DOT[e.event_type] ?? "bg-muted-foreground/40";
-            const status = getStatus(e.event_type);
             const label = e.event_type.replace(/([A-Z])/g, " $1").trim();
             const detail = Object.entries(e.detail)
               .slice(0, 2)
@@ -302,23 +321,53 @@ function RecentActivityPanel() {
                 <span className="text-[10px] text-muted-foreground/60 font-mono shrink-0 tabular-nums">
                   {timeAgo(e.timestamp_iso)}
                 </span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium shrink-0 ${status.cls}`}>
-                  {status.label}
-                </span>
+                <StatusBadge tone={/delete/i.test(e.event_type) ? "error" : "success"}>
+                  {/delete/i.test(e.event_type) ? "Deleted" : "Success"}
+                </StatusBadge>
               </div>
             );
           })
         )}
       </div>
 
-      {!loading && events.length > 8 && (
-        <div className="border-t border-border px-4 py-2.5 shrink-0">
-          <button
-            onClick={() => setShowAll(v => !v)}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-          >
-            {showAll ? "Show less ↑" : `Load more ↓`}
-          </button>
+      {!loading && totalPages > 1 && (
+        <div className="border-t border-border px-4 py-2.5 shrink-0 flex items-center justify-between">
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            {(page - 1) * ACTIVITY_PAGE_SIZE + 1}–{Math.min(page * ACTIVITY_PAGE_SIZE, events.length)} of {events.length}
+          </span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="flex h-6 w-6 items-center justify-center rounded text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              ‹
+            </button>
+            {pageNumbers().map((n, i) =>
+              n === "…" ? (
+                <span key={`ellipsis-${i}`} className="px-1 text-[11px] text-muted-foreground/50">…</span>
+              ) : (
+                <button
+                  key={n}
+                  onClick={() => setPage(n)}
+                  className={`flex h-6 min-w-[24px] items-center justify-center rounded px-1.5 text-[11px] font-medium transition-colors ${
+                    page === n
+                      ? "bg-[var(--v-accent)] text-white"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
+                >
+                  {n}
+                </button>
+              )
+            )}
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="flex h-6 w-6 items-center justify-center rounded text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              ›
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -596,6 +645,7 @@ export default function HomePage() {
   const { projects, isLoading, create, open, close, remove, refresh } = useProjectManifest();
   const { online, recordCount, dim } = useHealth();
   const [createOpen,   setCreateOpen]   = useState(false);
+  const [pickerOpen,   setPickerOpen]   = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [busyName,     setBusyName]     = useState<string | null>(null);
   const [favorites,    setFavorites]    = useState<string[]>([]);
@@ -663,7 +713,7 @@ export default function HomePage() {
               <RefreshCw size={14} />
             </button>
             <button
-              onClick={() => setCreateOpen(true)}
+              onClick={() => setPickerOpen(true)}
               className="flex items-center gap-2 rounded-lg bg-[var(--v-accent)] hover:opacity-90 hover:scale-[1.03] active:scale-[0.97] px-4 py-2 text-sm font-medium text-white transition-all duration-150"
             >
               <Plus size={14} />
@@ -676,7 +726,7 @@ export default function HomePage() {
         <GettingStarted
           projects={projects}
           recordCount={recordCount}
-          onCreateProject={() => setCreateOpen(true)}
+          onCreateProject={() => setPickerOpen(true)}
         />
 
         {/* ── Overview ── */}
@@ -688,7 +738,7 @@ export default function HomePage() {
         {isLoading ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {[0, 1].map(i => (
-              <div key={i} className="h-64 animate-pulse rounded-xl bg-accent/60" style={{ animationDelay: `${i * 80}ms` }} />
+              <Skeleton key={i} className="h-64 rounded-xl bg-accent/60" style={{ animationDelay: `${i * 80}ms` }} />
             ))}
           </div>
         ) : (
@@ -705,17 +755,23 @@ export default function HomePage() {
               onToggleFavorite={toggleFavorite}
               favorites={favorites}
               busyName={busyName}
-              onCreateProject={() => setCreateOpen(true)}
+              onCreateProject={() => setPickerOpen(true)}
             />
           </div>
         )}
 
         {/* ── Quick actions ── */}
         <div className="animate-fade-up" style={{ animationDelay: "180ms" }}>
-          <QuickActions onCreateProject={() => setCreateOpen(true)} />
+          <QuickActions onCreateProject={() => setPickerOpen(true)} />
         </div>
 
       </div>
+
+      <ProjectModePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onLocal={() => setCreateOpen(true)}
+      />
 
       <CreateProjectDialog
         open={createOpen}

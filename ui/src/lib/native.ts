@@ -29,6 +29,17 @@ export function nativeAvailable(): boolean {
   return isTauri();
 }
 
+/** Opens Valori Cloud's login page in the system browser and starts the
+ *  "sign in to sync" handoff — see src-tauri/src/lib.rs's open_cloud_login
+ *  and the valori://auth-callback deep link it eventually receives back.
+ *  No-op outside the desktop shell (the website is always cloud mode
+ *  already, it has no "sync" concept to switch into). */
+export async function openCloudLogin(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_cloud_login");
+}
+
 // ── Persisted preferences (desktop only) ────────────────────────────────────
 // A single JSON file under the app's config dir, via tauri-plugin-store.
 // Nothing here is used outside the desktop shell — the browser dev path

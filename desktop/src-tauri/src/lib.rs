@@ -22,6 +22,7 @@ mod daemon_manager;
 mod ui_server_manager;
 use daemon_manager::{daemon_status, start_daemon, stop_daemon, stop_daemon_internal, DaemonState};
 use ui_server_manager::UiServerState;
+use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_updater::UpdaterExt;
 
 /// Runs the shared shutdown sequence exactly once, then exits.
@@ -102,6 +103,32 @@ fn nav_to(app: &tauri::AppHandle, path: &str) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+/// Same as `nav_to`, but JSON-escapes `path` before interpolating it into
+/// the JS string literal — required here (unlike `nav_to`'s callers above,
+/// which only ever pass hardcoded paths or a urlencoded project name) since
+/// this carries a Supabase access/refresh token straight from a deep link.
+fn nav_to_safe(app: &tauri::AppHandle, path: &str) {
+    if let Some(w) = app.get_webview_window("main") {
+        let js = format!("window.location.href={}", serde_json::to_string(path).unwrap_or_default());
+        let _ = w.eval(&js);
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Opens Valori Cloud's login page in the user's default system browser —
+/// never inside the embedded webview, which is capability-locked to
+/// 127.0.0.1 only (see capabilities/default.json). `?desktop=1` tells the
+/// website to hand the session back via a valori://auth-callback deep link
+/// (see its /desktop-handoff page) instead of redirecting into its own
+/// dashboard.
+#[tauri::command]
+fn open_cloud_login(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://valori.systems/login?desktop=1", None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Show and focus the main window (used by tray click / "Open" menu item).
@@ -264,7 +291,8 @@ pub fn run() {
             stop_daemon,
             daemon_status,
             add_recent_document,
-            install_update
+            install_update,
+            open_cloud_login
         ])
         .setup(move |app| {
             let shutting_down = shutting_down_setup;
@@ -304,6 +332,20 @@ pub fn run() {
             let handle_for_links = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 for url in event.urls() {
+                    // valori://auth-callback?access_token=...&refresh_token=...
+                    // — the "sign in to sync" handoff (open_cloud_login above
+                    // + the website's /desktop-handoff page). Tokens go
+                    // straight through to the embedded webview's own
+                    // /auth/desktop-received page, which hands them to
+                    // Supabase and flips this app into cloud mode — they're
+                    // never read or stored on the Rust side.
+                    if url.host_str() == Some("auth-callback") {
+                        let query = url.query().unwrap_or("");
+                        show_main(&handle_for_links);
+                        nav_to_safe(&handle_for_links, &format!("/auth/desktop-received?{query}"));
+                        continue;
+                    }
+
                     let path = match (url.host_str(), url.path().trim_matches('/')) {
                         // valori://projects/my-project
                         (Some("projects"), name) if !name.is_empty() => {

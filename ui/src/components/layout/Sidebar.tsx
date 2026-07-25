@@ -9,6 +9,8 @@ import { useCluster } from "@/lib/hooks/useCluster";
 import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
+import { ProjectModePicker } from "@/components/projects/ProjectModePicker";
+import { Skeleton } from "@/components/ui/skeleton";
 import { getPreference, nativeAvailable } from "@/lib/native";
 import { SettingsPopover, type PopoverPos } from "@/components/layout/SettingsPopover";
 import {
@@ -217,7 +219,7 @@ export function Sidebar() {
 
   // Native app-menu "New Project" (⌘N) fires a custom DOM event.
   useEffect(() => {
-    function onNativeNew() { setCreateOpen(true); }
+    function onNativeNew() { setPickerOpen(true); }
     window.addEventListener("valori:new-project", onNativeNew);
     return () => window.removeEventListener("valori:new-project", onNativeNew);
   }, []);
@@ -225,6 +227,7 @@ export function Sidebar() {
   const { projects, isLoading, create, open } = useProjectManifest();
   const { isStandalone } = useCluster();
   const [createOpen, setCreateOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
 
   useEffect(() => {
@@ -329,7 +332,7 @@ export function Sidebar() {
                 Projects
               </p>
               <button
-                onClick={() => setCreateOpen(true)}
+                onClick={() => setPickerOpen(true)}
                 title="New project"
                 className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-card-foreground transition-colors"
               >
@@ -341,7 +344,7 @@ export function Sidebar() {
 
           {collapsed && (
             <button
-              onClick={() => setCreateOpen(true)}
+              onClick={() => setPickerOpen(true)}
               title="New project"
               aria-label="New project"
               className="flex h-9 w-9 mx-auto items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/60 hover:text-foreground transition-colors mb-1"
@@ -351,16 +354,16 @@ export function Sidebar() {
           )}
 
           <div className="flex flex-col gap-0.5">
-            {isLoading ? (
-              <div className="flex flex-col gap-1.5 px-2 pt-1">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className={cn("animate-pulse rounded-lg bg-accent/60", collapsed ? "h-9 w-9 mx-auto" : "h-7")} />
-                ))}
-              </div>
+             {isLoading ? (
+               <div className="flex flex-col gap-1.5 px-2 pt-1">
+                 {[1, 2, 3].map((i) => (
+                   <Skeleton key={i} className={cn("bg-accent/60", collapsed ? "h-9 w-9 mx-auto" : "h-7")} />
+                 ))}
+               </div>
             ) : projects.length === 0 ? (
               !collapsed && (
                 <button
-                  onClick={() => setCreateOpen(true)}
+                  onClick={() => setPickerOpen(true)}
                   className="mx-1 mt-1 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-3 text-xs text-muted-foreground hover:border-muted hover:text-muted-foreground transition-colors"
                 >
                   <Plus size={12} />
@@ -455,6 +458,12 @@ export function Sidebar() {
           onSettingsToggle={() => setSettingsOpen((o) => !o)}
         />
       </aside>
+
+      <ProjectModePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onLocal={() => setCreateOpen(true)}
+      />
 
       <CreateProjectDialog
         open={createOpen}
