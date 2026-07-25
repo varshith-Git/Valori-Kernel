@@ -18,6 +18,11 @@ const LABELS: Record<string, string> = {
   settings:     "Settings",
   help:         "Help",
   launch:       "Launcher",
+  cloud:        "Cloud",
+  tools:        "Tools",
+  operations:   "Operations",
+  playground:   "Playground",
+  graph:        "Graph",
 };
 
 export function Breadcrumb() {
