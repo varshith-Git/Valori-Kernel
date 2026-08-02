@@ -65,11 +65,17 @@ export function useLLMConfig() {
     setLoaded(true);
   }, []);
 
+  useEffect(() => {
+    if (loaded) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+      } catch {}
+    }
+  }, [config, loaded]);
+
   const setConfig = useCallback((update: Partial<LLMConfig> | ((prev: LLMConfig) => LLMConfig)) => {
     setConfigState((prev) => {
-      const next = typeof update === "function" ? update(prev) : { ...prev, ...update };
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
-      return next;
+      return typeof update === "function" ? update(prev) : { ...prev, ...update };
     });
   }, []);
 

@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 /**
  * The one page-header shape every screen should share: title + subtitle on
  * the left, actions on the right. Before this, every page hand-rolled its
@@ -11,9 +13,9 @@ export function PageHeader({
   subtitle,
   actions,
 }: {
-  title: React.ReactNode;
-  subtitle?: React.ReactNode;
-  actions?: React.ReactNode;
+  title: ReactNode;
+  subtitle?: ReactNode;
+  actions?: ReactNode;
 }) {
   return (
     <div className="mb-6 flex items-start justify-between gap-4">

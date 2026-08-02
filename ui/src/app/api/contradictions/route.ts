@@ -4,14 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getApiUrl } from "@/lib/server/connection";
-import { fetchWithTimeout } from "@/lib/server/http";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function apiHeaders(): Record<string, string> {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 export interface ContradictionEntry {
   id: string;
@@ -40,7 +33,7 @@ export async function GET(req: NextRequest) {
     // Fetch up to 200 contradiction entries via the meta/list endpoint (prefix scan).
     const listRes = await fetchWithTimeout(
       `${getApiUrl()}/v1/memory/meta/list?prefix=${encodeURIComponent("contradiction:")}&limit=200`,
-      { headers: apiHeaders() }
+      { headers: nodeHeaders() }
     );
 
     if (!listRes.ok) {
@@ -79,9 +72,9 @@ export async function GET(req: NextRequest) {
         let text_a: string | undefined;
         let text_b: string | undefined;
         try {
-          const ra = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${c.record_a}`, { headers: apiHeaders() });
+          const ra = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${c.record_a}`, { headers: nodeHeaders() });
           if (ra.ok) { const d = await ra.json() as { metadata?: Record<string, unknown> }; text_a = d.metadata?.text as string | undefined; }
-          const rb = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${c.record_b}`, { headers: apiHeaders() });
+          const rb = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${c.record_b}`, { headers: nodeHeaders() });
           if (rb.ok) { const d = await rb.json() as { metadata?: Record<string, unknown> }; text_b = d.metadata?.text as string | undefined; }
         } catch { /* skip */ }
         return { ...c, text_a: text_a?.slice(0, 300), text_b: text_b?.slice(0, 300) };
@@ -102,7 +95,7 @@ export async function POST(req: NextRequest) {
     if (!id || !action) return NextResponse.json({ error: "id and action are required" }, { status: 400 });
 
     const key = `contradiction:${id}`;
-    const getRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
+    const getRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: nodeHeaders() });
     if (!getRes.ok) return NextResponse.json({ error: "contradiction not found" }, { status: 404 });
     const existing = await getRes.json() as { metadata?: Record<string, unknown> };
     const meta = existing.metadata ?? {};
@@ -112,7 +105,7 @@ export async function POST(req: NextRequest) {
     // Update the contradiction entry status
     await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({
         target_id: key,
         metadata: { ...meta, status: newStatus, resolved_at: new Date().toISOString() },
@@ -121,12 +114,12 @@ export async function POST(req: NextRequest) {
 
     // If supersede_b: mark record_b's sidecar as superseded so search can filter it out
     if (action === "supersede_b" && meta.record_b) {
-      const rbRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${meta.record_b}`, { headers: apiHeaders() });
+      const rbRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${meta.record_b}`, { headers: nodeHeaders() });
       if (rbRes.ok) {
         const rbData = await rbRes.json() as { metadata?: Record<string, unknown> };
         await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
-          headers: apiHeaders(),
+          headers: nodeHeaders(),
           body: JSON.stringify({
             target_id: `record:${meta.record_b}`,
             metadata: {

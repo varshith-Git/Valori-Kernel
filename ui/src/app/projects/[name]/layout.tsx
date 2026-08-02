@@ -1,9 +1,9 @@
 "use client";
 
 import { use, useEffect, useState, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { mutate } from "swr";
-import { Loader2, AlertTriangle, ArrowLeft, Square, RotateCcw, RefreshCw, Pencil } from "lucide-react";
+import { Loader2, AlertTriangle, ArrowLeft, Square, RotateCcw, RefreshCw, Pencil, Layers } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
 
@@ -29,6 +29,11 @@ export default function ProjectLayout({
   const [actionBusy, setActionBusy] = useState(false);
   const [startLogs,  setStartLogs]  = useState<string[]>([]);
   const logsRef = useRef<HTMLDivElement>(null);
+
+  const pathname = usePathname();
+  // Collection pages sit at /projects/[name]/[collection] — one extra segment.
+  // Hide the project header card there; it's shown on the project root only.
+  const isCollectionPage = pathname.split("/").filter(Boolean).length > 2;
 
   const [renaming,    setRenaming]    = useState(false);
   const [renameValue, setRenameValue] = useState(project);
@@ -225,95 +230,99 @@ export default function ProjectLayout({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Session bar */}
-      <div className="flex items-center gap-3 px-1 py-1">
-        {/* Status + project name */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className={`h-2 w-2 rounded-full flex-shrink-0 ${statusDot} ${nodeStatus === "running" ? "animate-pulse" : ""}`} />
-
-          {renaming ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                ref={renameInputRef}
-                value={renameValue}
-                onChange={(e) => { setRenameValue(e.target.value); setRenameError(""); }}
-                onKeyDown={async (e) => {
-                  if (e.key === "Escape") { setRenaming(false); setRenameValue(project); setRenameError(""); }
-                  if (e.key === "Enter") {
-                    const next = renameValue.trim();
-                    if (!next || next === project) { setRenaming(false); return; }
-                    if (!/^[a-z0-9_-]+$/i.test(next)) { setRenameError("Letters, digits, - and _ only"); return; }
-                    setRenameBusy(true);
-                    const result = await renameProject(project, next);
-                    setRenameBusy(false);
-                    if (result) {
-                      setRenaming(false);
-                      router.replace(`/projects/${encodeURIComponent(result)}`);
+      {/* Project header card — shown on the project root (/projects/[name]) only */}
+      {!isCollectionPage && <div className="rounded-xl border border-border bg-card px-5 py-4 flex items-center gap-4">
+        <div className="w-12 h-12 rounded-xl bg-[var(--v-accent-muted)] flex items-center justify-center shrink-0">
+          <Layers size={22} className="text-[var(--v-accent)]" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2.5">
+            {renaming ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  ref={renameInputRef}
+                  value={renameValue}
+                  onChange={(e) => { setRenameValue(e.target.value); setRenameError(""); }}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Escape") { setRenaming(false); setRenameValue(project); setRenameError(""); }
+                    if (e.key === "Enter") {
+                      const next = renameValue.trim();
+                      if (!next || next === project) { setRenaming(false); return; }
+                      if (!/^[a-z0-9_-]+$/i.test(next)) { setRenameError("Letters, digits, - and _ only"); return; }
+                      setRenameBusy(true);
+                      const result = await renameProject(project, next);
+                      setRenameBusy(false);
+                      if (result) {
+                        setRenaming(false);
+                        router.replace(`/projects/${encodeURIComponent(result)}`);
+                      }
                     }
-                  }
-                }}
-                onBlur={() => { if (!renameBusy) { setRenaming(false); setRenameValue(project); setRenameError(""); } }}
-                autoFocus
-                className="h-6 rounded border border-[var(--v-accent)] bg-background px-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--v-accent-ring)] min-w-[120px]"
-              />
-              {renameBusy && <Loader2 size={11} className="animate-spin text-muted-foreground" />}
-              {renameError && <span className="text-[10px] text-red-500">{renameError}</span>}
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <span className={`text-sm font-medium ${
-                nodeStatus === "running" ? "text-foreground" : "text-muted-foreground"
-              }`}>
-                <span className="font-semibold">{project}</span>
-                {" "}
-                <span className="font-normal text-muted-foreground">
-                  {nodeStatus === "running" ? "is running" : nodeStatus === "error" ? "has an error" : "is stopped"}
+                  }}
+                  onBlur={() => { if (!renameBusy) { setRenaming(false); setRenameValue(project); setRenameError(""); } }}
+                  autoFocus
+                  className="h-6 rounded border border-[var(--v-accent)] bg-background px-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--v-accent-ring)] min-w-[120px]"
+                />
+                {renameBusy && <Loader2 size={11} className="animate-spin text-muted-foreground" />}
+                {renameError && <span className="text-[10px] text-red-500">{renameError}</span>}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold text-foreground">{project}</h1>
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium border ${
+                  nodeStatus === "running"
+                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+                    : nodeStatus === "error"
+                    ? "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30"
+                    : "bg-zinc-500/10 text-zinc-500 border-zinc-500/30"
+                }`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${statusDot} ${nodeStatus === "running" ? "animate-pulse" : ""}`} />
+                  {statusLabel}
                 </span>
-              </span>
-              {nodeStatus !== "running" && (
-                <button
-                  onClick={() => { setRenameValue(project); setRenaming(true); }}
-                  title="Rename project"
-                  className="flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                >
-                  <Pencil size={11} />
-                </button>
-              )}
-            </div>
-          )}
+                {nodeStatus !== "running" && (
+                  <button
+                    onClick={() => { setRenameValue(project); setRenaming(true); }}
+                    title="Rename project"
+                    className="flex items-center justify-center h-5 w-5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  >
+                    <Pencil size={11} />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Manage collections, metrics, and settings for this project.
+          </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Action buttons */}
+        <div className="flex items-center gap-2 shrink-0">
           {nodeStatus === "running" ? (
             <>
               <Button size="sm" variant="outline" onClick={handleRestart} disabled={actionBusy}
-                title="Snapshot, stop, then restart" className="gap-1.5 h-7 text-xs">
+                title="Snapshot, stop, then restart" className="gap-1.5 h-8 text-xs">
                 {actionBusy ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
                 Restart
               </Button>
               <Button size="sm" variant="outline" onClick={handleStop} disabled={actionBusy}
-                title="Snapshot & stop session" className="gap-1.5 h-7 text-xs">
+                title="Snapshot & stop session" className="gap-1.5 h-8 text-xs">
                 {actionBusy ? <Loader2 size={11} className="animate-spin" /> : <Square size={11} />}
                 Stop
               </Button>
             </>
           ) : (
             <Button size="sm" onClick={handleStart} disabled={actionBusy} title="Start session"
-              className="gap-1.5 h-7 text-xs border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-400"
+              className="gap-1.5 h-8 text-xs border-emerald-500/40 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-400"
               variant="outline">
               {actionBusy ? <Loader2 size={11} className="animate-spin" /> : null}
               Start
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={() => router.push("/")}
-            title="Back to all projects" className="gap-1.5 h-7 text-xs">
-            <ArrowLeft size={11} /> Back to Projects
-          </Button>
         </div>
-      </div>
+      </div>}
 
-      {/* Stopped-node banner — shown instead of silent empty tabs */}
-      {nodeStatus === "stopped" && (
+      {/* Stopped-node banner — shown instead of silent empty tabs, project root only */}
+      {!isCollectionPage && nodeStatus === "stopped" && (
         <div className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3">
           <span className="h-2 w-2 rounded-full bg-amber-400 flex-shrink-0" />
           <p className="text-xs text-amber-700 dark:text-amber-400 flex-1">

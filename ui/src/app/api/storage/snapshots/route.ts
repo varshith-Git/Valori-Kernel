@@ -1,19 +1,12 @@
 import { NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function authHeaders() {
-  const h: Record<string, string> = {};
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
 
 export async function GET() {
   try {
     const res = await fetchWithTimeout(`${getApiUrl()}/v1/storage/snapshots`, {
-      headers: authHeaders(),
+      headers: nodeHeaders(false),
       cache: "no-store",
     });
     // 400 or 404 = object store not configured

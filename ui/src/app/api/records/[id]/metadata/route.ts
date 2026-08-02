@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
-
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 export async function PATCH(
   req: NextRequest,
@@ -11,14 +9,11 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await req.json();
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-
     const collection = req.nextUrl.searchParams.get("collection") ?? "";
     const qs = collection ? `?collection=${encodeURIComponent(collection)}` : "";
     const res = await fetchWithTimeout(`${getApiUrl()}/v1/records/${id}/metadata${qs}`, {
       method: "PATCH",
-      headers,
+      headers: nodeHeaders(),
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));

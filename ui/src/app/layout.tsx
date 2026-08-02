@@ -36,12 +36,11 @@ export default function RootLayout({
             Reads localStorage and applies the correct class before React hydrates. */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem('valori-theme');var d=t||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.classList.remove('dark','light');document.documentElement.classList.add(d);}catch(e){}})();
-              try{fetch('/api/diag-mount?stage=html-script-executed').catch(function(){});}catch(e){}`,
+            __html: `(function(){try{var t=localStorage.getItem('valori-theme');var d=(!t||t==='system')?(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'):t;document.documentElement.classList.remove('dark','light');document.documentElement.classList.add(d);document.documentElement.setAttribute('data-theme',d);}catch(e){}})();`,
           }}
         />
       </head>
-      <body className="flex h-full bg-background text-foreground">
+      <body className="flex h-full overflow-hidden bg-background text-foreground">
         <ThemeProvider>
           <GlobalErrorBoundary>
             <AppShellGate>{children}</AppShellGate>

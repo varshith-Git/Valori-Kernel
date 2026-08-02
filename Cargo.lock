@@ -4927,6 +4927,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rcgen",
  "redb",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",

@@ -125,9 +125,13 @@ fn nav_to_safe(app: &tauri::AppHandle, path: &str) {
 /// (see its /desktop-handoff page) instead of redirecting into its own
 /// dashboard.
 #[tauri::command]
-fn open_cloud_login(app: tauri::AppHandle) -> Result<(), String> {
+fn open_cloud_login(app: tauri::AppHandle, provider: Option<String>) -> Result<(), String> {
+    let mut url = "https://valori.systems/login?desktop=1".to_string();
+    if let Some(p) = provider {
+        url.push_str(&format!("&provider={p}"));
+    }
     app.opener()
-        .open_url("https://valori.systems/login?desktop=1", None::<&str>)
+        .open_url(&url, None::<&str>)
         .map_err(|e| e.to_string())
 }
 

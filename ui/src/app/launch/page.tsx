@@ -9,6 +9,7 @@ import type { LaunchConfig, NodeCfg, NodeState, NodeStatus } from "@/lib/server/
 import { buildMembers, makeDefaultNodes as makeDefaultNodesShared, nextNodeConfig as nextNodeConfigShared } from "@/lib/server/cluster-config";
 import { DIMENSIONS } from "@/lib/dimensions";
 import { timeAgo } from "@/lib/time";
+import { StatusBadge } from "@/components/ui/status-badge";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -46,30 +47,19 @@ function nextNodeConfig(existing: NodeCfg[]): NodeCfg {
   return nextNodeConfigShared(existing, CLUSTER_DIR);
 }
 
+
 // ─── status badge ─────────────────────────────────────────────────────────────
 
-function StatusBadge({ status }: { status: NodeStatus | "unknown" }) {
-  const ring: Record<string, string> = {
-    stopped:  "border-border bg-accent text-muted-foreground",
-    starting: "border-amber-500/30 bg-amber-500/15 text-amber-700 animate-pulse",
-    running:  "border-emerald-500/30 bg-emerald-500/15 text-emerald-700",
-    error:    "border-red-500/30 bg-red-500/15 text-red-700",
-    unknown:  "border-border bg-accent text-muted-foreground",
+function NodeStatusBadge({ status }: { status: NodeStatus | "unknown" }) {
+  const toneMap: Record<string, Parameters<typeof StatusBadge>[0]["tone"]> = {
+    running:  "success",
+    starting: "warning",
+    error:    "error",
+    stopped:  "neutral",
+    unknown:  "neutral",
   };
-  const dot: Record<string, string> = {
-    stopped:  "bg-muted-foreground/50",
-    starting: "bg-amber-400 animate-pulse",
-    running:  "bg-emerald-400",
-    error:    "bg-red-400",
-    unknown:  "bg-muted-foreground/50",
-  };
-  const s = status in ring ? status : "unknown";
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-full border ${ring[s]}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot[s]}`} />
-      {status}
-    </span>
-  );
+  const tone = toneMap[status] ?? "neutral";
+  return <StatusBadge tone={tone} pulse={status === "starting"}>{status}</StatusBadge>;
 }
 
 // ─── log viewer — intentionally always-dark terminal ────────────────────────
@@ -188,7 +178,7 @@ function NodeCard({
         {nc.clusterInit && (
           <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-blue-950/60 border border-blue-800/60 text-blue-400">INIT</span>
         )}
-        <StatusBadge status={status?.status ?? "stopped"} />
+        <NodeStatusBadge status={status?.status ?? "stopped"} />
         {status?.pid && <span className="text-[10px] text-muted-foreground font-mono">pid {status.pid}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
@@ -581,7 +571,7 @@ export default function LaunchPage() {
           <div className="flex items-center gap-2">
             <Server size={15} className="text-muted-foreground" />
             <h2 className="text-sm font-semibold text-foreground">Standalone Node</h2>
-            {singleStatus && <StatusBadge status={singleStatus.status} />}
+            {singleStatus && <NodeStatusBadge status={singleStatus.status} />}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -640,7 +630,7 @@ export default function LaunchPage() {
                 )}
                 <div className="flex gap-1.5">
                   {clusterCfg.nodes.map(n => (
-                    <StatusBadge key={n.id} status={statuses[n.id]?.status ?? "stopped"} />
+                    <NodeStatusBadge key={n.id} status={statuses[n.id]?.status ?? "stopped"} />
                   ))}
                 </div>
               </div>

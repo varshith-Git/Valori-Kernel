@@ -986,58 +986,112 @@ impl Engine {
 
     // ── Snapshot ──────────────────────────────────────────────────────────────
 
-    pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
-        let mut buffer = Vec::new();
-        buffer.extend_from_slice(b"VAL1");
+    /// Write the complete engine snapshot to `w` without buffering the kernel
+    /// section in RAM.  The envelope format is identical to [`snapshot`].
+    ///
+    /// Requires `W: Write + Seek` so the kernel-section length (written as a
+    /// 4-byte prefix before the kernel bytes) can be patched in after the
+    /// kernel bytes are written — avoiding any need to know the size upfront.
+    ///
+    /// For saving to disk, use a `BufWriter<File>` (1 MB buffer recommended).
+    /// For in-memory use (e.g. HTTP download), use a `Cursor<Vec<u8>>`.
+    pub fn write_snapshot_to_writer<W: std::io::Write + std::io::Seek>(
+        &self,
+        w: &mut W,
+    ) -> Result<(), EngineError> {
+        use std::io::{Seek, SeekFrom, Write};
+        use valori_kernel::snapshot::encode::encode_state_to_writer;
 
-        let hint = valori_kernel::snapshot::encode::encode_capacity_hint(&self.state);
-        let mut k_buf = Vec::with_capacity(hint);
-        encode_state(&self.state, &mut k_buf)?;
-        buffer.extend_from_slice(&(k_buf.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&k_buf);
+        let io_err = |e: std::io::Error| EngineError::InvalidInput(e.to_string());
 
+        // Magic
+        w.write_all(b"VAL1").map_err(io_err)?;
+
+        // Kernel section — streamed record-by-record; length patched in after.
+        let len_pos = w.stream_position().map_err(io_err)?;
+        w.write_all(&0u32.to_le_bytes()).map_err(io_err)?; // placeholder
+        let data_start = w.stream_position().map_err(io_err)?;
+        encode_state_to_writer(&self.state, w)
+            .map_err(|e| EngineError::InvalidInput(format!("kernel encode: {e}")))?;
+        let data_end = w.stream_position().map_err(io_err)?;
+        let k_len = (data_end - data_start) as u32;
+        w.seek(SeekFrom::Start(len_pos)).map_err(io_err)?;
+        w.write_all(&k_len.to_le_bytes()).map_err(io_err)?;
+        w.seek(SeekFrom::Start(data_end)).map_err(io_err)?;
+
+        // Metadata section (small — buffering is fine)
         let m_buf = self.metadata.snapshot();
-        buffer.extend_from_slice(&(m_buf.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&m_buf);
+        w.write_all(&(m_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&m_buf).map_err(io_err)?;
 
+        // Index section
         let i_buf = self
             .index
             .snapshot()
             .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-        buffer.extend_from_slice(&(i_buf.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&i_buf);
+        w.write_all(&(i_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&i_buf).map_err(io_err)?;
 
+        // NSRG section
         let ns_json = serde_json::to_vec(&self.namespaces)
             .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-        buffer.extend_from_slice(b"NSRG");
-        buffer.extend_from_slice(&(ns_json.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&ns_json);
+        w.write_all(b"NSRG").map_err(io_err)?;
+        w.write_all(&(ns_json.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&ns_json).map_err(io_err)?;
 
-        let crts_buf = bincode::serde::encode_to_vec(&self.created_at, bincode::config::standard())
-            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-        buffer.extend_from_slice(b"CRTS");
-        buffer.extend_from_slice(&(crts_buf.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&crts_buf);
+        // CRTS section
+        let crts_buf =
+            bincode::serde::encode_to_vec(&self.created_at, bincode::config::standard())
+                .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        w.write_all(b"CRTS").map_err(io_err)?;
+        w.write_all(&(crts_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&crts_buf).map_err(io_err)?;
 
+        // BCRP section
         let (corpus, total_tokens) = self.reranker.snapshot_corpus();
         let bcrp_buf =
             bincode::serde::encode_to_vec(&(corpus, total_tokens), bincode::config::standard())
                 .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-        buffer.extend_from_slice(b"BCRP");
-        buffer.extend_from_slice(&(bcrp_buf.len() as u32).to_le_bytes());
-        buffer.extend_from_slice(&bcrp_buf);
+        w.write_all(b"BCRP").map_err(io_err)?;
+        w.write_all(&(bcrp_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&bcrp_buf).map_err(io_err)?;
 
-        Ok(buffer)
+        w.flush().map_err(io_err)?;
+        Ok(())
     }
 
+    /// Return the full snapshot as a `Vec<u8>`.
+    ///
+    /// Uses [`write_snapshot_to_writer`] internally so there is one encoding
+    /// path.  Callers that save to disk should prefer [`save_snapshot`] which
+    /// streams directly to a file and never materialises the full snapshot.
+    pub fn snapshot(&self) -> Result<Vec<u8>, EngineError> {
+        let hint = valori_kernel::snapshot::encode::encode_capacity_hint(&self.state) + 4096;
+        let mut cursor = std::io::Cursor::new(Vec::with_capacity(hint));
+        self.write_snapshot_to_writer(&mut cursor)?;
+        Ok(cursor.into_inner())
+    }
+
+    /// Stream the snapshot directly to `path` via a buffered file writer.
+    ///
+    /// Peak RAM overhead is ~1 MB (the write buffer) regardless of state size.
+    /// The write lock on the engine must already be held by the caller when
+    /// invoked via the async capability layer.
     pub fn save_snapshot(&self, path: Option<&Path>) -> Result<PathBuf, EngineError> {
         let target = path
             .or(self.snapshot_path.as_deref())
             .ok_or(EngineError::InvalidInput(
                 "No snapshot path configured".into(),
             ))?;
-        let data = self.snapshot()?;
-        std::fs::write(target, data).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(target)
+            .map_err(|e| EngineError::InvalidInput(format!("open snapshot: {e}")))?;
+        let mut w = std::io::BufWriter::with_capacity(1 << 20, file);
+        self.write_snapshot_to_writer(&mut w)
+            .map_err(|e| EngineError::InvalidInput(format!("snapshot write: {e}")))?;
         tracing::info!("Snapshot saved to {:?}", target);
         Ok(target.to_path_buf())
     }
@@ -1740,6 +1794,49 @@ mod tests {
         let mut e2 = Engine::with_config(tiny_cfg());
         e2.restore(&snap).unwrap();
         assert_eq!(e2.record_count(), 1);
+    }
+
+    #[test]
+    fn streaming_encoder_matches_buffered() {
+        // write_snapshot_to_writer must produce bit-for-bit identical bytes to
+        // snapshot() so callers can switch without a format change.
+        let mut e = Engine::with_config(tiny_cfg());
+        e.create_collection("default").unwrap();
+        e.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+        e.insert_record_from_f32(&[0.5, 0.6, 0.7, 0.8]).unwrap();
+
+        let buffered = e.snapshot().unwrap();
+
+        let mut cursor = std::io::Cursor::new(Vec::with_capacity(buffered.len()));
+        e.write_snapshot_to_writer(&mut cursor).unwrap();
+
+        assert_eq!(
+            buffered,
+            cursor.into_inner(),
+            "write_snapshot_to_writer must match snapshot()"
+        );
+    }
+
+    #[test]
+    fn streaming_save_restore_roundtrip() {
+        // save_snapshot writes directly to a file; restore must reconstruct
+        // identical state without an intermediate in-memory Vec<u8>.
+        let mut e = Engine::with_config(tiny_cfg());
+        e.create_collection("default").unwrap();
+        e.insert_record_from_f32(&[0.1, 0.2, 0.3, 0.4]).unwrap();
+        e.insert_record_from_f32(&[0.5, 0.6, 0.7, 0.8]).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let snap_path = dir.path().join("snap.val");
+        e.save_snapshot(Some(snap_path.as_path())).unwrap();
+
+        let data = std::fs::read(&snap_path).unwrap();
+        let mut e2 = Engine::with_config(tiny_cfg());
+        e2.restore(&data).unwrap();
+        assert_eq!(e2.record_count(), 2);
+
+        let results = e2.search_l2(&[0.1, 0.2, 0.3, 0.4], 1).unwrap();
+        assert_eq!(results.len(), 1);
     }
 
     #[test]

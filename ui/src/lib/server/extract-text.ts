@@ -52,8 +52,18 @@ export async function extractText(file: File): Promise<string> {
         });
     }
 
-    const data = await pdfParse(buf, { pagerender: renderPageWithLayout });
-    return data.text as string;
+    try {
+      // pdf-parse defaults to a bundled pdf.js from 2017 (v1.10.100); v2.0.550
+      // is also bundled and handles a wider range of real-world PDFs.
+      const data = await pdfParse(buf, { pagerender: renderPageWithLayout, version: "v2.0.550" });
+      return data.text as string;
+    } catch (e) {
+      console.error("PDF extraction failed:", e);
+      throw new Error(
+        "Could not read this PDF — it may be corrupted, password-protected, or a scanned image with no embedded text. " +
+        "Try re-exporting it, or upload a .txt/.md file instead."
+      );
+    }
   }
 
   if (

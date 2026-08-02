@@ -73,7 +73,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showChunks, setShowChunks] = useState(false);
   const [enrichEnabled, setEnrichEnabled] = useState(false);
-  const [chunkMode, setChunkMode] = useState<"fixed" | "tree">("tree");
+  const [chunkMode, setChunkMode] = useState<"fixed" | "tree">("fixed");
   const [suggestedQuestions, setSuggestedQuestions] = useState<string[] | null>(null);
   const [suggestingQuestions, setSuggestingQuestions] = useState(false);
   const [suggestError, setSuggestError] = useState<string | null>(null);
@@ -241,7 +241,7 @@ export function DocumentUploadTab({ collection, onAskQuestion }: Props) {
           </p>
         </div>
         <div className="flex gap-1 ml-4">
-          {(["tree", "fixed"] as const).map((m) => (
+          {(["fixed", "tree"] as const).map((m) => (
             <button
               key={m}
               type="button"

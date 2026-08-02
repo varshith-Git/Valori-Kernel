@@ -1,6 +1,6 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect, notFound } from 'next/navigation'
-import { OperationDetailView } from './OperationDetailView'
+import { OperationDetailView } from '@/components/operations/OperationDetailView'
 
 export default async function ProjectOperationDetailPage({
     params,

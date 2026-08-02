@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,14 +14,15 @@ export function MetricCard({
   value,
   hint,
   className,
+  ...props
 }: {
   label: string;
-  value: React.ReactNode;
+  value: ReactNode;
   hint?: string;
   className?: string;
-}) {
+} & React.ComponentProps<"div">) {
   return (
-    <div className={cn("rounded-xl border border-border/60 bg-background/60 p-4 text-center", className)}>
+    <div className={cn("rounded-xl border border-border/60 bg-background/60 p-4 text-center", className)} {...props}>
       <span className="block text-xs text-muted-foreground mb-1">{label}</span>
       <span className="font-mono text-2xl font-bold text-foreground">{value}</span>
       {hint && <span className="mt-1 block text-[11px] text-muted-foreground">{hint}</span>}

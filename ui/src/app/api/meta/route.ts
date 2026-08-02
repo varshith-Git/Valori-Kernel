@@ -1,14 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function authHeaders() {
-  const h: Record<string, string> = {};
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
 
 export async function GET(req: NextRequest) {
   const targetId = req.nextUrl.searchParams.get("target_id");
@@ -16,7 +9,7 @@ export async function GET(req: NextRequest) {
   try {
     const res = await fetchWithTimeout(
       `${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(targetId)}`,
-      { headers: authHeaders(), cache: "no-store" }
+      { headers: nodeHeaders(false), cache: "no-store" }
     );
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });
@@ -30,7 +23,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: nodeHeaders(),
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));

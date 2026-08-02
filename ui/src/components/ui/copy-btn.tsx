@@ -17,9 +17,30 @@ export function CopyBtn({ text, label = "copy", className = "" }: CopyBtnProps) 
 
   const copy = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
-    await navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 1500);
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        setDone(true);
+      } else {
+        // Fallback for non-secure HTTP environments
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+          document.execCommand("copy");
+          setDone(true);
+        } catch (err) {
+          console.error("Fallback copy failed", err);
+        }
+        document.body.removeChild(textArea);
+      }
+      setTimeout(() => setDone(false), 1500);
+    } catch (err) {
+      console.error("Clipboard copy failed", err);
+    }
   }, [text]);
 
   return (

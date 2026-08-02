@@ -1,8 +1,12 @@
 'use client'
 
-// Ported from valori-kernel/ui's app/cluster/page.tsx, adapted for
-// multi-tenancy — maps naturally onto this app's replication=1
-// (standalone) vs. replication=3 (Raft cluster) project model.
+// Shared by both the standalone /cluster page (no projectId — single
+// locally-connected daemon; standalone-mode message explains the
+// VALORI_CLUSTER_MEMBERS / VALORI_NODE_ID env vars + docker compose command
+// to enable clustering) and the cloud /cloud/projects/[id]/cluster page
+// (projectId passed — standalone-mode message explains replication=1 vs.
+// replication=3 project creation instead, since env vars aren't the cloud
+// user's lever).
 
 import { useCluster } from '@/lib/hooks/useCluster'
 import { NodeCard } from '@/components/cluster/NodeCard'
@@ -11,7 +15,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
 
-export function ClusterView({ projectId }: { projectId: string }) {
+export function ClusterView({ projectId }: { projectId?: string }) {
     const {
         members,
         leaderId,
@@ -29,7 +33,7 @@ export function ClusterView({ projectId }: { projectId: string }) {
 
     if (isLoading) {
         return (
-            <div className="flex flex-col gap-6 w-full">
+            <div className="flex flex-col gap-6 w-full max-w-[1600px]">
                 <Skeleton className="h-7 w-40 bg-accent" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {[1, 2, 3].map((i) => (
@@ -42,7 +46,7 @@ export function ClusterView({ projectId }: { projectId: string }) {
 
     if (error) {
         return (
-            <div className="w-full">
+            <div className="w-full max-w-[1600px]">
                 <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-5">
                     <p className="text-sm text-red-600 dark:text-red-400">Node unreachable</p>
                     <p className="mt-1 text-xs text-red-700">{String(error)}</p>
@@ -53,13 +57,27 @@ export function ClusterView({ projectId }: { projectId: string }) {
 
     if (isStandalone) {
         return (
-            <div className="w-full">
+            <div className="w-full max-w-[1600px]">
                 <div className="rounded-xl border border-border bg-card p-8 text-center">
                     <p className="text-sm text-muted-foreground font-medium">Running in standalone mode</p>
-                    <p className="mt-2 text-xs text-muted-foreground max-w-sm mx-auto">
-                        This project has a single node (replication = 1), not a Raft cluster. Create a project with
-                        3-node replication to see cluster health here.
-                    </p>
+                    {projectId ? (
+                        <p className="mt-2 text-xs text-muted-foreground max-w-sm mx-auto">
+                            This project has a single node (replication = 1), not a Raft cluster. Create a project with
+                            3-node replication to see cluster health here.
+                        </p>
+                    ) : (
+                        <>
+                            <p className="mt-2 text-xs text-muted-foreground max-w-sm mx-auto">
+                                This node is not part of a Raft cluster. To enable cluster mode,
+                                set <code className="font-mono bg-accent px-1 rounded">VALORI_CLUSTER_MEMBERS</code> and{" "}
+                                <code className="font-mono bg-accent px-1 rounded">VALORI_NODE_ID</code> and
+                                restart.
+                            </p>
+                            <pre className="mt-4 rounded-lg bg-background px-5 py-4 text-left text-xs text-accent-foreground font-mono inline-block">
+{`docker compose -f docker-compose.cluster.yml up -d`}
+                            </pre>
+                        </>
+                    )}
                 </div>
             </div>
         )
@@ -68,7 +86,7 @@ export function ClusterView({ projectId }: { projectId: string }) {
     const lag = lastLogIndex != null && lastAppliedIndex != null ? lastLogIndex - lastAppliedIndex : null
 
     return (
-        <div className="flex flex-col gap-6 w-full">
+        <div className="flex flex-col gap-6 w-full max-w-[1600px]">
             <PageHeader
                 title="Cluster Health"
                 subtitle={
@@ -107,7 +125,7 @@ export function ClusterView({ projectId }: { projectId: string }) {
 
             <div>
                 <h2 className="text-sm font-medium text-muted-foreground mb-3">Members ({members.length})</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
                     {members.map((m) => (
                         <NodeCard key={m.id} member={m} isLeader={m.id === leaderId} isThisNode={m.id === nodeId} />
                     ))}
@@ -118,7 +136,8 @@ export function ClusterView({ projectId }: { projectId: string }) {
                 <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
                     <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">Apply lag: {lag} entries behind committed log</p>
                     <p className="mt-1 text-xs text-amber-700">
-                        This node is still applying committed entries. Reads may not reflect the latest state.
+                        This node is still applying committed entries. Reads may not reflect the latest state. Use{" "}
+                        <code className="font-mono">consistency=linearizable</code> to force a read-index check.
                     </p>
                 </div>
             )}

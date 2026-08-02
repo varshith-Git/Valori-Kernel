@@ -2,12 +2,13 @@
 
 import { use, useState, useEffect } from "react";
 import Link from "next/link";
-import { Layers } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CollectionList } from "@/components/collections/CollectionList";
 import { useCollections } from "@/lib/hooks/useCollections";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { useProof } from "@/lib/hooks/useProof";
+import { CopyBtn } from "@/components/ui/copy-btn";
+import { StatusBadge } from "@/components/ui/status-badge";
 
 export default function ProjectPage({
   params,
@@ -20,32 +21,9 @@ export default function ProjectPage({
 
   return (
     <div className="flex flex-col gap-5 w-full max-w-[1600px]">
-      {/* Project header card */}
-      <div className="rounded-xl border border-border bg-card px-5 py-4 flex items-center gap-4">
-        <div className="w-12 h-12 rounded-xl bg-[var(--v-accent-muted)] flex items-center justify-center shrink-0">
-          <Layers size={22} className="text-[var(--v-accent)]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-xl font-semibold text-foreground">{project}</h1>
-            <span className={`inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full border ${
-              online
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-border bg-muted text-muted-foreground"
-            }`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-emerald-500" : "bg-zinc-400"}`} />
-              {online ? "Running" : "Stopped"}
-            </span>
-          </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Manage collections, metrics, and settings for this project.
-          </p>
-        </div>
-      </div>
-
       {/* Tabs */}
       <Tabs defaultValue="collections">
-        <TabsList className="border-b border-border bg-transparent rounded-none p-0 h-auto gap-0 w-full justify-start">
+        <TabsList className="inline-flex bg-[#e4e8ec] dark:bg-zinc-800 rounded-lg p-1 h-auto gap-0.5 w-auto justify-start">
           {[
             { value: "collections", label: "Collections" },
             { value: "metrics",     label: "Metrics" },
@@ -54,7 +32,7 @@ export default function ProjectPage({
             <TabsTrigger
               key={value}
               value={value}
-              className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--v-accent)] data-[state=active]:text-foreground text-muted-foreground bg-transparent px-4 py-2.5 text-sm font-medium hover:text-foreground transition-colors"
+              className="rounded-md border-0 text-muted-foreground bg-transparent px-4 py-1.5 text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:dark:bg-zinc-700 data-[state=active]:text-foreground data-[state=active]:shadow-sm hover:text-foreground"
             >
               {label}
             </TabsTrigger>
@@ -201,13 +179,9 @@ function SettingsTab({ project }: { project: string }) {
                 : "…"}
             </p>
           </div>
-          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
-            serverConfig?.auth_configured
-              ? "border-emerald-800 bg-emerald-950/40 text-emerald-400"
-              : "border-input bg-accent text-muted-foreground"
-          }`}>
+          <StatusBadge tone={serverConfig?.auth_configured ? "success" : "neutral"}>
             {serverConfig?.auth_configured ? "secured" : "open"}
-          </span>
+          </StatusBadge>
         </div>
       </Section>
 
@@ -275,12 +249,7 @@ function SettingRow({
   copyable?: boolean;
   highlight?: "green" | "red";
 }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    navigator.clipboard.writeText(value);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+
 
   return (
     <div className="flex items-center justify-between px-4 py-3">
@@ -301,12 +270,7 @@ function SettingRow({
           {value}
         </span>
         {copyable && (
-          <button
-            onClick={copy}
-            className="text-[10px] text-muted-foreground hover:text-muted-foreground transition-colors"
-          >
-            {copied ? "✓" : "copy"}
-          </button>
+          <CopyBtn text={value} label="copy" />
         )}
       </div>
     </div>

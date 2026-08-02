@@ -228,3 +228,127 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
 
     Ok(())
 }
+
+/// Write the snapshot directly to any [`std::io::Write`] implementation
+/// without collecting bytes into a single [`alloc::vec::Vec<u8>`] first.
+///
+/// Produces byte-for-byte identical output to [`encode_state`].
+/// Intended for streaming saves to disk at large record counts where
+/// buffering the full snapshot in RAM would cause an OOM.
+///
+/// Only compiled when the `std` feature is enabled; `no_std` targets
+/// continue to use [`encode_state`] into a caller-supplied `Vec`.
+#[cfg(feature = "std")]
+pub fn encode_state_to_writer<W: std::io::Write>(
+    state: &KernelState,
+    w: &mut W,
+) -> std::io::Result<()> {
+    macro_rules! wb   { ($b:expr) => {{ w.write_all($b)? }} }
+    macro_rules! wu8  { ($v:expr) => {{ wb!(&[$v as u8]) }} }
+    macro_rules! wu16 { ($v:expr) => {{ wb!(&($v as u16).to_le_bytes()) }} }
+    macro_rules! wu32 { ($v:expr) => {{ wb!(&($v as u32).to_le_bytes()) }} }
+    macro_rules! wi32 { ($v:expr) => {{ wb!(&($v as i32).to_le_bytes()) }} }
+    macro_rules! wu64 { ($v:expr) => {{ wb!(&($v as u64).to_le_bytes()) }} }
+
+    // Header
+    wb!(MAGIC);
+    wu32!(SCHEMA_VERSION);
+    wu64!(state.version.0);
+    wu32!(state.records.raw_records().len() as u32);
+    wu32!(state.dim.unwrap_or(0) as u32);
+    wu32!(state.nodes.raw_nodes().len() as u32);
+    wu32!(state.edges.raw_edges().len() as u32);
+    wu8!(crate::fxp::format::ACTIVE_FORMAT_ID);
+
+    // Records
+    let total_slots = state.records.raw_records().len() as u32;
+    wu32!(total_slots);
+    for slot in state.records.raw_records() {
+        if let Some(record) = slot {
+            wu8!(1u8); // present
+            wu32!(record.id.0);
+            wu8!(record.flags);
+            wu64!(record.tag);
+            for scalar in record.vector.data.iter() {
+                wi32!(scalar.0);
+            }
+            match &record.metadata {
+                Some(m) => {
+                    wu32!(m.len() as u32);
+                    wb!(m);
+                }
+                None => wu32!(0u32),
+            }
+            wu16!(record.namespace_id);
+            wu32!(record.next_in_ns);
+            wu32!(record.prev_in_ns);
+        } else {
+            wu8!(0u8); // absent slot
+        }
+    }
+
+    // Nodes
+    let node_count = state.nodes.raw_nodes().iter().filter(|s| s.is_some()).count() as u32;
+    wu32!(node_count);
+    for slot in state.nodes.raw_nodes().iter() {
+        if let Some(node) = slot {
+            wu32!(node.id.0);
+            wu8!(node.kind as u8);
+            match node.record {
+                Some(rid) => { wu8!(1u8); wu32!(rid.0); }
+                None => wu8!(0u8),
+            }
+            match node.first_out_edge {
+                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                None => wu8!(0u8),
+            }
+            match node.first_in_edge {
+                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                None => wu8!(0u8),
+            }
+            wu16!(node.namespace_id);
+            wu32!(node.next_in_ns);
+            wu32!(node.prev_in_ns);
+        }
+    }
+
+    // Edges
+    let edge_count = state.edges.raw_edges().iter().filter(|s| s.is_some()).count() as u32;
+    wu32!(edge_count);
+    for slot in state.edges.raw_edges().iter() {
+        if let Some(edge) = slot {
+            wu32!(edge.id.0);
+            wu8!(edge.kind as u8);
+            wu32!(edge.from.0);
+            wu32!(edge.to.0);
+            match edge.next_out {
+                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                None => wu8!(0u8),
+            }
+            match edge.next_in {
+                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                None => wu8!(0u8),
+            }
+        }
+    }
+
+    // V6: namespace head arrays (1024 × u32 each)
+    use crate::types::id::MAX_NAMESPACES;
+    for &head in state.namespace_record_heads.iter().take(MAX_NAMESPACES) {
+        wu32!(head);
+    }
+    for &head in state.namespace_node_heads.iter().take(MAX_NAMESPACES) {
+        wu32!(head);
+    }
+
+    // V7: KernelState.meta
+    wu32!(state.meta.len() as u32);
+    for (key, value) in state.meta.iter() {
+        wu32!(key.len() as u32);
+        wb!(key.as_bytes());
+        wu32!(value.len() as u32);
+        wb!(value.as_bytes());
+    }
+
+    Ok(())
+}

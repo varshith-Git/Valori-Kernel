@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { useReceipt, type ReceiptData } from "@/lib/hooks/useReceipt";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function formatHash(h: any): string {
   if (!h) return "N/A";
@@ -35,9 +37,9 @@ export function ReceiptCard() {
 
   if (isLoading) {
     return (
-      <div className="rounded-xl border border-border bg-card p-6 animate-pulse">
-        <div className="h-4 w-32 bg-accent rounded mb-4" />
-        <div className="h-20 w-full bg-accent rounded" />
+      <div className="rounded-xl border border-border bg-card p-6">
+        <Skeleton className="h-4 w-32 bg-accent rounded mb-4" />
+        <Skeleton className="h-20 w-full bg-accent rounded" />
       </div>
     );
   }
@@ -67,13 +69,9 @@ export function ReceiptCard() {
         </div>
         <div className="flex items-center gap-2">
           {isReadOnly ? (
-            <span className="rounded-full bg-blue-500/10 px-2.5 py-0.5 text-xs font-medium text-blue-400 border border-blue-500/20">
-              Read-Only
-            </span>
+            <StatusBadge tone="info">Read-Only</StatusBadge>
           ) : (
-            <span className="rounded-full bg-purple-500/10 px-2.5 py-0.5 text-xs font-medium text-purple-400 border border-purple-500/20">
-              State Transition
-            </span>
+            <StatusBadge tone="warning">State Transition</StatusBadge>
           )}
           <button
             onClick={handleVerify}

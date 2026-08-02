@@ -17,7 +17,7 @@ export function makeDefaultNodes(
 ): NodeCfg[] {
   const httpBase = opts.httpBase ?? 3000;
   const raftBase = opts.raftBase ?? 3100;
-  const dir      = opts.dir ?? "~/.valori/cluster";
+  const dir      = opts.dir ?? (process.env.VALORI_HOME ? `${process.env.VALORI_HOME}/cluster` : "~/.valori/cluster");
   return Array.from({ length: count }, (_, i) => {
     const id = i + 1;
     return {
@@ -32,7 +32,13 @@ export function makeDefaultNodes(
   });
 }
 
-export function nextNodeConfig(existing: NodeCfg[], dir = "~/.valori/cluster"): NodeCfg {
+export function nextNodeConfig(
+  existing: NodeCfg[],
+  dir = process.env.VALORI_HOME ? `${process.env.VALORI_HOME}/cluster` : "~/.valori/cluster"
+): NodeCfg {
+  if (existing.length === 0) {
+    return makeDefaultNodes(1, { dir })[0];
+  }
   const maxId   = Math.max(...existing.map(n => n.id));
   const maxHttp = Math.max(...existing.map(n => n.httpPort));
   const maxRaft = Math.max(...existing.map(n => n.raftPort ?? (3100 + n.id)));

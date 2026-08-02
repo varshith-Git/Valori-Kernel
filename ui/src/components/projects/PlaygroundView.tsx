@@ -1,15 +1,15 @@
 "use client";
 
-// Ported from valori-kernel/ui's app/playground/page.tsx, adapted for
-// multi-tenancy. Kernel's collection picker (useProjects — lists every
-// namespace on one shared local daemon) is dropped: this app has one
-// "default" collection per project, nothing to switch between yet (see
-// PROGRESS.md). The /help Docs link is dropped too — that page wasn't
-// ported (static content referencing kernel's own navigation).
+// Shared by both the standalone /playground page (no projectId — single
+// locally-connected daemon, collection picker enabled via useProjects) and
+// the cloud /cloud/projects/[id]/playground page (projectId passed — one
+// "default" collection per project, picker hidden, proxies through the
+// cloud-mode API instead).
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { RotateCcw, Code2, Copy, Check, Maximize2, Minimize2, ChevronDown, ChevronRight, Database, FolderOpen, Share2, Brain, Shield, Server } from "lucide-react";
+import { RotateCcw, Code2, Copy, Check, Maximize2, Minimize2, ChevronDown, ChevronRight, Database, FolderOpen, Share2, Brain, Shield, Server, BookOpen } from "lucide-react";
 import { useHealth } from "@/lib/hooks/useHealth";
+import { useProjects } from "@/lib/hooks/useProjects";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -207,10 +207,14 @@ interface RunResult {
   headers?: Record<string, string>;
 }
 
-export function PlaygroundView({ projectId }: { projectId: string }) {
+export function PlaygroundView({ projectId }: { projectId?: string }) {
   const { dim, online } = useHealth(projectId);
-  // Single "default" collection per project — see the module comment above.
-  const collection = "default";
+  // Cloud mode (projectId present): one "default" collection per project,
+  // nothing to switch between. Standalone mode: pull every namespace on the
+  // locally-connected daemon and let the picker switch between them.
+  const { projects } = useProjects();
+  const collections = !projectId && projects && projects.length > 0 ? projects : ["default"];
+  const [collection, setCollection] = useState("default");
   const [selected, setSelected] = useState<EndpointDef>(CATALOG[0].endpoints[0]);
   const [method, setMethod] = useState<EndpointDef["method"]>(CATALOG[0].endpoints[0].method);
   const [path, setPath] = useState(CATALOG[0].endpoints[0].path);
@@ -243,6 +247,18 @@ export function PlaygroundView({ projectId }: { projectId: string }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dim, selected]);
+
+  // Switching the target collection re-points the current sample body and
+  // path at it, without discarding manual edits elsewhere in either — path
+  // substitution works on whatever collection value is already there, and
+  // the body is only rewritten while it's still an unedited sample.
+  useEffect(() => {
+    setPath((p) => withCollection(p, collection));
+    if (isSample && selected.sampleBody) {
+      setBody(JSON.stringify(selected.sampleBody(dim ?? 8, collection), null, 2));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collection]);
 
   const pick = (ep: EndpointDef) => {
     setSelected(ep);
@@ -283,7 +299,7 @@ export function PlaygroundView({ projectId }: { projectId: string }) {
           throw new Error("Body is not valid JSON");
         }
       }
-      const res = await fetch(`/api/projects/${projectId}/playground`, {
+      const res = await fetch(`/api/cloud/projects/${projectId}/playground`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ method, path, body: parsedBody }),
@@ -338,6 +354,27 @@ export function PlaygroundView({ projectId }: { projectId: string }) {
         }
         actions={
           <div className="flex items-center gap-3 shrink-0 pt-0.5">
+            <a
+              href="/help"
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Docs
+            </a>
+            {!projectId && (
+              <div className="relative">
+                <select
+                  value={collection}
+                  onChange={(e) => setCollection(e.target.value)}
+                  className="appearance-none rounded-lg border border-border bg-transparent pl-2.5 pr-7 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--v-accent-ring)] cursor-pointer"
+                >
+                  {collections.map((c) => (
+                    <option key={c} value={c} className="bg-card text-foreground">{c}</option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" aria-hidden />
+              </div>
+            )}
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="relative flex h-2 w-2">
                 {online && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}

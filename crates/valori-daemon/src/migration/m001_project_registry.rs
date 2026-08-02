@@ -123,6 +123,15 @@ impl super::Migration for Migration001ProjectRegistry {
 
         let mut all_ok = true;
         for entry in &entries {
+            // "default" was the system-generated placeholder name from older
+            // app versions. Skip it so fresh-feeling installs start empty;
+            // users who deliberately named a project "default" in the new
+            // daemon-backed UI would have done so via the daemon directly, not
+            // via this legacy file.
+            if entry.name == "default" {
+                tracing::info!("migration 001: skipping system-generated 'default' project");
+                continue;
+            }
             match import_one(home, projects, entry) {
                 Ok(imported) => {
                     if imported {

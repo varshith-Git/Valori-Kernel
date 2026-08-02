@@ -1,15 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
+import { embedBatch, type EmbedConfig } from "@/lib/server/embed";
 
 import { getApiUrl } from "@/lib/server/connection";
 import { extractText } from "@/lib/server/extract-text";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function apiHeaders(): Record<string, string> {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
 
 // -- Tree chunker --------------------------------------------------------------
 // Parses raw text into section-based chunks by detecting numbered/titled headers.
@@ -122,120 +116,6 @@ function chunkText(text: string, size: number, overlap: number): string[] {
   }
 
   return chunks;
-}
-
-// -- Embedding providers --------------------------------------------------------
-
-interface EmbedConfig {
-  provider: string;
-  model: string;
-  apiKey: string;
-  endpoint: string;
-}
-
-async function embedBatch(texts: string[], cfg: EmbedConfig): Promise<number[][]> {
-  switch (cfg.provider) {
-    case "openai": {
-      const res = await fetchWithTimeout(cfg.endpoint || "https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-        body: JSON.stringify({ input: texts, model: cfg.model || "text-embedding-3-small" }),
-      });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({})) as { error?: { message?: string } };
-        throw new Error(`OpenAI: ${e.error?.message ?? res.status}`);
-      }
-      const data = await res.json() as { data: { embedding: number[] }[] };
-      return data.data.map((d) => d.embedding);
-    }
-    case "cohere": {
-      const res = await fetchWithTimeout(cfg.endpoint || "https://api.cohere.ai/v1/embed", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.apiKey}` },
-        body: JSON.stringify({
-          texts,
-          model: cfg.model || "embed-english-v3.0",
-          input_type: "search_document",
-          embedding_types: ["float"],
-        }),
-      });
-      if (!res.ok) throw new Error(`Cohere: ${res.status}`);
-      const data = await res.json() as { embeddings: { float: number[][] } };
-      return data.embeddings.float;
-    }
-    case "ollama": {
-      const model = cfg.model || "nomic-embed-text";
-      // Normalize to base URL — strip any /api/embed(dings) suffix the user may have saved
-      const base = (cfg.endpoint || "http://localhost:11434")
-        .replace(/\/api\/embed(?:dings)?$/, "")
-        .replace(/\/$/, "");
-
-      // Always send ONE text at a time to Ollama.
-      // Batching via input:[] causes Ollama to concatenate all texts internally,
-      // blowing past the model's context window on larger documents.
-      const results: number[][] = [];
-
-      for (const text of texts) {
-        // Truncate to ~1800 chars (~450 tokens) to stay safely within 512-token model context windows
-        const safeText = text.slice(0, 1800);
-
-        // Try /api/embed first (Ollama ≥ 0.1.36)
-        let res = await fetchWithTimeout(`${base}/api/embed`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model, input: safeText }),
-        });
-
-        if (res.status === 404) {
-          // Fall back to /api/embeddings (Ollama < 0.1.36)
-          res = await fetchWithTimeout(`${base}/api/embeddings`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, prompt: safeText }),
-          });
-
-          if (!res.ok) {
-            const b = await res.json().catch(() => ({})) as { error?: string };
-            if (res.status === 404) {
-              throw new Error(`Ollama model "${model}" not found — run: ollama pull ${model}`);
-            }
-            throw new Error(`Ollama: ${b.error ?? `HTTP ${res.status}`}`);
-          }
-
-          const d = await res.json() as { embedding: number[] };
-          results.push(d.embedding);
-          continue;
-        }
-
-        if (!res.ok) {
-          const b = await res.json().catch(() => ({})) as { error?: string };
-          throw new Error(`Ollama: ${b.error ?? `HTTP ${res.status}`}`);
-        }
-
-        const d = await res.json() as { embeddings: number[][] };
-        results.push(d.embeddings[0]);
-      }
-
-      return results;
-    }
-    case "custom": {
-      const res = await fetchWithTimeout(cfg.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
-        },
-        body: JSON.stringify({ input: texts, model: cfg.model }),
-      });
-      if (!res.ok) throw new Error(`Custom endpoint: ${res.status}`);
-      const data = await res.json() as { embeddings?: number[][]; data?: { embedding: number[] }[] };
-      if (Array.isArray(data.embeddings)) return data.embeddings;
-      if (Array.isArray(data.data)) return data.data.map((d) => d.embedding);
-      throw new Error("Unexpected response shape from custom endpoint");
-    }
-    default:
-      throw new Error(`Unknown provider: ${cfg.provider}`);
-  }
 }
 
 // -- Context enrichment --------------------------------------------------------
@@ -381,7 +261,7 @@ async function extractEntities(
 async function lookupEntityNode(label: string, collection: string): Promise<number | null> {
   const key = `entity:${collection}:${label.toLowerCase().trim()}`;
   try {
-    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: nodeHeaders() });
     if (!res.ok) return null;
     const d = await res.json() as { metadata?: Record<string, unknown> };
     const nodeId = d.metadata?.node_id;
@@ -396,7 +276,7 @@ async function registerEntityNode(label: string, collection: string, nodeId: num
   try {
     await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({
         target_id: key,
         metadata: { node_id: nodeId, label, collection, registered_at: new Date().toISOString() },
@@ -416,7 +296,7 @@ async function sha256hex(text: string): Promise<string> {
 async function lookupContentRecord(sha: string, collection: string): Promise<number | null> {
   const key = `content:${collection}:${sha}`;
   try {
-    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=${encodeURIComponent(key)}`, { headers: nodeHeaders() });
     if (!res.ok) return null;
     const d = await res.json() as { metadata?: Record<string, unknown> };
     const rid = d.metadata?.record_id;
@@ -431,7 +311,7 @@ async function registerContentRecord(sha: string, collection: string, recordId: 
   try {
     await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({
         target_id: key,
         metadata: { record_id: recordId, source, collection, registered_at: new Date().toISOString() },
@@ -454,7 +334,7 @@ async function detectContradictions(
     try {
       const res = await fetchWithTimeout(`${getApiUrl()}/v1/search`, {
         method: "POST",
-        headers: apiHeaders(),
+        headers: nodeHeaders(),
         body: JSON.stringify({ vector: vectors[i], k: 5, collection }),
       });
       if (!res.ok) continue;
@@ -465,7 +345,7 @@ async function detectContradictions(
         if (score < 0.92) continue;                   // not similar enough
 
         // Check if this hit is from a different source document
-        const metaRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${hit.id}`, { headers: apiHeaders() });
+        const metaRes = await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/get?target_id=record:${hit.id}`, { headers: nodeHeaders() });
         if (!metaRes.ok) continue;
         const m = await metaRes.json() as { metadata?: Record<string, unknown> };
         const hitSource = m.metadata?.source as string | undefined;
@@ -475,7 +355,7 @@ async function detectContradictions(
         const contradictionId = `${Date.now()}-${recordIds[i]}-${hit.id}`;
         await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
-          headers: apiHeaders(),
+          headers: nodeHeaders(),
           body: JSON.stringify({
             target_id: `contradiction:${contradictionId}`,
             metadata: {
@@ -502,10 +382,10 @@ async function detectContradictions(
 
 async function probeServerIngest(): Promise<{ enabled: boolean; provider?: string }> {
   try {
-    const res = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: apiHeaders() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: nodeHeaders() });
     if (!res.ok) return { enabled: false };
-    const h = await res.json() as { embed_enabled?: boolean; embed_provider?: string };
-    return { enabled: !!h.embed_enabled, provider: h.embed_provider };
+    const embedStatus = await res.json() as { embed_enabled?: boolean; embed_provider?: string };
+    return { enabled: !!embedStatus.embed_enabled, provider: embedStatus.embed_provider };
   } catch {
     return { enabled: false };
   }
@@ -527,13 +407,13 @@ export async function POST(req: NextRequest) {
     const endpoint = (form.get("endpoint") as string) || "";
     const chunkSize = parseInt((form.get("chunkSize") as string) || "1000", 10);
     const chunkOverlap = parseInt((form.get("chunkOverlap") as string) || "200", 10);
-    const chunkMode = (form.get("chunkMode") as string) || "tree"; // "fixed" | "tree"
+    const chunkMode = (form.get("chunkMode") as string) || "fixed"; // "fixed" | "tree"
 
     // Ensure the collection exists on the node before inserting.
     if (collection !== "default") {
       await fetchWithTimeout(`${getApiUrl()}/v1/namespaces`, {
         method: "POST",
-        headers: apiHeaders(),
+        headers: nodeHeaders(),
         body: JSON.stringify({ name: collection }),
       }).catch(() => {});
     }
@@ -551,7 +431,7 @@ export async function POST(req: NextRequest) {
       const strategy = chunkMode === "tree" ? "auto" : chunkMode; // auto lets the node pick best strategy
       const nodeRes = await fetchWithTimeout(`${getApiUrl()}/v1/ingest`, {
         method: "POST",
-        headers: apiHeaders(),
+        headers: nodeHeaders(),
         body: JSON.stringify({
           text: rawText,
           source: file.name,
@@ -637,7 +517,7 @@ export async function POST(req: NextRequest) {
     // 3. Create Document graph node
     const docRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({ kind: 0, record_id: null, collection }),
     });
     if (!docRes.ok) {
@@ -649,7 +529,7 @@ export async function POST(req: NextRequest) {
     // Store document-level metadata
     await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({
         target_id: `document:${documentNodeId}`,
         metadata: {
@@ -697,10 +577,10 @@ export async function POST(req: NextRequest) {
     // Fetch server dimension so we can detect mismatches before inserting
     let serverDim: number | null = null;
     try {
-      const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: apiHeaders() });
+      const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: nodeHeaders() });
       if (healthRes.ok) {
-        const h = await healthRes.json() as { dim?: number };
-        serverDim = h.dim ?? null;
+        const healthData = await healthRes.json() as { dim?: number };
+        serverDim = healthData.dim ?? null;
       }
     } catch { /* ignore — mismatch will surface on first insert */ }
 
@@ -759,7 +639,7 @@ export async function POST(req: NextRequest) {
       if (newVectors.length > 0) {
         const insertRes = await fetchWithTimeout(`${getApiUrl()}/v1/vectors/batch_insert`, {
           method: "POST",
-          headers: apiHeaders(),
+          headers: nodeHeaders(),
           body: JSON.stringify({ batch: newVectors, collection, metadata: newMetadata, texts: newTexts }),
         });
         if (!insertRes.ok) {
@@ -812,7 +692,7 @@ export async function POST(req: NextRequest) {
         let chunkEntities: string[] = [];
         const chunkRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
           method: "POST",
-          headers: apiHeaders(),
+          headers: nodeHeaders(),
           body: JSON.stringify({ kind: 1, record_id: recordId, collection }),
         });
         if (chunkRes.ok) {
@@ -822,7 +702,7 @@ export async function POST(req: NextRequest) {
           // Document → Chunk edge (EdgeKind::ParentOf = 6)
           await fetchWithTimeout(`${getApiUrl()}/graph/edge`, {
             method: "POST",
-            headers: apiHeaders(),
+            headers: nodeHeaders(),
             body: JSON.stringify({ from: documentNodeId, to: chunkNodeId, kind: 6, collection }),
           });
 
@@ -841,7 +721,7 @@ export async function POST(req: NextRequest) {
                 // New entity: create Concept node + register globally
                 const nodeRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
                   method: "POST",
-                  headers: apiHeaders(),
+                  headers: nodeHeaders(),
                   body: JSON.stringify({ kind: 1, record_id: null, collection }),
                 });
                 if (nodeRes.ok) {
@@ -850,7 +730,7 @@ export async function POST(req: NextRequest) {
                   entityNodeMap.set(label, node_id);
                   await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
                     method: "POST",
-                    headers: apiHeaders(),
+                    headers: nodeHeaders(),
                     body: JSON.stringify({
                       target_id: `node:${node_id}`,
                       metadata: { label, kind: "Concept", collection },
@@ -863,7 +743,7 @@ export async function POST(req: NextRequest) {
               if (conceptNodeId !== undefined) {
                 await fetchWithTimeout(`${getApiUrl()}/graph/edge`, {
                   method: "POST",
-                  headers: apiHeaders(),
+                  headers: nodeHeaders(),
                   body: JSON.stringify({ from: chunkNodeId, to: conceptNodeId, kind: 4, collection }),
                 });
               }
@@ -875,7 +755,7 @@ export async function POST(req: NextRequest) {
         const sectionTitle = chunkTitles[chunkIndex] ?? null;
         await fetchWithTimeout(`${getApiUrl()}/v1/memory/meta/set`, {
           method: "POST",
-          headers: apiHeaders(),
+          headers: nodeHeaders(),
           body: JSON.stringify({
             target_id: `record:${recordId}`,
             metadata: {

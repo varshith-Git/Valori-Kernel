@@ -295,6 +295,7 @@ export function Sidebar() {
                 width={22}
                 height={22}
                 className="dark:invert"
+                style={{ height: 'auto' }}
               />
             </button>
           ) : (
@@ -306,6 +307,7 @@ export function Sidebar() {
                   width={24}
                   height={24}
                   className="dark:invert"
+                  style={{ height: 'auto' }}
                 />
                 <div className="flex items-baseline gap-1">
                   <span className="font-mono text-sm font-bold tracking-tight text-foreground">valori</span>

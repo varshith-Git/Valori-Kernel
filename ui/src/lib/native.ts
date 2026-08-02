@@ -34,10 +34,10 @@ export function nativeAvailable(): boolean {
  *  and the valori://auth-callback deep link it eventually receives back.
  *  No-op outside the desktop shell (the website is always cloud mode
  *  already, it has no "sync" concept to switch into). */
-export async function openCloudLogin(): Promise<void> {
+export async function openCloudLogin(provider?: "google" | "github"): Promise<void> {
   if (!isTauri()) return;
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("open_cloud_login");
+  await invoke("open_cloud_login", { provider });
 }
 
 // ── Persisted preferences (desktop only) ────────────────────────────────────
@@ -81,7 +81,9 @@ export async function setPreference<T>(key: string, value: T): Promise<void> {
 // than this build expects (downgrade case) is left alone — don't nag them
 // backwards.
 
-export const ONBOARDING_VERSION = 1;
+// Bump this whenever the onboarding flow gains a step that every existing
+// user must see — v2 adds the mandatory sign-in step.
+export const ONBOARDING_VERSION = 2;
 
 export async function isOnboardingComplete(): Promise<boolean> {
   const completed = await getPreference<number>("onboardingVersion");

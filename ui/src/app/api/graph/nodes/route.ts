@@ -1,14 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function authHeaders(): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
 
 export async function GET(req: NextRequest) {
   try {
@@ -19,7 +12,7 @@ export async function GET(req: NextRequest) {
       if (v !== null) url.searchParams.set(key, v);
     }
     const res = await fetchWithTimeout(url.toString(), {
-      headers: authHeaders(),
+      headers: nodeHeaders(false),
       cache: "no-store",
     });
     const data = await res.json().catch(() => ({ nodes: [], count: 0 }));

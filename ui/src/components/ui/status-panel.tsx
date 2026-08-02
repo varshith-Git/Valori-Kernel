@@ -1,3 +1,4 @@
+import type { ComponentType, ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -56,17 +57,28 @@ const messageVariants = cva("text-xs mt-1", {
 });
 
 export interface StatusPanelProps extends VariantProps<typeof panelVariants> {
-  icon: React.ReactNode;
+  icon: ComponentType<{ className?: string }> | ReactNode;
   title: string;
-  message?: React.ReactNode;
-  children?: React.ReactNode;
+  message?: ReactNode;
+  children?: ReactNode;
   className?: string;
 }
 
-export function StatusPanel({ tone, icon, title, message, children, className }: StatusPanelProps) {
+export function StatusPanel({ tone, icon: Icon, title, message, children, className }: StatusPanelProps) {
+  const isComponent = typeof Icon === "function" || (Icon && typeof (Icon as any).render === "function");
+
   return (
     <div className={cn(panelVariants({ tone }), className)}>
-      <span className={iconVariants({ tone })}>{icon}</span>
+      <span className={cn("flex-shrink-0 flex items-center justify-center", !isComponent && iconVariants({ tone }))}>
+        {isComponent ? (
+          (() => {
+            const IconComp = Icon as ComponentType<{ className?: string }>;
+            return <IconComp className={cn("h-6 w-6", iconVariants({ tone }).replace("text-3xl", "").replace("text-2xl", ""))} />;
+          })()
+        ) : (
+          Icon
+        )}
+      </span>
       <div className="min-w-0 flex-1">
         <p className={titleVariants({ tone })}>{title}</p>
         {message && <p className={messageVariants({ tone })}>{message}</p>}

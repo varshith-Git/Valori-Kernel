@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { CopyBtn } from "@/components/ui/copy-btn";
 import { useTheme } from "@/lib/theme";
 
 // -- Types ---------------------------------------------------------------------
@@ -327,28 +328,6 @@ function SyntaxCode({ code, lang }: { code: string; lang: "python" | "typescript
         </span>
       ))}
     </pre>
-  );
-}
-
-// -- Copy button ---------------------------------------------------------------
-function CopyBtn({ text, label = "copy" }: { text: string; label?: string }) {
-  const [done, setDone] = useState(false);
-  const copy = useCallback(async () => {
-    await navigator.clipboard.writeText(text);
-    setDone(true);
-    setTimeout(() => setDone(false), 1500);
-  }, [text]);
-  return (
-    <button
-      onClick={copy}
-      className={`text-[11px] px-3 py-1 rounded border transition-all ${
-        done
-          ? "border-emerald-700 bg-emerald-950/50 text-emerald-400"
-          : "border-input text-muted-foreground hover:text-foreground hover:border-ring bg-card"
-      }`}
-    >
-      {done ? "✓ copied" : label}
-    </button>
   );
 }
 

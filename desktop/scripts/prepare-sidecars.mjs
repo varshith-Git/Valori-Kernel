@@ -22,7 +22,7 @@
 // not be a real build — `prepare-ui-server.mjs` (release only) fills it in for real.
 
 import { execFileSync } from "node:child_process";
-import { copyFileSync, chmodSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -100,6 +100,28 @@ export function prepareSidecars({ release = false } = {}) {
   copyFileSync(process.execPath, helperNodeDest);
   if (!isWindows) chmodSync(helperNodeDest, 0o755);
   console.log(`[prepare-sidecars] helper node: ${process.execPath} -> ${helperNodeDest}`);
+
+  if (process.platform === "darwin") {
+    const helperContentsDir = dirname(uiServerHelperMacOSDir);
+    const plistDest = join(helperContentsDir, "Info.plist");
+    const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.valori.ui-server-helper</string>
+    <key>CFBundleName</key>
+    <string>ValoriUIServer</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+`;
+    writeFileSync(plistDest, plistContent);
+    console.log(`[prepare-sidecars] helper plist: created ${plistDest}`);
+  }
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];

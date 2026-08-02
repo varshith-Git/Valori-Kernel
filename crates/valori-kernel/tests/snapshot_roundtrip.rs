@@ -146,6 +146,28 @@ fn v7_meta_roundtrips() {
     );
 }
 
+// ── Writer encoder parity test ───────────────────────────────────────────────
+
+#[test]
+fn writer_encoder_matches_vec_encoder() {
+    // Verifies that encode_state_to_writer produces byte-for-byte identical
+    // output to encode_state so callers can switch safely.
+    use valori_kernel::snapshot::encode::encode_state_to_writer;
+
+    let state = populated_state();
+
+    let mut vec_buf = Vec::with_capacity(encode_capacity_hint(&state));
+    encode_state(&state, &mut vec_buf).expect("vec encode");
+
+    let mut writer_buf: Vec<u8> = Vec::new();
+    encode_state_to_writer(&state, &mut writer_buf).expect("writer encode");
+
+    assert_eq!(
+        vec_buf, writer_buf,
+        "writer and Vec<u8> encoders must produce identical bytes"
+    );
+}
+
 // ── Decoder hardening tests ───────────────────────────────────────────────────
 // Each test crafts a minimally-valid snapshot then mutates one field to an
 // illegal value and verifies that decode_state returns Err.

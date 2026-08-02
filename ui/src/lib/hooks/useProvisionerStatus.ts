@@ -22,7 +22,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json() as Promise<Proj
 
 export function useProvisionerStatus(projectId: string) {
     const { data, error, isLoading, mutate } = useSWR<ProjectStatusResponse>(
-        `/api/projects/${projectId}/status`,
+        `/api/cloud/projects/${projectId}/status`,
         fetcher,
         { refreshInterval: 10000 }
     )

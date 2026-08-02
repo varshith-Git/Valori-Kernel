@@ -213,6 +213,7 @@ class ProcessManager {
     proc.on("error", err => {
       this.pushLog(node, `[launcher] spawn error: ${err.message}`);
       node.state.status = "error";
+      resolveExit();
     });
     proc.on("exit", (code, sig) => {
       this.pushLog(node, `[launcher] exited  code=${code}  signal=${sig}`);

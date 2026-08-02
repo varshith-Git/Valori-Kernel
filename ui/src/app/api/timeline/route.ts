@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 interface TimelineEvent {
   log_index?: number;
@@ -26,10 +25,7 @@ function formatEvent(e: TimelineEvent): string {
 
 export async function GET() {
   try {
-    const headers: Record<string, string> = {};
-    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-
-    const res = await fetchWithTimeout(`${getApiUrl()}/timeline`, { headers, cache: "no-store" });
+    const res = await fetchWithTimeout(`${getApiUrl()}/timeline`, { headers: nodeHeaders(false), cache: "no-store" });
     // 400 = event log not enabled — pass through so the UI can handle it
     const body = await res.json().catch(() => null);
 

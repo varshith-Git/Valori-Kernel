@@ -7,6 +7,7 @@ import useSWR from "swr";
 const HISTORY = 60;       // data points to retain
 const FAST_MS = 2_000;    // health + latency poll
 const SNAP_MS = 30_000;   // snapshot poll
+const FILES_MS = 10_000;  // local files poll (standalone mode only)
 
 // -- Types ---------------------------------------------------------------------
 interface HealthSnapshot {
@@ -30,6 +31,7 @@ interface PingResult {
 }
 
 interface SnapshotEntry { epoch_secs: number; size_bytes: number }
+interface LocalFile { kind: "snap" | "log"; size_bytes: number; name: string }
 
 interface Series {
   ts: number;
@@ -265,12 +267,13 @@ function FillBar({ label, pct, color }: { label: string; pct: number; color: str
 }
 
 // -- Main page -----------------------------------------------------------------
-// Ported from valori-kernel/ui's app/metrics/page.tsx, adapted for
-// multi-tenancy (projectId-scoped ping route) — the WAL/snap "local files"
-// info cards are dropped: they read a local filesystem path
-// (VALORI_EVENT_LOG_PATH/VALORI_SNAPSHOT_PATH) that has no equivalent when
-// the node runs on a remote VPS with no shared filesystem with the browser.
-export function MetricsView({ projectId }: { projectId: string }) {
+// Shared by both the standalone /metrics page (no projectId — single
+// locally-connected daemon; the WAL/snap "local files" info cards are shown
+// since the browser and node share a filesystem) and the cloud
+// /cloud/projects/[id]/metrics page (projectId passed — those cards are
+// hidden, since a remote VPS node has no filesystem in common with the
+// browser to read VALORI_EVENT_LOG_PATH/VALORI_SNAPSHOT_PATH from).
+export function MetricsView({ projectId }: { projectId?: string }) {
   // -- Time series state ------------------------------------------------------
   const [latSeries,    setLatSeries]    = useState<Series[]>([]);
   const [recSeries,    setRecSeries]    = useState<Series[]>([]);
@@ -290,7 +293,8 @@ export function MetricsView({ projectId }: { projectId: string }) {
   // -- Fast poll: ping (latency + health) ------------------------------------
   const poll = useCallback(async () => {
     try {
-      const res = await fetch(`/api/projects/${projectId}/metrics/ping`, { cache: "no-store" });
+      const pingUrl = projectId ? `/api/cloud/projects/${projectId}/metrics/ping` : "/api/metrics/ping";
+      const res = await fetch(pingUrl, { cache: "no-store" });
       if (!res.ok) { setConnected(false); return; }
       const d = await res.json() as PingResult;
       if (d.error) { setConnected(false); return; }
@@ -338,9 +342,16 @@ export function MetricsView({ projectId }: { projectId: string }) {
 
   // -- Snapshot poll ----------------------------------------------------------
   const { data: snapsData } = useSWR<{ snapshots: SnapshotEntry[]; disabled?: boolean }>(
-    `/api/projects/${projectId}/storage/snapshots`,
+    projectId ? `/api/cloud/projects/${projectId}/storage/snapshots` : "/api/storage/snapshots",
     fetcher,
     { refreshInterval: SNAP_MS }
+  );
+
+  // -- Local files poll (standalone only — see module comment above) ----------
+  const { data: filesData } = useSWR<{ files: LocalFile[] }>(
+    projectId ? null : "/api/local-files",
+    fetcher,
+    { refreshInterval: FILES_MS }
   );
 
   // -- Derived values ---------------------------------------------------------
@@ -361,6 +372,12 @@ export function MetricsView({ projectId }: { projectId: string }) {
 
   const snapshots = snapsData?.snapshots ?? [];
   const newestSnap = snapshots.sort((a, b) => b.epoch_secs - a.epoch_secs)[0];
+
+  const walFiles = (filesData?.files ?? []).filter((f) => f.kind === "log");
+  const walBytes = walFiles.reduce((s, f) => s + f.size_bytes, 0);
+
+  const snapFiles = (filesData?.files ?? []).filter((f) => f.kind === "snap");
+  const snapBytes = snapFiles.reduce((s, f) => s + f.size_bytes, 0);
 
   const statusColor =
     health?.status === "ok" ? "var(--color-emerald-500)"
@@ -452,6 +469,24 @@ export function MetricsView({ projectId }: { projectId: string }) {
           sub={newestSnap ? fmtBytes(newestSnap.size_bytes) : undefined}
           accent={!newestSnap ? "amber" : "green"}
         />
+        {!projectId && (
+          <>
+            <InfoCard
+              icon="▤"
+              label="WAL size (local)"
+              value={walBytes > 0 ? fmtBytes(walBytes) : "—"}
+              sub={walFiles.length > 0 ? `${walFiles.length} log file${walFiles.length !== 1 ? "s" : ""}` : "no .log files found"}
+              accent="blue"
+            />
+            <InfoCard
+              icon="▲"
+              label="Snap files (local)"
+              value={snapBytes > 0 ? fmtBytes(snapBytes) : "—"}
+              sub={snapFiles.length > 0 ? `${snapFiles.length} .snap file${snapFiles.length !== 1 ? "s" : ""}` : "no .snap files"}
+              accent="blue"
+            />
+          </>
+        )}
       </div>
 
       {/* -- Slab fill gauges + server info -- */}

@@ -14,6 +14,12 @@ serde     = { version = "1.0", default-features = false, features = ["derive", "
 thiserror = { version = "2.0", default-features = false }
 getrandom = { version = "0.2", optional = true }
 
+# getrandom 0.2 has no default WASM syscall backend; the js feature uses the
+# browser / Cloudflare Worker crypto API instead.  Without this the kernel
+# fails to compile for wasm32-unknown-unknown when the std feature is on.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [features]
 default = ["std"]
 std = ["thiserror/std", "dep:getrandom"]

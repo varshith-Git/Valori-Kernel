@@ -10,7 +10,8 @@ export interface SavedConnection {
   status?:       string;
 }
 
-const HISTORY_FILE = path.join(os.homedir(), ".valori", "ui-connections.json");
+const VALORI_HOME   = process.env.VALORI_HOME || path.join(os.homedir(), ".valori");
+const HISTORY_FILE = path.join(VALORI_HOME, "ui-connections.json");
 const MAX_HISTORY  = 8;
 
 function readHistory(): SavedConnection[] {

@@ -1,15 +1,7 @@
 import { NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function h(json = false): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (json) headers["Content-Type"] = "application/json";
-  if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-  return headers;
-}
 
 // GET /api/metrics/ping
 // Times an actual /search request against the Valori backend (server-side,
@@ -17,7 +9,7 @@ function h(json = false): Record<string, string> {
 export async function GET() {
   try {
     // 1. Get dimension from health
-    const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: h(), cache: "no-store" });
+    const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: nodeHeaders(false), cache: "no-store" });
     if (!healthRes.ok) {
       return NextResponse.json({ error: "health check failed" }, { status: 502 });
     }
@@ -41,7 +33,7 @@ export async function GET() {
     const t0 = performance.now();
     const searchRes = await fetchWithTimeout(`${getApiUrl()}/search`, {
       method: "POST",
-      headers: h(true),
+      headers: nodeHeaders(),
       body: JSON.stringify({ query, k: 1 }),
     });
     const latency_ms = Math.round(performance.now() - t0);

@@ -29,3 +29,17 @@ export function errorResponse(e: unknown, fallbackStatus = 500, fallbackMessage?
   const message = fallbackMessage ?? (e instanceof Error ? e.message : String(e));
   return NextResponse.json({ error: message }, { status: fallbackStatus });
 }
+
+// TOKEN is read once at module load — safe in Next.js API routes (always runtime).
+const _TOKEN = process.env.VALORI_AUTH_TOKEN;
+
+/**
+ * Standard headers for proxying requests to the Valori node.
+ * Pass json=false for binary endpoints (snapshot download) that must not set Content-Type.
+ */
+export function nodeHeaders(json = true): Record<string, string> {
+  const h: Record<string, string> = {};
+  if (json) h["Content-Type"] = "application/json";
+  if (_TOKEN) h["Authorization"] = `Bearer ${_TOKEN}`;
+  return h;
+}

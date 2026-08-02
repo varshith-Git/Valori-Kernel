@@ -28,8 +28,11 @@ export class DaemonError extends Error {
 // real failure, and always safe to retry (nothing reached the server yet).
 // Without this, a project-creation click within the first few seconds of
 // opening the app surfaces a raw "fetch failed" instead of just working.
-const DAEMON_STARTUP_RETRY_MS = 10_000;
-const DAEMON_STARTUP_RETRY_INTERVAL_MS = 500;
+// 3 s covers the daemon's typical cold-start on a fast machine; long enough
+// to survive the "app just launched" window without hanging the UI for 10 s
+// when the daemon is genuinely absent.
+const DAEMON_STARTUP_RETRY_MS = 3_000;
+const DAEMON_STARTUP_RETRY_INTERVAL_MS = 300;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;

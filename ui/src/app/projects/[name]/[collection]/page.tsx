@@ -179,35 +179,22 @@ export default function CollectionPage({
 
       {/* Tab bar: primary + two named group menus */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="flex items-center gap-1 flex-wrap border-b border-border">
-          <TabsList className="h-auto bg-transparent border-0 p-0 gap-0 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap mb-1">
+          <TabsList className="inline-flex bg-[#e4e8ec] dark:bg-zinc-800 rounded-lg p-1 h-auto gap-0.5">
             {PRIMARY_TABS.map(({ value, label, tip }) => (
               <TabsTrigger
                 key={value}
                 value={value}
                 title={tip}
-                className="rounded-none border-b-2 border-transparent data-[state=active]:border-[var(--v-accent)] data-[state=active]:text-foreground text-muted-foreground bg-transparent px-4 py-2.5 text-sm font-medium hover:text-foreground transition-colors"
+                className="rounded-md border-0 text-muted-foreground bg-transparent px-4 py-1.5 text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:dark:bg-zinc-700 data-[state=active]:text-foreground data-[state=active]:shadow-sm hover:text-foreground"
               >
                 {label}
               </TabsTrigger>
             ))}
           </TabsList>
 
-          {/* Analyze group */}
-          <div className={cn(
-            "flex items-center border-b-2 pb-[1px]",
-            isAnalyze ? "border-[var(--v-accent)]" : "border-transparent"
-          )}>
-            <GroupMenu label="Analyze" tabs={ANALYZE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
-          </div>
-
-          {/* Compliance group */}
-          <div className={cn(
-            "flex items-center border-b-2 pb-[1px]",
-            isCompliance ? "border-[var(--v-accent)]" : "border-transparent"
-          )}>
-            <GroupMenu label="Compliance" tabs={COMPLIANCE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
-          </div>
+          <GroupMenu label="Analyze" tabs={ANALYZE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
+          <GroupMenu label="Compliance" tabs={COMPLIANCE_TABS} activeValue={activeTab} onSelect={setActiveTab} />
         </div>
 
         {/* Tab content for all panels */}

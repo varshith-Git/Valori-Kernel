@@ -10,6 +10,19 @@ export async function callLLM(
   userMessage: string,
   cfg: LLMConfig,
 ): Promise<string> {
+  let out = "";
+  for await (const token of streamLLM(systemPrompt, userMessage, cfg)) {
+    out += token;
+  }
+  return out;
+}
+
+/** Yields tokens one at a time so callers can stream to the client. */
+export async function* streamLLM(
+  systemPrompt: string,
+  userMessage: string,
+  cfg: LLMConfig,
+): AsyncGenerator<string> {
   const messages = [
     { role: "system", content: systemPrompt },
     { role: "user", content: userMessage },
@@ -20,14 +33,30 @@ export async function callLLM(
     const res = await fetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: cfg.model || "llama3.2", messages, stream: false, options: { temperature: 0 } }),
+      body: JSON.stringify({ model: cfg.model || "llama3.2", messages, stream: true, options: { temperature: 0 } }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => res.status.toString());
       throw new Error(`Ollama error (${res.status}): ${text}`);
     }
-    const data = await res.json() as { message?: { content?: string } };
-    return data.message?.content ?? "";
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const obj = JSON.parse(line) as { message?: { content?: string }; done?: boolean };
+          if (obj.message?.content) yield obj.message.content;
+        } catch { /* skip malformed */ }
+      }
+    }
+    return;
   }
 
   const baseMap: Record<string, string> = {
@@ -44,13 +73,30 @@ export async function callLLM(
       "Content-Type": "application/json",
       ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
     },
-    body: JSON.stringify({ model: cfg.model, messages, max_tokens: 512, temperature: 0 }),
+    body: JSON.stringify({ model: cfg.model, messages, max_tokens: 512, temperature: 0, stream: true }),
   });
-
   if (!res.ok) {
     const text = await res.text().catch(() => res.status.toString());
     throw new Error(`${cfg.provider} error (${res.status}): ${text.slice(0, 200)}`);
   }
-  const data = await res.json() as { choices?: { message?: { content?: string } }[] };
-  return data.choices?.[0]?.message?.content ?? "";
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const obj = JSON.parse(payload) as { choices?: { delta?: { content?: string } }[] };
+        const token = obj.choices?.[0]?.delta?.content;
+        if (token) yield token;
+      } catch { /* skip */ }
+    }
+  }
 }

@@ -6,11 +6,16 @@ import { Code2, Globe, Activity, Shield, Lock, Server, Clock } from 'lucide-reac
 import { useSearchParams } from 'next/navigation'
 import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
-
+import { nativeAvailable, openCloudLogin } from '@/lib/native'
 async function signInWithOAuth(provider: 'google' | 'github', next?: string | null) {
+    if (nativeAvailable()) {
+        await openCloudLogin(provider)
+        return
+    }
+
     const supabase = createClient()
     const canonicalOrigin = window.location.origin.replace('://www.', '://')
-    const redirectUrl = `${canonicalOrigin}/auth/callback${next ? `?next=${next}` : ''}`
+    const redirectUrl = `${canonicalOrigin}/auth/callback${next ? `?next=${encodeURIComponent(next)}` : ''}`
 
     const { data, error } = await supabase.auth.signInWithOAuth({
         provider,
@@ -36,6 +41,15 @@ async function signInWithOAuth(provider: 'google' | 'github', next?: string | nu
 function LoginForm() {
     const searchParams = useSearchParams()
     const next = searchParams.get('next')
+    const provider = searchParams.get('provider') as 'google' | 'github' | null
+
+    // Auto-trigger OAuth when arriving from SignInGate with ?provider=google/github
+    useEffect(() => {
+        if (provider === 'google' || provider === 'github') {
+            signInWithOAuth(provider, next)
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
 
     // Fake live clock for "Last Snapshot"
     const [time, setTime] = useState<string>("")
@@ -138,6 +152,15 @@ function LoginForm() {
                             <Code2 size={18} />
                             <span className="font-mono text-xs">SSO_GITHUB</span>
                         </button>
+                    </div>
+
+                    <div className="text-center mt-4">
+                        <Link
+                            href="/"
+                            className="text-xs text-muted-foreground hover:text-foreground transition-colors font-mono underline underline-offset-4"
+                        >
+                            &larr; BACK_TO_SIGN_IN_OPTIONS
+                        </Link>
                     </div>
 
                     {/* Specialized Compliance Signaling */}

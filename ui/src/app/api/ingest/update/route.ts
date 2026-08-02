@@ -1,15 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
 import { extractText } from "@/lib/server/extract-text";
-
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function apiHeaders(): Record<string, string> {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -22,7 +14,7 @@ export async function POST(req: NextRequest) {
     if (!documentNodeId) return NextResponse.json({ error: "Missing document_node_id" }, { status: 400 });
 
     const collection = (form.get("collection") as string) || "default";
-    const chunkMode = (form.get("chunkMode") as string) || "tree";
+    const chunkMode = (form.get("chunkMode") as string) || "fixed";
 
     const rawText = await extractText(file);
     if (!rawText.trim()) return NextResponse.json({ error: "No text extracted from file" }, { status: 400 });
@@ -30,7 +22,7 @@ export async function POST(req: NextRequest) {
     const strategy = chunkMode === "tree" ? "auto" : chunkMode;
     const nodeRes = await fetchWithTimeout(`${getApiUrl()}/v1/ingest/update`, {
       method: "POST",
-      headers: apiHeaders(),
+      headers: nodeHeaders(),
       body: JSON.stringify({
         document_node_id: documentNodeId,
         text: rawText,

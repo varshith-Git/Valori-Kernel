@@ -46,9 +46,11 @@ export function Toaster() {
       {toasts.map((t) => (
         <div
           key={t.id}
+          role={t.kind === "error" ? "alert" : "status"}
+          aria-atomic="true"
           className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-sm max-w-sm pointer-events-auto shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200 ${STYLES[t.kind]}`}
         >
-          <span className="mt-px flex-shrink-0 font-bold text-xs opacity-80">{ICONS[t.kind]}</span>
+          <span className="mt-px flex-shrink-0 font-bold text-xs opacity-80" aria-hidden="true">{ICONS[t.kind]}</span>
           <span className="flex-1 leading-snug">{t.message}</span>
           <button
             onClick={() => dismiss(t.id)}

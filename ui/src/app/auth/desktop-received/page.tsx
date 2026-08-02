@@ -17,6 +17,7 @@ function DesktopReceivedInner() {
     const router = useRouter()
     const params = useSearchParams()
     const [error, setError] = useState<string | null>(null)
+    const [success, setSuccess] = useState<boolean>(false)
 
     useEffect(() => {
         const accessToken = params.get('access_token')
@@ -48,7 +49,10 @@ function DesktopReceivedInner() {
                 return
             }
 
-            router.replace('/')
+            setSuccess(true)
+            setTimeout(() => {
+                window.location.href = '/'
+            }, 1500)
         }
         run()
     }, [params, router])
@@ -58,6 +62,16 @@ function DesktopReceivedInner() {
             <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-4 text-center">
                 <AlertTriangle className="text-destructive" size={28} />
                 <p className="text-sm text-muted-foreground max-w-sm">{error}</p>
+            </div>
+        )
+    }
+
+    if (success) {
+        return (
+            <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-center">
+                <ShieldCheck className="text-primary animate-bounce" size={32} />
+                <h1 className="text-lg font-semibold font-mono">SIGN_IN_SUCCESSFUL</h1>
+                <p className="text-sm text-muted-foreground">Welcome to Valori! Redirecting to home page…</p>
             </div>
         )
     }

@@ -7,6 +7,13 @@
       "runtimeArgs": ["-c", "cd ui && npm run dev"],
       "port": 3001,
       "autoPort": false
+    },
+    {
+      "name": "valori-cloud-dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/as-mac-0272/Desktop/sass/valori-ui/ui && npm run dev -- -p 3002"],
+      "port": 3002,
+      "autoPort": false
     }
   ]
 }

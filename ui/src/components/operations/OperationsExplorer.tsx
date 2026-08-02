@@ -80,7 +80,7 @@ function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; s
     : <ChevronDown className="h-3.5 w-3.5 text-[var(--v-accent)]" />;
 }
 
-function RowMenu({ op, projectId }: { op: OperationSummary; projectId: string }) {
+function RowMenu({ op, projectId }: { op: OperationSummary; projectId?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -105,7 +105,7 @@ function RowMenu({ op, projectId }: { op: OperationSummary; projectId: string })
       {open && (
         <div className="absolute right-0 top-8 z-50 min-w-[10rem] rounded-lg border border-border bg-card shadow-lg py-1">
           <Link
-            href={`/cloud/projects/${projectId}/operations/${encodeURIComponent(op.id)}`}
+            href={projectId ? `/cloud/projects/${projectId}/operations/${encodeURIComponent(op.id)}` : `/operations/${encodeURIComponent(op.id)}`}
             className="flex items-center gap-2 px-3 py-1.5 text-sm text-foreground hover:bg-accent/70 transition-colors"
             onClick={() => setOpen(false)}
           >
@@ -122,7 +122,7 @@ function RowMenu({ op, projectId }: { op: OperationSummary; projectId: string })
   );
 }
 
-export function OperationsExplorer({ projectId }: { projectId: string }) {
+export function OperationsExplorer({ projectId }: { projectId?: string }) {
   const [operations, setOperations] = useState<OperationSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -139,7 +139,7 @@ export function OperationsExplorer({ projectId }: { projectId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/cloud/projects/${projectId}/operations`);
+      const res = await fetch(projectId ? `/api/cloud/projects/${projectId}/operations` : "/api/operations");
       if (res.status === 503) {
         setEventLogEnabled(false);
         setOperations([]);
@@ -390,7 +390,7 @@ cargo run -p valori-node`}
             return (
               <Link
                 key={op.id}
-                href={`/cloud/projects/${projectId}/operations/${encodeURIComponent(op.id)}`}
+                href={projectId ? `/cloud/projects/${projectId}/operations/${encodeURIComponent(op.id)}` : `/operations/${encodeURIComponent(op.id)}`}
                 className={`group grid grid-cols-[1fr_1fr_1fr_1.6fr_7rem_2.5rem] items-center border-b border-border/40 last:border-b-0 hover:bg-accent/40 transition-colors duration-100 ${idx % 2 === 0 ? "" : "bg-muted/[0.025]"}`}
               >
                 {/* ID */}

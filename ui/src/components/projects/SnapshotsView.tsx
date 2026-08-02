@@ -105,14 +105,14 @@ export function SnapshotsView({ projectId }: { projectId: string }) {
     }, [])
 
     const { data: health, mutate: mutateHealth } = useSWR<Health>(
-        `/api/projects/${projectId}/health`,
+        `/api/cloud/projects/${projectId}/health`,
         fetcher,
         { refreshInterval: 5000, revalidateOnFocus: false }
     )
     const eventCount = health?.event_log_height ?? null
 
     const { data: snapsData, mutate: mutateSnaps } = useSWR<{ snapshots: SnapshotEntry[]; disabled?: boolean }>(
-        `/api/projects/${projectId}/storage/snapshots`,
+        `/api/cloud/projects/${projectId}/storage/snapshots`,
         fetcher,
         { refreshInterval: 15000 }
     )
@@ -125,7 +125,7 @@ export function SnapshotsView({ projectId }: { projectId: string }) {
         if (eventCount < base + threshold) return
         if (autoTriggering.current) return
         autoTriggering.current = true
-        fetch(`/api/projects/${projectId}/storage/snapshots/upload`, { method: 'POST' })
+        fetch(`/api/cloud/projects/${projectId}/storage/snapshots/upload`, { method: 'POST' })
             .then((r) => r.json())
             .then((d) => {
                 const now = new Date().toISOString()
@@ -146,7 +146,7 @@ export function SnapshotsView({ projectId }: { projectId: string }) {
     async function handleS3Upload() {
         setSavingS3(true)
         try {
-            const res = await fetch(`/api/projects/${projectId}/storage/snapshots/upload`, { method: 'POST' })
+            const res = await fetch(`/api/cloud/projects/${projectId}/storage/snapshots/upload`, { method: 'POST' })
             const d = (await res.json()) as { size_bytes?: number; error?: string }
             if (!res.ok) throw new Error(d.error ?? `HTTP ${res.status}`)
             showToast(`Saved to object store (${fmtBytes(d.size_bytes ?? 0)})`, true)
@@ -167,7 +167,7 @@ export function SnapshotsView({ projectId }: { projectId: string }) {
         setConfirmKey(null)
         setRestoringKey(key)
         try {
-            const res = await fetch(`/api/projects/${projectId}/storage/snapshots/restore`, {
+            const res = await fetch(`/api/cloud/projects/${projectId}/storage/snapshots/restore`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ key }),
@@ -277,7 +277,7 @@ export function SnapshotsView({ projectId }: { projectId: string }) {
                             <div className="flex flex-col gap-1.5">
                                 <p className="text-xs font-medium text-foreground">Download</p>
                                 <a
-                                    href={`/api/projects/${projectId}/snapshot/download`}
+                                    href={`/api/cloud/projects/${projectId}/snapshot/download`}
                                     download
                                     className="mt-0.5 w-full text-center rounded-lg border border-input bg-accent px-4 py-1.5 text-xs text-card-foreground hover:bg-muted transition-colors"
                                 >

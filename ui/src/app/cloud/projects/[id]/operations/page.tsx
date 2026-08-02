@@ -1,6 +1,6 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect, notFound } from 'next/navigation'
-import { OperationsExplorer } from './OperationsExplorer'
+import { OperationsExplorer } from '@/components/operations/OperationsExplorer'
 
 export default async function ProjectOperationsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params

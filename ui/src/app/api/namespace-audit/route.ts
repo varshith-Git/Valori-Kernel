@@ -1,15 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 import crypto from "crypto";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function h(): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-  return headers;
-}
 
 export interface NsEvent {
   event_id: number;
@@ -65,9 +58,9 @@ export async function GET(req: NextRequest) {
 
   // Parallel fetch: nodes in namespace + full timeline + global proof
   const [nodesRes, timelineRes, proofRes] = await Promise.allSettled([
-    fetchWithTimeout(`${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(namespace)}`, { headers: h() }),
-    fetchWithTimeout(`${getApiUrl()}/timeline`, { headers: h() }),
-    fetchWithTimeout(`${getApiUrl()}/v1/proof/event-log`, { headers: h() }),
+    fetchWithTimeout(`${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(namespace)}`, { headers: nodeHeaders() }),
+    fetchWithTimeout(`${getApiUrl()}/timeline?limit=2000`, { headers: nodeHeaders() }),
+    fetchWithTimeout(`${getApiUrl()}/v1/proof/event-log`, { headers: nodeHeaders() }),
   ]);
 
   // -- Parse nodes --------------------------------------------------------------

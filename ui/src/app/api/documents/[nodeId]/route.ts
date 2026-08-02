@@ -1,21 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function h(): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-  return headers;
-}
 
 // Check if a graph node actually exists before trying to delete it.
 // Avoids sending a DeleteNode event for an already-deleted node, which
 // causes the kernel to return InvalidOperation and roll back the WAL buffer.
 async function nodeExists(nodeId: number): Promise<boolean> {
   try {
-    const res = await fetchWithTimeout(`${getApiUrl()}/graph/node/${nodeId}`, { headers: h() });
+    const res = await fetchWithTimeout(`${getApiUrl()}/graph/node/${nodeId}`, { headers: nodeHeaders() });
     return res.ok;
   } catch {
     return false;
@@ -28,7 +21,7 @@ async function deleteNode(nodeId: number): Promise<boolean> {
   if (!(await nodeExists(nodeId))) return true; // already gone — skip
   const res = await fetchWithTimeout(`${getApiUrl()}/graph/node/${nodeId}`, {
     method: "DELETE",
-    headers: h(),
+    headers: nodeHeaders(),
   });
   return res.ok;
 }
@@ -52,7 +45,7 @@ export async function DELETE(
 
   try {
     // 1. Get chunk edges for this document
-    const edgesRes = await fetchWithTimeout(`${getApiUrl()}/graph/edges/${docNodeId}`, { headers: h() });
+    const edgesRes = await fetchWithTimeout(`${getApiUrl()}/graph/edges/${docNodeId}`, { headers: nodeHeaders() });
     const edgesData = edgesRes.ok
       ? await edgesRes.json().catch(() => ({ edges: [] })) as { edges?: { to_node: number }[] }
       : { edges: [] };
@@ -63,7 +56,7 @@ export async function DELETE(
     // 2. Build chunk_node → record_id map from the namespace's node list
     const nodesRes = await fetchWithTimeout(
       `${getApiUrl()}/graph/nodes?collection=${encodeURIComponent(collection)}`,
-      { headers: h() }
+      { headers: nodeHeaders() }
     );
     const nodesData = nodesRes.ok
       ? await nodesRes.json().catch(() => ({ nodes: [] })) as { nodes?: { node_id: number; record_id: number | null }[] }
@@ -84,7 +77,7 @@ export async function DELETE(
       recordIds.map(async (recordId) => {
         const res = await fetchWithTimeout(`${getApiUrl()}/v1/delete`, {
           method: "POST",
-          headers: h(),
+          headers: nodeHeaders(),
           body: JSON.stringify({ id: recordId }),
         });
         if (res.ok) deletedRecords++;

@@ -1,4 +1,5 @@
 import { cva, type VariantProps } from "class-variance-authority";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,7 +39,7 @@ const pillVariants = cva(
 );
 
 export interface StatusBadgeProps extends VariantProps<typeof pillVariants> {
-  children: React.ReactNode;
+  children: ReactNode;
   /** Pulse the dot — for a transient state like "starting" or "connecting". */
   pulse?: boolean;
   className?: string;

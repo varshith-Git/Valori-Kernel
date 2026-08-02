@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import useSWR from "swr";
+import { CopyBtn } from "@/components/ui/copy-btn";
 
 // -- Colour-code each event kind -----------------------------------------------
 function lineColor(line: string): string {
@@ -19,38 +20,6 @@ function lineColor(line: string): string {
 function eventKind(line: string): string {
   const m = line.match(/:\s+([A-Za-z]+(?:[A-Z][a-z]+)*)/);
   return m ? m[1] : "Event";
-}
-
-// -- Copy button ---------------------------------------------------------------
-function CopyBtn({
-  text,
-  label = "copy",
-  className = "",
-}: {
-  text: string;
-  label?: string;
-  className?: string;
-}) {
-  const [done, setDone] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setDone(true);
-      setTimeout(() => setDone(false), 1600);
-    } catch { /* clipboard denied — no-op */ }
-  };
-  return (
-    <button
-      onClick={copy}
-      className={`text-[10px] px-2 py-0.5 rounded border transition-all select-none ${
-        done
-          ? "border-emerald-300 bg-emerald-100 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400"
-          : "border-input bg-card text-muted-foreground hover:text-foreground hover:border-ring"
-      } ${className}`}
-    >
-      {done ? "✓" : label}
-    </button>
-  );
 }
 
 // -- Single log line -----------------------------------------------------------

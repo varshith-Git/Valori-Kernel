@@ -5,7 +5,7 @@ import { useProof } from "@/lib/hooks/useProof";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { markProofViewed } from "@/lib/onboarding";
 import { ProofHash } from "@/components/proof/ProofHash";
-import { MetricCard } from "@/components/proof/MetricCard";
+import { MetricCard } from "@/components/ui/metric-card";
 import { ProofExport } from "@/components/proof/ProofExport";
 import { ReceiptCard } from "@/components/proof/ReceiptCard";
 
@@ -58,23 +58,23 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
         <MetricCard
           label="Chain height"
-          value={chainHeight?.toLocaleString() ?? null}
-          sub="committed events"
+          value={chainHeight?.toLocaleString() ?? "—"}
+          hint="committed events"
         />
         <MetricCard
           label="Records"
-          value={recordCount?.toLocaleString() ?? null}
-          sub="live vectors"
+          value={recordCount?.toLocaleString() ?? "—"}
+          hint="live vectors"
         />
         <MetricCard
           label="Dimension"
-          value={dim ?? null}
-          sub="Q16.16 fixed-point"
+          value={dim ?? "—"}
+          hint="Q16.16 fixed-point"
         />
         <MetricCard
           label="Algorithm"
           value="BLAKE3"
-          sub="chained · deterministic"
+          hint="chained · deterministic"
         />
       </div>
 

@@ -3,8 +3,8 @@
 import { useMemo, useState } from "react";
 import { RefreshCw, SearchX } from "lucide-react";
 import { isExecutionRecord, toExecutionViewModel } from "@/lib/execution-viewmodel";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { MetricCard } from "@/components/ui/MetricCard";
+import { EmptyState } from "@/components/ui/empty-state";
+import { MetricCard } from "@/components/ui/metric-card";
 import ExecutionTimeline from "./ExecutionTimeline";
 import ExecutionGraph from "./ExecutionGraph";
 import StageDetailPanel from "./StageDetailPanel";

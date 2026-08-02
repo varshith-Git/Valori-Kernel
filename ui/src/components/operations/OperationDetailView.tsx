@@ -39,7 +39,7 @@ interface OperationDetail {
   metrics: Record<string, unknown>;
 }
 
-export function OperationDetailView({ projectId, operationId }: { projectId: string; operationId: string }) {
+export function OperationDetailView({ projectId, operationId }: { projectId?: string; operationId: string }) {
   const unwrappedParams = { id: operationId };
   const router = useRouter();
   // Two different id spaces share this route: "op-N" (a single committed WAL
@@ -55,12 +55,17 @@ export function OperationDetailView({ projectId, operationId }: { projectId: str
   const [activeTab, setActiveTab] = useState<"overview" | "results" | "proof" | "metrics" | "execution">("overview");
   const [executionData, setExecutionData] = useState<any>(null);
   const [loadingExecution, setLoadingExecution] = useState(false);
+  const operationsListHref = projectId ? `/cloud/projects/${projectId}/operations` : "/operations";
 
   const fetchDetail = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/cloud/projects/${projectId}/operations/${encodeURIComponent(unwrappedParams.id)}`);
+      const res = await fetch(
+        projectId
+          ? `/api/cloud/projects/${projectId}/operations/${encodeURIComponent(unwrappedParams.id)}`
+          : `/api/operations/${encodeURIComponent(unwrappedParams.id)}`
+      );
       if (!res.ok) {
         if (res.status === 404) throw new Error("Operation receipt or journal entry not found.");
         throw new Error(`HTTP ${res.status}`);
@@ -78,7 +83,11 @@ export function OperationDetailView({ projectId, operationId }: { projectId: str
   const fetchExecution = async () => {
     setLoadingExecution(true);
     try {
-      const res = await fetch(`/api/cloud/projects/${projectId}/operations/${encodeURIComponent(unwrappedParams.id)}/execution`);
+      const res = await fetch(
+        projectId
+          ? `/api/cloud/projects/${projectId}/operations/${encodeURIComponent(unwrappedParams.id)}/execution`
+          : `/api/operations/${encodeURIComponent(unwrappedParams.id)}/execution`
+      );
       const data = await res.json();
       setExecutionData(data);
     } catch (err) {
@@ -112,7 +121,7 @@ export function OperationDetailView({ projectId, operationId }: { projectId: str
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push(`/cloud/projects/${projectId}/operations`)}
+            onClick={() => router.push(operationsListHref)}
             className="w-fit gap-2 text-muted-foreground hover:text-foreground -ml-2"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -149,7 +158,7 @@ export function OperationDetailView({ projectId, operationId }: { projectId: str
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => router.push(`/cloud/projects/${projectId}/operations`)}
+          onClick={() => router.push(operationsListHref)}
           className="w-fit gap-2 text-muted-foreground hover:text-foreground -ml-2"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -176,7 +185,7 @@ export function OperationDetailView({ projectId, operationId }: { projectId: str
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => router.push(`/cloud/projects/${projectId}/operations`)}
+          onClick={() => router.push(operationsListHref)}
           className="w-fit gap-2 text-muted-foreground hover:text-foreground -ml-2"
         >
           <ArrowLeft className="h-4 w-4" />

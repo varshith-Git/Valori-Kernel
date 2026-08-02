@@ -1,9 +1,10 @@
+import * as React from "react";
 import { cn } from "@/lib/utils";
 
 /** A loading placeholder — one shape, reused instead of every page inventing
  *  its own `animate-pulse` div with slightly different radius/opacity. */
-export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-lg bg-muted/60", className)} />;
+export function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
+  return <div className={cn("animate-pulse rounded-lg bg-muted/60", className)} {...props} />;
 }
 
 /** Common composite: a page-header-shaped skeleton, for the "we don't know

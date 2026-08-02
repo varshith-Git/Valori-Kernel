@@ -1,17 +1,13 @@
 import { NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 // GET /api/snapshot/download
 // Streams the current snapshot binary from /v1/snapshot/download.
 export async function GET() {
   try {
-    const headers: Record<string, string> = {};
-    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-
-    const res = await fetchWithTimeout(`${getApiUrl()}/v1/snapshot/download`, { headers });
+    const res = await fetchWithTimeout(`${getApiUrl()}/v1/snapshot/download`, { headers: nodeHeaders(false) });
     if (!res.ok) {
       return NextResponse.json(
         { error: `snapshot download failed: HTTP ${res.status}` },

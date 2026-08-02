@@ -33,6 +33,7 @@ async function findLeaderUrl(anyPort: number): Promise<string> {
 
 async function waitForNode(httpPort: number, maxMs = 30_000): Promise<void> {
   const deadline = Date.now() + maxMs;
+  let delay = 100;
   while (Date.now() < deadline) {
     try {
       const r = await fetch(`http://127.0.0.1:${httpPort}/health`, {
@@ -40,7 +41,10 @@ async function waitForNode(httpPort: number, maxMs = 30_000): Promise<void> {
       });
       if (r.ok) return;
     } catch {}
-    await new Promise(res => setTimeout(res, 500));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise(res => setTimeout(res, Math.min(delay, remaining)));
+    delay = Math.min(delay * 2, 2000);
   }
   throw new Error(`Node :${httpPort} did not become healthy within ${maxMs / 1000}s`);
 }

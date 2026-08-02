@@ -66,6 +66,7 @@ struct TestNode {
 }
 
 async fn spawn_tls_node(id: NodeId, tls: RaftTlsConfig) -> TestNode {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = Arc::new(
         Config {
             heartbeat_interval: 100,

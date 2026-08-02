@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Check, Copy, ShieldCheck } from "lucide-react";
 import type { ExecutionViewModel } from "@/lib/execution-viewmodel";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { StatusBadge } from "@/components/ui/status-badge";
 
 function CopyableHash({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);

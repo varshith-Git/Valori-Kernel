@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchWithTimeout } from "@/lib/server/http";
+import { fetchWithTimeout, nodeHeaders } from "@/lib/server/http";
 import { getApiUrl } from "@/lib/server/connection";
-
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
 
 // Generic playground proxy: forwards a single request to the connected node.
 // Path is restricted to the node's public API surface so this can't be used
@@ -28,9 +26,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `path must start with one of: ${ALLOWED_PREFIXES.join(", ")}` }, { status: 400 });
   }
 
-  const headers: Record<string, string> = {};
-  if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
-
+  const headers = nodeHeaders(false);
   const init: RequestInit = { method, headers };
   if (payload.body !== undefined && method !== "GET") {
     headers["Content-Type"] = "application/json";

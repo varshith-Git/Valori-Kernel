@@ -399,7 +399,7 @@ export function GraphView({ projectId, namespace }: { projectId: string; namespa
         let d: typeof queue[number] | undefined;
         while ((d = queue.shift())) {
           if (cancelled) return;
-          const r = await fetch(`/api/projects/${projectId}/graph/edges/${d.node_id}`);
+          const r = await fetch(`/api/cloud/projects/${projectId}/graph/edges/${d.node_id}`);
           if (cancelled) return;
           const data = await r.json().catch(() => ({ edges: [] }));
           result[d.node_id] = data.edges ?? [];

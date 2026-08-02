@@ -7,8 +7,8 @@ const fetcher = (url: string) =>
   fetch(url).then(async (r) => {
     if (!r.ok) throw new Error(`${r.status}`);
     const data = await r.json();
-    return Array.isArray(data.collections)
-      ? data.collections.map((c: { name: string }) => c.name)
+    return data && Array.isArray(data.collections)
+      ? data.collections.map((c: any) => c?.name).filter(Boolean)
       : [];
   });
 

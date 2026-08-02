@@ -155,8 +155,8 @@ impl VectorIndex for BinaryQuantizationIndex {
 
         let query_code = self.encode_vector(query);
         let candidates_cap = (40 * k).max(400);
-        let mut candidates: alloc::vec::Vec<(u32, RecordId)> =
-            alloc::vec::Vec::with_capacity(candidates_cap + 1);
+        let mut heap: alloc::collections::BinaryHeap<(u32, RecordId)> =
+            alloc::collections::BinaryHeap::with_capacity(candidates_cap + 1);
 
         // Stage 1: Coarse BQ Scan via Hamming Distance
         for record in pool.iter() {
@@ -178,20 +178,18 @@ impl VectorIndex for BinaryQuantizationIndex {
             let h_dist = Self::hamming_distance(&query_code, cand_code);
             let cand_item = (h_dist, record.id);
 
-            if candidates.len() < candidates_cap {
-                let pos =
-                    candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
-                candidates.insert(pos, cand_item);
-            } else if Self::cmp_cand(&cand_item, &candidates[candidates_cap - 1]) == Ordering::Less
-            {
-                let pos =
-                    candidates.partition_point(|x| Self::cmp_cand(x, &cand_item) == Ordering::Less);
-                candidates.pop();
-                candidates.insert(pos, cand_item);
+            if heap.len() < candidates_cap {
+                heap.push(cand_item);
+            } else if let Some(&worst) = heap.peek() {
+                if cand_item < worst {
+                    heap.pop();
+                    heap.push(cand_item);
+                }
             }
         }
 
         // Stage 2: Exact Q16.16 Rescore
+        let candidates = heap.into_sorted_vec();
         let mut count = 0;
         for &(_, id) in &candidates {
             let record = match pool.get(id) {

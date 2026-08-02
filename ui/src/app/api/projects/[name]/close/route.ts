@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import * as daemon from "@/lib/server/daemon";
+
+const execFileAsync = promisify(execFile);
 import { projectNodePaths, protectAll, touchProject } from "@/lib/server/projects";
 import { toLegacyEntry, resolveProjectsDir } from "@/lib/server/project-adapter";
 import { pm } from "@/lib/server/process-manager";
@@ -13,10 +16,10 @@ async function probePort(port: number): Promise<boolean> {
   } catch { return false; }
 }
 
-function findPidOnPort(port: number): number | null {
+async function findPidOnPort(port: number): Promise<number | null> {
   try {
-    const out = execFileSync("lsof", ["-ti", `:${port}`], { encoding: "utf8", timeout: 3000 }).trim();
-    const pid = parseInt(out.split("\n")[0], 10);
+    const { stdout } = await execFileAsync("lsof", ["-ti", `:${port}`], { encoding: "utf8", timeout: 3000 });
+    const pid = parseInt(stdout.trim().split("\n")[0], 10);
     return isNaN(pid) ? null : pid;
   } catch { return null; }
 }
@@ -68,8 +71,8 @@ export async function POST(
   try {
     const r = await fetch(`http://127.0.0.1:${entry.nodes[0].httpPort}/health`, { signal: AbortSignal.timeout(1500) });
     if (r.ok) {
-      const h = (await r.json()) as HealthBody;
-      finalRecords = typeof h.records === "number" ? h.records : h.records?.live;
+      const healthBody = (await r.json()) as HealthBody;
+      finalRecords = typeof healthBody.records === "number" ? healthBody.records : healthBody.records?.live;
     }
   } catch { /* node may already be down */ }
 
@@ -94,7 +97,7 @@ export async function POST(
 
       await snapshotViaHttp(n.httpPort, snapshotPath);
 
-      const pid = findPidOnPort(n.httpPort);
+      const pid = await findPidOnPort(n.httpPort);
       if (pid) {
         try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
         await new Promise((r) => setTimeout(r, 2000));

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import useSWR, { mutate as globalMutate } from "swr";
 import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
-import { CopyBtn } from "@/components/ui/CopyBtn";
+import { CopyBtn } from "@/components/ui/copy-btn";
 
 // -- Types ---------------------------------------------------------------------
 

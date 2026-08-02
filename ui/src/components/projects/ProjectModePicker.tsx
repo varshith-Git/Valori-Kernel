@@ -11,7 +11,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { HardDrive, Cloud, LogIn, Loader2 } from "lucide-react";
 import { createClient } from "@/utils/supabase/client";
-import { openCloudLogin, nativeAvailable } from "@/lib/native";
 
 interface Props {
   open: boolean;
@@ -104,8 +103,7 @@ export function ProjectModePicker({ open, onClose, onLocal }: Props) {
                 size="sm"
                 variant="outline"
                 className="w-full text-xs"
-                onClick={() => openCloudLogin()}
-                disabled={!nativeAvailable()}
+                onClick={() => { onClose(); router.push("/login?next=/cloud"); }}
               >
                 <LogIn size={13} className="mr-1.5" /> Sign in to sync
               </Button>

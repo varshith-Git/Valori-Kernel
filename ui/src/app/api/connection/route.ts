@@ -14,21 +14,31 @@ async function probe(url: string): Promise<{ reachable: boolean } & HealthPayloa
   }
 }
 
-// GET — current URL + history (each entry probed for liveness)
+// GET — current URL + history (each unique URL probed exactly once)
 export async function GET() {
-  const current  = getApiUrl();
-  const health   = await probe(current);
-  const history  = getHistory();
+  const current = getApiUrl();
+  const history = getHistory();
 
-  // Probe all history entries in parallel (fast timeout)
-  const probed = await Promise.all(
-    history.map(async h => ({
-      ...h,
-      reachable: h.url === current ? health.reachable : (await probe(h.url)).reachable,
-      live_dim:     h.url === current ? health.dim     : undefined,
-      live_records: h.url === current ? health.records : undefined,
-    }))
+  // Collect unique URLs: current first, then history entries not already covered.
+  const urlSet = new Set<string>([current]);
+  for (const h of history) urlSet.add(h.url);
+
+  // Probe all unique URLs in parallel.
+  const results = new Map<string, Awaited<ReturnType<typeof probe>>>();
+  await Promise.all(
+    [...urlSet].map(async (url) => results.set(url, await probe(url)))
   );
+
+  const health = results.get(current)!;
+  const probed = history.map((h) => {
+    const r = results.get(h.url) ?? { reachable: false };
+    return {
+      ...h,
+      reachable:    r.reachable,
+      live_dim:     h.url === current ? r.dim     : undefined,
+      live_records: h.url === current ? r.records : undefined,
+    };
+  });
 
   return NextResponse.json({
     url:       current,

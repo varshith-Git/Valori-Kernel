@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getApiUrl } from "@/lib/server/connection";
-const TOKEN = process.env.VALORI_AUTH_TOKEN;
-
-function authHeaders(): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (TOKEN) h["Authorization"] = `Bearer ${TOKEN}`;
-  return h;
-}
+import { nodeHeaders } from "@/lib/server/http";
 
 export async function GET() {
   try {
     const res = await fetch(`${getApiUrl()}/v1/namespaces`, {
-      headers: authHeaders(),
+      headers: nodeHeaders(false),
       cache: "no-store",
       signal: AbortSignal.timeout(3000),
     });
@@ -28,8 +22,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const res = await fetch(`${getApiUrl()}/v1/namespaces`, {
       method: "POST",
-      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      headers: nodeHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(3000),
     });
     const data = await res.json().catch(() => ({}));
     return NextResponse.json(data, { status: res.status });

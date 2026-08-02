@@ -38,15 +38,20 @@ export function useProjectGroups(): {
   for (const ns of (Array.isArray(namespaces) ? namespaces : [])) {
     const { project, collection } = parseNs(ns);
     const existing = grouped.get(project);
+    const isBare = !ns.includes(SEP);
+
     if (!existing) {
-      const isBare = !ns.includes(SEP);
       grouped.set(project, {
         project,
         collections: isBare ? [] : [collection],
         isBare,
       });
     } else {
-      if (!existing.isBare) existing.collections.push(collection);
+      if (isBare) {
+        existing.isBare = true;
+      } else if (!existing.collections.includes(collection)) {
+        existing.collections.push(collection);
+      }
     }
   }
 

@@ -1,16 +1,7 @@
 import { createClient } from '@/utils/supabase/server'
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { CreateProjectDialog } from './CreateProjectDialog'
-
-const STATUS_STYLE: Record<string, string> = {
-    active: 'bg-primary/10 text-primary border-primary/30',
-    creating: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
-    error: 'bg-destructive/10 text-destructive border-destructive/30',
-    stopped: 'bg-muted text-muted-foreground border-border',
-    suspended: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
-    deleted: 'bg-muted text-muted-foreground border-border',
-}
+import { CloudProjectsClient } from './CloudProjectsClient'
 
 export default async function DashboardPage() {
     const supabase = await createClient()
@@ -105,50 +96,19 @@ export default async function DashboardPage() {
                     <CreateProjectDialog orgId={org.id} atLimit={atProjectLimit} />
                 </div>
 
-                <div className="rounded-2xl border border-border bg-card/50 backdrop-blur-xl overflow-hidden">
-                    {!projects || projects.length === 0 ? (
-                        <div className="p-12 text-center">
-                            <p className="text-muted-foreground text-sm">No projects yet.</p>
-                        </div>
-                    ) : (
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase tracking-widest">
-                                    <th className="px-6 py-3 font-medium">Name</th>
-                                    <th className="px-6 py-3 font-medium">Region</th>
-                                    <th className="px-6 py-3 font-medium">Vector config</th>
-                                    <th className="px-6 py-3 font-medium">Status</th>
-                                    <th className="px-6 py-3 font-medium">Node URL</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {projects.map((p) => (
-                                    <tr key={p.id} className="border-b border-border last:border-0 hover:bg-accent/30 transition-colors">
-                                        <td className="px-6 py-4 text-foreground font-medium">
-                                            <Link href={`/cloud/projects/${p.id}`} className="hover:underline">
-                                                {p.name}
-                                            </Link>
-                                        </td>
-                                        <td className="px-6 py-4 text-muted-foreground">{p.region}</td>
-                                        <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
-                                            {p.dim}d · {p.index_type}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            <span
-                                                className={`inline-block px-2 py-0.5 rounded-full text-xs border ${STATUS_STYLE[p.status] ?? STATUS_STYLE.stopped}`}
-                                            >
-                                                {p.status}
-                                            </span>
-                                        </td>
-                                        <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
-                                            {p.node_url ?? '—'}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
+                <CloudProjectsClient
+                    projects={(projects ?? []).map(p => ({
+                        id: p.id,
+                        name: p.name,
+                        region: p.region,
+                        dim: p.dim,
+                        index_type: p.index_type,
+                        status: p.status,
+                        node_url: p.node_url ?? null,
+                        replication: p.replication ?? 1,
+                    }))}
+                    orgId={org.id}
+                />
             </div>
         </div>
     )

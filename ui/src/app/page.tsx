@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   Plus, Layers, RefreshCw, FolderOpen, Trash2, Play, Pause,
   ArrowRight, Loader2, Star, Upload, BookOpen, Lightbulb, SquareTerminal,
+  MoreVertical, Pencil, Copy, Archive,
 } from "lucide-react";
 import { forgetProject, getFavoriteProjects, toggleFavoriteProject, touchRecentProject } from "@/lib/native";
 import { useProjectManifest, type ManifestProject } from "@/lib/hooks/useProjectManifest";
@@ -374,6 +375,155 @@ function RecentActivityPanel() {
   );
 }
 
+// ── Local project three-dot menu ──────────────────────────────────────────────
+
+const ARCHIVED_KEY = "valori:archived-projects";
+function readArchived(): string[] {
+  try { return JSON.parse(localStorage.getItem(ARCHIVED_KEY) ?? "[]") as string[]; } catch { return []; }
+}
+function writeArchived(list: string[]) {
+  try { localStorage.setItem(ARCHIVED_KEY, JSON.stringify(list)); } catch {}
+}
+
+function ProjectRowMenu({ name, onRename, onDuplicate, onArchive }: {
+  name: string;
+  onRename: () => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        className="opacity-0 group-hover:opacity-100 flex items-center justify-center w-6 h-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-all"
+        aria-label="Project actions"
+      >
+        <MoreVertical size={13} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-card shadow-lg py-1 overflow-hidden">
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(false); onRename(); }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-left"
+          >
+            <Pencil size={13} /> Rename
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(false); onDuplicate(); }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-left"
+          >
+            <Copy size={13} /> Duplicate
+          </button>
+          <div className="mx-2 my-0.5 border-t border-border/60" />
+          <button
+            onClick={(e) => { e.stopPropagation(); setOpen(false); onArchive(); }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors text-left"
+          >
+            <Archive size={13} /> Archive
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LocalRenameDialog({ name, onClose, onSuccess }: {
+  name: string;
+  onClose: () => void;
+  onSuccess: (newName: string) => void;
+}) {
+  const [value, setValue] = useState(name);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (trimmed === name) { onClose(); return; }
+    setLoading(true);
+    const res = await fetch(`/api/projects/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({})) as { error?: string };
+      setError(d.error ?? "Rename failed");
+      setLoading(false);
+      return;
+    }
+    onSuccess(trimmed);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 space-y-4"
+      >
+        <h2 className="text-base font-semibold text-foreground">Rename project</h2>
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--v-accent-ring)]"
+        />
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <button type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 border border-border text-foreground rounded-lg hover:bg-accent transition text-sm">Cancel</button>
+          <button type="submit" disabled={loading || !value.trim()} className="flex-1 px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:opacity-90 transition disabled:opacity-50 text-sm">
+            {loading ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function LocalArchiveDialog({ name, onClose, onSuccess }: {
+  name: string;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  function handleArchive() {
+    const list = readArchived();
+    if (!list.includes(name)) writeArchived([...list, name]);
+    onSuccess();
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 space-y-4"
+      >
+        <h2 className="text-base font-semibold text-foreground">Archive project?</h2>
+        <p className="text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">{name}</span> will be hidden from this list.
+          Your data is not deleted — restart the app to see it again.
+        </p>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 px-4 py-2 border border-border text-foreground rounded-lg hover:bg-accent transition text-sm">Cancel</button>
+          <button onClick={handleArchive} className="flex-1 px-4 py-2 bg-amber-500 text-white font-semibold rounded-lg hover:opacity-90 transition text-sm">Archive</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Projects panel ────────────────────────────────────────────────────────────
 
 function ProjectsPanel({
@@ -381,6 +531,8 @@ function ProjectsPanel({
   onOpen,
   onClose,
   onDelete,
+  onRename,
+  onDuplicate,
   onToggleFavorite,
   favorites,
   busyName,
@@ -390,24 +542,33 @@ function ProjectsPanel({
   onOpen: (name: string) => void;
   onClose: (name: string) => void;
   onDelete: (name: string) => void;
+  onRename: (name: string) => void;
+  onDuplicate: (p: ManifestProject) => void;
   onToggleFavorite: (name: string) => void;
   favorites: string[];
   busyName: string | null;
   onCreateProject: () => void;
 }) {
   const [tab, setTab] = useState<TabFilter>("all");
+  const [archived, setArchived] = useState<string[]>([]);
+
+  useEffect(() => {
+    setArchived(readArchived());
+  }, []);
+
+  const visibleProjects = projects.filter(p => !archived.includes(p.name));
 
   const counts = {
-    all:     projects.length,
-    running: projects.filter(p => p.status === "running" || p.status === "starting").length,
-    stopped: projects.filter(p => p.status === "stopped" || p.status === "error").length,
+    all:     visibleProjects.length,
+    running: visibleProjects.filter(p => p.status === "running" || p.status === "starting").length,
+    stopped: visibleProjects.filter(p => p.status === "stopped" || p.status === "error").length,
   };
 
   const filtered = tab === "all"
-    ? projects
+    ? visibleProjects
     : tab === "running"
-    ? projects.filter(p => p.status === "running" || p.status === "starting")
-    : projects.filter(p => p.status === "stopped" || p.status === "error");
+    ? visibleProjects.filter(p => p.status === "running" || p.status === "starting")
+    : visibleProjects.filter(p => p.status === "stopped" || p.status === "error");
 
   const [showAll, setShowAll] = useState(false);
   const SHOW_LIMIT = 6;
@@ -456,7 +617,7 @@ function ProjectsPanel({
 
       {/* Project rows */}
       <div className="flex-1 overflow-y-auto divide-y divide-border/60">
-        {projects.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <div className="h-10 w-10 rounded-xl border border-dashed border-border flex items-center justify-center">
               <FolderOpen size={18} className="text-muted-foreground" />
@@ -540,6 +701,18 @@ function ProjectsPanel({
                       {busyName === p.name ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} className="fill-current ml-0.5" />}
                     </button>
                   )}
+
+                  {/* Three-dot menu */}
+                  <ProjectRowMenu
+                    name={p.name}
+                    onRename={() => onRename(p.name)}
+                    onDuplicate={() => onDuplicate(p)}
+                    onArchive={() => {
+                      const list = readArchived();
+                      if (!list.includes(p.name)) writeArchived([...list, p.name]);
+                      setArchived(readArchived());
+                    }}
+                  />
 
                   {/* Delete */}
                   <button
@@ -642,11 +815,12 @@ function QuickActions({ onCreateProject }: { onCreateProject: () => void }) {
 
 export default function HomePage() {
   const router = useRouter();
-  const { projects, isLoading, create, open, close, remove, refresh } = useProjectManifest();
+  const { projects, isLoading, create, open, close, remove, rename, refresh } = useProjectManifest();
   const { online, recordCount, dim } = useHealth();
   const [createOpen,   setCreateOpen]   = useState(false);
   const [pickerOpen,   setPickerOpen]   = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [busyName,     setBusyName]     = useState<string | null>(null);
   const [favorites,    setFavorites]    = useState<string[]>([]);
 
@@ -678,6 +852,17 @@ export default function HomePage() {
     setBusyName(name);
     await close(name);
     setBusyName(null);
+  };
+
+  const handleDuplicate = async (p: ManifestProject) => {
+    await create({
+      name: `${p.name}-copy`,
+      dim: p.dim,
+      index: p.index,
+      replication: p.replication,
+      shardCount: p.shardCount,
+      embed: p.embed,
+    });
   };
 
   const activeProject = projects.find(p => p.status === "running");
@@ -752,6 +937,8 @@ export default function HomePage() {
               onOpen={handleOpen}
               onClose={handleClose}
               onDelete={setDeleteTarget}
+              onRename={setRenameTarget}
+              onDuplicate={handleDuplicate}
               onToggleFavorite={toggleFavorite}
               favorites={favorites}
               busyName={busyName}
@@ -796,6 +983,18 @@ export default function HomePage() {
             forgetProject(deleteTarget).catch(() => {});
             setFavorites(prev => prev.filter(n => n !== deleteTarget));
             setDeleteTarget(null);
+          }}
+        />
+      )}
+
+      {renameTarget && (
+        <LocalRenameDialog
+          name={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onSuccess={async (newName) => {
+            await rename(renameTarget, newName);
+            setFavorites(prev => prev.map(n => n === renameTarget ? newName : n));
+            setRenameTarget(null);
           }}
         />
       )}

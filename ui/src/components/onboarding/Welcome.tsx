@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Image from "next/image";
 import { FolderOpen, Monitor, Package, ShieldCheck, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -75,7 +75,7 @@ function Sidebar({
             flexShrink: 0,
           }}
         >
-          <Image src="/logo.png" alt="Valori" width={20} height={20} className="dark:invert" />
+          <Image src="/logo.png" alt="Valori" width={20} height={20} className="dark:invert" style={{ height: 'auto' }} />
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0 }}>
           <span style={{ fontSize: 14, fontWeight: 600, color: "var(--foreground)" }}>
@@ -191,6 +191,8 @@ function Sidebar({
 
 // ── Step panels ───────────────────────────────────────────────────────────────
 
+// ── Terms sections ────────────────────────────────────────────────────────────
+
 const TERMS_SECTIONS = [
   {
     title: "Acceptance of terms",
@@ -254,7 +256,7 @@ function TermsPanel({
               flexShrink: 0,
             }}
           >
-            <Image src="/logo.png" alt="Valori" width={28} height={28} className="dark:invert" />
+            <Image src="/logo.png" alt="Valori" width={28} height={28} className="dark:invert" style={{ height: 'auto' }} />
           </div>
           <div>
             <p style={{ fontSize: 15, fontWeight: 600, color: "var(--v-accent)", margin: "0 0 4px" }}>
@@ -360,6 +362,8 @@ function FolderPanel({
   modelDir,
   onPickWorkspace,
   onPickModel,
+  onChangeWorkspace,
+  onChangeModel,
   onBack,
   onNext,
 }: {
@@ -367,6 +371,8 @@ function FolderPanel({
   modelDir: string | null;
   onPickWorkspace: () => void;
   onPickModel: () => void;
+  onChangeWorkspace: (path: string | null) => void;
+  onChangeModel: (path: string | null) => void;
   onBack: () => void;
   onNext: () => void;
 }) {
@@ -381,15 +387,15 @@ function FolderPanel({
         {/* Workspace */}
         <div style={{ marginBottom: 24 }}>
           <p style={{ fontSize: 13, fontWeight: 600, color: "var(--foreground)", margin: "0 0 4px" }}>
-            Workspace folder <span style={{ color: "var(--v-accent)" }}>*</span>
+            Workspace folder <span style={{ color: "#ef4444" }}>*</span>
           </p>
           <p style={{ fontSize: 12, color: "var(--muted-foreground)", margin: "0 0 10px", lineHeight: 1.5 }}>
             Where your project data and audit logs live on disk.
           </p>
           <div style={{ display: "flex", gap: 8 }}>
             <input
-              readOnly
               value={workspaceDir ?? ""}
+              onChange={(e) => onChangeWorkspace(e.target.value || null)}
               placeholder="Not selected"
               style={{
                 flex: 1,
@@ -422,8 +428,8 @@ function FolderPanel({
           </p>
           <div style={{ display: "flex", gap: 8 }}>
             <input
-              readOnly
               value={modelDir ?? ""}
+              onChange={(e) => onChangeModel(e.target.value || null)}
               placeholder="Same as workspace"
               style={{
                 flex: 1,
@@ -662,16 +668,32 @@ export default function Welcome({ onFinish }: { onFinish: () => void }) {
   const [installing,   setInstalling]    = useState(false);
   const [installError, setInstallError]  = useState<string | null>(null);
 
+  useEffect(() => {
+    async function initDefaults() {
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        try {
+          const { dataDir, join } = await import("@tauri-apps/api/path");
+          const base = await dataDir();
+          const appData = await join(base, "Valori");
+          const defaultWorkspace = await join(appData, "workspace");
+          const defaultModel = await join(appData, "models");
+          setWorkspaceDir(defaultWorkspace);
+          setModelDir(defaultModel);
+        } catch (e) {
+          console.error("Failed to load default folder paths", e);
+        }
+      }
+    }
+    initDefaults();
+  }, []);
+
   const markDone = (id: StepId) =>
     setCompleted((prev) => new Set([...prev, id]));
 
   const goTo = (id: StepId) => setStep(id);
 
   const handleAccept = () => { markDone("terms"); goTo("folder"); };
-  const handleDecline = () => {
-    // Nothing to persist — just re-show the terms.
-    setAgreed(false);
-  };
+  const handleDecline = () => { setAgreed(false); };
 
   const handlePickWorkspace = async () => {
     const dir = await pickFolder("Choose workspace folder");
@@ -751,6 +773,8 @@ export default function Welcome({ onFinish }: { onFinish: () => void }) {
             modelDir={modelDir}
             onPickWorkspace={handlePickWorkspace}
             onPickModel={handlePickModel}
+            onChangeWorkspace={setWorkspaceDir}
+            onChangeModel={setModelDir}
             onBack={() => goTo("terms")}
             onNext={handleFolderNext}
           />

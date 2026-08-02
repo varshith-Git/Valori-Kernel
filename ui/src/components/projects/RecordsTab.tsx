@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useHealth } from "@/lib/hooks/useHealth";
 import type { SearchResult } from "@/types/valori";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Props {
   collection: string;
@@ -50,7 +51,7 @@ export function RecordsTab({ collection }: Props) {
   };
 
   if (!dim) return <p className="text-xs text-muted-foreground">Loading dimension…</p>;
-  if (isLoading) return <div className="h-8 animate-pulse rounded bg-accent w-1/2" />;
+  if (isLoading) return <Skeleton className="h-8 bg-accent w-1/2" />;
   if (error) return <p className="text-xs text-red-400">{error}</p>;
   if (records.length === 0) {
     return (

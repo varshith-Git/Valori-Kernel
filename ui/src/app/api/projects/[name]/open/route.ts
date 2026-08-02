@@ -107,8 +107,8 @@ export async function POST(
   const preHealth = await Promise.all(entry.nodes.map((n) => probeHealth(n.httpPort, 400)));
 
   for (let i = 0; i < entry.nodes.length; i++) {
-    const h = preHealth[i] as (HealthBody & { event_log_height?: number | null }) | null;
-    if (h && h.event_log_height == null) {
+    const nodeHealth = preHealth[i] as (HealthBody & { event_log_height?: number | null }) | null;
+    if (nodeHealth && nodeHealth.event_log_height == null) {
       const port = entry.nodes[i].httpPort;
       const { snapshotPath } = projectNodePaths(entry, entry.nodes[i].id);
       await pm.snapshotThenStop(port, snapshotPath);
@@ -117,7 +117,7 @@ export async function POST(
     }
   }
 
-  preHealth.forEach((h, i) => { if (h) pm.markRunning(entry.nodes[i].httpPort); });
+  preHealth.forEach((nodeHealth, i) => { if (nodeHealth) pm.markRunning(entry.nodes[i].httpPort); });
 
   const anyToStart = entry.nodes.some((n, i) => !preHealth[i] && !pm.isRunning(n.httpPort));
   if (anyToStart) {

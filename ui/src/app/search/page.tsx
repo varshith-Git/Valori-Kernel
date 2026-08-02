@@ -10,6 +10,11 @@ import { useProof } from "@/lib/hooks/useProof";
 import type { SearchResult } from "@/types/valori";
 import type { ActivityEvent } from "@/app/api/activity/route";
 import { EVENT_COLORS } from "@/lib/event-types";
+import { PageHeader } from "@/components/ui/page-header";
+import { MetricCard } from "@/components/ui/metric-card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { CopyBtn } from "@/components/ui/copy-btn";
 
 // -- Helpers -------------------------------------------------------------------
 
@@ -74,32 +79,40 @@ function ResultsTab({ results, stateHash, queriedAt }: {
   return (
     <div className="flex flex-col gap-3">
       {stateHash && (
-        <p className="text-[11px] text-muted-foreground font-mono">
-          Searched against state{" "}
-          <span className="text-foreground">{stateHash.slice(0, 16)}…</span>
-          {queriedAt && ` · ${new Date(queriedAt).toLocaleTimeString()}`}
-        </p>
+        <div className="flex items-center gap-2 mb-1">
+          <p className="text-[11px] text-muted-foreground font-mono">
+            Searched against state{" "}
+            <span className="text-foreground">{stateHash.slice(0, 16)}…</span>
+            {queriedAt && ` · ${new Date(queriedAt).toLocaleTimeString()}`}
+          </p>
+          <CopyBtn text={stateHash} label="copy hash" className="scale-75 origin-left" />
+        </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {results.map((r, i) => (
-          <div key={r.id} className="rounded-lg border border-border bg-card px-4 py-3 flex flex-col gap-1.5">
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] font-mono text-muted-foreground w-5">{i + 1}</span>
-              <span className="font-mono text-xs text-muted-foreground">#{r.id}</span>
-              <span className="font-mono text-xs text-muted-foreground">{r.score.toFixed(5)}</span>
-              {(r.collection) && (
-                <span className="ml-auto text-[10px] text-muted-foreground">{r.collection}</span>
+          <div key={r.id} className="rounded-xl border border-border bg-card/60 hover:bg-card px-4 py-3 flex flex-col gap-2 transition-colors relative group">
+            <div className="flex items-center gap-2.5">
+              <span className="text-[10px] font-mono text-muted-foreground/60 w-5">{i + 1}</span>
+              <span className="font-mono text-xs font-semibold text-foreground">#{r.id}</span>
+              <StatusBadge tone="neutral">{`Score: ${r.score.toFixed(5)}`}</StatusBadge>
+              {r.collection && (
+                <StatusBadge tone="info" className="ml-auto text-[10px]">{r.collection}</StatusBadge>
               )}
               {r.source && (
-                <span className="text-[10px] text-muted-foreground truncate max-w-[300px]" title={r.source}>
+                <span className="text-[10px] text-muted-foreground truncate max-w-[200px] font-mono" title={r.source}>
                   {r.source.split("/").pop()}
                 </span>
               )}
             </div>
             {r.text && (
-              <p className="text-xs text-muted-foreground leading-relaxed pl-8 border-l-2 border-border ml-5">
-                {r.text}{r.text.length >= 160 ? "…" : ""}
-              </p>
+              <div className="relative pl-6 border-l-2 border-border/80 ml-5 group/text">
+                <p className="text-xs text-muted-foreground leading-relaxed pr-8">
+                  {r.text}
+                </p>
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <CopyBtn text={r.text} label="copy chunk" />
+                </div>
+              </div>
             )}
           </div>
         ))}
@@ -121,15 +134,16 @@ function ProofTab({ searchHash }: { searchHash: string | null }) {
     <div className="flex flex-col gap-5">
       {/* Hash comparison */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="px-5 py-3 border-b border-border bg-background/50">
+        <div className="px-5 py-3 border-b border-border bg-background/50 flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">State Hash</h3>
+          {match && <StatusBadge tone="success">Current</StatusBadge>}
+          {diverged && <StatusBadge tone="warning">Outdated</StatusBadge>}
         </div>
         <div className="px-5 py-4 flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-muted-foreground">Searched against</span>
-              {match && <span className="text-[10px] text-emerald-600 dark:text-emerald-400">✓ current</span>}
-              {diverged && <span className="text-[10px] text-amber-500">new events since search</span>}
+              {searchHash && <CopyBtn text={searchHash} label="copy search hash" />}
             </div>
             <code className="font-mono text-xs text-foreground bg-background border border-border rounded-lg px-3 py-2 break-all">
               {searchHash ?? "—"}
@@ -138,7 +152,10 @@ function ProofTab({ searchHash }: { searchHash: string | null }) {
 
           {diverged && (
             <div className="flex flex-col gap-2">
-              <span className="text-[11px] text-muted-foreground">Current</span>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">Current</span>
+                {currentHash && <CopyBtn text={currentHash} label="copy current hash" />}
+              </div>
               <code className="font-mono text-xs text-foreground bg-background border border-border rounded-lg px-3 py-2 break-all">
                 {isLoading ? "loading…" : (currentHash ?? "—")}
               </code>
@@ -149,17 +166,21 @@ function ProofTab({ searchHash }: { searchHash: string | null }) {
 
       {/* Chain metrics */}
       <div className="grid grid-cols-3 gap-3">
-        {[
-          { label: "Chain height", value: chainHeight?.toLocaleString() ?? "—", sub: "committed events" },
-          { label: "Records",      value: recordCount?.toLocaleString() ?? "—", sub: "live vectors" },
-          { label: "Dimension",    value: dim ? String(dim) : "—",              sub: "Q16.16 fixed-point" },
-        ].map((m) => (
-          <div key={m.label} className="rounded-xl border border-border bg-card px-4 py-3">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">{m.label}</p>
-            <p className="text-xl font-bold text-foreground tabular-nums mt-1">{m.value}</p>
-            <p className="text-[10px] text-muted-foreground mt-0.5">{m.sub}</p>
-          </div>
-        ))}
+        <MetricCard
+          label="Chain height"
+          value={chainHeight?.toLocaleString() ?? "—"}
+          hint="committed events"
+        />
+        <MetricCard
+          label="Records"
+          value={recordCount?.toLocaleString() ?? "—"}
+          hint="live vectors"
+        />
+        <MetricCard
+          label="Dimension"
+          value={dim ? String(dim) : "—"}
+          hint="Q16.16 fixed-point"
+        />
       </div>
 
       <p className="text-[11px] text-muted-foreground">
@@ -191,8 +212,15 @@ function TimelineTab() {
 
   if (loading) {
     return (
-      <div className="py-10 flex items-center justify-center">
-        <div className="h-4 w-4 rounded-full border-2 border-[var(--v-accent)] border-t-transparent animate-spin" />
+      <div className="flex flex-col gap-2.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 py-2.5 px-4 rounded-xl border border-border/60 bg-card/40">
+            <Skeleton className="h-3 w-8" />
+            <Skeleton className="h-3 w-28" />
+            <Skeleton className="h-3 flex-1" />
+            <Skeleton className="h-3 w-16" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -313,12 +341,10 @@ export default function SearchPage() {
     <div className="flex flex-col gap-5 w-full max-w-[1600px]">
 
       {/* Page title */}
-      <div>
-        <h1 className="text-lg font-semibold text-foreground">Search</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          k-NN vector similarity search across your collections
-        </p>
-      </div>
+      <PageHeader
+        title="Search"
+        subtitle="k-NN vector similarity search across your collections"
+      />
 
       {/* Query input card */}
       <div className="rounded-xl border border-border bg-card p-5 flex flex-col gap-4">

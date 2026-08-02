@@ -13,6 +13,8 @@ import { useProof } from "@/lib/hooks/useProof";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { ChevronRight, RefreshCw, Download, ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // -- Types ---------------------------------------------------------------------
 
@@ -178,15 +180,9 @@ function AuditPageInner() {
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-xl font-semibold text-foreground">Audit</h1>
-            <span className={cn(
-              "inline-flex items-center gap-1.5 text-xs font-medium px-2 py-0.5 rounded-full border",
-              online
-                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                : "border-border bg-muted text-muted-foreground"
-            )}>
-              <span className={cn("w-1.5 h-1.5 rounded-full", online ? "bg-emerald-500 animate-pulse" : "bg-zinc-400")} />
+            <StatusBadge tone={online ? "success" : "neutral"} pulse={online}>
               {online ? "Live" : "Offline"}
-            </span>
+            </StatusBadge>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Every mutation, chained and verifiable — browse, verify, export, or share for third-party review.
@@ -323,8 +319,8 @@ cargo run -p valori-node`}
       {/* Table */}
       {loading ? (
         <div className="flex flex-col gap-px">
-          <div className="h-10 rounded-t-lg bg-muted animate-pulse" />
-          {[1, 2, 3, 4, 5].map((i) => <div key={i} className="h-14 bg-card border border-border animate-pulse" />)}
+          <Skeleton className="h-10 rounded-t-lg" />
+          {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-14 bg-card border border-border rounded-none" />)}
         </div>
       ) : error ? (
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
@@ -550,7 +546,7 @@ function ProofBanner() {
     (url: string) => fetch(url).then((r) => r.json()),
     { refreshInterval: 5000 }
   );
-  if (isLoading) return <div className="h-16 animate-pulse rounded-xl bg-muted" />;
+  if (isLoading) return <Skeleton className="h-16 rounded-xl" />;
   if (!data) return null;
   return (
     <div className="rounded-xl border border-border bg-card p-5">
@@ -913,13 +909,13 @@ function SnapshotSection() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <div className="h-24 animate-pulse rounded-xl bg-accent" />;
+  if (loading) return <Skeleton className="h-24 rounded-xl bg-accent" />;
 
   if (data?.disabled) {
     return (
       <div className="rounded-xl border border-border p-6 text-center">
         <p className="text-sm text-muted-foreground">Object store not configured.</p>
-        <Link href="/settings/snapshots" className="mt-2 block text-xs text-muted-foreground hover:text-accent-foreground transition-colors">
+        <Link href="/snapshots" className="mt-2 block text-xs text-muted-foreground hover:text-accent-foreground transition-colors">
           → Configure in Settings
         </Link>
       </div>
@@ -944,7 +940,7 @@ function SnapshotSection() {
           </div>
         </div>
       ))}
-      <Link href="/settings/snapshots" className="text-xs text-muted-foreground hover:text-accent-foreground transition-colors">
+      <Link href="/snapshots" className="text-xs text-muted-foreground hover:text-accent-foreground transition-colors">
         → Manage snapshots
       </Link>
     </div>

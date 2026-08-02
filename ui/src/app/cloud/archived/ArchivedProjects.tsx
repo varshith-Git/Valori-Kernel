@@ -23,7 +23,7 @@ export function ArchivedProjects({ initialProjects }: { initialProjects: Archive
     const handleRestore = (id: string) => {
         setError(null)
         startTransition(async () => {
-            const res = await fetch(`/api/projects/${id}/restore`, { method: 'POST' })
+            const res = await fetch(`/api/cloud/projects/${id}/restore`, { method: 'POST' })
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}))
                 setError(data.error ?? 'Could not restore project.')
