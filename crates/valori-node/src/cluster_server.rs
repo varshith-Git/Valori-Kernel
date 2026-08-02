@@ -915,6 +915,10 @@ fn default_k() -> usize {
     10
 }
 
+/// Hard ceiling on a single search's `k` — mirrors `server.rs::MAX_SEARCH_K`
+/// (standalone path). Keep both in sync; see that constant's doc comment.
+const MAX_SEARCH_K: usize = 5000;
+
 // Wire-compatible with the standalone server's SearchHit { id, score }
 // (api.rs) so one SDK client speaks to both standalone and cluster nodes.
 // `score` is the L2 distance as a float (raw Q32.32 divided by SCALE²),
@@ -930,6 +934,20 @@ async fn search(
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(req): Json<SearchRequest>,
 ) -> Response {
+    // k=0 is meaningless; an unbounded k gets multiplied by POOL_FACTOR (20x)
+    // on the rerank path before sizing a results buffer, so an unchecked huge
+    // k is a client-triggerable unbounded allocation, matching the same bound
+    // enforced on the standalone path (server.rs::MAX_SEARCH_K).
+    if req.k == 0 || req.k > MAX_SEARCH_K {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("k must be between 1 and {MAX_SEARCH_K}, got {}", req.k)
+            })),
+        )
+            .into_response();
+    }
+
     // Startup readiness gate (B13): never serve from a state machine that is
     // still replaying its log back up to the committed index known at boot.
     if let Err(resp) = state.readiness.check(&state.raft) {
@@ -4800,6 +4818,7 @@ async fn cluster_memory_search(
 struct ClusterTimelineQuery {
     from: Option<String>,
     to: Option<String>,
+    limit: Option<usize>,
 }
 
 fn collect_cluster_timeline(
@@ -4966,6 +4985,11 @@ async fn cluster_timeline(
     }
 
     let total = entries.len();
+    let mut entries = entries;
+    if let Some(n) = q.limit {
+        let skip = total.saturating_sub(n);
+        entries.drain(..skip);
+    }
     (
         StatusCode::OK,
         Json(crate::api::TimelineResponse {

@@ -1262,12 +1262,25 @@ async fn batch_insert(
     Ok(Json(BatchInsertResponse { ids }))
 }
 
+/// Hard ceiling on a single search's `k`. Above this, a client-supplied `k`
+/// gets multiplied by `valori_search::POOL_FACTOR` (20x) on the rerank path
+/// before it's used to size a results buffer — an unbounded `k` is a
+/// client-triggerable unbounded allocation, not just a slow query.
+const MAX_SEARCH_K: usize = 5000;
+
 async fn search(
     State(state): State<SharedEngine>,
     axum::Extension(receipts): axum::Extension<Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, EngineError> {
     use valori_kernel::snapshot::blake3::hash_state_blake3;
+
+    if payload.k == 0 || payload.k > MAX_SEARCH_K {
+        return Err(EngineError::InvalidInput(format!(
+            "k must be between 1 and {MAX_SEARCH_K}, got {}",
+            payload.k
+        )));
+    }
 
     if payload.as_of.is_some() || payload.as_of_log_index.is_some() {
         return search_as_of(state, payload).await;
@@ -2240,6 +2253,8 @@ struct TimelineQuery {
     from: Option<String>,
     /// ISO 8601 UTC upper bound (inclusive).
     to: Option<String>,
+    /// Return only the N most-recent events. Applied after timestamp filtering.
+    limit: Option<usize>,
     /// Filter to events in a specific collection (not yet applied at kernel level;
     /// kept for future use when namespace is stored per-event).
     #[allow(dead_code)]
@@ -2317,6 +2332,10 @@ async fn get_timeline(
     }
 
     let total = entries.len();
+    if let Some(n) = q.limit {
+        let skip = total.saturating_sub(n);
+        entries.drain(..skip);
+    }
     Ok(Json(TimelineResponse {
         events: entries,
         total,

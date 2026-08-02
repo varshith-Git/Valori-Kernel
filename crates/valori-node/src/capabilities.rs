@@ -142,26 +142,16 @@ impl KernelCapability for EngineKernelCapability {
         path: Option<&str>,
     ) -> Result<String, EffectError> {
         use valori_kernel::snapshot::blake3::hash_state_blake3;
-        // Resolve path and snapshot bytes under a READ lock, then release before I/O.
-        let (target, data, hash) = {
-            let eng = self.engine.read().await;
-            let target = path
-                .map(std::path::PathBuf::from)
-                .or_else(|| eng.snapshot_path.clone())
-                .ok_or_else(|| {
-                    EffectError::Dispatch("snapshot: No snapshot path configured".into())
-                })?;
-            let data = eng
-                .snapshot()
-                .map_err(|e| EffectError::Dispatch(format!("snapshot encode: {e}")))?;
-            let hash: String = hash_state_blake3(&eng.state)
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect();
-            (target, data, hash)
-        }; // read lock released here
-        std::fs::write(&target, data)
-            .map_err(|e| EffectError::Dispatch(format!("snapshot write: {e}")))?;
+        // Stream directly to disk under the read lock — no intermediate Vec<u8>.
+        // Total write-blocking time is I/O-bound (~disk speed) rather than
+        // memory-copy-bound, cutting peak RAM from 2× snapshot size to ~1 MB.
+        let eng = self.engine.read().await;
+        let hash: String = hash_state_blake3(&eng.state)
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
+        eng.save_snapshot(path.map(std::path::Path::new))
+            .map_err(|e| EffectError::Dispatch(format!("snapshot: {e}")))?;
         Ok(hash)
     }
 
@@ -592,6 +582,32 @@ impl Capability for RaftKernelCapability {
     }
 }
 
+/// Derives the 16-byte Raft dedup key for a client-supplied `request_id`.
+///
+/// Prefers the canonical 16-byte UUID value when `request_id` parses as one.
+/// Falls back to a raw ASCII-prefix truncation for non-UUID strings (this
+/// dedup key predates UUID-only inputs and callers like tests still pass
+/// plain strings, e.g. "req-1"), which keeps `dedup_set` behavior unchanged
+/// for those callers. UUID-shaped inputs now dedup on the real 128-bit value
+/// instead of ~52 bits of ASCII-prefix entropy — the '-' separators and the
+/// fixed version nibble ate most of the 16-byte prefix's information content
+/// under the old truncation.
+fn parse_request_id(request_id: &str) -> Option<[u8; 16]> {
+    match uuid::Uuid::parse_str(request_id) {
+        Ok(uuid) => Some(*uuid.as_bytes()),
+        Err(_) => {
+            let bytes = request_id.as_bytes();
+            if bytes.len() >= 16 {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(&bytes[..16]);
+                Some(arr)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl KernelCapability for RaftKernelCapability {
     fn shard_count(&self) -> u8 {
@@ -611,16 +627,7 @@ impl KernelCapability for RaftKernelCapability {
         use valori_kernel::types::scalar::FxpScalar;
         use valori_kernel::types::vector::FxpVector;
 
-        let req_id_bytes: Option<[u8; 16]> = {
-            let bytes = request_id.as_bytes();
-            if bytes.len() >= 16 {
-                let mut arr = [0u8; 16];
-                arr.copy_from_slice(&bytes[..16]);
-                Some(arr)
-            } else {
-                None
-            }
-        };
+        let req_id_bytes: Option<[u8; 16]> = parse_request_id(request_id);
 
         let sid = ShardId(shard_id as u32);
         let shard = self
@@ -1582,5 +1589,39 @@ mod tests {
         };
         assert!(reg.embed().is_err());
         assert!(reg.llm().is_err());
+    }
+
+    #[test]
+    fn parse_request_id_decodes_canonical_uuid() {
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        let expected = uuid::Uuid::parse_str(id).unwrap();
+        assert_eq!(parse_request_id(id), Some(*expected.as_bytes()));
+    }
+
+    #[test]
+    fn parse_request_id_falls_back_to_prefix_for_non_uuid_strings() {
+        // Same behavior as before this change: short strings with < 16 bytes
+        // can't form a dedup key at all.
+        assert_eq!(parse_request_id("req-1"), None);
+    }
+
+    #[test]
+    fn parse_request_id_prefix_fallback_for_long_non_uuid_strings() {
+        let s = "this-is-not-a-uuid-but-is-long";
+        let mut expected = [0u8; 16];
+        expected.copy_from_slice(&s.as_bytes()[..16]);
+        assert_eq!(parse_request_id(s), Some(expected));
+    }
+
+    #[test]
+    fn parse_request_id_distinguishes_uuids_sharing_a_16_byte_ascii_prefix() {
+        // These two UUIDs share the same first 16 ASCII bytes
+        // ("550e8400-e29b-4") under the old raw-prefix scheme, so the old
+        // implementation would have collided them into the same dedup key.
+        // Real UUID parsing must tell them apart.
+        let a = "550e8400-e29b-41d4-a716-000000000001";
+        let b = "550e8400-e29b-41d4-a716-000000000002";
+        assert_eq!(&a.as_bytes()[..16], &b.as_bytes()[..16]);
+        assert_ne!(parse_request_id(a), parse_request_id(b));
     }
 }

@@ -179,9 +179,35 @@ struct StateMachineInner {
     /// entries to prevent duplicate `events.log` lines — the entries were
     /// already written to audit before the restart.
     replay_until: Option<u64>,
+    /// Cached `hash_state_blake3(&self.state)`. Blank/Membership/schema-reject/
+    /// dedup-hit entries never mutate `state`, so recomputing the full hash for
+    /// them is pure waste under bulk replication and retry storms. Any code
+    /// path that mutates `state` MUST call `refresh_state_hash` (or otherwise
+    /// invalidate this) instead of reading it directly.
+    cached_state_hash: Option<[u8; 32]>,
 }
 
 impl StateMachineInner {
+    /// Current state hash, reusing the cache when `state` hasn't mutated
+    /// since it was last computed.
+    fn state_hash(&mut self) -> [u8; 32] {
+        if let Some(h) = self.cached_state_hash {
+            return h;
+        }
+        let h = hash_state_blake3(&self.state);
+        self.cached_state_hash = Some(h);
+        h
+    }
+
+    /// Recomputes the hash after `self.state` has just mutated and refreshes
+    /// the cache. Call this instead of `state_hash()` at any site that just
+    /// applied an event to `self.state`.
+    fn refresh_state_hash(&mut self) -> [u8; 32] {
+        let h = hash_state_blake3(&self.state);
+        self.cached_state_hash = Some(h);
+        h
+    }
+
     fn remember_request(&mut self, id: [u8; 16]) {
         if self.dedup_set.insert(id) {
             self.dedup_order.push_back(id);
@@ -307,6 +333,7 @@ impl ValoriStateMachine {
                 created_at: HashMap::new(),
                 text_corpus: std::collections::HashMap::new(),
                 namespace_registry: CollectionRegistry::new(),
+                cached_state_hash: None,
             })),
         }
     }
@@ -395,6 +422,7 @@ impl ValoriStateMachine {
             namespace_registry,
             current_snapshot,
             last_applied,
+            initial_state_hash,
         ) = match snapshot {
             Some((meta, bytes)) => {
                 let (payload, _): (SnapshotPayload, usize) =
@@ -433,6 +461,9 @@ impl ValoriStateMachine {
                     namespace_registry,
                     Some((meta, bytes)),
                     last_applied,
+                    // `actual` is already verified above to match this state exactly —
+                    // seed the cache instead of paying for a redundant rehash later.
+                    Some(actual),
                 )
             }
             None => {
@@ -447,6 +478,7 @@ impl ValoriStateMachine {
                     HashMap::new(),
                     std::collections::HashMap::new(),
                     CollectionRegistry::new(),
+                    None,
                     None,
                     None,
                 )
@@ -464,6 +496,7 @@ impl ValoriStateMachine {
                 audit,
                 db: Some(db),
                 replay_until,
+                cached_state_hash: initial_state_hash,
                 created_at,
                 text_corpus,
                 namespace_registry,
@@ -473,7 +506,7 @@ impl ValoriStateMachine {
 
     /// Current BLAKE3 state hash — the cross-node equality invariant.
     pub async fn state_hash(&self) -> [u8; 32] {
-        hash_state_blake3(&self.inner.lock().await.state)
+        self.inner.lock().await.state_hash()
     }
 
     /// The dimension the kernel has actually locked to (set on first insert).
@@ -575,7 +608,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                 EntryPayload::Blank => {
                     replies.push(ClientResponse {
                         log_index,
-                        state_hash: hash_state_blake3(&inner.state),
+                        state_hash: inner.state_hash(),
                         deduplicated: false,
                         rejected: None,
                         allocated_record_id: None,
@@ -588,7 +621,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     inner.membership = StoredMembership::new(Some(entry.log_id), m);
                     replies.push(ClientResponse {
                         log_index,
-                        state_hash: hash_state_blake3(&inner.state),
+                        state_hash: inner.state_hash(),
                         deduplicated: false,
                         rejected: None,
                         allocated_record_id: None,
@@ -613,7 +646,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         inner.last_applied = Some(entry.log_id);
                         replies.push(ClientResponse {
                             log_index,
-                            state_hash: hash_state_blake3(&inner.state),
+                            state_hash: inner.state_hash(),
                             deduplicated: false,
                             rejected: Some(format!(
                                 "schema version {} exceeds this node's max ({CURRENT_SCHEMA_VERSION})",
@@ -632,7 +665,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         if inner.dedup_set.contains(&id) {
                             replies.push(ClientResponse {
                                 log_index,
-                                state_hash: hash_state_blake3(&inner.state),
+                                state_hash: inner.state_hash(),
                                 deduplicated: true,
                                 rejected: None,
                                 allocated_record_id: None,
@@ -808,9 +841,20 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         _ => None,
                     };
 
+                    // A successful apply just mutated `inner.state` above — the
+                    // cache must be refreshed, not reused. A rejected apply left
+                    // `state` untouched (invariant: DEDUP CHECK -> KERNEL APPLY ->
+                    // AUDIT WRITE, no audit/mutation on rejection), so the cache
+                    // is still valid there.
+                    let state_hash = if rejected.is_none() {
+                        inner.refresh_state_hash()
+                    } else {
+                        inner.state_hash()
+                    };
+
                     replies.push(ClientResponse {
                         log_index,
-                        state_hash: hash_state_blake3(&inner.state),
+                        state_hash,
                         deduplicated: false,
                         rejected,
                         allocated_record_id,
@@ -865,6 +909,9 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
 
         let mut inner = self.inner.lock().await;
         inner.state = state;
+        // `actual` is already verified above to match this exact state —
+        // seed the cache instead of paying for a redundant rehash.
+        inner.cached_state_hash = Some(actual);
         inner.last_applied = meta.last_log_id;
         inner.membership = meta.last_membership.clone();
         inner.dedup_set = payload.dedup.iter().copied().collect();
@@ -905,7 +952,7 @@ impl RaftSnapshotBuilder<TypeConfig> for ValoriStateMachine {
         let payload = SnapshotPayload {
             kernel: inner.encode_kernel()?,
             dedup: inner.dedup_order.iter().copied().collect(),
-            state_hash: hash_state_blake3(&inner.state),
+            state_hash: inner.state_hash(),
             created_at: inner.created_at.iter().map(|(&k, &v)| (k, v)).collect(),
             text_corpus: inner
                 .text_corpus
