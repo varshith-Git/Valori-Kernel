@@ -1021,7 +1021,8 @@ impl Engine {
 
         // Metadata section (small — buffering is fine)
         let m_buf = self.metadata.snapshot();
-        w.write_all(&(m_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&(m_buf.len() as u32).to_le_bytes())
+            .map_err(io_err)?;
         w.write_all(&m_buf).map_err(io_err)?;
 
         // Index section
@@ -1029,22 +1030,24 @@ impl Engine {
             .index
             .snapshot()
             .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
-        w.write_all(&(i_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&(i_buf.len() as u32).to_le_bytes())
+            .map_err(io_err)?;
         w.write_all(&i_buf).map_err(io_err)?;
 
         // NSRG section
         let ns_json = serde_json::to_vec(&self.namespaces)
             .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         w.write_all(b"NSRG").map_err(io_err)?;
-        w.write_all(&(ns_json.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&(ns_json.len() as u32).to_le_bytes())
+            .map_err(io_err)?;
         w.write_all(&ns_json).map_err(io_err)?;
 
         // CRTS section
-        let crts_buf =
-            bincode::serde::encode_to_vec(&self.created_at, bincode::config::standard())
-                .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        let crts_buf = bincode::serde::encode_to_vec(&self.created_at, bincode::config::standard())
+            .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         w.write_all(b"CRTS").map_err(io_err)?;
-        w.write_all(&(crts_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&(crts_buf.len() as u32).to_le_bytes())
+            .map_err(io_err)?;
         w.write_all(&crts_buf).map_err(io_err)?;
 
         // BCRP section
@@ -1053,7 +1056,8 @@ impl Engine {
             bincode::serde::encode_to_vec(&(corpus, total_tokens), bincode::config::standard())
                 .map_err(|e| EngineError::InvalidInput(e.to_string()))?;
         w.write_all(b"BCRP").map_err(io_err)?;
-        w.write_all(&(bcrp_buf.len() as u32).to_le_bytes()).map_err(io_err)?;
+        w.write_all(&(bcrp_buf.len() as u32).to_le_bytes())
+            .map_err(io_err)?;
         w.write_all(&bcrp_buf).map_err(io_err)?;
 
         w.flush().map_err(io_err)?;

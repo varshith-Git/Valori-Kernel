@@ -243,12 +243,36 @@ pub fn encode_state_to_writer<W: std::io::Write>(
     state: &KernelState,
     w: &mut W,
 ) -> std::io::Result<()> {
-    macro_rules! wb   { ($b:expr) => {{ w.write_all($b)? }} }
-    macro_rules! wu8  { ($v:expr) => {{ wb!(&[$v as u8]) }} }
-    macro_rules! wu16 { ($v:expr) => {{ wb!(&($v as u16).to_le_bytes()) }} }
-    macro_rules! wu32 { ($v:expr) => {{ wb!(&($v as u32).to_le_bytes()) }} }
-    macro_rules! wi32 { ($v:expr) => {{ wb!(&($v as i32).to_le_bytes()) }} }
-    macro_rules! wu64 { ($v:expr) => {{ wb!(&($v as u64).to_le_bytes()) }} }
+    macro_rules! wb {
+        ($b:expr) => {{
+            w.write_all($b)?
+        }};
+    }
+    macro_rules! wu8 {
+        ($v:expr) => {{
+            wb!(&[$v as u8])
+        }};
+    }
+    macro_rules! wu16 {
+        ($v:expr) => {{
+            wb!(&($v as u16).to_le_bytes())
+        }};
+    }
+    macro_rules! wu32 {
+        ($v:expr) => {{
+            wb!(&($v as u32).to_le_bytes())
+        }};
+    }
+    macro_rules! wi32 {
+        ($v:expr) => {{
+            wb!(&($v as i32).to_le_bytes())
+        }};
+    }
+    macro_rules! wu64 {
+        ($v:expr) => {{
+            wb!(&($v as u64).to_le_bytes())
+        }};
+    }
 
     // Header
     wb!(MAGIC);
@@ -288,22 +312,36 @@ pub fn encode_state_to_writer<W: std::io::Write>(
     }
 
     // Nodes
-    let node_count = state.nodes.raw_nodes().iter().filter(|s| s.is_some()).count() as u32;
+    let node_count = state
+        .nodes
+        .raw_nodes()
+        .iter()
+        .filter(|s| s.is_some())
+        .count() as u32;
     wu32!(node_count);
     for slot in state.nodes.raw_nodes().iter() {
         if let Some(node) = slot {
             wu32!(node.id.0);
             wu8!(node.kind as u8);
             match node.record {
-                Some(rid) => { wu8!(1u8); wu32!(rid.0); }
+                Some(rid) => {
+                    wu8!(1u8);
+                    wu32!(rid.0);
+                }
                 None => wu8!(0u8),
             }
             match node.first_out_edge {
-                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                Some(eid) => {
+                    wu8!(1u8);
+                    wu32!(eid.0);
+                }
                 None => wu8!(0u8),
             }
             match node.first_in_edge {
-                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                Some(eid) => {
+                    wu8!(1u8);
+                    wu32!(eid.0);
+                }
                 None => wu8!(0u8),
             }
             wu16!(node.namespace_id);
@@ -313,7 +351,12 @@ pub fn encode_state_to_writer<W: std::io::Write>(
     }
 
     // Edges
-    let edge_count = state.edges.raw_edges().iter().filter(|s| s.is_some()).count() as u32;
+    let edge_count = state
+        .edges
+        .raw_edges()
+        .iter()
+        .filter(|s| s.is_some())
+        .count() as u32;
     wu32!(edge_count);
     for slot in state.edges.raw_edges().iter() {
         if let Some(edge) = slot {
@@ -322,11 +365,17 @@ pub fn encode_state_to_writer<W: std::io::Write>(
             wu32!(edge.from.0);
             wu32!(edge.to.0);
             match edge.next_out {
-                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                Some(eid) => {
+                    wu8!(1u8);
+                    wu32!(eid.0);
+                }
                 None => wu8!(0u8),
             }
             match edge.next_in {
-                Some(eid) => { wu8!(1u8); wu32!(eid.0); }
+                Some(eid) => {
+                    wu8!(1u8);
+                    wu32!(eid.0);
+                }
                 None => wu8!(0u8),
             }
         }
