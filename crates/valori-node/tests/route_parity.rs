@@ -30,12 +30,6 @@ const STANDALONE_ONLY: &[&str] = &[
     "/v1/replication/wal",
     "/v1/replication/events",
     "/v1/replication/state",
-    // Object-store offload is per-node standalone ops tooling today.
-    "/v1/storage/snapshots",
-    "/v1/storage/snapshots/upload",
-    "/v1/storage/snapshots/restore",
-    "/v1/storage/wal",
-    "/v1/storage/wal/archive",
 ];
 
 /// Routes that exist ONLY on the cluster router, with the reason.

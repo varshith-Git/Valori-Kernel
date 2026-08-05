@@ -270,6 +270,12 @@ cargo test -p valori-node
 # Test a specific test
 cargo test -p valori-node test_collections_isolation -- --nocapture
 
+# Mandatory disaster-recovery test (object-store durability) — insert 10k
+# vectors, drop the engine (simulated container loss, no local disk state),
+# deploy a fresh one, restore from object store, confirm search works and
+# the BLAKE3 state hash is byte-identical before/after. Must stay green.
+cargo test -p valori-node --test dr_disaster_recovery
+
 # Run a 3-node local cluster
 docker compose up -d
 curl http://localhost:3001/health
@@ -338,10 +344,10 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 
 | Var | Default | Purpose |
 |---|---|---|
-| `VALORI_OBJECT_STORE_URL` | — | `s3://bucket/prefix` or `file:///path`; absent = disabled |
+| `VALORI_OBJECT_STORE_URL` | — | `s3://bucket/prefix` (AWS, or MinIO/R2/Localstack via `_ENDPOINT`), `b2://bucket/prefix` (Backblaze B2 — derives `https://s3.{region}.backblazeb2.com`, so set `_REGION` and leave `_ENDPOINT` unset), or `file:///path`; absent = disabled. **If set, the node write/read-tests it at startup (before binding its listener) and exits non-zero if unreachable — a misconfigured store fails deployment instead of silently losing durability.** |
 | `VALORI_OBJECT_STORE_KEEP` | 7 | Snapshots to retain in object store after pruning |
-| `VALORI_OBJECT_STORE_REGION` | `us-east-1` | S3 region (also reads `AWS_DEFAULT_REGION`) |
-| `VALORI_OBJECT_STORE_ENDPOINT` | — | Custom endpoint for MinIO / Localstack / R2 |
+| `VALORI_OBJECT_STORE_REGION` | `us-east-1` | S3 region (also reads `AWS_DEFAULT_REGION`). **Required, no default, for `b2://`** — every B2 endpoint is region-specific (e.g. `us-west-004`). |
+| `VALORI_OBJECT_STORE_ENDPOINT` | — | Custom endpoint for MinIO / Localstack / R2. Leave unset for `b2://`, which derives its own; setting it still overrides. |
 
 ---
 
@@ -406,6 +412,10 @@ c.get_proof()         # → {"final_state_hash": "<hex>"}
 
 # Object-store offload (Phase 3.1) — needs VALORI_OBJECT_STORE_URL on the node
 c.upload_snapshot_to_store(); c.list_remote_snapshots(); c.restore_from_store(key="...")
+# manifest.json (Phase 3.8) — the disaster-recovery entry point: current
+# snapshot + archived WAL segments in one object. Every upload rewrites it.
+c.get_manifest()            # → {"manifest": {"schema_version", "node_version", "current_snapshot", "wal_segments", "updated_at"} | null}
+c.restore_from_store()      # key omitted -> resolves via manifest.json's current_snapshot
 
 # Cluster
 c.get_cluster_status()

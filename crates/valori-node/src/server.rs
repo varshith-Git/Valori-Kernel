@@ -327,6 +327,7 @@ pub fn build_router_with_keys(
             post(upload_snapshot_to_store),
         )
         .route("/v1/storage/snapshots/restore", post(restore_from_store))
+        .route("/v1/storage/manifest", axum::routing::get(get_manifest))
         .route("/v1/storage/wal", axum::routing::get(list_remote_wal))
         .route("/v1/storage/wal/archive", post(archive_wal_segment))
         .route("/v1/records/encrypted", post(insert_encrypted_handler))
@@ -2634,8 +2635,18 @@ struct ListRemoteSnapshotsResponse {
 
 #[derive(serde::Deserialize)]
 struct RestoreFromStoreRequest {
-    /// Object key returned by a previous upload or list call.
-    key: String,
+    /// Object key returned by a previous upload or list call. Omit to
+    /// restore whatever `manifest.json` currently names as current — see
+    /// `GET /v1/storage/manifest`; this is now the recommended entry point
+    /// for disaster recovery instead of listing `snapshots/` and picking
+    /// the newest filename by hand.
+    #[serde(default)]
+    key: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ManifestResponse {
+    manifest: Option<crate::object_store::SnapshotManifest>,
 }
 
 #[derive(serde::Serialize)]
@@ -2690,9 +2701,11 @@ async fn list_remote_snapshots(
 async fn upload_snapshot_to_store(
     State(state): State<SharedEngine>,
 ) -> Result<Json<StorageSnapshotUploadResponse>, EngineError> {
+    let started = std::time::Instant::now();
+
     // Encode snapshot on the blocking thread pool (CPU-heavy), cloning out the
     // object-store handle and state hash before releasing the lock.
-    let (snap_bytes, state_hash, object_store, keep) = tokio::task::spawn_blocking({
+    let (snap_bytes, state_hash, object_store, keep, index_bytes) = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
             let engine = state.blocking_read();
@@ -2705,11 +2718,19 @@ async fn upload_snapshot_to_store(
                 .collect::<String>();
             let os = engine.object_store.clone();
             let keep = engine.object_store_keep as usize;
-            Ok::<_, EngineError>((snap, hash, os, keep))
+            // Measured here, where the index is already being serialized
+            // for the snapshot — see Engine::index_size_bytes for why this
+            // isn't a per-/health gauge.
+            let index_bytes = engine.index_size_bytes();
+            Ok::<_, EngineError>((snap, hash, os, keep, index_bytes))
         }
     })
     .await
     .map_err(|e| EngineError::InvalidInput(format!("snapshot encode panicked: {e}")))??;
+
+    if let Some(bytes) = index_bytes {
+        metrics::gauge!("valori_index_size_bytes", bytes as f64);
+    }
 
     let os = object_store.ok_or_else(|| {
         EngineError::InvalidInput(
@@ -2718,12 +2739,21 @@ async fn upload_snapshot_to_store(
     })?;
 
     let size_bytes = snap_bytes.len();
-    let key = os
-        .upload_snapshot(&snap_bytes, &state_hash)
+    let entry = os
+        .upload_snapshot_and_update_manifest(&snap_bytes, &state_hash, env!("CARGO_PKG_VERSION"))
         .await
         .map_err(|e| EngineError::InvalidInput(format!("upload failed: {e}")))?;
+    let key = entry.key;
 
     let pruned = os.prune_snapshots(keep).await.unwrap_or(0);
+
+    // Encode + upload + prune — the whole operation an operator waits on,
+    // not just the encode step.
+    metrics::gauge!("valori_snapshot_size_bytes", size_bytes as f64);
+    metrics::histogram!(
+        "valori_snapshot_duration_seconds",
+        started.elapsed().as_secs_f64()
+    );
 
     Ok(Json(StorageSnapshotUploadResponse {
         key,
@@ -2733,9 +2763,36 @@ async fn upload_snapshot_to_store(
     }))
 }
 
+/// `GET /v1/storage/manifest` — the disaster-recovery entry point: names
+/// the current snapshot and archived WAL segments in one object, instead of
+/// a caller listing `snapshots/`/`wal/` and sorting filenames themselves.
+/// `manifest: null` means the object store is configured but no snapshot
+/// has ever been uploaded through `POST /v1/storage/snapshots/upload` yet
+/// (an older store that only ever used the pre-manifest path would also
+/// read as `null` here — not an error, just nothing written).
+async fn get_manifest(
+    State(state): State<SharedEngine>,
+) -> Result<Json<ManifestResponse>, EngineError> {
+    let object_store = {
+        let engine = state.read().await;
+        engine.object_store.clone()
+    };
+    let os = object_store.ok_or_else(|| {
+        EngineError::InvalidInput(
+            "object store not configured — set VALORI_OBJECT_STORE_URL".into(),
+        )
+    })?;
+    let manifest = os
+        .read_manifest()
+        .await
+        .map_err(|e| EngineError::InvalidInput(format!("reading manifest failed: {e}")))?;
+    Ok(Json(ManifestResponse { manifest }))
+}
+
 /// `POST /v1/storage/snapshots/restore` — pull a snapshot from the object store and restore.
 ///
-/// Body: `{ "key": "snapshots/00000001750000000_abc12345.snap" }`
+/// Body: `{ "key": "snapshots/00000001750000000_abc12345.snap" }`, or `{}`
+/// to restore whatever `manifest.json` currently names as current.
 async fn restore_from_store(
     State(state): State<SharedEngine>,
     Json(req): Json<RestoreFromStoreRequest>,
@@ -2750,8 +2807,27 @@ async fn restore_from_store(
         )
     })?;
 
+    let started = std::time::Instant::now();
+
+    let key = match req.key {
+        Some(key) => key,
+        None => {
+            let manifest = os.read_manifest().await.map_err(|e| {
+                EngineError::InvalidInput(format!("reading manifest failed: {e}"))
+            })?;
+            manifest
+                .and_then(|m| m.current_snapshot)
+                .map(|s| s.key)
+                .ok_or_else(|| {
+                    EngineError::InvalidInput(
+                        "no key given and manifest.json names no current snapshot".into(),
+                    )
+                })?
+        }
+    };
+
     let data = os
-        .download_snapshot(&req.key)
+        .download_snapshot(&key)
         .await
         .map_err(|e| EngineError::InvalidInput(format!("download failed: {e}")))?;
     let size_bytes = data.len();
@@ -2772,13 +2848,22 @@ async fn restore_from_store(
             .collect::<String>()
     };
 
+    // Download + apply + rehash — the full time a project is unavailable
+    // during a disaster recovery, which is the number that actually
+    // matters for an RTO claim.
+    metrics::histogram!(
+        "valori_restore_duration_seconds",
+        started.elapsed().as_secs_f64()
+    );
+    metrics::gauge!("valori_restore_size_bytes", size_bytes as f64);
+
     tracing::info!(
-        key = %req.key,
+        key = %key,
         state_hash = %state_hash,
         "restored from object store"
     );
     Ok(Json(RestoreFromStoreResponse {
-        key: req.key,
+        key,
         state_hash,
         size_bytes,
     }))
@@ -2855,6 +2940,21 @@ async fn archive_wal_segment(
         .archive_wal_segment(&local_path)
         .await
         .map_err(|e| EngineError::InvalidInput(format!("archive failed: {e}")))?;
+
+    // Refresh manifest.json's WAL list — preserve whatever it currently
+    // names as the current snapshot, this archive doesn't change that.
+    // Best-effort: a manifest-refresh failure shouldn't fail an otherwise
+    // successful archive.
+    if let Ok(current_snapshot) = os.read_manifest().await.map(|m| m.and_then(|m| m.current_snapshot)) {
+        if let Ok(wal_segments) = os.list_wal_segments().await {
+            if let Err(e) = os
+                .write_manifest(current_snapshot.as_ref(), wal_segments, env!("CARGO_PKG_VERSION"))
+                .await
+            {
+                tracing::warn!(error = %e, "failed to refresh manifest.json after WAL archive, continuing");
+            }
+        }
+    }
 
     Ok(Json(ArchiveWalResponse { key, size_bytes }))
 }

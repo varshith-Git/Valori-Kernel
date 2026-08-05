@@ -14,6 +14,7 @@ pub mod server;
 // embedder and chunking logic now live in the valori-ingest crate.
 pub mod metadata;
 pub mod persistence;
+pub mod process_metrics;
 pub mod telemetry;
 // Storage layer now lives in valori-storage; re-export here so all existing
 // `crate::wal_writer::*`, `crate::events::*`, etc. imports still compile.

@@ -117,6 +117,10 @@ struct DataPlaneState {
     shard_event_log_paths: std::collections::BTreeMap<ShardId, std::path::PathBuf>,
     /// Startup readiness gate (B13). Shared; cheap to clone.
     readiness: Arc<ReadinessGate>,
+    /// Phase 3.1 object store, from `VALORI_OBJECT_STORE_URL`. `None` when
+    /// unset — the `/v1/storage/*` handlers then 400 with the same message
+    /// the standalone path uses.
+    object_store: Option<Arc<crate::object_store::ObjectStoreBackend>>,
     /// Phase 3.6: per-node AES-256-GCM vault. DEKs are not Raft-replicated;
     /// each node holds only the keys for records it encrypted.
     vault: Arc<dyn KeyVault + Send + Sync>,
@@ -305,6 +309,7 @@ pub fn build_cluster_router_with_keys(
         http: reqwest::Client::new(),
         shard_event_log_paths,
         readiness: Arc::new(ReadinessGate::new(handle.startup_committed_index)),
+        object_store: crate::object_store::ObjectStoreBackend::from_env(),
         vault: {
             use crate::crypto_vault::AesGcmVault;
             Arc::new(AesGcmVault::in_memory())
@@ -428,7 +433,15 @@ pub fn build_cluster_router_with_keys(
         )
         .route("/v1/snapshot/save", post(cluster_snapshot_save))
         .route("/v1/snapshot/restore", post(cluster_snapshot_restore))
-        .route("/v1/snapshot/download", get(cluster_snapshot_download));
+        .route("/v1/snapshot/download", get(cluster_snapshot_download))
+        // Phase 3.1 object store — reads + upload are per-node safe; restore
+        // is a documented 501 (see cluster_storage_restore).
+        .route("/v1/storage/snapshots", get(cluster_list_remote_snapshots))
+        .route("/v1/storage/snapshots/upload", post(cluster_upload_snapshot_to_store))
+        .route("/v1/storage/snapshots/restore", post(cluster_storage_restore))
+        .route("/v1/storage/manifest", get(cluster_get_manifest))
+        .route("/v1/storage/wal", get(cluster_list_remote_wal))
+        .route("/v1/storage/wal/archive", post(cluster_archive_wal_segment));
 
     // ── Deprecated legacy routes ──────────────────────────────────────────────
     let legacy = Router::new()
@@ -5250,6 +5263,241 @@ async fn cluster_snapshot_restore() -> Response {
         "error": "Snapshot restore in cluster mode must be done via the Raft snapshot mechanism. \
                   Shut down all nodes, replace the redb log file on node-1, and restart."
     }))).into_response()
+}
+
+// ── Object store (Phase 3.1) — cluster path ───────────────────────────────────
+// Reads and uploads are safe per-node operations: each node encodes its OWN
+// converged state, and every node's object store points at the same bucket.
+// The control plane calls these on the project's published node (index 0),
+// same as it does on the standalone path.
+//
+// RESTORE is the one that isn't symmetric — see `cluster_storage_restore`.
+
+fn cluster_object_store(
+    state: &DataPlaneState,
+) -> Result<Arc<crate::object_store::ObjectStoreBackend>, Response> {
+    state.object_store.clone().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "object store not configured — set VALORI_OBJECT_STORE_URL"
+            })),
+        )
+            .into_response()
+    })
+}
+
+/// `GET /v1/storage/snapshots` — list snapshots in the object store.
+async fn cluster_list_remote_snapshots(State(state): State<DataPlaneState>) -> Response {
+    let os = match cluster_object_store(&state) {
+        Ok(os) => os,
+        Err(r) => return r,
+    };
+    match os.list_snapshots().await {
+        Ok(snapshots) => {
+            let count = snapshots.len();
+            (StatusCode::OK, Json(serde_json::json!({ "snapshots": snapshots, "count": count }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("object store list failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /v1/storage/manifest` — the disaster-recovery entry point.
+async fn cluster_get_manifest(State(state): State<DataPlaneState>) -> Response {
+    let os = match cluster_object_store(&state) {
+        Ok(os) => os,
+        Err(r) => return r,
+    };
+    match os.read_manifest().await {
+        Ok(manifest) => (StatusCode::OK, Json(serde_json::json!({ "manifest": manifest }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("reading manifest failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /v1/storage/snapshots/upload` — encode this node's state and push
+/// it to the object store, rewriting `manifest.json` to point at it.
+///
+/// Safe on any node: a converged cluster produces byte-identical state on
+/// every peer (that's what the state-hash watcher checks), so it doesn't
+/// matter which one uploads. The snapshot is keyed by epoch + state hash,
+/// so two nodes uploading concurrently produce two objects rather than a
+/// corrupted one.
+async fn cluster_upload_snapshot_to_store(State(state): State<DataPlaneState>) -> Response {
+    let os = match cluster_object_store(&state) {
+        Ok(os) => os,
+        Err(r) => return r,
+    };
+
+    let bytes = match state.sm.with_state(encode_cluster_snapshot).await {
+        Ok(b) => b,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("snapshot encode failed: {e}") })),
+            )
+                .into_response()
+        }
+    };
+
+    let state_hash: String = state.sm.state_hash().await.iter().map(|b| format!("{b:02x}")).collect();
+    let size_bytes = bytes.len();
+
+    let entry = match os
+        .upload_snapshot_and_update_manifest(&bytes, &state_hash, env!("CARGO_PKG_VERSION"))
+        .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("upload failed: {e}") })),
+            )
+                .into_response()
+        }
+    };
+
+    let keep = std::env::var("VALORI_OBJECT_STORE_KEEP")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(7);
+    let pruned = os.prune_snapshots(keep).await.unwrap_or(0);
+
+    metrics::gauge!("valori_snapshot_size_bytes", size_bytes as f64);
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "key": entry.key,
+            "state_hash": state_hash,
+            "size_bytes": size_bytes,
+            "pruned": pruned,
+        })),
+    )
+        .into_response()
+}
+
+/// `POST /v1/storage/snapshots/restore` — **deliberately not implemented in
+/// cluster mode**, matching `cluster_snapshot_restore` above.
+///
+/// Overwriting one node's `KernelState` out-of-band would desync it from the
+/// Raft log: its applied index would no longer describe its state, and the
+/// next committed entry would be applied on top of data the log never
+/// produced. The node would silently diverge from its peers — exactly the
+/// failure the state-hash watcher exists to detect. Raft's own snapshot
+/// install is the only correct in-cluster path, and it's leader-driven, not
+/// something an operator triggers per-node over HTTP.
+///
+/// This returns 501 with the real procedure rather than 404, so a control
+/// plane calling it learns what to do instead of seeing a missing route.
+async fn cluster_storage_restore() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(serde_json::json!({
+            "error": "restore-from-object-store is not available in cluster mode",
+            "why": "writing state behind Raft's back would desync this node's applied index from its log, \
+                    silently diverging it from its peers",
+            "instead": "recover into a NEW cluster: bootstrap a single node in standalone mode, \
+                        POST /v1/storage/snapshots/restore there (or restore via manifest.json), \
+                        verify its state hash, then bring peers up against it and let Raft replicate.",
+            "manifest": "GET /v1/storage/manifest names the snapshot to restore from"
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /v1/storage/wal` — list archived WAL segments.
+async fn cluster_list_remote_wal(State(state): State<DataPlaneState>) -> Response {
+    let os = match cluster_object_store(&state) {
+        Ok(os) => os,
+        Err(r) => return r,
+    };
+    match os.list_wal_segments().await {
+        Ok(segments) => {
+            let count = segments.len();
+            (StatusCode::OK, Json(serde_json::json!({ "segments": segments, "count": count }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("object store list failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ClusterArchiveWalRequest {
+    path: String,
+}
+
+/// `POST /v1/storage/wal/archive` — archive a sealed per-shard segment.
+///
+/// Path is validated against this node's own shard log directories
+/// (`shard_event_log_paths`), so a caller can't use this to exfiltrate an
+/// arbitrary file from the container — the same containment the standalone
+/// path gets from `safe_path`.
+async fn cluster_archive_wal_segment(
+    State(state): State<DataPlaneState>,
+    Json(req): Json<ClusterArchiveWalRequest>,
+) -> Response {
+    let os = match cluster_object_store(&state) {
+        Ok(os) => os,
+        Err(r) => return r,
+    };
+
+    let candidate = std::path::PathBuf::from(&req.path);
+    let allowed = state
+        .shard_event_log_paths
+        .values()
+        .filter_map(|p| p.parent())
+        .any(|dir| candidate.starts_with(dir));
+
+    if !allowed {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "path is not inside any shard's event-log directory"
+            })),
+        )
+            .into_response();
+    }
+    if !candidate.exists() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("segment not found: {}", candidate.display()) })),
+        )
+            .into_response();
+    }
+
+    let size_bytes = std::fs::metadata(&candidate).map(|m| m.len()).unwrap_or(0);
+    match os.archive_wal_segment(&candidate).await {
+        Ok(key) => {
+            // Keep manifest.json's WAL list current, same as standalone.
+            if let Ok(current) = os.read_manifest().await.map(|m| m.and_then(|m| m.current_snapshot)) {
+                if let Ok(segments) = os.list_wal_segments().await {
+                    if let Err(e) = os
+                        .write_manifest(current.as_ref(), segments, env!("CARGO_PKG_VERSION"))
+                        .await
+                    {
+                        tracing::warn!(error = %e, "failed to refresh manifest.json after WAL archive, continuing");
+                    }
+                }
+            }
+            (StatusCode::OK, Json(serde_json::json!({ "key": key, "size_bytes": size_bytes }))).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("archive failed: {e}") })),
+        )
+            .into_response(),
+    }
 }
 
 async fn cluster_snapshot_download(State(state): State<DataPlaneState>) -> Response {

@@ -580,12 +580,35 @@ impl Engine {
 
         metrics::gauge!("valori_dim", self.dim as f64);
 
+        // +1 for the implicit `default` namespace, which never gets an
+        // entry in the registry map (id 0 is reserved for it — see
+        // CollectionRegistry::new).
+        metrics::gauge!(
+            "valori_collections_total",
+            self.namespaces.map.len() as f64 + 1.0
+        );
+
         if let Some(c) = self.event_committer() {
             metrics::gauge!(
                 "valori_event_log_height",
                 c.journal().committed_height() as f64
             );
         }
+    }
+
+    /// Serialized size of the vector index in bytes. Separate from
+    /// `update_prometheus_metrics` on purpose: this has to serialize the
+    /// whole index to measure it, which is far too expensive to run on
+    /// every `/health` probe. Called at snapshot time instead, where that
+    /// work is happening anyway.
+    ///
+    /// **`0` is a correct answer for `IndexKind::BruteForce`**, not a
+    /// failure — brute force holds no structure of its own (it scans the
+    /// record pool), so `BruteForceIndex::snapshot()` legitimately returns
+    /// an empty buffer. HNSW/IVF/BQ report their real serialized size.
+    /// `None` means serialization itself failed.
+    pub fn index_size_bytes(&self) -> Option<usize> {
+        self.index.snapshot().ok().map(|b| b.len())
     }
 
     // ── Inserts ───────────────────────────────────────────────────────────────

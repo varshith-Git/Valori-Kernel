@@ -15,7 +15,7 @@ disk: WAL, append-only event log, crash recovery, and the object-store backend.
 | `events::event_commit` | `EventCommitter` — shadow-first commit barrier; batch; auto-rotation |
 | `events::event_replay` | `recover_from_event_log`, `read_all_segments`, chain-splice verification |
 | `events::event_proof` | `EventProof` — BLAKE3 log hash + canonical state proof |
-| `object_store` | `ObjectStoreBackend` — S3/file upload/download/list/prune via opendal |
+| `object_store` | `ObjectStoreBackend` — upload/download/list/prune via opendal against `s3://` (AWS, or MinIO/R2/Localstack via an endpoint), `b2://` (Backblaze B2 over its S3-compatible API, endpoint derived from the region), or `file://`; `check_connectivity()` write-then-reads a canary object, used by valori-node at startup to fail fast on a misconfigured store; `manifest.json` (`SnapshotManifest`) is the disaster-recovery entry point — `upload_snapshot_and_update_manifest()` names the current snapshot + archived WAL segments in one object instead of a caller listing/sorting `snapshots/`/`wal/` by hand; snapshots themselves are already versioned (`{epoch}_{hash8}.snap`, never overwritten) — the manifest is what picks the active one out of however many exist |
 | `recovery` | `replay_wal`, `recover_from_events`, `validate_snapshot`; `StorageError` |
 
 ## Dependency graph position

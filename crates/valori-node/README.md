@@ -23,6 +23,21 @@ curl http://localhost:3000/health
 curl http://localhost:3000/version
 ```
 
+### `/metrics` — what's exported
+
+| Metric | Type | Notes |
+|---|---|---|
+| `valori_records_live` / `_capacity` / `valori_record_fill_ratio` | gauge | Vector count vs. the `VALORI_MAX_RECORDS` slab. |
+| `valori_nodes_live` / `valori_edges_live` (+ `_capacity`, `_fill_ratio`) | gauge | Graph pools. |
+| `valori_dim` | gauge | Vector dimension. |
+| `valori_collections_total` | gauge | Namespaces, including the implicit `default`. |
+| `valori_event_log_height` | gauge | Committed audit-chain height. |
+| `valori_process_memory_rss_bytes` / `_virtual_bytes` | gauge | This process's memory. Sampled every 10s by a background task (`process_metrics.rs`). |
+| `valori_process_cpu_percent` | gauge | Percent of ONE core — >100 under multi-threaded load is expected. Needs two samples to be non-zero, which is why it's a task, not a handler. |
+| `valori_index_size_bytes` | gauge | Serialized index size. Updated at snapshot time only (measuring it means serializing the index). **`0` is correct for `VALORI_INDEX=brute`** — brute force keeps no structure of its own. |
+| `valori_snapshot_size_bytes` / `valori_snapshot_duration_seconds` | gauge / histogram | Per `POST /v1/storage/snapshots/upload`. Duration covers encode + upload + prune. |
+| `valori_restore_size_bytes` / `valori_restore_duration_seconds` | gauge / histogram | Per `POST /v1/storage/snapshots/restore`. Duration covers download + apply + rehash — the real project-unavailable window, i.e. what an RTO claim should be based on. |
+
 ---
 
 ## Collections (Multi-tenancy)

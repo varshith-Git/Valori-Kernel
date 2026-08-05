@@ -662,8 +662,21 @@ class _SyncSnapshotMixin:
     def upload_snapshot_to_store(self) -> Dict[str, Any]:
         return self._t.post_rpc("/v1/storage/snapshots/upload", {})
 
-    def restore_from_store(self, key: str) -> Dict[str, Any]:
-        return self._t.post_rpc("/v1/storage/snapshots/restore", {"key": key})
+    def restore_from_store(self, key: Optional[str] = None) -> Dict[str, Any]:
+        """Omit `key` to restore whatever manifest.json currently names as
+        current (see `get_manifest`) instead of picking a key by hand."""
+        body: Dict[str, Any] = {"key": key} if key is not None else {}
+        return self._t.post_rpc("/v1/storage/snapshots/restore", body)
+
+    def get_manifest(self) -> Dict[str, Any]:
+        """The disaster-recovery entry point: current snapshot + archived
+        WAL segments in one object, instead of listing/sorting by hand."""
+        try:
+            resp = self._t.get(self._t.base_url + "/v1/storage/manifest", timeout=15)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get manifest: {e}")
 
     def list_remote_wal(self) -> Dict[str, Any]:
         try:
@@ -1599,8 +1612,21 @@ class _AsyncSnapshotMixin:
     async def upload_snapshot_to_store(self) -> Dict[str, Any]:
         return await self._t.post_rpc("/v1/storage/snapshots/upload", {})
 
-    async def restore_from_store(self, key: str) -> Dict[str, Any]:
-        return await self._t.post_rpc("/v1/storage/snapshots/restore", {"key": key})
+    async def restore_from_store(self, key: Optional[str] = None) -> Dict[str, Any]:
+        """Omit `key` to restore whatever manifest.json currently names as
+        current (see `get_manifest`) instead of picking a key by hand."""
+        body: Dict[str, Any] = {"key": key} if key is not None else {}
+        return await self._t.post_rpc("/v1/storage/snapshots/restore", body)
+
+    async def get_manifest(self) -> Dict[str, Any]:
+        """The disaster-recovery entry point: current snapshot + archived
+        WAL segments in one object, instead of listing/sorting by hand."""
+        try:
+            resp = await self._t.get(self._t.base_url + "/v1/storage/manifest")
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to get manifest: {e}")
 
     async def list_remote_wal(self) -> Dict[str, Any]:
         try:

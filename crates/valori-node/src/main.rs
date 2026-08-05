@@ -23,6 +23,11 @@ async fn main() {
     // Initialize Telemetry (Logs + Metrics)
     valori_node::telemetry::init_telemetry();
 
+    // Per-node process metrics (RSS / virtual memory / CPU). Sampled on a
+    // fixed interval rather than per-request — see process_metrics.rs for
+    // why CPU percent can't be measured in a handler.
+    valori_node::process_metrics::spawn_process_metrics_task();
+
     // ── Boot-mode decision (Phase 2) ──────────────────────────────────────────
     // VALORI_CLUSTER_MEMBERS present → Raft cluster mode.
     // Absent → the standalone path below, unchanged.
@@ -44,6 +49,16 @@ async fn main() {
     let cfg = NodeConfig::default();
 
     tracing::info!("Initializing Valori Node with config: {:?}", cfg);
+
+    // ── Storage connectivity gate ───────────────────────────────────────────
+    // If VALORI_OBJECT_STORE_URL is set, the node must prove it can actually
+    // write to and read from it BEFORE accepting any traffic — otherwise the
+    // scheduled snapshot/WAL sweep (the whole point of configuring object
+    // storage) fails silently hours later, invisible until someone needs a
+    // restore that isn't there. A misconfigured bucket/credentials/region is
+    // a deploy-time failure, not a runtime one: exit non-zero here, never
+    // bind the listener, so the node never becomes Ready.
+    verify_object_storage_or_exit().await;
 
     let mut engine = Engine::new(&cfg);
 
@@ -139,6 +154,39 @@ async fn main() {
         .unwrap();
 }
 
+/// No-op if `VALORI_OBJECT_STORE_URL` is unset (object storage is optional).
+/// If it's set, this must succeed or the process exits before ever binding
+/// its listener — see the FATAL log line below for exactly what to check
+/// (bucket/prefix, credentials, region, endpoint, network reachability from
+/// this host to the object store).
+async fn verify_object_storage_or_exit() {
+    let Some(url) = std::env::var("VALORI_OBJECT_STORE_URL").ok() else {
+        return;
+    };
+
+    let backend = match valori_storage::object_store::ObjectStoreBackend::from_url(&url) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("FATAL: VALORI_OBJECT_STORE_URL={url:?} is set but invalid: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match backend.check_connectivity().await {
+        Ok(()) => {
+            tracing::info!("object store connectivity check passed ({url})");
+        }
+        Err(e) => {
+            eprintln!(
+                "FATAL: object store connectivity check failed for {url:?}: {e} — \
+                 refusing to start (check bucket/prefix, credentials, region, \
+                 endpoint, and network reachability)"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Resolve on SIGTERM / Ctrl-C. Before returning (which lets axum drain and exit)
 /// write a final snapshot if a snapshot path is configured. The WAL already
 /// guarantees durability — this just keeps the next start instant. Snapshot-on-close.
@@ -196,6 +244,10 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         persistent_raft_log = cluster_cfg.raft_log_path.is_some(),
         "Booting in CLUSTER mode"
     );
+
+    // Same storage connectivity gate as the standalone path above — cluster
+    // nodes must also refuse to become Ready on a misconfigured object store.
+    verify_object_storage_or_exit().await;
 
     if node_cfg.event_log_path.is_none() {
         tracing::warn!(
