@@ -69,7 +69,7 @@ jobs:
 
       - name: Install cross (Linux cross-compilation)
         if: matrix.cross
-        run: cargo install cross --locked
+        run: cargo install cross --locked --force
 
       - name: Build (native)
         if: "!matrix.cross"
@@ -105,7 +105,7 @@ jobs:
           cache-key: sbom
 
       - name: Install cargo-sbom
-        run: cargo install cargo-sbom --locked
+        run: cargo install cargo-sbom --locked --force
 
       - name: Generate SPDX SBOM
         run: |
