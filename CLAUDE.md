@@ -460,6 +460,16 @@ c.ingest_update(42, new_text, source="paper-v2.pdf", collection="default")
 > `community_overview()`,
 > `extract_entities(text, namespace=, entity_types=, model=)` — available on both
 > `SyncRemoteClient` and `AsyncRemoteClient`. `community_detect` must be called before `community_search` or `community_overview`. `extract_entities` requires `VALORI_EMBED_PROVIDER`.
+>
+> **v0.3.0 SDK-parity additions:** `get_operations()`, `get_operation(operation_id)`,
+> `get_operation_execution(operation_id)`, `get_models_health()` — available on both
+> `SyncRemoteClient` and `AsyncRemoteClient`; these endpoints already existed on the
+> node but had no SDK method. `cluster_proof()` — cluster-mode analog of `get_proof()`,
+> added to `SyncRemoteClient`/`AsyncRemoteClient`/`ClusterClient`/`AsyncClusterClient`.
+> Deliberately left uncovered: `GET /metrics` (Prometheus scrape target, not
+> request/response) and `GET /v1/replication/{wal,events,state}` (internal
+> node-to-node replication protocol — `/events` is an unbounded live stream with
+> no natural end, not a fit for a synchronous request/response SDK method).
 
 ---
 

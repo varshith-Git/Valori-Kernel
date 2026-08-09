@@ -1081,6 +1081,19 @@ class _SyncClusterMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
 
+    def cluster_proof(self) -> Dict[str, Any]:
+        """This node's Raft-derived state hash + last-applied index/term —
+        the cluster-mode analog of `get_proof()`. 404s off cluster mode."""
+        url = self._t.base_url + "/v1/cluster/proof"
+        try:
+            resp = self._t.get(url, timeout=5)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode")
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to fetch cluster proof from {url}: {e}")
+
 
 class _SyncIndexMixin:
     _t: _SyncTransport
@@ -1116,6 +1129,14 @@ class _SyncIndexMixin:
             return resp.text.strip()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get version: {e}")
+
+    def get_models_health(self) -> Dict[str, Any]:
+        try:
+            resp = self._t.get(self._t.base_url + "/v1/models/health", timeout=5)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get models health: {e}")
 
 
 class _SyncMetaMixin:
@@ -1219,6 +1240,51 @@ class _SyncMetaMixin:
             return resp.json()
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"resolve_contradiction failed: {e}")
+
+
+class _SyncOperationsMixin:
+    _t: _SyncTransport
+
+    def get_operations(self) -> Dict[str, Any]:
+        """One entry per committed kernel event (WAL-log granularity) —
+        `{"operations": [...], "total": N}`. Requires an event log on the node."""
+        try:
+            resp = self._t.get(self._t.base_url + "/v1/operations", timeout=10)
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to list operations: {e}")
+
+    def get_operation(self, operation_id: str) -> Dict[str, Any]:
+        """Detail view for one `op-N` id from `get_operations()`."""
+        url = f"{self._t.base_url}/v1/operations/{operation_id}"
+        try:
+            resp = self._t.get(url, timeout=10)
+            if resp.status_code == 404:
+                raise NotFoundError(f"operation '{operation_id}' not found")
+            _raise_for_status(resp)
+            return resp.json()
+        except (NotFoundError, AuthenticationError):
+            raise
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get operation '{operation_id}': {e}")
+
+    def get_operation_execution(self, operation_id: str) -> Dict[str, Any]:
+        """Per-stage execution trace for an `operation_id` returned by
+        `ingest()`/`ingest_async()` — a different, coarser id space than the
+        `op-N` ids from `get_operations()`. 404s if this id never ran through
+        the ingest pipeline."""
+        url = f"{self._t.base_url}/v1/operations/{operation_id}/execution"
+        try:
+            resp = self._t.get(url, timeout=10)
+            if resp.status_code == 404:
+                raise NotFoundError(f"no execution record for operation '{operation_id}'")
+            _raise_for_status(resp)
+            return resp.json()
+        except (NotFoundError, AuthenticationError):
+            raise
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get execution for '{operation_id}': {e}")
 
 
 # ── Async domain mixins ──────────────────────────────────────────────────────
@@ -1988,6 +2054,19 @@ class _AsyncClusterMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to fetch cluster role from {url}: {e}")
 
+    async def cluster_proof(self) -> Dict[str, Any]:
+        """This node's Raft-derived state hash + last-applied index/term —
+        the cluster-mode analog of `get_proof()`. 404s off cluster mode."""
+        url = self._t.base_url + "/v1/cluster/proof"
+        try:
+            resp = await self._t.get(url)
+            if resp.status_code == 404:
+                raise ConnectionError("node is not running in cluster mode")
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to fetch cluster proof from {url}: {e}")
+
 
 class _AsyncIndexMixin:
     _t: _AsyncTransport
@@ -2023,6 +2102,14 @@ class _AsyncIndexMixin:
             return resp.text.strip()
         except Exception as e:
             raise ConnectionError(f"Failed to get version: {e}")
+
+    async def get_models_health(self) -> Dict[str, Any]:
+        try:
+            resp = await self._t.get(self._t.base_url + "/v1/models/health")
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to get models health: {e}")
 
 
 class _AsyncMetaMixin:
@@ -2127,6 +2214,51 @@ class _AsyncMetaMixin:
             raise ConnectionError(f"resolve_contradiction failed: {e}")
 
 
+class _AsyncOperationsMixin:
+    _t: _AsyncTransport
+
+    async def get_operations(self) -> Dict[str, Any]:
+        """One entry per committed kernel event (WAL-log granularity) —
+        `{"operations": [...], "total": N}`. Requires an event log on the node."""
+        try:
+            resp = await self._t.get(self._t.base_url + "/v1/operations")
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to list operations: {e}")
+
+    async def get_operation(self, operation_id: str) -> Dict[str, Any]:
+        """Detail view for one `op-N` id from `get_operations()`."""
+        url = f"{self._t.base_url}/v1/operations/{operation_id}"
+        try:
+            resp = await self._t.get(url)
+            if resp.status_code == 404:
+                raise NotFoundError(f"operation '{operation_id}' not found")
+            _raise_for_status(resp)
+            return resp.json()
+        except (NotFoundError, AuthenticationError):
+            raise
+        except Exception as e:
+            raise ConnectionError(f"Failed to get operation '{operation_id}': {e}")
+
+    async def get_operation_execution(self, operation_id: str) -> Dict[str, Any]:
+        """Per-stage execution trace for an `operation_id` returned by
+        `ingest()`/`ingest_async()` — a different, coarser id space than the
+        `op-N` ids from `get_operations()`. 404s if this id never ran through
+        the ingest pipeline."""
+        url = f"{self._t.base_url}/v1/operations/{operation_id}/execution"
+        try:
+            resp = await self._t.get(url)
+            if resp.status_code == 404:
+                raise NotFoundError(f"no execution record for operation '{operation_id}'")
+            _raise_for_status(resp)
+            return resp.json()
+        except (NotFoundError, AuthenticationError):
+            raise
+        except Exception as e:
+            raise ConnectionError(f"Failed to get execution for '{operation_id}': {e}")
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
@@ -2146,6 +2278,7 @@ class SyncRemoteClient(
     _SyncClusterMixin,
     _SyncIndexMixin,
     _SyncMetaMixin,
+    _SyncOperationsMixin,
     ValoriClient,
 ):
     """Synchronous REST client for a Valoricore node — standalone or clustered.
@@ -2226,6 +2359,7 @@ class AsyncRemoteClient(
     _AsyncClusterMixin,
     _AsyncIndexMixin,
     _AsyncMetaMixin,
+    _AsyncOperationsMixin,
     ValoriClient,
 ):
     """Asynchronous REST client for a Valoricore node (httpx-backed).
@@ -2440,6 +2574,9 @@ class ClusterClient:
     def get_cluster_role(self) -> str:
         return self._write_client().get_cluster_role()
 
+    def cluster_proof(self) -> Dict[str, Any]:
+        return self._read_client().cluster_proof()
+
     def create_key(self, scope: str = "read_write", collection: Optional[str] = None,
                    description: Optional[str] = None) -> Dict[str, Any]:
         return self._write_client().create_key(scope=scope, collection=collection,
@@ -2579,6 +2716,9 @@ class AsyncClusterClient:
 
     async def get_cluster_role(self) -> str:
         return await self._write_client().get_cluster_role()
+
+    async def cluster_proof(self) -> Dict[str, Any]:
+        return await self._read_client().cluster_proof()
 
     async def close(self) -> None:
         import asyncio
