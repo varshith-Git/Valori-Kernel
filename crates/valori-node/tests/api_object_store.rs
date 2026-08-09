@@ -138,7 +138,7 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
     );
     assert_eq!(manifest["current_snapshot"]["key"], key);
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
-    assert!(manifest["node_version"].as_str().unwrap_or("").len() > 0);
+    assert!(!manifest["node_version"].as_str().unwrap_or("").is_empty());
 
     let manifest_path = dir.path().join("manifest.json");
     assert!(
