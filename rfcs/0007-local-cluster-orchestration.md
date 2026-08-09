@@ -8,16 +8,24 @@
 
 ---
 
-## 1. Summary & Current State
+## TL;DR
 
-Today, `valori-daemon` is capable of launching and supervising a **single Valori node**. When a project is opened with a replication factor of **1**, the daemon:
+Right now, opening a **single-node** project in Valori Studio "just works" — the daemon starts one process, watches it, restarts it if it dies. Opening a **replicated** project (3 nodes, say) does not work yet: nothing spawns the other two nodes or wires them into a cluster.
+
+This RFC scopes the work to close that gap: teach `valori-daemon` to stand up, supervise, and report on a whole local Raft cluster — so that from the developer's point of view, opening a 3-node project feels exactly like opening a 1-node project. No Docker, no Kubernetes, no manual port juggling.
+
+**What we're asking reviewers to sign off on:** the daemon becoming a *local cluster manager*, not just a *single-process supervisor* — including the five responsibilities in §3 and the explicit non-goals in §2.1.
+
+---
+
+## 1. Current State
+
+Today, `valori-daemon` can launch and supervise exactly **one** `valori-node`. When a project is opened with replication factor **1**, the daemon:
 
 1. Allocates an available HTTP port.
 2. Starts one `valori-node` process.
 3. Monitors its PID.
 4. Restarts the node automatically if it crashes.
-
-Conceptually:
 
 ```text
 Valori Studio (Tauri Frontend)
@@ -29,15 +37,15 @@ valori-daemon (Supervised Process Manager)
 valori-node (Single process instance)
 ```
 
-This provides a managed local development experience similar to how desktop databases launch a single embedded server.
+This is comparable to how a desktop database (SQLite, etc.) launches a single embedded server — simple, and it's why single-node projects already feel effortless to open.
 
 ---
 
 ## 2. The Gap
 
-Clustered projects require multiple coordinated processes rather than a single process. 
+A clustered project needs **multiple coordinated processes**, not one. A project configured with **replication = 3** should transparently produce a working 3-node Raft cluster on the developer's machine — today it doesn't produce anything beyond a single node.
 
-For example, a project configured with **replication = 3** should automatically create a complete local Raft cluster. Instead of launching one node, the daemon becomes a local cluster manager:
+Closing this gap turns the daemon from a single-process babysitter into a local cluster manager:
 
 ```text
                 Valori Studio
@@ -49,52 +57,55 @@ For example, a project configured with **replication = 3** should automatically 
       Node 1      Node 2      Node 3
 ```
 
-The daemon is responsible for orchestrating the entire cluster lifecycle.
+### 2.1 Non-Goals
+
+To keep review scope tight, this RFC explicitly does **not** cover:
+
+* Multi-**machine** clusters (this is local-only — all nodes run on the developer's own laptop).
+* Production/cloud cluster orchestration (that's the separate Cloud SaaS control plane).
+* Automatic replica-count changes without a UI-initiated action (no autoscaling).
+* Cross-project resource sharing or port pooling beyond what's needed to avoid collisions.
 
 ---
 
-## 3. Core Responsibilities
+## 3. What the Daemon Needs to Do
 
-### A. Node Provisioning
+Five responsibilities, roughly in the order a developer would experience them.
 
-Create the required number of local nodes. For a three-node cluster:
+### A. Provision the nodes
+
+Spin up the right number of local node processes, each with a unique port and its own isolated database directory. For a three-node cluster:
 
 | Node | HTTP Port | Raft Port (gRPC) | Node ID |
-| ---- | --------- | ---------------- | ------- |
-| 1    | 3001      | 3101             | 1       |
-| 2    | 3002      | 3102             | 2       |
-| 3    | 3003      | 3103             | 3       |
+| ---- | --------- | ----------------- | ------- |
+| 1    | 3001      | 3101              | 1       |
+| 2    | 3002      | 3102              | 2       |
+| 3    | 3003      | 3103              | 3       |
 
-Every node must receive unique ports and a stable, isolated database directory.
+**Why it matters:** without this, two clustered projects opened side-by-side would collide on ports or overwrite each other's data.
 
-### B. Cluster Bootstrap
+### B. Bootstrap the Raft cluster
 
-The daemon prepares the environment for every process. Example:
+Give each process the environment it needs to find the others and agree on who starts the cluster.
 
-**Node 1**
+**Node 1** (the bootstrap node)
 ```text
 VALORI_NODE_ID=1
 VALORI_CLUSTER_INIT=1
 VALORI_CLUSTER_MEMBERS=1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003
 ```
 
-**Node 2**
+**Nodes 2 and 3** (joiners — same `VALORI_CLUSTER_MEMBERS`, no `VALORI_CLUSTER_INIT`)
 ```text
 VALORI_NODE_ID=2
 VALORI_CLUSTER_MEMBERS=1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003
 ```
 
-**Node 3**
-```text
-VALORI_NODE_ID=3
-VALORI_CLUSTER_MEMBERS=1=127.0.0.1:3101/127.0.0.1:3001,2=127.0.0.1:3102/127.0.0.1:3002,3=127.0.0.1:3103/127.0.0.1:3003
-```
+**Why it matters:** exactly one node must initialize the Raft group; the rest must join it automatically. Get this wrong and you either get three independent single-node clusters or a cluster that never forms.
 
-Only the first node initializes the Raft cluster (`VALORI_CLUSTER_INIT=1`). The remaining nodes join it automatically.
+### C. Supervise every node independently
 
-### C. Process Supervision
-
-Instead of monitoring a single process, the daemon supervises the entire process group:
+One crashed node shouldn't take the others down with it, and shouldn't require a manual restart.
 
 ```text
 Daemon
@@ -103,59 +114,46 @@ Daemon
 └── Node 3 (healthy)
 ```
 
-A failure of one node should not interrupt the others, preserving the quorum.
+**Why it matters:** this is what makes Raft's fault tolerance actually demonstrable locally — a developer can kill a node and watch the cluster keep serving from the remaining quorum, the same failure mode they'd see in production.
 
-### D. Cluster Observability
+### D. Roll individual node health into one cluster status
 
-The daemon should expose a single cluster status to the UI. Rather than reporting the health of individual processes independently, it aggregates:
+The UI shouldn't have to reason about three separate processes. The daemon aggregates:
 
-* **Consensus state-hash convergence**: Verification that all active replicas have converged to the identical Merkle-tree state hash.
-* **Leader/Follower topology**: Which node is currently elected leader and which are followers.
-* **Replication lag**: Height differences in WAL and Raft logs between the leader and followers.
-* **Quorum availability**: Whether a majority of replicas are currently alive.
-* **WAL replay progress**: Node startup replay position.
+* **State-hash convergence** — have all replicas converged on the same data?
+* **Leader/follower topology** — who's currently leading?
+* **Replication lag** — how far behind is each follower?
+* **Quorum availability** — is a majority of the cluster alive right now?
+* **WAL replay progress** — is a restarting node still catching up?
 
-This allows Valori Studio to present the cluster as one logical database while highlighting divergence or partition issues.
+**Why it matters:** this is the difference between "Valori Studio shows a 3-node cluster" and "Valori Studio shows *one database* that happens to be replicated" — the latter is the actual product goal.
 
-### E. Lifecycle Management
+### E. Handle whole-cluster lifecycle actions from the UI
 
-Operations initiated from the UI apply to the cluster as a whole:
-
-* **Start / Stop**: Spawning or killing all nodes in the cluster.
-* **Restart**: Triggering graceful rolling restarts to avoid quorum loss.
-* **Scale**: Adding or removing replicas dynamically.
+Start, stop, restart, and scale operations issued from Valori Studio need to apply to the whole cluster, coordinated by the daemon — not to be manually repeated per node by the user.
 
 ---
 
-## 4. Why This Matters
+## 4. Why This Matters (Product Impact)
 
-This functionality makes the daemon behave like a lightweight local orchestrator. Developers can experiment with distributed features such as:
+Today, trying out Raft consensus, leader election, replication, or failover means standing up Docker Compose or a small VM fleet — a real barrier for anyone just evaluating Valori or debugging a cluster-specific issue.
 
-* Raft consensus
-* Leader election
-* Replication
-* Failover
-* Quorum recovery
-* Network partitions
-
-without installing Kubernetes, Docker Compose, or multiple virtual machines. Opening a replicated project should feel no different from opening a single-node project—the daemon handles all of the orchestration transparently.
+With this RFC done: **opening a replicated project feels identical to opening a single-node one.** One click, one loading state, one health indicator — the daemon absorbs all the orchestration complexity. That turns "distributed systems features" from something you read about in docs into something you can click into and break on purpose, locally, in seconds.
 
 ---
 
 ## 5. Current Status
 
-The project metadata already contains the information needed to describe clustered deployments (such as replication settings and node configurations). 
-
-The remaining work is implementing the daemon's orchestration layer to allocate ports, spawn/supervise multiple node processes, and expose the aggregated cluster observability.
+The project metadata format already has everything needed to *describe* a clustered deployment (replication factor, node config). What's missing is the daemon's orchestration layer itself — port allocation, multi-process spawning, Raft membership wiring, per-node supervision, and health aggregation, all described in §3.
 
 ---
 
-## 6. Future Capabilities
+## 6. Future Capabilities (Out of Scope Here, Enabled By This)
 
-Once multi-node orchestration is in place, the daemon can become the foundation for additional local-cluster features:
+Once multi-node orchestration lands, it becomes the foundation for:
 
-* **One-click cluster creation**: Setting replica counts directly from the UI.
-* **Chaos testing & simulated failures**: Killing nodes or adding network delays from the dashboard to test application resiliency.
-* **Rolling upgrades**: Upgrading database nodes one by one with zero downtime.
-* **Automatic snapshot scheduling**: Directing the leader to periodically save and offload snapshots.
-* **Local disaster recovery testing**: Simulating cluster corruption and restoring from WAL archives.
+* **One-click cluster creation** — set replica count directly in the UI.
+* **Chaos testing** — kill nodes or inject network delay from the dashboard to test resiliency.
+* **Rolling upgrades** — upgrade nodes one at a time with zero downtime.
+* **Automatic snapshot scheduling** — leader periodically saves and offloads snapshots.
+* **Local disaster-recovery drills** — simulate corruption, restore from WAL archives.

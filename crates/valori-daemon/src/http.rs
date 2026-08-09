@@ -9,6 +9,7 @@
 //! `POST /v1/projects/:name/start`
 //! `POST /v1/projects/:name/stop`
 //! `POST /v1/projects/:name/restart`
+//! `GET  /v1/projects/:name/cluster`   aggregated per-node cluster health (RFC-0007)
 
 use std::sync::Arc;
 
@@ -57,6 +58,7 @@ pub fn router(daemon: SharedDaemon) -> Router {
         .route("/v1/projects/:name/restart", post(restart_project))
         .route("/v1/projects/:name/logs", get(project_logs))
         .route("/v1/projects/:name/runtime", get(project_runtime))
+        .route("/v1/projects/:name/cluster", get(project_cluster))
         // ── collections (proxied to the running node) ───────────────────────
         .route(
             "/v1/projects/:name/collections",
@@ -159,6 +161,20 @@ async fn project_runtime(
     Ok(Json(
         serde_json::to_value(stats).unwrap_or_else(|_| json!({})),
     ))
+}
+
+/// `GET /v1/projects/:name/cluster` — aggregated per-node + Raft cluster
+/// health for a `replication > 1` project (RFC-0007 §3D). Returns
+/// `{name, replication, nodes_total, nodes_reachable, nodes: [...]}` — empty
+/// `nodes` for single-node projects (not an error, just nothing to report).
+async fn project_cluster(
+    State(d): State<SharedDaemon>,
+    Path(name): Path<String>,
+) -> DaemonResult<Json<Value>> {
+    // `project_cluster_status` itself does `self.projects.get(name)?` first
+    // (404 if unknown) — see daemon.rs.
+    let status = d.lock().await.project_cluster_status(&name).await?;
+    Ok(Json(status))
 }
 
 // ── Workspaces ──────────────────────────────────────────────────────────────

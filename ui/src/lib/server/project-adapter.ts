@@ -10,15 +10,18 @@
 // See RFC-0006 Phase B.1.
 
 import path from "path";
-import os from "os";
 import * as daemon from "./daemon";
 import type { DaemonProject } from "./daemon";
 import type { ProjectEntry, ProjectNodeEntry, ProjectEmbedConfig } from "./projects";
+import { getValoriHome } from "./valori-home";
 
 // Used only when the daemon can't be reached — the daemon's actual
 // VALORI_HOME (read via resolveProjectsDir) is the source of truth, since
 // the user may have picked a workspace outside ~/.valori during onboarding.
-const FALLBACK_PROJECTS_DIR = path.join(os.homedir(), ".valori", "projects");
+// getValoriHome() (not a hardcoded ~/.valori) so this fallback still
+// respects an explicit VALORI_HOME override even when the daemon can't be
+// reached to confirm it live.
+const FALLBACK_PROJECTS_DIR = path.join(getValoriHome(), "projects");
 
 // VALORI_HOME is fixed for the daemon's lifetime, so cache the first
 // successful answer instead of round-tripping on every request.

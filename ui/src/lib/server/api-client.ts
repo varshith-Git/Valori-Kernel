@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { getApiUrl } from "./connection";
 import { nodeHeaders } from "./http";
+import { getValoriHome } from "./valori-home";
 
 // Single point of truth for "where does this request go and what auth does
 // it need" — every /api/* route handler should resolve its target through
@@ -21,8 +21,7 @@ import { nodeHeaders } from "./http";
 
 export type UiMode = "local" | "cloud";
 
-const VALORI_HOME = process.env.VALORI_HOME || path.join(os.homedir(), ".valori");
-const MODE_FILE = path.join(VALORI_HOME, "ui-mode.json");
+const MODE_FILE = path.join(getValoriHome(), "ui-mode.json");
 const FORCE_CLOUD = process.env.VALORI_FORCE_CLOUD === "1";
 
 export function getMode(): UiMode {
@@ -39,7 +38,7 @@ export function getMode(): UiMode {
 // VALORI_FORCE_CLOUD, not something a request could toggle.
 export function setMode(mode: UiMode): void {
     if (FORCE_CLOUD) return;
-    fs.mkdirSync(VALORI_HOME, { recursive: true });
+    fs.mkdirSync(getValoriHome(), { recursive: true });
     fs.writeFileSync(MODE_FILE, JSON.stringify({ mode }, null, 2));
 }
 

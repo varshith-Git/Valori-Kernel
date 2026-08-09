@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import os from "os";
+import { getValoriHome } from "./valori-home";
 
 export interface SavedConnection {
   url:           string;
@@ -10,8 +10,7 @@ export interface SavedConnection {
   status?:       string;
 }
 
-const VALORI_HOME   = process.env.VALORI_HOME || path.join(os.homedir(), ".valori");
-const HISTORY_FILE = path.join(VALORI_HOME, "ui-connections.json");
+const HISTORY_FILE = path.join(getValoriHome(), "ui-connections.json");
 const MAX_HISTORY  = 8;
 
 function readHistory(): SavedConnection[] {

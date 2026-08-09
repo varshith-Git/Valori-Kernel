@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Database, BrainCircuit, Network, Cloud, ArrowRight,
   Layers, FolderOpen, FolderInput, Wrench, Check, LogIn, LogOut,
@@ -11,6 +11,7 @@ import { LLMSelector } from "@/components/ingestion/LLMSelector";
 import {
   getPreference, nativeAvailable, openCloudLogin, pickFolder,
   resetOnboarding, revealPath, setPreference,
+  credentialStore, credentialGet, credentialDelete, migrateLegacyProviderCredential,
 } from "@/lib/native";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -196,6 +197,11 @@ export default function SettingsPage() {
   const [rerankerApiKey,   setRerankerApiKey]   = useState("");
   const [rerankerModel,    setRerankerModel]     = useState("rerank-english-v3.0");
   const [rerankerEndpoint, setRerankerEndpoint] = useState("");
+  // Desktop only (Studio S3): the credential reference currently backing
+  // `rerankerApiKey`. See SettingsModal.tsx's identical pattern — this
+  // page is a second, independent reader/writer of the same
+  // `localStorage["valori:reranker_config"]` key.
+  const rerankerCredentialRef = useRef<string | null>(null);
   const [configLoadFailed, setConfigLoadFailed] = useState(false);
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [modelDir,     setModelDir]     = useState<string | null>(null);
@@ -317,16 +323,26 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(RERANKER_STORAGE_KEY);
-      if (raw) {
+    (async () => {
+      if (nativeAvailable()) {
+        await migrateLegacyProviderCredential(RERANKER_STORAGE_KEY).catch(() => {});
+      }
+      try {
+        const raw = localStorage.getItem(RERANKER_STORAGE_KEY);
+        if (!raw) return;
         const c = JSON.parse(raw);
         setRerankerProvider(c.provider ?? "none");
-        setRerankerApiKey(c.apiKey ?? "");
         setRerankerModel(c.model ?? "rerank-english-v3.0");
         setRerankerEndpoint(c.endpoint ?? "");
-      }
-    } catch { localStorage.removeItem(RERANKER_STORAGE_KEY); }
+        if (nativeAvailable() && c.credentialRef) {
+          rerankerCredentialRef.current = c.credentialRef;
+          const resolved = await credentialGet(c.credentialRef).catch(() => null);
+          setRerankerApiKey(resolved ?? "");
+        } else {
+          setRerankerApiKey(c.apiKey ?? "");
+        }
+      } catch { localStorage.removeItem(RERANKER_STORAGE_KEY); }
+    })();
   }, []);
 
   /* active-section tracking via IntersectionObserver */
@@ -344,14 +360,49 @@ export default function SettingsPage() {
     return () => obs.disconnect();
   }, [cloudEmail]); // re-observe when cloud sections mount/unmount
 
-  const saveReranker = (update: Partial<{ provider: string; apiKey: string; model: string; endpoint: string }>) => {
-    const next = {
-      provider: update.provider ?? rerankerProvider,
-      apiKey:   update.apiKey   ?? rerankerApiKey,
-      model:    update.model    ?? rerankerModel,
-      endpoint: update.endpoint ?? rerankerEndpoint,
-    };
-    try { localStorage.setItem(RERANKER_STORAGE_KEY, JSON.stringify(next)); } catch {}
+  const saveReranker = async (update: Partial<{ provider: string; apiKey: string; model: string; endpoint: string }>) => {
+    const provider = update.provider ?? rerankerProvider;
+    const apiKey = update.apiKey ?? rerankerApiKey;
+    const model = update.model ?? rerankerModel;
+    const endpoint = update.endpoint ?? rerankerEndpoint;
+    const base = { provider, model, endpoint };
+
+    if (nativeAvailable()) {
+      // Desktop (Studio S3): never write apiKey to localStorage.
+      if (!apiKey) {
+        if (rerankerCredentialRef.current) {
+          await credentialDelete(rerankerCredentialRef.current).catch(() => {});
+        }
+        rerankerCredentialRef.current = null;
+        try { localStorage.setItem(RERANKER_STORAGE_KEY, JSON.stringify(base)); } catch {}
+      } else {
+        const currentlyResolved = rerankerCredentialRef.current
+          ? await credentialGet(rerankerCredentialRef.current).catch(() => null)
+          : null;
+        if (currentlyResolved === apiKey) {
+          try {
+            localStorage.setItem(
+              RERANKER_STORAGE_KEY,
+              JSON.stringify({ ...base, credentialRef: rerankerCredentialRef.current }),
+            );
+          } catch {}
+        } else {
+          // Reuse the existing reference if one exists (e.g. the user is
+          // still typing) — avoids one orphaned keychain entry per keystroke.
+          try {
+            const ref = await credentialStore(apiKey, rerankerCredentialRef.current ?? undefined);
+            rerankerCredentialRef.current = ref;
+            localStorage.setItem(RERANKER_STORAGE_KEY, JSON.stringify({ ...base, credentialRef: ref }));
+          } catch {
+            // Keychain unavailable — fail closed, retry on next save.
+          }
+        }
+      }
+    } else {
+      // Web mode — unchanged behavior.
+      try { localStorage.setItem(RERANKER_STORAGE_KEY, JSON.stringify({ ...base, apiKey })); } catch {}
+    }
+
     if (update.provider  !== undefined) setRerankerProvider(update.provider as "none" | "cohere" | "custom");
     if (update.apiKey    !== undefined) setRerankerApiKey(update.apiKey);
     if (update.model     !== undefined) setRerankerModel(update.model);

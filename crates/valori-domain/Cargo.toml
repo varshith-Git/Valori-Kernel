@@ -1,0 +1,29 @@
+[package]
+name = "valori-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cross-boundary domain vocabulary for the Valori platform (identity types shared by daemon, node, models, Studio and Cloud)"
+
+# ── std-only, by design ───────────────────────────────────────────────────────
+# valori-domain is platform vocabulary, not kernel vocabulary. It is std-only
+# and it is NOT reachable from valori-kernel, valori-wire, valori-storage or
+# valori-state — those crates own formats frozen by COMPATIBILITY.md and must
+# never be coupled to product concepts. That firewall is enforced by
+# `crates/valori-node/tests/dependency_direction.rs`, not by convention.
+#
+# The only workspace dependency permitted here is valori-core. See
+# SEALED_CRATES in dependency_direction.rs.
+[dependencies]
+valori-core = { workspace = true, features = ["std"] }
+serde       = { version = "1.0", features = ["derive"] }
+thiserror   = "2.0"
+uuid        = { version = "1", features = ["v4", "serde"] }
+
+# Wire-shape tests assert the exact JSON these types produce — that assertion
+# is the compatibility guard, so the JSON library is a real test dependency.
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

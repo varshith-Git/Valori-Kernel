@@ -1,0 +1,40 @@
+[package]
+name = "valori-studio-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Durable Studio-local metadata store (redb): preferences, project registry, sessions, telemetry queue, sync state, update state. Not the project data store — see docs/architecture/studio-storage.md."
+
+# ── Dependency direction ────────────────────────────────────────────────────
+# This crate is consumed by desktop/src-tauri and must stay leaf-ward: it may
+# depend on valori-domain for shared identity types (ProjectId, SessionId,
+# InstallationId), and nothing else in the workspace. It must NEVER depend on
+# valori-daemon, valori-node, valori-metadata, valori-consensus, or any Cloud
+# crate — see crates/valori-node/tests/dependency_direction.rs (SEALED_CRATES)
+# and docs/architecture/studio-storage.md.
+[dependencies]
+valori-domain = { workspace = true }
+
+redb       = "2"
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror  = "2.0"
+uuid       = { version = "1", features = ["v4"] }
+# Only used by `migration.rs` to parse the RFC3339 timestamps in legacy
+# `events.jsonl` envelopes (the same format `desktop/src-tauri` already
+# writes them in via `chrono::Utc::now().to_rfc3339()`). No "clock"
+# feature — this crate never reads the system time itself, matching the
+# rest of the crate's convention of taking timestamps as arguments.
+chrono     = { version = "0.4", default-features = false, features = ["std"] }
+# Only used by `recovery.rs` to log recovery events (studio database open
+# failed / backup restored / fresh database created, …) to the app's
+# normal tracing subscriber — see docs/architecture/studio-storage.md
+# §"Logging". No log formatting/subscriber setup lives here, only the
+# facade macros; `desktop/src-tauri` owns the actual subscriber.
+tracing    = "0.1"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

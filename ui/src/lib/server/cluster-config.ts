@@ -1,4 +1,6 @@
+import path from "path";
 import type { NodeCfg } from "./process-manager";
+import { getValoriHome } from "./valori-home";
 
 // Shared helpers for building multi-node Raft cluster configs. Used by both
 // the Launcher page's ad-hoc "Cluster" mode and per-project cluster creation
@@ -17,7 +19,7 @@ export function makeDefaultNodes(
 ): NodeCfg[] {
   const httpBase = opts.httpBase ?? 3000;
   const raftBase = opts.raftBase ?? 3100;
-  const dir      = opts.dir ?? (process.env.VALORI_HOME ? `${process.env.VALORI_HOME}/cluster` : "~/.valori/cluster");
+  const dir      = opts.dir ?? path.join(getValoriHome(), "cluster");
   return Array.from({ length: count }, (_, i) => {
     const id = i + 1;
     return {
@@ -34,7 +36,7 @@ export function makeDefaultNodes(
 
 export function nextNodeConfig(
   existing: NodeCfg[],
-  dir = process.env.VALORI_HOME ? `${process.env.VALORI_HOME}/cluster` : "~/.valori/cluster"
+  dir = path.join(getValoriHome(), "cluster")
 ): NodeCfg {
   if (existing.length === 0) {
     return makeDefaultNodes(1, { dir })[0];

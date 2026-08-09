@@ -81,12 +81,34 @@ pub struct ModelManager {
 }
 
 impl ModelManager {
-    /// Create a new manager rooted at `home`.
+    /// Create a new manager rooted at `home` — model artifacts install into
+    /// `<home>/models/`.
     ///
     /// `store` is the persistence backend (use `JsonModelStore::new(home)`).
     /// The built-in registry is loaded automatically.
     pub fn new(home: impl AsRef<Path>, store: Box<dyn ModelStore>) -> ModelResult<Self> {
-        let models_dir = home.as_ref().join("models");
+        Self::new_with_models_dir(home, None, store)
+    }
+
+    /// Same as [`Self::new`], but `models_dir_override`, if `Some`,
+    /// relocates only the *artifact* directory — never the manifest index
+    /// (`JsonModelStore`'s `<home>/models.json`, still keyed off `home`
+    /// unconditionally: it's small Studio/daemon metadata, not the thing a
+    /// "put my models on a bigger disk" override cares about moving).
+    ///
+    /// This is the wiring behind Studio's `modelDir` preference (S7 —
+    /// `docs/phases/phase-studio-S7-persistence-boundary.md`): when a user
+    /// sets a custom model directory, it overrides *only* where model
+    /// artifacts are installed, independent of `workspaceDir`/`home` —
+    /// the two preferences the Settings UI has always presented as
+    /// separate folder pickers actually behave independently now, not
+    /// just cosmetically.
+    pub fn new_with_models_dir(
+        home: impl AsRef<Path>,
+        models_dir_override: Option<PathBuf>,
+        store: Box<dyn ModelStore>,
+    ) -> ModelResult<Self> {
+        let models_dir = models_dir_override.unwrap_or_else(|| home.as_ref().join("models"));
         std::fs::create_dir_all(&models_dir)?;
         Ok(Self {
             store,
@@ -282,6 +304,39 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let store = Box::new(JsonModelStore::new(&tmp).unwrap());
         ModelManager::new(&tmp, store).unwrap()
+    }
+
+    #[test]
+    fn models_dir_override_relocates_artifacts_independent_of_home() {
+        let home = std::env::temp_dir().join(format!("valori_test_home_{}", uuid_like()));
+        let models_dir = std::env::temp_dir().join(format!("valori_test_models_{}", uuid_like()));
+        std::fs::create_dir_all(&home).unwrap();
+        let store = Box::new(JsonModelStore::new(&home).unwrap());
+        let manager =
+            ModelManager::new_with_models_dir(&home, Some(models_dir.clone()), store).unwrap();
+        assert_eq!(manager.models_dir, models_dir);
+        assert_ne!(manager.models_dir, home.join("models"));
+        assert!(
+            models_dir.exists(),
+            "the override directory must be created"
+        );
+    }
+
+    #[test]
+    fn no_override_falls_back_to_home_join_models() {
+        let home = std::env::temp_dir().join(format!("valori_test_home_{}", uuid_like()));
+        std::fs::create_dir_all(&home).unwrap();
+        let store = Box::new(JsonModelStore::new(&home).unwrap());
+        let manager = ModelManager::new(&home, store).unwrap();
+        assert_eq!(manager.models_dir, home.join("models"));
+    }
+
+    fn uuid_like() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
     }
 
     #[test]

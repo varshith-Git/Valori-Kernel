@@ -10,7 +10,6 @@
     "core:default",
     "dialog:default",
     "opener:default",
-    "store:default",
     "window-state:default",
     "deep-link:default",
     "allow-start-daemon",
@@ -20,6 +19,10 @@
     "allow-add-recent-document",
     "allow-install-update",
     "allow-open-cloud-login",
+    "allow-preferences",
+    "allow-project-registry",
+    "allow-telemetry",
+    "allow-credentials",
     "updater:default"
   ]
 }

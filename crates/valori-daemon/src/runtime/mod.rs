@@ -44,6 +44,11 @@ pub struct NodeInfo {
     pub port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uptime_secs: Option<u64>,
+    /// Raft-semantic node id within a cluster project. `None` for single-node
+    /// projects and for the aggregate `NodeInfo` a cluster project's `status()`
+    /// returns — set only on the per-node entries from `Runtime::cluster_nodes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<u32>,
 }
 
 impl NodeInfo {
@@ -54,6 +59,7 @@ impl NodeInfo {
             pid: None,
             port: None,
             uptime_secs: None,
+            node_id: None,
         }
     }
 }
@@ -104,4 +110,14 @@ pub trait Runtime: Send + Sync {
 
     /// Backend detail for `/v1/config` (e.g. binary path, port range).
     fn describe(&self) -> serde_json::Value;
+
+    /// Per-node status for a cluster project (RFC-0007) — one `NodeInfo` per
+    /// physical process, each with `node_id` set. Empty for single-node
+    /// projects or a project that isn't running; `status()` continues to
+    /// return one aggregate `NodeInfo` for both single-node and cluster
+    /// projects, this is the additional per-node detail on top of that.
+    fn cluster_nodes(&self, name: &str) -> Vec<NodeInfo> {
+        let _ = name;
+        Vec::new()
+    }
 }

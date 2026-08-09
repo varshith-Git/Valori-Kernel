@@ -15,6 +15,23 @@ frontend (daemon / node / `ui`) — see
 
 Referenced by: `CONTRIBUTING.md`, `CLAUDE.md`.
 
+Concept ownership — which layer owns `Project`, `Model`, `Runtime`, `Execution`,
+and which concepts belong to the private Cloud control plane — lives in
+[`ownership.md`](ownership.md). Read it before adding a type.
+
+**These rules are now mechanically enforced.**
+`crates/valori-node/tests/dependency_direction.rs` fails CI on: a dependency
+cycle; `valori-core`/`valori-kernel`/`valori-domain` gaining a dependency
+outside their allowlist; any determinism-critical crate (kernel, wire, storage,
+state, index, rag, verify) reaching `valori-domain`, even transitively; any
+crate depending on `valori-cloud-*`; or a Cloud-only identity concept being
+defined in the OSS platform core. Widening a rule requires a written reason in
+that file **and** here.
+
+`valori-domain` (added in phase M0–M2) sits beside `valori-kernel`, not below
+it: it depends only on `valori-core`, carries std-only product vocabulary, and
+is invisible to every crate that owns a frozen on-disk or on-wire format.
+
 ---
 
 ## Dependency graph

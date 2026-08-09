@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/valori-core",
+    "crates/valori-domain",
     "crates/valori-storage",
     "crates/valori-state",
     "crates/valori-metadata",
@@ -22,6 +23,7 @@ members = [
     "crates/valori-engine",
     "crates/valori-daemon",
     "crates/valori-models",
+    "crates/valori-studio-storage",
     # embedded is intentionally excluded from the workspace — it has a path
     # dependency on the INT sibling repo (../../INT) which is not checked in.
     # Build locally: cargo build --manifest-path embedded/Cargo.toml --target thumbv7em-none-eabihf
@@ -33,6 +35,7 @@ members = [
 #    only resolve when maturin builds it. Build: pip install ./python
 default-members = [
     "crates/valori-core",
+    "crates/valori-domain",
     "crates/valori-storage",
     "crates/valori-state",
     "crates/valori-metadata",
@@ -50,7 +53,7 @@ default-members = [
 # Shared package metadata — every crate inherits this with `.workspace = true`,
 # so the workspace ships one coherent version instead of seven that drift.
 [workspace.package]
-version    = "0.2.4"
+version    = "0.3.0"
 edition    = "2021"
 license    = "MIT OR Apache-2.0"
 authors    = ["Varshith Gudur"]
@@ -64,24 +67,26 @@ repository = "https://github.com/valori-db/valori-kernel"
 # default-features = false keeps the no_std firmware (embedded/) buildable;
 # `std` is an opt-in feature on valori-kernel, so consumers that need it (the
 # PyO3 FFI) enable `features = ["std"]` explicitly.
-valori-core      = { path = "crates/valori-core",      version = "0.2.4", default-features = false }
-valori-storage   = { path = "crates/valori-storage",   version = "0.2.4" }
-valori-state     = { path = "crates/valori-state",     version = "0.2.4" }
-valori-metadata  = { path = "crates/valori-metadata",  version = "0.2.4" }
-valori-planner   = { path = "crates/valori-planner",   version = "0.2.4" }
-valori-effect    = { path = "crates/valori-effect",    version = "0.2.4" }
-valori-kernel    = { path = "crates/valori-kernel",    version = "0.2.1", default-features = false }
-valori-wire      = { path = "crates/valori-wire",      version = "0.2.1" }
-valori-consensus = { path = "crates/valori-consensus", version = "0.2.1" }
-valori-node      = { path = "crates/valori-node",      version = "0.2.1" }
-valori-verify    = { path = "crates/valori-verify",    version = "0.2.1" }
-valori-search    = { path = "crates/valori-search",    version = "0.2.4" }
-valori-index     = { path = "crates/valori-index",     version = "0.2.4" }
+valori-core      = { path = "crates/valori-core",      version = "0.3.0", default-features = false }
+valori-domain    = { path = "crates/valori-domain",    version = "0.3.0" }
+valori-storage   = { path = "crates/valori-storage",   version = "0.3.0" }
+valori-state     = { path = "crates/valori-state",     version = "0.3.0" }
+valori-metadata  = { path = "crates/valori-metadata",  version = "0.3.0" }
+valori-planner   = { path = "crates/valori-planner",   version = "0.3.0" }
+valori-effect    = { path = "crates/valori-effect",    version = "0.3.0" }
+valori-kernel    = { path = "crates/valori-kernel",    version = "0.3.0", default-features = false }
+valori-wire      = { path = "crates/valori-wire",      version = "0.3.0" }
+valori-consensus = { path = "crates/valori-consensus", version = "0.3.0" }
+valori-node      = { path = "crates/valori-node",      version = "0.3.0" }
+valori-verify    = { path = "crates/valori-verify",    version = "0.3.0" }
+valori-search    = { path = "crates/valori-search",    version = "0.3.0" }
+valori-index     = { path = "crates/valori-index",     version = "0.3.0" }
 valori-rag       = { path = "crates/valori-rag",       version = "0.2.4" }
 valori-ingest    = { path = "crates/valori-ingest",    version = "0.2.4" }
-valori-engine    = { path = "crates/valori-engine",    version = "0.2.4" }
-valori-daemon    = { path = "crates/valori-daemon",    version = "0.2.4" }
+valori-engine    = { path = "crates/valori-engine",    version = "0.3.0" }
+valori-daemon    = { path = "crates/valori-daemon",    version = "0.3.0" }
 valori-models    = { path = "crates/valori-models",    version = "0.1.0" }
+valori-studio-storage = { path = "crates/valori-studio-storage", version = "0.3.0" }
 
 # ── Workspace lints ────────────────────────────────────────────────────────────
 # Allow lints that are noisy in new/generated code but not indicative of bugs.

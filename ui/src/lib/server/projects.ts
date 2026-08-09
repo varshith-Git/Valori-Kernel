@@ -19,12 +19,12 @@
 
 import fs from "fs";
 import path from "path";
-import os from "os";
 import { execFileSync } from "child_process";
+import { getValoriHome } from "./valori-home";
 
 // ─── paths ─────────────────────────────────────────────────────────────────────
 
-const VALORI_HOME   = path.join(os.homedir(), ".valori");
+const VALORI_HOME   = getValoriHome();
 const PROJECTS_DIR  = path.join(VALORI_HOME, "projects");
 // Distinct from the CLI `valori setup` wizard's `projects.json` (a different
 // cluster-topology schema) — never clobber that file.

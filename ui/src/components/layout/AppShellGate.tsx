@@ -12,16 +12,30 @@ import { useWindowTitle } from "@/lib/hooks/useWindowTitle";
 import {
   getLastPage,
   getPreference,
+  getStudioRecoveryStatus,
   isOnboardingComplete,
   nativeAvailable,
   setLastPage,
   startDaemon,
 } from "@/lib/native";
+import { toast } from "@/lib/toast";
+import { reportSessionEnded, reportSessionStarted } from "@/lib/telemetry";
+import { markStartupPhase } from "@/lib/startupMarks";
 import { createClient } from "@/utils/supabase/client";
 
 // Paths that render full-screen without the sidebar/topbar shell.
 // These must never be saved as "last page" or shown inside the app chrome.
 const SHELL_EXEMPT = ["/login", "/signup", "/forgot-password", "/auth/"];
+
+// Module-load time as a proxy for "app start" — not a true process-launch
+// timestamp (that would need a Rust-side mark threaded through), but this
+// module loads early enough in the app's lifecycle to be a reasonable
+// approximation for Phase 1's startup_time_ms.
+const moduleLoadTime = typeof performance !== "undefined" ? performance.now() : 0;
+// react_mounted_ms for the startup waterfall (see startupMarks.ts) — same
+// moment as moduleLoadTime above, just recorded as a wall-clock mark
+// instead of a performance.now() delta.
+markStartupPhase("react_mounted_ms");
 
 function isExempt(path: string) {
   return SHELL_EXEMPT.some((p) => path.startsWith(p));
@@ -78,7 +92,15 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
             setShowWelcome(true);
           } else {
             const workspaceDir = await getPreference<string>("workspaceDir");
-            startDaemon(workspaceDir).catch((e) => console.error("failed to start daemon:", e));
+            const modelDir = await getPreference<string>("modelDir");
+            startDaemon(workspaceDir, modelDir)
+              .then(() => markStartupPhase("daemon_ready_ms"))
+              .catch((e) => console.error("failed to start daemon:", e));
+            // Returning user, onboarding (and its consent step) already
+            // done — a no-op if `analytics` consent is off. First-time
+            // users get this from handleOnboardingFinish instead, once
+            // consent is actually known.
+            reportSessionStarted(performance.now() - moduleLoadTime).catch(() => {});
           }
         }
       } catch (e) {
@@ -89,8 +111,38 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
     })();
   }, []);
 
+  // Studio database recovery notice — non-blocking, per
+  // docs/architecture/studio-storage.md §"Recovery UI". Queried once per
+  // mount rather than only listening for the `studio-recovery` event: the
+  // event fires once, synchronously, during Rust `setup()`, well before
+  // this component (or any window) is guaranteed to be listening. A
+  // healthy launch (the overwhelming common case) is silent — nothing is
+  // shown, no toast, no delay.
+  useEffect(() => {
+    if (!nativeAvailable()) return;
+    getStudioRecoveryStatus()
+      .then((status) => {
+        if (!status || status.kind === "healthy") return;
+        if (status.kind === "unavailable") {
+          toast(
+            "Studio's local settings database is unavailable for this session. " +
+              "Your project data was not affected.",
+            "warning",
+          );
+          return;
+        }
+        // "restored_from_backup" | "fresh_database_created" — both carry
+        // a ready-made, non-technical message from the Rust side.
+        toast(status.message, "warning");
+      })
+      .catch(() => {});
+  }, []);
+
   const handleOnboardingFinish = async () => {
     setShowWelcome(false);
+    // First-time session_started — consent is only known now that the
+    // onboarding wizard's telemetry step has actually run.
+    reportSessionStarted(performance.now() - moduleLoadTime).catch(() => {});
     // After installation, check session — show sign-in gate if not signed in.
     if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
       const supabase = createClient();
@@ -137,6 +189,15 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
     const h = () => setSettingsOpen(true);
     window.addEventListener("valori:open-settings", h);
     return () => window.removeEventListener("valori:open-settings", h);
+  }, []);
+
+  // Best-effort session_ended — see telemetry.ts's own comment on why this
+  // isn't fully reliable (a force-quit can skip beforeunload entirely).
+  // Accepted gap for Phase 1.
+  useEffect(() => {
+    const h = () => { reportSessionEnded(); };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
   }, []);
 
   // Global keyboard shortcuts (desktop-grade feel).

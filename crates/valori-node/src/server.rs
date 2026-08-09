@@ -2812,9 +2812,10 @@ async fn restore_from_store(
     let key = match req.key {
         Some(key) => key,
         None => {
-            let manifest = os.read_manifest().await.map_err(|e| {
-                EngineError::InvalidInput(format!("reading manifest failed: {e}"))
-            })?;
+            let manifest = os
+                .read_manifest()
+                .await
+                .map_err(|e| EngineError::InvalidInput(format!("reading manifest failed: {e}")))?;
             manifest
                 .and_then(|m| m.current_snapshot)
                 .map(|s| s.key)
@@ -2945,10 +2946,18 @@ async fn archive_wal_segment(
     // names as the current snapshot, this archive doesn't change that.
     // Best-effort: a manifest-refresh failure shouldn't fail an otherwise
     // successful archive.
-    if let Ok(current_snapshot) = os.read_manifest().await.map(|m| m.and_then(|m| m.current_snapshot)) {
+    if let Ok(current_snapshot) = os
+        .read_manifest()
+        .await
+        .map(|m| m.and_then(|m| m.current_snapshot))
+    {
         if let Ok(wal_segments) = os.list_wal_segments().await {
             if let Err(e) = os
-                .write_manifest(current_snapshot.as_ref(), wal_segments, env!("CARGO_PKG_VERSION"))
+                .write_manifest(
+                    current_snapshot.as_ref(),
+                    wal_segments,
+                    env!("CARGO_PKG_VERSION"),
+                )
                 .await
             {
                 tracing::warn!(error = %e, "failed to refresh manifest.json after WAL archive, continuing");

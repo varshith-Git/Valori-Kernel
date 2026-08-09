@@ -7,6 +7,7 @@ description = "Control-plane persistence for Valori: Project, Collection, Shard 
 
 [dependencies]
 valori-core  = { workspace = true, features = ["std"] }
+valori-domain = { workspace = true }
 valori-wire  = { workspace = true }
 
 redb       = "2"

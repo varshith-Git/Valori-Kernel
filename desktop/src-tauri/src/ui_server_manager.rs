@@ -41,7 +41,10 @@ async fn probe(url: &str) -> bool {
 
 /// Spawn the bundled `ui/` server and wait for it to answer, then navigate
 /// the main window to it. Release builds only — call from `setup()`.
-pub async fn start_and_navigate(app: &tauri::AppHandle, state: &UiServerState) -> Result<(), String> {
+pub async fn start_and_navigate(
+    app: &tauri::AppHandle,
+    state: &UiServerState,
+) -> Result<(), String> {
     eprintln!("[ui-server] resolving bundled resource path…");
     let server_js = app
         .path()
@@ -57,7 +60,11 @@ pub async fn start_and_navigate(app: &tauri::AppHandle, state: &UiServerState) -
     // to nowhere useful once `ui/` is running as this bundled sidecar. Same
     // fix as the daemon: hand it the bundled sidecar's real path directly.
     let valori_node_bin = crate::daemon_manager::sidecar_sibling_path("valori-node")?;
-    eprintln!("[ui-server] VALORI_NODE_BIN={} (exists: {})", valori_node_bin.display(), valori_node_bin.exists());
+    eprintln!(
+        "[ui-server] VALORI_NODE_BIN={} (exists: {})",
+        valori_node_bin.display(),
+        valori_node_bin.exists()
+    );
 
     // Node is launched from inside ValoriUIServer.app — a minimal helper
     // app bundle whose Info.plist has LSUIElement=YES. When macOS resolves
@@ -73,12 +80,20 @@ pub async fn start_and_navigate(app: &tauri::AppHandle, state: &UiServerState) -
             tauri::path::BaseDirectory::Resource,
         )
         .map_err(|e| format!("could not resolve helper node binary: {e}"))?;
-    eprintln!("[ui-server] helper node bin={} (exists: {})", helper_node_bin.display(), helper_node_bin.exists());
+    eprintln!(
+        "[ui-server] helper node bin={} (exists: {})",
+        helper_node_bin.display(),
+        helper_node_bin.exists()
+    );
 
     eprintln!("[ui-server] spawning helper node…");
     let (mut rx, child) = app
         .shell()
-        .command(helper_node_bin.to_str().ok_or("helper node path is not valid UTF-8")?)
+        .command(
+            helper_node_bin
+                .to_str()
+                .ok_or("helper node path is not valid UTF-8")?,
+        )
         .args([server_js.display().to_string()])
         .env("PORT", UI_SERVER_PORT.to_string())
         .env("HOSTNAME", "127.0.0.1")
@@ -125,7 +140,9 @@ pub async fn start_and_navigate(app: &tauri::AppHandle, state: &UiServerState) -
 
     *state.0.lock().unwrap() = Some(child);
 
-    let window = app.get_webview_window("main").ok_or("main window not found")?;
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
     eprintln!("[ui-server] navigating main window to {url}");
     window
         .navigate(Url::parse(&url).expect("valid loopback URL"))

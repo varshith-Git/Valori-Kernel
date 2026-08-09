@@ -123,8 +123,14 @@ fn resolve_dev_binary(name: &str) -> Result<PathBuf, String> {
 pub(crate) fn sidecar_sibling_path(name: &str) -> Result<PathBuf, String> {
     let exe_path = tauri::utils::platform::current_exe()
         .map_err(|e| format!("could not resolve current executable path: {e}"))?;
-    let exe_dir = exe_path.parent().ok_or("current executable has no parent directory")?;
-    let base_dir = if exe_dir.ends_with("deps") { exe_dir.parent().unwrap_or(exe_dir) } else { exe_dir };
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("current executable has no parent directory")?;
+    let base_dir = if exe_dir.ends_with("deps") {
+        exe_dir.parent().unwrap_or(exe_dir)
+    } else {
+        exe_dir
+    };
     let mut path = base_dir.join(name);
     if cfg!(windows) && path.extension().map_or(true, |e| e != "exe") {
         path.as_mut_os_string().push(".exe");
@@ -154,8 +160,10 @@ async fn check_version(bind: &str) -> Result<(), String> {
         .send()
         .await
         .map_err(|e| format!("failed to reach daemon /version: {e}"))?;
-    let body: serde_json::Value =
-        resp.json().await.map_err(|e| format!("bad /version response: {e}"))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("bad /version response: {e}"))?;
     let api = body.get("api").and_then(|v| v.as_str()).unwrap_or("");
     check_api_compat(api)
 }
@@ -171,27 +179,36 @@ fn check_api_compat(reported_api: &str) -> Result<(), String> {
 
 /// Start the daemon if it isn't already running under our supervision.
 /// `home` becomes `VALORI_HOME` for the spawned process — the real effect of
-/// the workspace folder the user picked in onboarding/settings.
+/// the workspace folder the user picked in onboarding/settings. `model_dir`
+/// becomes `VALORI_MODELS_DIR` — the real effect of the `modelDir`
+/// preference (S7 — `docs/phases/phase-studio-S7-persistence-boundary.md`),
+/// independent of `home`: setting one never implies or overrides the other.
 #[tauri::command]
 pub async fn start_daemon(
     app: tauri::AppHandle,
     state: tauri::State<'_, DaemonState>,
     home: Option<String>,
+    model_dir: Option<String>,
 ) -> Result<DaemonStatus, String> {
-    start_daemon_internal(&app, &state, home).await
+    start_daemon_internal(&app, &state, home, model_dir).await
 }
 
 pub async fn start_daemon_internal(
     app: &tauri::AppHandle,
     state: &DaemonState,
     home: Option<String>,
+    model_dir: Option<String>,
 ) -> Result<DaemonStatus, String> {
-    eprintln!("[daemon] start_daemon_internal called home={home:?}");
+    eprintln!("[daemon] start_daemon_internal called home={home:?} model_dir={model_dir:?}");
     let already_running = state.0.lock().unwrap().as_ref().map(|r| r.bind.clone());
     if let Some(bind) = already_running {
         eprintln!("[daemon] already running on {bind}");
         let healthy = probe_health(&bind).await;
-        return Ok(DaemonStatus { running: true, healthy, bind: Some(bind) });
+        return Ok(DaemonStatus {
+            running: true,
+            healthy,
+            bind: Some(bind),
+        });
     }
 
     let bind = DEFAULT_BIND.to_string();
@@ -199,8 +216,11 @@ pub async fn start_daemon_internal(
     if let Some(home) = &home {
         envs.push(("VALORI_HOME".into(), home.clone()));
     }
+    if let Some(model_dir) = &model_dir {
+        envs.push(("VALORI_MODELS_DIR".into(), model_dir.clone()));
+    }
 
-    eprintln!("[daemon] starting — home={home:?} bind={bind}");
+    eprintln!("[daemon] starting — home={home:?} model_dir={model_dir:?} bind={bind}");
 
     let child = if cfg!(debug_assertions) {
         let binary = resolve_dev_binary("valori-daemon")?;
@@ -228,25 +248,23 @@ pub async fn start_daemon_internal(
         // letting it fall back to a dev-only target/{release,debug} search
         // that doesn't exist on an end user's machine.
         let node_bin = sidecar_sibling_path("valori-node")?;
-        eprintln!("[daemon] node_bin={} (exists: {})", node_bin.display(), node_bin.exists());
+        eprintln!(
+            "[daemon] node_bin={} (exists: {})",
+            node_bin.display(),
+            node_bin.exists()
+        );
         envs.push(("VALORI_NODE_BIN".into(), node_bin.display().to_string()));
 
         eprintln!("[daemon] resolving sidecar…");
-        let cmd = app
-            .shell()
-            .sidecar("valori-daemon")
-            .map_err(|e| {
-                eprintln!("[daemon] sidecar resolve failed: {e}");
-                format!("valori-daemon sidecar not found in this build: {e}")
-            })?;
+        let cmd = app.shell().sidecar("valori-daemon").map_err(|e| {
+            eprintln!("[daemon] sidecar resolve failed: {e}");
+            format!("valori-daemon sidecar not found in this build: {e}")
+        })?;
         eprintln!("[daemon] sidecar resolved, spawning…");
-        let (mut rx, child) = cmd
-            .envs(envs)
-            .spawn()
-            .map_err(|e| {
-                eprintln!("[daemon] sidecar spawn failed: {e}");
-                format!("failed to spawn valori-daemon sidecar: {e}")
-            })?;
+        let (mut rx, child) = cmd.envs(envs).spawn().map_err(|e| {
+            eprintln!("[daemon] sidecar spawn failed: {e}");
+            format!("failed to spawn valori-daemon sidecar: {e}")
+        })?;
         eprintln!("[daemon] sidecar spawned pid={}", child.pid());
         let exited = Arc::new(tokio::sync::Notify::new());
         let exited_tx = exited.clone();
@@ -297,8 +315,15 @@ pub async fn start_daemon_internal(
     }
     eprintln!("[daemon] version ok");
 
-    *state.0.lock().unwrap() = Some(RunningDaemon { child, bind: bind.clone() });
-    Ok(DaemonStatus { running: true, healthy: true, bind: Some(bind) })
+    *state.0.lock().unwrap() = Some(RunningDaemon {
+        child,
+        bind: bind.clone(),
+    });
+    Ok(DaemonStatus {
+        running: true,
+        healthy: true,
+        bind: Some(bind),
+    })
 }
 
 /// Ask the daemon to shut down gracefully over HTTP (snapshot every running
@@ -346,9 +371,17 @@ pub async fn daemon_status_internal(state: &DaemonState) -> Result<DaemonStatus,
     match bind {
         Some(bind) => {
             let healthy = probe_health(&bind).await;
-            Ok(DaemonStatus { running: true, healthy, bind: Some(bind) })
+            Ok(DaemonStatus {
+                running: true,
+                healthy,
+                bind: Some(bind),
+            })
         }
-        None => Ok(DaemonStatus { running: false, healthy: false, bind: None }),
+        None => Ok(DaemonStatus {
+            running: false,
+            healthy: false,
+            bind: None,
+        }),
     }
 }
 
@@ -377,7 +410,10 @@ mod tests {
             eprintln!("skipping: valori-daemon binary not built");
             return;
         }
-        assert!(cfg!(debug_assertions), "this test only exercises the dev-mode path");
+        assert!(
+            cfg!(debug_assertions),
+            "this test only exercises the dev-mode path"
+        );
 
         let home = tempfile::tempdir().unwrap();
         let state = DaemonState::default();
@@ -396,12 +432,18 @@ mod tests {
             if probe_health(&bind).await {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "daemon never became healthy");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "daemon never became healthy"
+            );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         check_version(&bind).await.unwrap();
 
-        *state.0.lock().unwrap() = Some(RunningDaemon { child: RunningChild::Dev(child), bind: bind.clone() });
+        *state.0.lock().unwrap() = Some(RunningDaemon {
+            child: RunningChild::Dev(child),
+            bind: bind.clone(),
+        });
 
         let status2 = daemon_status_internal(&state).await.unwrap();
         assert!(status2.running);
@@ -410,6 +452,9 @@ mod tests {
         stop_daemon_internal(&state).await;
 
         let status3 = daemon_status_internal(&state).await.unwrap();
-        assert!(!status3.running, "daemon should be gone after stop_daemon_internal");
+        assert!(
+            !status3.running,
+            "daemon should be gone after stop_daemon_internal"
+        );
     }
 }

@@ -6,6 +6,514 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-09
+
+Kernel/workspace and desktop app both bumped to 0.3.0 (minor — this
+release adds real new capabilities: OS-keychain credential storage,
+desktop filesystem consolidation, session retention, and the persistence
+boundary cleanup below, not just fixes).
+
+### Added (Phase Studio S7 — Persistence Boundary Cleanup — 2026-08-09)
+
+Closes out S6's six follow-up items.
+
+- `ui/src/lib/server/valori-home.ts` (new) — the one TypeScript-side
+  `$VALORI_HOME` resolver, replacing three duplicated (agreeing) copies
+  and fixing two that silently ignored an explicit override.
+- `modelDir` preference now actually wired: overrides model artifact
+  storage independently of `workspaceDir`
+  (`ModelManager::new_with_models_dir`, `VALORI_MODELS_DIR` env var,
+  `startDaemon(home, modelDir)`).
+- `metadata.redb`'s dormancy formally documented and mechanically
+  enforced (`dependency_direction.rs`'s new
+  `metadata_db_open_stays_out_of_production_binaries`) — not wired, not
+  deleted (its `Project`/`Collection` code is real, paused M3
+  infrastructure).
+- `logs/` and `crashes/` given real, bounded content: a `tracing-appender`
+  file log sink (daily rotation, 7-day cleanup) and best-effort crash
+  archival (30-day cleanup) — the live panic-hook marker path is
+  unchanged.
+- `tauri-plugin-store` fully removed (dependency, plugin registration,
+  capability entry) — zero call sites existed.
+- `valori:notifs` migrated off desktop `localStorage` onto
+  `studio.redb`'s `preferences.notification_prefs` (web build unchanged).
+- New consolidated architecture test
+  (`desktop/src-tauri/tests/persistence_boundary_architecture.rs`, 8
+  tests) mechanically prevents: UI writing desktop state to
+  `localStorage` outside an explicit allowlist, UI touching the raw
+  filesystem, any module minting its own `~/.valori` path outside an
+  explicit allowlist, Studio storage depending on project internals, and
+  a second embedded database engine appearing anywhere in the workspace.
+- See `docs/phases/phase-studio-S7-persistence-boundary.md` for full
+  validation.
+
+### Added (Phase Studio S6 — Desktop Filesystem Consolidation — 2026-08-09)
+
+Establishes one canonical, enforceable answer to "where does every desktop
+file live, who owns it, how is it created/recovered/cleaned up" — see
+`docs/reviews/studio-filesystem-audit.md` for the preceding read-only
+audit.
+
+- `crates/valori-studio-storage/src/path.rs` — new `StudioPaths`, the
+  canonical path resolver: typed accessors for `studio_db`, `backups_dir`,
+  `recovery_log_path`, `projects_dir`/`project_dir(name)`,
+  `models_dir`/`model_dir(&ModelId)`, `logs_dir`, `crashes_dir`,
+  `cache_dir`, `downloads_dir`, `temp_dir`. Pure path math — no
+  filesystem access. Pre-existing free functions now delegate to it.
+- `desktop/src-tauri/src/filesystem_service.rs` (new) — `FileSystemService`:
+  safe operations (`create_dir`, `atomic_write`/`atomic_replace`,
+  `read`/`remove`/`rename`/`copy`/`exists`, `clear_cache`,
+  `cleanup_stale_temp_files`) plus `safe_join` (component-aware path-
+  traversal + symlink-escape rejection). Wired into startup: stale
+  temp-file cleanup (24h), never fatal.
+- `crates/valori-daemon/src/project.rs` — `project.json`'s existing atomic
+  write-then-rename gained an `fsync` before the rename, closing a narrow
+  power-loss durability gap.
+- New architecture tests (`desktop/src-tauri/tests/filesystem_architecture.rs`)
+  prevent Studio storage/desktop from ever depending on
+  kernel/storage/node/daemon crates, and prevent the browser UI/Cloud from
+  touching the local filesystem directly.
+- A project-safety test proves, with real production types against a real
+  project fixture, that every Studio housekeeping operation (recovery,
+  cache clear, temp cleanup, atomic writes) leaves project files
+  byte-for-byte unchanged.
+- See `docs/phases/phase-studio-S6-filesystem-management.md` for full
+  validation, including a real 16-step desktop smoke test.
+
+### Fixed (Phase Studio S5 — Session Retention — 2026-08-09)
+
+Fixes the P0 finding from `docs/reviews/studio-persistence-consolidation-audit.md`:
+`studio.redb`'s `sessions` table grew by one row per app launch, forever,
+with no pruning.
+
+- `crates/valori-studio-storage/src/session.rs` — new
+  `SessionRetentionPolicy` (typed: keep newest 100 completed sessions;
+  completed sessions beyond that floor prune once older than 90 days;
+  crashed sessions prune once older than 180 days, no count cap) and
+  `SessionStore::prune(current_session_id, &policy, now)`. Deterministic,
+  oldest-first deletion; touches only the `sessions` table.
+- `desktop/src-tauri/src/lib.rs` — startup reordered to DB open →
+  installation identity → crash reconciliation → **prune** → start
+  current session. Pruning failure is logged and never fatal to startup,
+  never triggers `studio.redb` recovery.
+- No schema version bump — purely additive, fully backward compatible.
+- See `docs/phases/phase-studio-S5-session-retention.md` for full
+  validation (13 new storage tests, 118 total; real desktop smoke test
+  against a disposable `$VALORI_HOME` with byte-for-byte project-file
+  verification).
+
+### Security (Phase Studio S3 — Credential Security — 2026-08-09)
+
+Implements the approved fix from `docs/reviews/studio-credentials-audit.md`:
+provider API keys (OpenAI/Cohere/Groq/Together/custom) no longer persist as
+plaintext in `localStorage` on the desktop build.
+
+- **`CredentialRef`** (`crates/valori-domain`) — new UUID v4 opaque
+  reference type, same `uuid_id!` pattern as `InstallationId`.
+- **`CredentialService`** (`desktop/src-tauri/src/credential_service.rs`,
+  new) — the sole wrapper around the `keyring` crate (macOS Keychain /
+  Windows Credential Manager / Linux Secret Service). New Tauri commands:
+  `credential_store`, `credential_get`, `credential_exists`,
+  `credential_delete`.
+- `useLLMConfig.ts`, `useEmbeddingConfig.ts`, and `SettingsModal.tsx`'s
+  reranker config now persist `{ provider, model, credentialRef }` instead
+  of `{ provider, model, apiKey }` in `localStorage` — desktop only. The
+  web/Cloud build is unchanged (documented limitation — no OS keychain
+  reachable from a browser tab).
+- One-time, idempotent, verify-before-delete migration of existing
+  plaintext credentials (`native.ts`'s `migrateLegacyProviderCredential`) —
+  never deletes the legacy value before confirming the new one resolves.
+- `studio.redb` was not and is not used for provider configuration; new
+  architecture tests (`credential_security_architecture.rs`) lock in that
+  secrets cannot enter `studio.redb`, telemetry, logs, or crash reports.
+- See `docs/phases/phase-studio-S3-credentials.md` for full validation.
+
+### Fixed (Phase Studio Installation Identity — 2026-08-09)
+
+Implements the approved fix from `docs/reviews/installation-id-audit.md`:
+`installation_id` was only ever generated as a side effect of the
+telemetry send path, so any user who never opted into telemetry (the
+default state) never received an installation identity at all.
+
+- `desktop/src-tauri/src/lib.rs` — `setup()` now calls
+  `StudioPreferencesService::get_or_init_installation_id()`
+  **unconditionally**, before session start, independent of telemetry
+  consent, Cloud login, or project state.
+- `desktop/src-tauri/src/preferences_service.rs` —
+  `get_or_init_installation_id` is now the sole canonical
+  get-or-init implementation (returns typed `InstallationId`).
+- `desktop/src-tauri/src/telemetry.rs` — the private `installation_id()`
+  helper no longer duplicates get-or-init logic; it reads through the
+  canonical service.
+- New architecture test
+  (`desktop/src-tauri/tests/installation_id_architecture.rs`, 4 tests)
+  mechanically enforces exactly one generation site and no second desktop
+  persistence location.
+- Existing sessions recorded with `installation_id: None` (from installs
+  that had telemetry off) are left as accurate historical records, not
+  rewritten.
+- See `docs/phases/phase-studio-installation-identity.md` for full
+  validation (105 storage tests, 45 desktop tests, real desktop smoke
+  test against a disposable `$VALORI_HOME`).
+
+### Fixed (Phase Studio S2c — Privacy Boundary & Persistence Cleanup — 2026-08-08)
+
+Implements exactly the two concrete issues found by
+`docs/architecture/studio-persistence-audit.md` — no other persistence
+feature touched.
+
+- **Telemetry consent revocation now invalidates already-queued analytics
+  events**, closing a real privacy gap: previously, disabling analytics
+  stopped new events from queuing but did nothing to events already in
+  `telemetry_queue` — `drain_queue` had no consent check of its own.
+  - `crates/valori-studio-storage/src/telemetry.rs` — new
+    `TelemetryCategory` enum (`Analytics`/`Crash`, matching
+    `TelemetryConsent`'s two existing fields — no third category added,
+    none was found to exist); `StudioTelemetryEvent` gained a `category`
+    field (`#[serde(default)]` to `Analytics` for pre-existing rows); new
+    `TelemetryQueue::discard_category(category)` bulk-delete primitive.
+  - `desktop/src-tauri/src/telemetry.rs` — `analytics_consent` replaced
+    by category-aware `consent_for_category`; `enqueue_telemetry_event`
+    gained a `category` parameter; **`drain_queue` (the uploader
+    boundary) now re-checks consent per event, per category, immediately
+    before dispatching each HTTP request** — not just at enqueue time,
+    not cached, not once per batch.
+  - `desktop/src-tauri/src/preferences_service.rs` — new
+    `discard_revoked_telemetry_categories`, called from
+    `set_telemetry_consent_command` immediately after persisting revoked
+    consent — the eager half of the invariant; the uploader-boundary
+    recheck is the half that makes it safe even if this were skipped.
+  - **Bug found and fixed in the same change**: crash events
+    (`studio_crashed`) were silently gated by *analytics* consent instead
+    of *crash* consent at enqueue time — a user with `crash: true,
+    analytics: false` had crash reports dropped despite explicitly
+    opting into them. `ui/src/lib/telemetry.ts`'s `send()` now passes an
+    explicit category (`"crash"` for `studio_crashed`).
+  - Independent consent categories preserved — `TelemetryConsent` is
+    still exactly `{ analytics: bool, crash: bool }`, not collapsed or
+    extended.
+  - 4 new tests in `valori-studio-storage` (105 total), 10 new in
+    `desktop/src-tauri` (35 total): existing-queued-event discard,
+    multiple-events discard, re-enable-only-allows-new-events,
+    independent-crash-consent, restart durability, repeated-drain-tick
+    safety.
+- **`ui/src/lib/theme.tsx` no longer dual-writes to `studio.redb` and
+  `localStorage`** in the desktop app. Now branches on the existing
+  `nativeAvailable()` check: desktop reads/writes `studio.redb` only;
+  browser/web mode (Valori Cloud, `npm run dev` outside Tauri) keeps
+  using `localStorage`, unchanged. One-time, idempotent, non-destructive
+  migration for installations that only ever had a legacy `localStorage`
+  theme value (backfills `studio.redb` once; never deletes the legacy
+  key). No `studio.redb` schema change — `preferences.theme` already
+  existed.
+- **`docs/architecture/studio-storage.md`** — new §14.5 (Telemetry
+  consent enforcement) and §18 (Theme persistence).
+  **`docs/architecture/studio-persistence-audit.md`** — both fixed
+  findings marked inline, cross-referenced; original audit text
+  otherwise preserved as a point-in-time record.
+
+### Added (Phase Studio DR — Database resilience & recovery — 2026-08-08)
+
+Invariant established: `studio.redb` contains recoverable Studio
+metadata. It must never be allowed to make Valori Studio permanently
+unlaunchable, and corruption of `studio.redb` must never delete or modify
+the user's actual Valori project data — verified structurally (the
+dependency firewall makes recovery code physically unable to reach
+project files) and by test (byte-for-byte hash checks, both in the
+automated suite and a real desktop launch).
+
+- **`crates/valori-studio-storage/src/recovery.rs`** (new) —
+  `open_with_recovery(db_path, backups_dir, recovery_log_path)`: try
+  current → preserve corrupt original (atomic `fs::rename` to
+  `studio.redb.corrupt-<unix_ms>`, never deleted) → try bounded rolling
+  backup generations (`$VALORI_HOME/backups/studio.redb.{1,2,3}`,
+  newest-first, each validated read-only via `Database::open` before
+  restoring) → fresh-database fallback. Never fails for a condition a
+  fresh database can resolve.
+  - `RecoveryOutcome` (`Healthy` / `RestoredFromBackup` /
+    `FreshDatabaseCreated`) and `RecoveryState` (`Healthy`/
+    `RecoveryRequired`/`RestoringBackup`/`Rebuilding`/`Recovered`/
+    `RecoveryFailed`).
+  - Backups taken before a schema migration (so a migration failure has
+    the pre-migration state to fall back to) and at most once per 24h on
+    a healthy open — never on a preference write, telemetry enqueue, or
+    any other hot path.
+  - `DatabaseAlreadyOpen` (another process/handle holding the file open)
+    is explicitly never treated as corruption — recovering a database
+    that's merely locked would be actively destructive.
+  - Crash-safe and idempotent: a process killed between "preserve" and
+    "restore" is detected and resumed correctly on the next launch, by
+    deriving state purely from the filesystem (no separate lock file).
+  - Append-only `$VALORI_HOME/studio-recovery.jsonl` — a **sibling** of
+    `studio.redb`, so a corruption event that destroys the database can't
+    also destroy the record that corruption happened. Never logs
+    preference values, telemetry payloads, project content, or
+    credentials.
+  - Evidence-based rebuild classification documented in the module's own
+    doc comment: `preferences` restores-from-backup-or-safe-defaults;
+    `update_state`/`telemetry_queue`/`sessions` are trivially
+    rebuildable/disposable; `sync_state` is Cloud-re-derivable; the
+    `projects` registry is **not** auto-rebuilt (no `project.json` parser
+    exists in this crate and adding one would violate the dependency
+    firewall); WAL/snapshots/vectors/indexes are never touched — this
+    crate has no code path to them.
+- **`StudioDatabase::open_default_with_recovery()`** — the recovery-aware
+  entry point at the default paths, alongside the existing plain
+  `open`/`open_default`.
+- **`desktop/src-tauri/src/studio_storage.rs`** — startup now calls
+  `open_with_recovery` instead of the plain open; new
+  `RecoveryStatusDto` (camelCase fields, snake_case `"kind"` tag — pinned
+  by a dedicated wire-shape test) + `get_studio_recovery_status` Tauri
+  command + a `studio-recovery` event emitted once during `setup()`.
+- **`ui/src/lib/native.ts`** / **`AppShellGate.tsx`** — `StudioRecoveryStatus`
+  binding; a non-blocking toast (reusing the existing toast system, no
+  new UI component) on any non-healthy recovery outcome; silent on a
+  healthy launch.
+- **Tests** — 13 new in `crates/valori-studio-storage/tests/recovery.rs`
+  (101 total in the crate) covering healthy/corrupt-with-backup/
+  corrupt-no-backup/multiple-backups-mixed-validity/pre-migration-backup/
+  idempotency/crash-resume/cross-process-lock-safety/project-data-integrity/
+  recovery-log-content; 2 new in `desktop/src-tauri` (25 total). Plus a
+  real desktop application launch against a disposable `$VALORI_HOME`
+  (never the developer's production `~/.valori`) exercising all four
+  scenarios (healthy, corrupt+no-backup, corrupt+valid-backup, healthy
+  relaunch) with SHA-256-verified project-file integrity.
+- **`docs/architecture/studio-storage.md`** — §10 rewritten (Corruption
+  behavior and recovery), new §15 (Recovery UI), §16 (Logging), §17
+  (Concurrency and recovery ordering); §13's startup diagram updated.
+
+### Changed (Phase Studio S2b-2d & S2b-2d.1 — Telemetry Queue & Consent Boundary Migration — 2026-08-08)
+
+- **`desktop/src-tauri/src/telemetry.rs`** — rewired `enqueue()` and
+  `drain_queue()` from `events.jsonl` file I/O to `studio.redb`'s
+  `telemetry_queue` table via `TelemetryQueue`. Removed `QUEUE_LOCK`,
+  `queue_path()`, `QUEUE_FILE`, `MAX_QUEUE_LINES`. `events.jsonl` is now a
+  read-only legacy artifact — this module never writes to it.
+- **Canonical Consent Routing (S2b-2d.1)** — `analytics_consent()` now resolves
+  consent exclusively through the managed `StudioPreferencesService` (`app.try_state::<StudioPreferencesService>()`).
+  Telemetry no longer accesses `studio.redb`'s `preferences` table directly.
+  Consent decisions are strictly separated from telemetry queue persistence:
+  `Telemetry -> StudioPreferencesService -> StudioDatabase -> preferences` for consent decisions,
+  `Telemetry -> TelemetryStore -> studio.redb` for telemetry queuing.
+- **`desktop/src-tauri/src/lib.rs`** — registered `StudioPreferencesService` as
+  managed Tauri state (`app.manage(StudioPreferencesService::new(studio_db.clone()))`) so
+  all Rust-native consumers can access it without bypassing the service boundary.
+- **Drain improvements** — `drain_queue()` now calls `mark_delivered()` on
+  success and `increment_retry()` on failure (per-event retry metadata); a
+  `prune_older_than(7 days)` backstop runs each tick, closing the gap the
+  file-based sender had (no time-based eviction at all).
+- **`installation_id` at drain time** — `installation_id` is no longer stored
+  per queued event; it is read once per drain tick from the preferences table
+  and stamped on all wire envelopes for that tick.
+- **`build_wire_envelope()`** (new helper) — converts `StudioTelemetryEvent`
+  → `TelemetryEnvelope` (wire format) by re-hydrating `schema`, `source`,
+  `version`, `platform`, `arch` from constants + `get_app_info()` at send
+  time. Wire format (`TelemetryEnvelope`, `TELEMETRY_ENDPOINT`, `SCHEMA`,
+  `SOURCE`) is unchanged.
+- **`DRAIN_BATCH_SIZE = 50`** — caps the in-memory batch per drain tick;
+  sender loops every 60 s.
+- **`lib.rs`** — updated comment on `spawn_sender(...)` to reflect the new
+  queue backend.
+
+### Added (Phase Studio S2b-2c — Session Store Runtime Migration — 2026-08-08)
+
+- **`desktop/src-tauri/src/session_service.rs`** (new) — typed `SessionService`
+  and Tauri commands (`session_get_current`, `session_list_recent`, `session_end_current`)
+  backed by `studio.redb`'s `sessions` table using canonical `valori_domain::SessionId`.
+- **Application Process Session Lifecycle** — active session started in Tauri `setup()` with
+  version, platform, and installation ID. Clean application shutdown recorded in `shutdown_and_exit()`
+  with duration calculation.
+- **Crash Reconciliation** — next application startup scans for prior unended sessions
+  (`ended_at.is_none()`), marking them as `crashed: true` with `ended_at` populated.
+- **Idempotent Lifecycle** — `start()` is idempotent for React dev-mode remounts without
+  generating duplicate session records or mutating `started_at`.
+- **`crates/valori-studio-storage/tests/startup_integration.rs`** — added `session_runtime_lifecycle_and_crash_reconciliation`
+  test proving startup session persistence, clean shutdown, crash flagging across restarts, and untouched `preferences.json`.
+- **Telemetry Queue & Uploader Independence** — `events.jsonl`, `telemetry_queue`, and background sender
+  remain independent and will be addressed in S2b-2d.
+
+### Added (Phase Studio S2b-2b — Project & Recent Project Registry Migration — 2026-08-08)
+
+- **`desktop/src-tauri/src/project_registry_service.rs`** (new) — typed `ProjectRegistryService`
+  and Tauri commands (`registry_list_projects`, `registry_get_project`, `registry_recent_projects`,
+  `registry_favorite_projects`, `registry_register_local_project`, `registry_register_cloud_project`,
+  `registry_rename_project`, `registry_set_local_path`, `registry_set_favorite`,
+  `registry_touch_last_opened`, `registry_unregister_project`, `registry_reconcile_legacy_names`)
+  backed by `studio.redb`'s `projects` table using canonical `valori_domain::ProjectId`.
+- **Registry vs Storage Separation** — `studio.redb` acts strictly as Studio's reference/index layer.
+  Actual local project storage (`~/.valori/projects/<name>/` — vectors, WAL, snapshots, indexes, collections)
+  remains owned by `valori-daemon` / `valori-metadata` / engine.
+- **`ui/src/lib/native.ts`** — migrated `getRecentProjects`, `touchRecentProject`, `getLastOpenedProject`,
+  `getFavoriteProjects`, `toggleFavoriteProject`, `forgetProject` to route through typed Tauri registry commands.
+- **Identity & Availability Invariants** — renames and moves preserve `ProjectId`; missing local project directories
+  report `available: false` without deleting registry records; recents are derived by `ORDER BY last_opened_at DESC`.
+- **`crates/valori-studio-storage/tests/startup_integration.rs`** — added project registry runtime lifecycle test
+  verifying canonical `ProjectId` preservation, legacy name reconciliation, and untouched legacy `preferences.json`.
+- **Remaining consumers (sessions, telemetry queue uploader, sync, updates)** deferred to S2b-2c..e.
+
+### Added (Phase Studio S2b-2a — Preferences Runtime Consumer Migration — 2026-08-08)
+
+- **`desktop/src-tauri/src/preferences_service.rs`** (new) — typed `StudioPreferencesService`
+  and Tauri commands (`get_preference`, `set_preference`, `get_all_preferences`, `get_installation_id_command`,
+  `get_telemetry_consent_command`, `set_telemetry_consent_command`) backed by `studio.redb`'s `preferences` table.
+- **`desktop/src-tauri/src/telemetry.rs`** — migrated `analytics_consent` and `installation_id`
+  from `preferences.json` to `Arc<StudioDatabase>` (`studio.redb`), lazily generating a permanent UUID `installation_id`.
+- **`ui/src/lib/native.ts` & `ui/src/lib/theme.tsx`** — replaced `tauri-plugin-store` / `LazyStore("preferences.json")`
+  with typed Tauri preference commands, persisting theme, telemetry consent, onboarding status, and last page into `studio.redb`.
+  **Legacy `preferences.json` is preserved byte-for-byte unmodified.**
+- **`crates/valori-studio-storage/tests/startup_integration.rs`** — added runtime preference flow
+  integration test verifying theme changes, telemetry consent updates, and permanent `installation_id` across restarts.
+- **Remaining consumers (projects, sessions, telemetry queue uploader, sync, updates)** deferred to S2b-2b..e.
+
+### Added (Phase Studio S2b-1 — Real Startup Migration Integration — 2026-08-08)
+
+- **`desktop/src-tauri/src/studio_storage.rs`** (new) — wires `StudioDatabase`
+  and the S2a migration engine into the real Tauri desktop startup lifecycle.
+  Resolves real on-disk legacy paths via Tauri's `app.path().app_config_dir()`,
+  opens/creates `$VALORI_HOME/studio.redb` (or `~/.valori/studio.redb`),
+  runs legacy migration idempotently, logs non-sensitive progress diagnostics,
+  and manages `Arc<StudioDatabase>` in Tauri application state.
+  **Legacy files are never modified, deleted, or renamed.**
+- **`crates/valori-studio-storage/tests/startup_integration.rs`** (new, 5 tests) —
+  tests the full startup migration boundary with temporary fixtures: fresh install,
+  existing install with legacy files, idempotency on restart, fail-safe behavior
+  on corrupt legacy data, and non-destruction of unrelated metadata.redb/project files.
+- **Runtime consumers are NOT yet migrated** — S2b-2 deferred.
+
+### Added (Phase Studio S2a — Legacy Studio persistence migration engine — 2026-08-08)
+
+Migration **engine** only, per explicit review instruction to split S2 into
+S2a (migration) and S2b (application wiring), with a review checkpoint
+between them. **Not wired into `desktop/src-tauri`. Legacy files are read
+but never written, renamed, or deleted.** No runtime consumer changed.
+
+- **`crates/valori-studio-storage/src/migration.rs`** (new) — one-time,
+  idempotent, transactional import of `preferences.json` and
+  `events.jsonl` into `studio.redb`. Five-step contract: detect (a `meta`
+  flag short-circuits a second call) → validate (whole-file for
+  preferences, per-line for telemetry — a malformed line is skipped and
+  reported, not fatal) → import transactionally (data + completed-flag in
+  one redb write transaction) → verify (a fresh read transaction confirms
+  the write) → mark complete (the flag itself).
+  - `preferences.json` fields (`onboardingVersion`, `telemetryConsent`,
+    `installationId`, `lastPage`) **merge** onto any pre-existing
+    `StudioPreferences` row — never a blind overwrite.
+  - `recentProjects`/`favoriteProjects`/`lastOpenedProject` are name-only
+    in the legacy source (no `ProjectId`) — preserved losslessly in
+    `meta.legacy_project_names`, deliberately **not** written into the
+    `ProjectId`-keyed `projects` table (minting a fresh id per name would
+    create an identity the daemon's own `project.json` doesn't know
+    about). A later phase reconciles these by name against the daemon's
+    real project list.
+  - `events.jsonl` envelopes import with RFC3339 `timestamp` → unix-ms
+    `created_at`, `session_id` parsed as `valori_domain::SessionId`
+    (invalid values are skipped, not fatal), and respect
+    `TelemetryQueue::MAX_QUEUE_LEN` at import time — the newest 500 by
+    timestamp survive, same policy live `enqueue()` already enforces.
+  - Neither function ever writes to, renames, or deletes the legacy file —
+    `std::fs::read` only, proven by a byte-for-byte before/after test.
+  - No credential-shaped field is migrated — `preferences.json`'s real
+    shape has none, and the typed-field deserialization silently drops
+    anything not explicitly modeled (e.g. a hypothetical `apiKey`), rather
+    than copying it through.
+- **`StudioDatabase`** — new methods `migrate_legacy_preferences[_from_path]`,
+  `migrate_legacy_telemetry_queue[_from_path]`, `run_legacy_migration`,
+  `legacy_project_names`; new public types `LegacyStudioPaths`,
+  `LegacyMigrationSummary`, `MigrationReport`, `SkippedRecord`,
+  `LegacyProjectNames`.
+- **`StudioPreferences`** — added `installation_id: Option<InstallationId>`
+  (a genuine singleton fact, unlike the name-only project lists). Purely
+  additive; no schema/table version change.
+- **New dependency**: `chrono` (RFC3339 parsing in `migration.rs` only, no
+  `"clock"` feature — this crate still never reads the system clock
+  itself).
+- **`docs/architecture/studio-storage.md`** — new §6.5 "Legacy data
+  migration (S2a)"; §12 extended with the target `provider`/`model`/
+  `credential_ref` + OS-keychain architecture for a future security phase
+  (documented, not implemented); status and cross-references updated.
+- **Tests** — 19 new (`crates/valori-studio-storage/tests/migration.rs`),
+  77 total in the crate, 0 failed.
+
+### Added (Phase Studio S1 — Durable Studio storage — 2026-08-08)
+
+Storage foundation only, per `docs/architecture/studio-storage-audit.md` (the
+read-only audit this phase implements). **No existing Studio persistence
+touched or migrated** — `preferences.json`, `tauri-plugin-store`,
+`events.jsonl`, `localStorage`, the existing telemetry sender, the existing
+updater, and `desktop/src-tauri` itself are all unchanged; the new crate is
+not yet consumed anywhere. See `docs/phases/phase-studio-S1-durable-storage.md`
+for the full validation record.
+
+- **`crates/valori-studio-storage`** (new crate) — durable Studio-local
+  metadata store, `~/.valori/studio.redb` (override with `$VALORI_HOME`),
+  entirely separate from `~/.valori/metadata.redb` and any Raft `redb`
+  file. `StudioDatabase` is the single typed owner; no `redb::Database` is
+  exposed publicly.
+  - `preferences` — `StudioPreferences` (theme, language, accent color,
+    onboarding version, telemetry consent, window state, last page).
+  - `projects` — `StudioProjectRecord` (local path or cloud reference,
+    favorite, last-opened, registered-at), keyed by `valori_domain::ProjectId`
+    with identity-preserving upsert semantics (rename/path-change/
+    re-registration never mint a new id or lose `favorite`/`registered_at`).
+  - `project_cache` — disposable display cache, independent of `projects`;
+    clearing it cannot affect the registry.
+  - `sessions` — Studio **application** sessions (launch→exit), explicitly
+    distinct from a Valori execution or Cloud deployment.
+  - `telemetry_queue` — durable, bounded (`MAX_QUEUE_LEN = 500`) queue;
+    delivered events are deleted, not flagged, so the table cannot grow
+    into an unbounded history.
+  - `sync_state` / `update_state` — Studio-side sync bookkeeping (Cloud
+    stays authoritative) and updater state.
+  - Explicit `meta.schema_version` (currently `1`) with a migration
+    scaffold: opening a database from a newer schema version than the
+    build supports fails clearly and leaves the file untouched; opening an
+    older or pre-versioning one is additive-only, never destructive.
+  - JSON (`serde_json`) serialization throughout, matching
+    `valori-metadata::MetadataDb`'s existing convention; every stored
+    struct is forward-compatible via `#[serde(default)]`.
+  - Sealed in `crates/valori-node/tests/dependency_direction.rs`: may
+    depend on `valori-domain` only, never `valori-daemon`/`valori-node`/
+    `valori-metadata`/`valori-consensus`/any Cloud crate.
+  - 58 tests: database lifecycle (fresh/reopen/schema version/unsupported
+    future version/corrupt file/pre-versioning backward-compat fixture),
+    per-store CRUD + reopen, and concurrency (concurrent writers/readers,
+    panicking-transaction safety, reopen after concurrent load).
+- **`docs/architecture/studio-storage.md`** (new) — the crate's contract:
+  ownership, schema, serialization, versioning/migration, concurrency,
+  durability, corruption behavior, backward compatibility, and what must
+  never enter `studio.redb` (secrets; project/vector/WAL/snapshot data
+  owned elsewhere).
+- **`crates/valori-node/tests/dependency_direction.rs`** — added
+  `valori-studio-storage` to `SEALED_CRATES` (allowlist: `valori-domain`
+  only) and `OSS_PLATFORM_CORE` (Cloud-concept ban applies to it too), and
+  its expected edge to `EXPECTED_EDGES`. No existing rule weakened.
+
+### Added (Phase M0–M2 — Platform contracts — 2026-08-08)
+
+Implements Stage 2 (steps M0–M2) of [`ARCHITECTURE_AUDIT.md`](ARCHITECTURE_AUDIT.md). **No existing behaviour, file format or wire format changed** — every addition is additive and no duplicate implementation was removed (that is step M3, deliberately not executed).
+
+- **`crates/valori-node/tests/dependency_direction.rs`** — architecture tripwire that makes the crate dependency graph mechanically enforceable. Parses every `crates/*/Cargo.toml` (shipped deps only; dev-deps excluded with a documented reason) and asserts: the graph is acyclic; `valori-core`/`valori-kernel`/`valori-domain` depend only on their allowlists; the determinism-critical crates (kernel, wire, storage, state, index, rag, verify) cannot reach `valori-domain` even transitively; no crate depends on `valori-cloud-*`; and Cloud-only identity concepts (`OrganizationId`, `UserId`, `BillingAccountId`, `SubscriptionId`, `DeploymentId`, `WorkerId`) are not *defined* in the OSS platform core. Runs in the existing CI `cargo test -p valori-kernel -p valori-node` job.
+- **`crates/valori-domain`** (new crate; `valori-core` is its only workspace dependency) — cross-boundary platform vocabulary, std-only, sealed and firewalled from the kernel.
+  - `id` — `ProjectId`, `SessionId`, `InstallationId` (UUID-backed); `ModelId` (`provider/model-name` slug); `SnapshotId` (opaque handle over a storage-owned object key). Re-exports `CollectionId`, `NamespaceId`, `ExecutionId` from `valori-core` rather than redefining them. Every ID is `#[serde(transparent)]`, so it has the same JSON form as the `String` it will eventually replace.
+  - `project` — canonical `Project`, plus `ProjectName` (validated filesystem-safe), `IndexKind`, `ProjectTopology` (`{ replicas, shards }` as `NonZeroU8`; cluster-ness derived, never stored), `Timestamp` (unix seconds), `LocalProject` (identity + location), and `ApiProject` (the HTTP wire contract).
+  - `error` — `DomainError`, `Result<T>`.
+  - `RuntimeId` and `PipelineId` are **deliberately not built** — neither has a real consumer; the conditions that would unblock them are documented in `id.rs`.
+- **`crates/valori-daemon/src/domain_adapter.rs`** — `manifest_to_domain` / `manifest_from_domain` between `ProjectManifest` and the domain model. Intentionally not a `From` impl: `manifest_from_domain` mutates an existing manifest so `workspace`, `restart_policy`, `embedding`, `storage` and cluster port allocations cannot be silently defaulted away. Rejects malformed ids, unknown index kinds and shard counts above 255 rather than coercing them.
+- **`crates/valori-metadata/src/domain_adapter.rs`** — `record_to_domain(record, id)` / `record_from_domain` between the redb control-plane record and the domain model. Requires the caller to supply the `ProjectId` because the record has none — making the `name → id` gap explicit instead of minting a fresh identity on every read. `mode` is recomputed from topology, so it can no longer contradict `node_count`.
+- **`docs/architecture/ownership.md`** — the architecture constitution: concept→owner registry (OSS vs private Cloud, persistence/API/UI per concept), admission rules for `valori-domain`, the domain≠persistence≠API≠UI separation, the identity rule, the single-execution-engine rule (`PipelineEngine`/`WorkflowEngine`/`JobEngine`/`TaskEngine` forbidden by name — extend `OperationKind`/`TaskKind` instead), the three-runtimes table (process / AI-model / hosted inference stay separately named), the split-provider-trait direction for M4, and the deferred extension points.
+- **`ARCHITECTURE_AUDIT.md`** — Stage 1 audit: current crate/desktop/Next.js architecture, duplicate concepts, the four divergent `Project` implementations, ID inventory, event models, API contract situation, capability-system scope, OSS/private boundary, missing abstractions, migration risks and the recommended target architecture and sequence.
+- **Tests** — 50 new: 6 dependency-direction, 14 ID wire-compat, 16 `Project`/`ApiProject` contract, 8 daemon adapter, 6 metadata adapter.
+- **Phase M2.1 — review repairs.** Post-M2 review (`docs/reviews/m2-project-review.md`) found and fixed seven defects before any consumer migration:
+  - **F1 (critical)** — `#[serde(transparent)]` bypassed every validated newtype's constructor, so `serde_json::from_str::<ProjectName>("\"../../etc/passwd\"")` succeeded while `ProjectName::parse` correctly failed. New `crates/valori-domain/src/validate.rs` routes `Deserialize` through the canonical `parse()` for `ProjectName`, `ModelId` and `SnapshotId`; validation is defined once and cannot drift. `Serialize` is untouched, so emitted JSON is byte-identical. `ProjectId`/`SessionId`/`InstallationId` (via `Uuid`) and `ProjectTopology` (via `NonZeroU8`) were already safe, and tests now assert that rather than assuming it.
+  - **F2** — `ProjectName` implemented the stricter UI rule rather than the daemon's, so daemon-created projects named `_scratch`, `-tmp` or 64 characters long could not be represented — and `ProjectStore::list()` would have silently dropped them. `ProjectName::parse` now implements the daemon contract (≤64 bytes, `[A-Za-z0-9_-]`), and the stricter rule became a separate creation policy, `ProjectName::check_new_project_policy()`. Path traversal remains unrepresentable.
+  - **F3** — `ProjectManifest.id` defaulted to a freshly minted UUID, so a manifest written before the field existed produced a *different* id on every read. It now defaults to empty, and `JsonProjectStore::get()` backfills and persists one id exactly once. The id is random, never derived from name or path; existing ids are never reassigned; an unwritable manifest logs a warning rather than failing the listing.
+  - **F4** — `manifest_from_domain` silently discarded cluster → standalone demotion, leaving a stale cluster block on disk. It now returns `Result` and rejects the transition with `UnsupportedTopologyChange`.
+  - **F5** — `ApiProject.is_cluster` could contradict `replicas` and was silently ignored; `TryFrom<ApiProject>` now rejects inconsistent payloads.
+  - **F6** — both adapters saturated `dim` across the `usize`/`u32`/`u16` width mismatch, silently rewriting a dimension that is immutable after first insert. Both now return `DimensionOutOfRange`.
+  - **F7** — `index_from_domain` ended in `.unwrap_or_default()`, silently rewriting an unmatched variant to `Brute`. Now an exhaustive `match`, so enum drift is a compile error.
+  - **Tests** — +37, including the new `crates/valori-domain/tests/invariants.rs` matrix (every type through constructor, serialize, deserialize, invalid input, persistence boundary and adapter boundary) and eight daemon identity-stability tests. Combined suite: **552 passing, 0 failing**.
+  - `record_count` was **not** added back to the canonical model; public API field names were **not** changed; the `apiKey` vs `api_key_ref` credential divergence is documented as a security migration item, not implemented.
+
 ### Added (Phase P8 — CI hardening — 2026-07-16)
 
 - **`.github/workflows/ci.yml`** — two new parallel jobs:

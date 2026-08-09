@@ -3,11 +3,24 @@
 //! confirms it becomes healthy, then stops it. Requires the debug binary at
 //! `target/debug/valori-node` (built by `cargo build -p valori-node`).
 
-use valori_daemon::{Daemon, EmbeddingConfig, ProjectManifest, StorageConfig};
+use valori_daemon::{
+    ClusterConfig, Daemon, EmbeddingConfig, ProjectManifest, ProjectNode, StorageConfig,
+};
 
 /// Locate `target/debug/valori-node` relative to this crate.
 fn node_binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/valori-node")
+}
+
+/// An OS-assigned free port, released immediately (standard test-only
+/// best-effort allocation — same technique `PortAllocator` itself uses to
+/// probe availability).
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 #[tokio::test]
@@ -143,4 +156,132 @@ async fn start_unknown_project_is_not_found() {
     let mut daemon = Daemon::new(home.path()).unwrap();
     let err = daemon.start_project("ghost").await.unwrap_err();
     assert!(matches!(err, valori_daemon::DaemonError::NotFound(_)));
+}
+
+/// RFC-0007: a `replication: 3` project actually starts a working 3-node
+/// Raft cluster (not just a single node), reports per-node health via
+/// `project_cluster_status`, survives one node being killed (the daemon
+/// respawns only that node, leaving its two peers alone), and shuts all
+/// three down cleanly.
+#[tokio::test]
+async fn cluster_project_forms_and_recovers_from_one_node_crash() {
+    let bin = node_binary();
+    if !bin.exists() {
+        eprintln!(
+            "skipping: {} not built (run `cargo build -p valori-node`)",
+            bin.display()
+        );
+        return;
+    }
+    std::env::set_var("VALORI_NODE_BIN", &bin);
+
+    let home = tempfile::tempdir().unwrap();
+    let mut daemon = Daemon::new(home.path()).unwrap();
+
+    let nodes = vec![
+        ProjectNode {
+            id: 1,
+            http_port: free_port(),
+            raft_port: Some(free_port()),
+        },
+        ProjectNode {
+            id: 2,
+            http_port: free_port(),
+            raft_port: Some(free_port()),
+        },
+        ProjectNode {
+            id: 3,
+            http_port: free_port(),
+            raft_port: Some(free_port()),
+        },
+    ];
+
+    daemon
+        .create_project(ProjectManifest {
+            id: valori_daemon::new_id(),
+            name: "trio".into(),
+            dim: 8,
+            index: "brute".into(),
+            workspace: "default".into(),
+            restart_policy: valori_daemon::RestartPolicy::Always,
+            created_at: 0,
+            last_opened_at: None,
+            cluster: Some(ClusterConfig {
+                replication: 3,
+                nodes: nodes.clone(),
+                shard_count: 1,
+            }),
+            embedding: EmbeddingConfig::default(),
+            storage: StorageConfig::default(),
+        })
+        .unwrap();
+
+    // start — should bring up all 3 processes and wait for all 3 to be healthy.
+    let info = daemon.start_project("trio").await.unwrap();
+    assert_eq!(info.status, valori_daemon::RuntimeState::Running);
+
+    let cluster = daemon.project_cluster_status("trio").await.unwrap();
+    assert_eq!(cluster["nodes_total"], serde_json::json!(3));
+    assert_eq!(cluster["nodes_reachable"], serde_json::json!(3));
+
+    // Each node individually answers its own /health.
+    for n in &nodes {
+        let health = reqwest::get(format!("http://127.0.0.1:{}/health", n.http_port))
+            .await
+            .expect("node health request");
+        assert!(
+            health.status().is_success(),
+            "node {} should be healthy",
+            n.id
+        );
+    }
+
+    // Kill node 2 directly (simulating a crash) and confirm the daemon
+    // respawns only that node — nodes 1 and 3 must never restart.
+    let before = daemon.project_cluster_status("trio").await.unwrap();
+    let node2_pid = before["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node_id"] == serde_json::json!(2))
+        .and_then(|n| n["pid"].as_u64())
+        .expect("node 2 pid");
+    let _ = std::process::Command::new("kill")
+        .arg("-9")
+        .arg(node2_pid.to_string())
+        .status();
+
+    let mut restarted = 0;
+    for _ in 0..20 {
+        restarted = daemon.supervise_tick().await;
+        if restarted > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert_eq!(
+        restarted, 1,
+        "supervisor should have restarted exactly node 2"
+    );
+
+    // node 2 is healthy again, on the same port, with a new pid.
+    let health2 = reqwest::get(format!("http://127.0.0.1:{}/health", nodes[1].http_port))
+        .await
+        .expect("node 2 health request after respawn");
+    assert!(health2.status().is_success());
+
+    let after = daemon.project_cluster_status("trio").await.unwrap();
+    assert_eq!(after["nodes_reachable"], serde_json::json!(3));
+
+    daemon.stop_project("trio").await.unwrap();
+    for n in &nodes {
+        assert!(
+            !reqwest::get(format!("http://127.0.0.1:{}/health", n.http_port))
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false),
+            "node {} should be stopped",
+            n.id
+        );
+    }
 }

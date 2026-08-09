@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import useSWR from "swr";
 import { toast } from "@/lib/toast";
 import { nativeAvailable } from "@/lib/native";
+import { markStartupPhase } from "@/lib/startupMarks";
 
 export interface ManifestProjectNode {
   id:        number;
@@ -90,6 +91,22 @@ export function useProjectManifest() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Startup waterfall (see startupMarks.ts): "workspace_loaded" and
+  // "interactive" marks live here, not in a specific page — this hook is
+  // used by Sidebar.tsx, which renders on every real screen, so this fires
+  // regardless of which page the user actually lands on (deep link,
+  // restored last-page, etc.). `markStartupPhase` no-ops after the first
+  // call, so multiple hook instances (Sidebar + whatever page is showing)
+  // racing here is harmless. "interactive" is one rAF tick later — an
+  // honest "next paint after data arrived" approximation, not a real
+  // paint observer.
+  useEffect(() => {
+    if (data === undefined) return;
+    markStartupPhase("workspace_loaded_ms");
+    const raf = requestAnimationFrame(() => markStartupPhase("interactive_ms"));
+    return () => cancelAnimationFrame(raf);
+  }, [data]);
 
   const create = async (input: {
     name: string;

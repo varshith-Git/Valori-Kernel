@@ -47,7 +47,9 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 8 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 8 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(json!(null));
     (status, json)
 }
@@ -58,7 +60,9 @@ async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, Value) {
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 8 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 8 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(json!(null));
     (status, json)
 }
@@ -112,7 +116,11 @@ async fn ten_thousand_vectors_survive_container_loss_via_object_store() {
             json!({ "batch": batch }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "batch insert at {chunk_start} failed: {body}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "batch insert at {chunk_start} failed: {body}"
+        );
     }
 
     let router = build_router(original.clone(), None, None);
@@ -125,7 +133,11 @@ async fn ten_thousand_vectors_survive_container_loss_via_object_store() {
     let (status, proof) = get_json(router, "/v1/proof/state").await;
     assert_eq!(status, StatusCode::OK);
     let checksum_before = proof["final_state_hash"].as_str().unwrap().to_string();
-    assert_eq!(checksum_before.len(), 64, "expected a 32-byte hex BLAKE3 hash");
+    assert_eq!(
+        checksum_before.len(),
+        64,
+        "expected a 32-byte hex BLAKE3 hash"
+    );
 
     // Snapshot to object store — this is what the scheduled backup sweep
     // (and any pre-destroy final-snapshot step) calls in production.
@@ -182,7 +194,11 @@ async fn ten_thousand_vectors_survive_container_loss_via_object_store() {
             json!({ "query": vector_for(i), "k": 1, "rerank": false }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "search for index {i} failed: {search}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "search for index {i} failed: {search}"
+        );
         let hits = search["results"].as_array().unwrap();
         assert_eq!(hits.len(), 1, "expected exactly one hit for index {i}");
         assert_eq!(

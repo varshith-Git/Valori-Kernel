@@ -95,6 +95,7 @@ Read this first. It replaces cold-start greping for structure, invariants, and c
 |---|---|
 | `crates/valori-kernel` | The deterministic core: fixed-point vector store, knowledge graph, BLAKE3 audit chain, snapshot encode/decode. `no_std`. |
 | `crates/valori-core` | Minimal-dependency `no_std` type foundation (shared IDs, error types, traits). Every other crate depends on this; deps are only `serde` + `thiserror` (+ `getrandom` behind `std`). |
+| `crates/valori-domain` | Cross-boundary platform vocabulary (std): `ProjectId`, `SessionId`, `InstallationId`, `ModelId`, `SnapshotId`, canonical `Project`/`LocalProject`/`ApiProject`. Sits **beside** the kernel, not below it — depends only on `valori-core`, and the determinism-critical crates may not reach it. See `docs/architecture/ownership.md`. |
 | `crates/valori-wire` | Shared serialization types (serde structs) + V2/V3/V4 event-log format (encode/decode/chain). Used by node ↔ Python SDK ↔ CLI. |
 | `crates/valori-storage` | Durable storage layer: WAL, append-only event log (V4), object-store backend (S3/file). Persistence primitives only; recovery orchestration lives in `valori-state`. |
 | `crates/valori-state` | State lifecycle orchestration: transitions `KernelState` between durable storage and in-memory operation (snapshot restore, WAL replay). |

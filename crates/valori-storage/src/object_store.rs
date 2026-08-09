@@ -433,7 +433,9 @@ impl ObjectStoreBackend {
         };
         let bytes = serde_json::to_vec(&manifest)
             .map_err(|e| ObjectStoreError::Io(format!("encoding manifest.json: {e}")))?;
-        self.op.write(&self.manifest_key(), Bytes::from(bytes)).await?;
+        self.op
+            .write(&self.manifest_key(), Bytes::from(bytes))
+            .await?;
         tracing::info!(
             snapshot_key = ?manifest.current_snapshot.as_ref().map(|s| &s.key),
             wal_segments = manifest.wal_segments.len(),
@@ -735,10 +737,16 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest = backend.read_manifest().await.unwrap().expect("manifest must exist");
+        let manifest = backend
+            .read_manifest()
+            .await
+            .unwrap()
+            .expect("manifest must exist");
         assert_eq!(manifest.schema_version, MANIFEST_SCHEMA_VERSION);
         assert_eq!(manifest.node_version, "9.9.9");
-        let current = manifest.current_snapshot.expect("must name a current snapshot");
+        let current = manifest
+            .current_snapshot
+            .expect("must name a current snapshot");
         assert_eq!(current.key, entry.key);
         assert_eq!(current.state_hash, "cafebabe");
         assert!(manifest.wal_segments.is_empty());
@@ -759,7 +767,10 @@ mod tests {
             .upload_snapshot_and_update_manifest(b"v2", "bbbb2222", "1.0.0")
             .await
             .unwrap();
-        assert_ne!(first.key, second.key, "two uploads must not collide on the same key");
+        assert_ne!(
+            first.key, second.key,
+            "two uploads must not collide on the same key"
+        );
 
         let manifest = backend.read_manifest().await.unwrap().unwrap();
         assert_eq!(manifest.current_snapshot.unwrap().key, second.key);
@@ -792,7 +803,10 @@ mod tests {
         // list_wal_segments's own listing behavior (a pre-existing,
         // unrelated concern of that method, not this manifest feature).
         assert!(
-            manifest.wal_segments.iter().any(|s| s.key.ends_with("events.log.000001")),
+            manifest
+                .wal_segments
+                .iter()
+                .any(|s| s.key.ends_with("events.log.000001")),
             "expected the archived segment in the manifest's wal_segments: {:?}",
             manifest.wal_segments
         );

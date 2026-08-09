@@ -36,7 +36,9 @@ async fn post_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode,
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -47,7 +49,9 @@ async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, Value) {
         .await
         .unwrap();
     let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!(null));
     (status, json)
 }
@@ -58,7 +62,10 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
     // SAFETY: single-threaded w.r.t. this env var — no other test in this
     // binary reads/writes VALORI_OBJECT_STORE_URL.
     unsafe {
-        std::env::set_var("VALORI_OBJECT_STORE_URL", format!("file://{}", dir.path().display()));
+        std::env::set_var(
+            "VALORI_OBJECT_STORE_URL",
+            format!("file://{}", dir.path().display()),
+        );
     }
 
     let mut cfg = NodeConfig::default();
@@ -88,22 +95,35 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
 
     // Trigger the same endpoint the scheduled backup sweep calls.
     let router = build_router(shared.clone(), None, None);
-    let (status, body) = post_json(router, "/v1/storage/snapshots/upload", serde_json::json!({})).await;
+    let (status, body) = post_json(
+        router,
+        "/v1/storage/snapshots/upload",
+        serde_json::json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "snapshot upload failed: {body}");
-    let key = body["key"].as_str().expect("missing key in response").to_string();
+    let key = body["key"]
+        .as_str()
+        .expect("missing key in response")
+        .to_string();
     assert!(body["size_bytes"].as_u64().unwrap_or(0) > 0);
 
     // "Snapshot appears in S3" — confirmed two ways: via the API...
     let router = build_router(shared.clone(), None, None);
     let (status, list_body) = get_json(router, "/v1/storage/snapshots").await;
     assert_eq!(status, StatusCode::OK);
-    let snapshots = list_body["snapshots"].as_array().expect("missing snapshots array");
+    let snapshots = list_body["snapshots"]
+        .as_array()
+        .expect("missing snapshots array");
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0]["key"], key);
 
     // ...and directly on disk (the file:// stand-in for the S3 bucket).
     let snap_path = dir.path().join(&key);
-    assert!(snap_path.exists(), "expected snapshot file at {snap_path:?}");
+    assert!(
+        snap_path.exists(),
+        "expected snapshot file at {snap_path:?}"
+    );
     assert!(std::fs::metadata(&snap_path).unwrap().len() > 0);
 
     // manifest.json is the new entry point — the upload above must have
@@ -112,18 +132,33 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
     let (status, manifest_body) = get_json(router, "/v1/storage/manifest").await;
     assert_eq!(status, StatusCode::OK);
     let manifest = &manifest_body["manifest"];
-    assert!(!manifest.is_null(), "manifest.json should exist after an upload");
+    assert!(
+        !manifest.is_null(),
+        "manifest.json should exist after an upload"
+    );
     assert_eq!(manifest["current_snapshot"]["key"], key);
     assert_eq!(manifest["schema_version"].as_u64(), Some(1));
     assert!(manifest["node_version"].as_str().unwrap_or("").len() > 0);
 
     let manifest_path = dir.path().join("manifest.json");
-    assert!(manifest_path.exists(), "expected manifest.json at {manifest_path:?}");
+    assert!(
+        manifest_path.exists(),
+        "expected manifest.json at {manifest_path:?}"
+    );
 
     // Restore with NO key given — must resolve via manifest.json alone.
     let router = build_router(shared.clone(), None, None);
-    let (status, restore_body) = post_json(router, "/v1/storage/snapshots/restore", serde_json::json!({})).await;
-    assert_eq!(status, StatusCode::OK, "manifest-driven restore failed: {restore_body}");
+    let (status, restore_body) = post_json(
+        router,
+        "/v1/storage/snapshots/restore",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "manifest-driven restore failed: {restore_body}"
+    );
     assert_eq!(restore_body["key"].as_str(), Some(key.as_str()));
 
     unsafe {

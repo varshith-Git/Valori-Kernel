@@ -3,6 +3,11 @@
 //!
 //! Env:
 //!   VALORI_HOME        data root (default ~/.valori)
+//!   VALORI_MODELS_DIR  model artifact root (default <VALORI_HOME>/models) —
+//!                      the real effect of Studio's `modelDir` preference
+//!                      (S7 — docs/phases/phase-studio-S7-persistence-boundary.md);
+//!                      overrides only model artifact installation, never
+//!                      VALORI_HOME itself
 //!   VALORI_DAEMON_BIND listen address (default 127.0.0.1:8080)
 //!   VALORI_NODE_BIN    path to the valori-node binary to supervise
 //!   VALORI_REPO_ROOT   where to find target/{release,debug}/valori-node
@@ -22,7 +27,10 @@ async fn main() {
         .init();
 
     let home = default_home();
-    let daemon = match Daemon::new(&home) {
+    let models_dir = std::env::var("VALORI_MODELS_DIR")
+        .ok()
+        .map(std::path::PathBuf::from);
+    let daemon = match Daemon::new_with_models_dir(&home, models_dir) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("failed to initialize daemon at {}: {e}", home.display());

@@ -2,44 +2,30 @@ import fs from "fs";
 import { NextRequest, NextResponse } from "next/server";
 import * as daemon from "@/lib/server/daemon";
 import type { DaemonProject } from "@/lib/server/daemon";
-import { pm } from "@/lib/server/process-manager";
 import { allocateNodes, isValidName, projectPaths } from "@/lib/server/projects";
 import { toManifestShape, resolveProjectsDir } from "@/lib/server/project-adapter";
 import { errorResponse } from "@/lib/server/http";
 
 // GET — every project + live status, sourced entirely from valori-daemon
 // (RFC-0006 Phase B.1). The daemon is the metadata source of truth for BOTH
-// single-node and cluster projects (Phase B.0.5 imported everything). Live
-// runtime status differs by kind:
-//   - single-node (replication 1): the daemon actually runs these — its own
-//     status is authoritative.
-//   - cluster (replication 3): the daemon can't launch a cluster yet, so
-//     these are still started via the old `pm`-based path (`/open`/`/close`)
-//     — live status comes from `pm`, keyed by the ports the daemon persisted.
+// single-node and cluster projects (Phase B.0.5 imported everything).
+//
+// RFC-0007: the daemon now launches and supervises cluster (replication 3)
+// projects itself, the same as single-node — `p.status.status` (from
+// `LocalRuntime::status()` → `cluster_status_info()` on the Rust side) is
+// already the aggregate across all of a cluster's nodes (`running` iff every
+// node is), so both kinds use the identical status mapping below. No
+// per-node polling needed here; that lives in `GET /v1/projects/:name/cluster`
+// for callers that want per-node detail (leader, quorum, etc).
 export function liveStatus(p: DaemonProject): { status: "stopped" | "starting" | "running" | "error"; nodesRunning: number; nodesTotal: number } {
-  const replication = p.cluster?.replication ?? 1;
-
-  if (replication === 1) {
-    const s = p.status.status;
-    const status =
-      s === "running" ? "running" :
-      s === "starting" || s === "recovering" ? "starting" :
-      s === "stopped" ? "stopped" :
-      "error"; // stopping | failed
-    return { status, nodesRunning: status === "running" ? 1 : 0, nodesTotal: 1 };
-  }
-
-  const nodes = p.cluster?.nodes ?? [];
-  const nodeStatuses = nodes.map((n) => pm.getStatus(n.http_port)?.status ?? "stopped");
-  const runningCount = nodeStatuses.filter((s) => s === "running").length;
-  const anyStarting = nodeStatuses.some((s) => s === "starting");
-  const anyError = nodeStatuses.some((s) => s === "error");
+  const nodesTotal = p.cluster?.nodes?.length || 1;
+  const s = p.status.status;
   const status =
-    nodes.length > 0 && runningCount === nodes.length ? "running" :
-    anyStarting ? "starting" :
-    runningCount > 0 || anyError ? "error" :
-    "stopped";
-  return { status, nodesRunning: runningCount, nodesTotal: nodes.length };
+    s === "running" ? "running" :
+    s === "starting" || s === "recovering" ? "starting" :
+    s === "stopped" ? "stopped" :
+    "error"; // stopping | failed
+  return { status, nodesRunning: status === "running" ? nodesTotal : 0, nodesTotal };
 }
 
 export async function GET() {

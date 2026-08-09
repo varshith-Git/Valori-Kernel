@@ -63,9 +63,17 @@ function DocRow({
 }) {
   return (
     <div>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onToggle}
-        className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[13px] transition-colors ${
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-[13px] transition-colors ${
           selected
             ? "bg-muted text-foreground"
             : "text-accent-foreground hover:bg-accent"
@@ -89,6 +97,7 @@ function DocRow({
           {chunks.length} chunk{chunks.length !== 1 ? "s" : ""}
         </span>
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             onSelect();
@@ -97,7 +106,7 @@ function DocRow({
         >
           info
         </button>
-      </button>
+      </div>
 
       {expanded && chunks.length > 0 && (
         <div className="ml-6 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">

@@ -43,7 +43,20 @@ pub struct Daemon {
 impl Daemon {
     /// Build a daemon rooted at `home` (e.g. `~/.valori`) with the default
     /// implementations: JSON stores, `LocalRuntime`, in-memory event store.
+    /// Model artifacts install under `<home>/models/` — use
+    /// [`Self::new_with_models_dir`] to relocate them independently (the
+    /// `modelDir` preference's real effect — see
+    /// `docs/phases/phase-studio-S7-persistence-boundary.md`).
     pub fn new(home: impl AsRef<std::path::Path>) -> DaemonResult<Self> {
+        Self::new_with_models_dir(home, None)
+    }
+
+    /// Same as [`Self::new`], but `models_dir`, if `Some`, overrides only
+    /// where model artifacts install — independent of `home`.
+    pub fn new_with_models_dir(
+        home: impl AsRef<std::path::Path>,
+        models_dir: Option<std::path::PathBuf>,
+    ) -> DaemonResult<Self> {
         let home_ref = home.as_ref();
         let deps = DaemonDeps {
             projects: Box::new(JsonProjectStore::new(home_ref)?),
@@ -52,19 +65,32 @@ impl Daemon {
             events: Box::new(MemoryEventStore::new()),
             models: Box::new(JsonModelStore::new(home_ref)?),
         };
-        Self::with_deps(home_ref, deps)
+        Self::with_deps_and_models_dir(home_ref, deps, models_dir)
     }
 
     /// Build a daemon from fully-injected dependencies (Docker runtime, SQLite
-    /// store, etc.). The daemon constructs nothing durable itself.
+    /// store, etc.). The daemon constructs nothing durable itself. Model
+    /// artifacts install under `<home>/models/` — use
+    /// [`Self::with_deps_and_models_dir`] to relocate them independently.
     pub fn with_deps(home: impl AsRef<std::path::Path>, deps: DaemonDeps) -> DaemonResult<Self> {
+        Self::with_deps_and_models_dir(home, deps, None)
+    }
+
+    /// Same as [`Self::with_deps`], but `models_dir`, if `Some`, overrides
+    /// only where model artifacts install — independent of `home`. See
+    /// `valori_models::ModelManager::new_with_models_dir`'s doc comment.
+    pub fn with_deps_and_models_dir(
+        home: impl AsRef<std::path::Path>,
+        deps: DaemonDeps,
+        models_dir: Option<std::path::PathBuf>,
+    ) -> DaemonResult<Self> {
         let home = home.as_ref().to_path_buf();
         // One-time, idempotent startup migrations (e.g. importing ui/'s legacy
         // project registry) — see `crate::migration`. Never blocks startup on
         // failure; a failed migration just retries next launch.
         crate::migration::run_all(&home, deps.projects.as_ref());
         Ok(Self {
-            models: ModelManager::new(&home, deps.models)?,
+            models: ModelManager::new_with_models_dir(&home, models_dir, deps.models)?,
             projects: deps.projects,
             workspaces: deps.workspaces,
             runtime: deps.runtime,
@@ -338,6 +364,53 @@ impl Daemon {
         self.runtime
             .resources(name)
             .ok_or_else(|| DaemonError::InvalidInput(format!("project '{name}' is not running")))
+    }
+
+    /// Aggregated cluster health for a `replication > 1` project (RFC-0007
+    /// §3D). For each running node, merges the daemon's own OS-level status
+    /// with that node's own `/v1/cluster/status` response (leader, quorum,
+    /// state-hash convergence, etc. — `valori-node` already computes all of
+    /// that; the daemon only fans the request out and merges results, it does
+    /// not reimplement any Raft health logic). Nodes that aren't currently
+    /// running are reported with `reachable: false` and no cluster detail.
+    pub async fn project_cluster_status(&self, name: &str) -> DaemonResult<Value> {
+        let project = self.projects.get(name)?;
+        let replication = project
+            .config
+            .cluster
+            .as_ref()
+            .map(|c| c.replication)
+            .unwrap_or(1);
+
+        let os_nodes = self.runtime.cluster_nodes(name);
+        let mut nodes = Vec::new();
+        for os_node in &os_nodes {
+            let mut entry = json!({
+                "node_id": os_node.node_id,
+                "status": os_node.status,
+                "pid": os_node.pid,
+                "port": os_node.port,
+                "uptime_secs": os_node.uptime_secs,
+                "reachable": false,
+            });
+            if let Some(port) = os_node.port {
+                if let Ok(cluster_status) =
+                    proxy_get(&format!("http://127.0.0.1:{port}/v1/cluster/status")).await
+                {
+                    entry["reachable"] = json!(true);
+                    entry["cluster_status"] = cluster_status;
+                }
+            }
+            nodes.push(entry);
+        }
+
+        Ok(json!({
+            "name": name,
+            "replication": replication,
+            "nodes_total": os_nodes.len(),
+            "nodes_reachable": nodes.iter().filter(|n| n["reachable"] == json!(true)).count(),
+            "nodes": nodes,
+        }))
     }
 
     /// Recent daemon lifecycle events (Docker-style).

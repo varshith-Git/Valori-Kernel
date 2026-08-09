@@ -48,3 +48,67 @@ description = "Allow the open_cloud_login command — opens Valori Cloud's login
 
 [permission.commands]
 allow = ["open_cloud_login"]
+
+[[permission]]
+identifier = "allow-preferences"
+description = "Allow studio preferences and consent commands."
+
+[permission.commands]
+allow = [
+  "get_preference",
+  "set_preference",
+  "get_all_preferences",
+  "get_installation_id_command",
+  "get_telemetry_consent_command",
+  "set_telemetry_consent_command"
+]
+
+[[permission]]
+identifier = "allow-project-registry"
+description = "Allow project registry commands."
+
+[permission.commands]
+allow = [
+  "registry_list_projects",
+  "registry_get_project",
+  "registry_recent_projects",
+  "registry_favorite_projects",
+  "registry_register_local_project",
+  "registry_register_cloud_project",
+  "registry_rename_project",
+  "registry_set_local_path",
+  "registry_set_favorite",
+  "registry_touch_last_opened",
+  "registry_unregister_project",
+  "registry_reconcile_legacy_names"
+]
+
+[[permission]]
+identifier = "allow-telemetry"
+description = "Allow telemetry, session, and recovery status commands."
+
+[permission.commands]
+allow = [
+  "get_app_info",
+  "get_session_id",
+  "get_rust_start_ms",
+  "enqueue_telemetry_event",
+  "check_and_clear_crash_marker",
+  "session_get_current",
+  "session_list_recent",
+  "session_end_current",
+  "get_studio_recovery_status"
+]
+
+[[permission]]
+identifier = "allow-credentials"
+description = "Allow provider-credential commands (Studio S3) — the OS credential store, never studio.redb or localStorage."
+
+[permission.commands]
+allow = [
+  "credential_store",
+  "credential_get",
+  "credential_exists",
+  "credential_delete"
+]
+

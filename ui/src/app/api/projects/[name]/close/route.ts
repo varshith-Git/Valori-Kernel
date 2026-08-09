@@ -1,39 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import * as daemon from "@/lib/server/daemon";
-
-const execFileAsync = promisify(execFile);
-import { projectNodePaths, protectAll, touchProject } from "@/lib/server/projects";
+import { protectAll, touchProject } from "@/lib/server/projects";
 import { toLegacyEntry, resolveProjectsDir } from "@/lib/server/project-adapter";
-import { pm } from "@/lib/server/process-manager";
 import { errorResponse } from "@/lib/server/http";
-
-async function probePort(port: number): Promise<boolean> {
-  try {
-    const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1500) });
-    return r.ok;
-  } catch { return false; }
-}
-
-async function findPidOnPort(port: number): Promise<number | null> {
-  try {
-    const { stdout } = await execFileAsync("lsof", ["-ti", `:${port}`], { encoding: "utf8", timeout: 3000 });
-    const pid = parseInt(stdout.trim().split("\n")[0], 10);
-    return isNaN(pid) ? null : pid;
-  } catch { return null; }
-}
-
-async function snapshotViaHttp(port: number, snapshotPath: string): Promise<void> {
-  try {
-    await fetch(`http://127.0.0.1:${port}/v1/snapshot/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: snapshotPath }),
-      signal: AbortSignal.timeout(8000),
-    });
-  } catch { /* WAL is durable regardless */ }
-}
 
 interface HealthBody {
   records?: { live?: number } | number;
@@ -41,14 +10,13 @@ interface HealthBody {
 
 // POST — snapshot-on-close.
 //
-// Single-node (replication 1, RFC-0006 Phase B.1): `daemon.stopProject()`
-// sends a graceful stop; `valori-node` snapshots on graceful shutdown itself
-// whenever VALORI_SNAPSHOT_PATH is set, which the daemon always sets — no
-// separate HTTP snapshot call needed, unlike the orphan-recovery path below.
-//
-// Cluster (replication 3): unchanged from the pre-migration implementation —
-// still stops each node itself and falls back to an HTTP snapshot + SIGTERM
-// for orphaned processes the daemon never supervised.
+// RFC-0007: `valori-daemon` now owns stop/supervise for BOTH single-node and
+// cluster (replication 3) projects — `daemon.stopProject()` already does the
+// graceful snapshot-then-terminate sequence for every node in a cluster (see
+// `LocalRuntime::stop_cluster` in `crates/valori-daemon/src/runtime/local.rs`).
+// This route no longer manages any process itself (no `lsof`/`SIGTERM`
+// fallback) — that was only ever needed for processes the daemon never
+// supervised in the first place.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
@@ -76,34 +44,10 @@ export async function POST(
     }
   } catch { /* node may already be down */ }
 
-  if (entry.replication === 1) {
-    try {
-      await daemon.stopProject(name);
-    } catch (e) {
-      return errorResponse(e, 503);
-    }
-  } else {
-    await Promise.all(entry.nodes.map(async (n) => {
-      const { snapshotPath } = projectNodePaths(entry, n.id);
-
-      if (pm.isRunning(n.httpPort)) {
-        await pm.snapshotThenStop(n.httpPort, snapshotPath);
-        await pm.waitForExit(n.httpPort);
-        return;
-      }
-
-      const alive = await probePort(n.httpPort);
-      if (!alive) return;
-
-      await snapshotViaHttp(n.httpPort, snapshotPath);
-
-      const pid = await findPidOnPort(n.httpPort);
-      if (pid) {
-        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-        await new Promise((r) => setTimeout(r, 2000));
-        try { process.kill(pid, 0); process.kill(pid, "SIGKILL"); } catch { /* gone */ }
-      }
-    }));
+  try {
+    await daemon.stopProject(name);
+  } catch (e) {
+    return errorResponse(e, 503);
   }
 
   protectAll(entry);

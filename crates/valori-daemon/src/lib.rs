@@ -15,6 +15,7 @@
 //! See `rfcs/0006-desktop-daemon-architecture.md`.
 
 pub mod daemon;
+pub mod domain_adapter;
 pub mod error;
 pub mod events;
 pub mod http;

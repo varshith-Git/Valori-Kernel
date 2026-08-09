@@ -40,7 +40,8 @@ export function DaemonBanner() {
     setRestarting(true);
     try {
       const workspaceDir = await getPreference<string>("workspaceDir");
-      await startDaemon(workspaceDir);
+      const modelDir = await getPreference<string>("modelDir");
+      await startDaemon(workspaceDir, modelDir);
       failCount.current = 0;
       setLost(false);
     } catch (e) {

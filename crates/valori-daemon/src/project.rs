@@ -55,6 +55,16 @@ pub struct ProjectNode {
 /// `api_key_ref` deliberately holds a *reference* (env var name, keychain
 /// entry id, etc.), never the raw secret — the manifest file is plain JSON
 /// on disk, unlike `ui/`'s current `ProjectEntry.embed.apiKey`.
+///
+/// **Studio S3 compatibility note** (`docs/phases/phase-studio-S3-credentials.md`):
+/// `valori_domain::CredentialRef`'s wire form is a bare UUID string
+/// (`#[serde(transparent)]`), so `credential_ref.to_string()` is a valid
+/// `api_key_ref` value with no adapter and no field rename — this field's
+/// type intentionally stays `Option<String>`, not `Option<CredentialRef>`,
+/// so existing `project.json` manifests are unaffected. Nothing currently
+/// populates this field from the desktop credential-storage flow (S3
+/// deliberately did not wire project creation to it — see that phase doc's
+/// "deferred" section); it remains schema-complete, not behavior-complete.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct EmbeddingConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -106,7 +116,16 @@ impl Default for StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProjectManifest {
     /// Stable id (UUID). Never changes; `name` is a mutable label.
-    #[serde(default = "crate::new_id")]
+    ///
+    /// Defaults to the **empty string**, not a fresh UUID. That distinction is
+    /// load-bearing: `#[serde(default = "crate::new_id")]` made a manifest
+    /// written before this field existed mint a *different* id on every read,
+    /// because `get()` never wrote the value back. An empty id therefore means
+    /// "not yet assigned", and [`JsonProjectStore::get`] backfills it exactly
+    /// once. See `docs/reviews/m2-project-review.md` finding F3.
+    ///
+    /// Never empty once a manifest has been read through the store.
+    #[serde(default)]
     pub id: String,
     pub name: String,
     /// Vector dimension — immutable after first insert (maps to `VALORI_DIM`).
@@ -160,6 +179,30 @@ impl Project {
     pub fn snapshot_path(&self) -> PathBuf {
         self.dir.join("snapshot.val")
     }
+
+    /// Per-node event log path for a cluster project. Naming (`events-n{id}.log`,
+    /// flat in the project dir) matches `projectNodePaths()` in
+    /// `ui/src/lib/server/projects.ts` byte-for-byte — this is load-bearing:
+    /// cluster projects created through the pre-daemon (`process-manager.ts`)
+    /// path already have data on disk at these exact paths, and diverging here
+    /// would silently orphan it on first daemon-launched start.
+    pub fn node_event_log_path(&self, id: u32) -> PathBuf {
+        self.dir.join(format!("events-n{id}.log"))
+    }
+    /// Per-node snapshot path for a cluster project. See `node_event_log_path`.
+    pub fn node_snapshot_path(&self, id: u32) -> PathBuf {
+        self.dir.join(format!("current-n{id}.snap"))
+    }
+    /// Per-node Raft log (redb) path for a cluster project. See `node_event_log_path`.
+    pub fn node_raft_log_path(&self, id: u32) -> PathBuf {
+        self.dir.join(format!("raft-n{id}.redb"))
+    }
+    /// Per-node launcher log (stdout+stderr capture) for a cluster project. No
+    /// pre-existing convention to match — the legacy `pm`-based path only kept
+    /// logs in memory, never on disk.
+    pub fn node_log_path(&self, id: u32) -> PathBuf {
+        self.dir.join(format!("node-n{id}.log"))
+    }
 }
 
 /// Filesystem-backed [`ProjectStore`](crate::store::ProjectStore) rooted at
@@ -190,11 +233,71 @@ impl JsonProjectStore {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     }
 
+    /// Assign and persist a stable id for a manifest written before the `id`
+    /// field existed. Idempotent: a manifest that already has one is untouched.
+    ///
+    /// # Why this is a read-path repair
+    ///
+    /// A legacy `project.json` has no `id`. Minting one per read — the previous
+    /// behaviour — produced a different identity every time, which makes the id
+    /// useless for correlating a project across the daemon, the control plane
+    /// and Cloud. The id is therefore minted once and written back immediately.
+    ///
+    /// # The new id is random, never derived
+    ///
+    /// It is a fresh UUID v4. It is deliberately **not** derived from the
+    /// project's name or directory path: both are mutable, and deriving
+    /// identity from either would silently change the id on rename or move —
+    /// exactly the property this repair exists to provide.
+    ///
+    /// # If the manifest cannot be written
+    ///
+    /// The project keeps the freshly minted id for this process, and a warning
+    /// is logged. Identity remains unstable until the manifest becomes
+    /// writable (a project at rest may be `chflags uchg`-protected). Returning
+    /// an error instead would make such a project unlistable, which is a worse
+    /// failure — but the condition is never silent.
+    fn backfill_id(&self, project: &mut Project) {
+        if !project.config.id.is_empty() {
+            return;
+        }
+        project.config.id = crate::new_id();
+        if let Err(e) = self.write_manifest(project) {
+            tracing::warn!(
+                project = %project.config.name,
+                error = %e,
+                "could not persist a backfilled project id; the id will not be \
+                 stable across restarts until the manifest is writable"
+            );
+        } else {
+            tracing::info!(
+                project = %project.config.name,
+                id = %project.config.id,
+                "assigned a stable id to a legacy project manifest"
+            );
+        }
+    }
+
     fn write_manifest(&self, project: &Project) -> DaemonResult<()> {
         let path = self.manifest_path(&project.config.name);
-        // write-then-rename so a crash mid-write never leaves a half file.
+        // write-then-fsync-then-rename (S6 — Desktop Filesystem
+        // Consolidation) so a crash mid-write never leaves a half file, and
+        // an fsync-less power loss between the rename and the OS actually
+        // flushing the page cache can't leave `path` truncated either.
+        // Same write-temp/fsync/atomic-rename contract
+        // `desktop/src-tauri`'s `FileSystemService::atomic_write` documents
+        // — kept as a local, dependency-free implementation here rather
+        // than depending on the Studio-side service, since `valori-daemon`
+        // runs as its own independent process (see
+        // `docs/architecture/control-plane.md`) and must not depend on
+        // `desktop/src-tauri`.
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&project.config)?)?;
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&serde_json::to_vec_pretty(&project.config)?)?;
+            file.sync_all()?;
+        }
         std::fs::rename(&tmp, &path)?;
         Ok(())
     }
@@ -216,7 +319,10 @@ impl crate::store::ProjectStore for JsonProjectStore {
             return Err(DaemonError::AlreadyExists(config.name.clone()));
         }
         std::fs::create_dir_all(&dir)?;
-        let project = Project { config, dir };
+        let mut project = Project { config, dir };
+        if project.config.id.is_empty() {
+            project.config.id = crate::new_id();
+        }
         self.write_manifest(&project)?;
         Ok(project)
     }
@@ -226,10 +332,12 @@ impl crate::store::ProjectStore for JsonProjectStore {
         let bytes =
             std::fs::read(&manifest).map_err(|_| DaemonError::NotFound(name.to_string()))?;
         let config: ProjectManifest = serde_json::from_slice(&bytes)?;
-        Ok(Project {
+        let mut project = Project {
             config,
             dir: self.projects_root.join(name),
-        })
+        };
+        self.backfill_id(&mut project);
+        Ok(project)
     }
 
     fn import(&self, config: ProjectManifest) -> DaemonResult<Project> {
@@ -241,7 +349,10 @@ impl crate::store::ProjectStore for JsonProjectStore {
         }
         let dir = self.projects_root.join(&config.name);
         std::fs::create_dir_all(&dir)?;
-        let project = Project { config, dir };
+        let mut project = Project { config, dir };
+        if project.config.id.is_empty() {
+            project.config.id = crate::new_id();
+        }
         self.write_manifest(&project)?;
         Ok(project)
     }
@@ -343,6 +454,179 @@ mod tests {
             embedding: EmbeddingConfig::default(),
             storage: StorageConfig::default(),
         }
+    }
+
+    // ── F3: stable project identity ───────────────────────────────────────────
+    //
+    // A manifest written before the `id` field existed must be assigned an id
+    // exactly once, and must keep it forever after. See `backfill_id`.
+
+    /// Write a manifest with no `id` key at all — the legacy on-disk shape.
+    fn write_legacy_manifest(home: &Path, name: &str) {
+        let dir = home.join("projects").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy = serde_json::json!({
+            "name": name,
+            "dim": 128,
+            "index": "brute",
+            "workspace": "default",
+            "created_at": 1_750_000_000u64,
+        });
+        std::fs::write(
+            dir.join("project.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn legacy_manifest_without_id_gets_one_stable_id() {
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "legacy");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+
+        let first = pm.get("legacy").unwrap().config.id;
+        assert!(!first.is_empty(), "an id must be assigned on first load");
+        assert!(
+            uuid::Uuid::parse_str(&first).is_ok(),
+            "the assigned id must be a UUID, not a derived value: {first}"
+        );
+
+        let second = pm.get("legacy").unwrap().config.id;
+        assert_eq!(
+            first, second,
+            "the id must be persisted on first load, not minted on every read"
+        );
+    }
+
+    #[test]
+    fn backfilled_id_survives_a_fresh_store_instance() {
+        // Stands in for restarting the application: a brand-new store object
+        // reading the same directory must see the same identity.
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "legacy");
+
+        let first = JsonProjectStore::new(home.path())
+            .unwrap()
+            .get("legacy")
+            .unwrap()
+            .config
+            .id;
+        let after_restart = JsonProjectStore::new(home.path())
+            .unwrap()
+            .get("legacy")
+            .unwrap()
+            .config
+            .id;
+
+        assert_eq!(first, after_restart);
+    }
+
+    #[test]
+    fn backfilled_id_is_written_to_disk() {
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "legacy");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+
+        let id = pm.get("legacy").unwrap().config.id;
+        let raw =
+            std::fs::read_to_string(home.path().join("projects/legacy/project.json")).unwrap();
+        let on_disk: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            on_disk["id"].as_str(),
+            Some(id.as_str()),
+            "the id must be persisted, not held only in memory"
+        );
+    }
+
+    #[test]
+    fn existing_id_is_never_reassigned() {
+        let home = tempfile::tempdir().unwrap();
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+        let created = pm.create(cfg("healthcare")).unwrap().config.id;
+
+        for _ in 0..3 {
+            assert_eq!(pm.get("healthcare").unwrap().config.id, created);
+        }
+    }
+
+    #[test]
+    fn identity_is_not_derived_from_the_project_name() {
+        // Two projects created with identical settings but different names must
+        // get different ids; and the id must not be a function of the name.
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "alpha");
+        write_legacy_manifest(home.path(), "beta");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+
+        assert_ne!(
+            pm.get("alpha").unwrap().config.id,
+            pm.get("beta").unwrap().config.id
+        );
+
+        // Same name, different store root => different id. If identity were
+        // derived from the name these would collide.
+        let other_home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(other_home.path(), "alpha");
+        let other = JsonProjectStore::new(other_home.path()).unwrap();
+        assert_ne!(
+            pm.get("alpha").unwrap().config.id,
+            other.get("alpha").unwrap().config.id
+        );
+    }
+
+    #[test]
+    fn renaming_a_project_directory_preserves_the_id() {
+        // A rename today is a directory move plus a manifest `name` change.
+        // The id lives in the manifest, so it must survive both.
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "before");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+        let id = pm.get("before").unwrap().config.id;
+
+        let projects = home.path().join("projects");
+        std::fs::rename(projects.join("before"), projects.join("after")).unwrap();
+        let path = projects.join("after/project.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        manifest["name"] = serde_json::json!("after");
+        std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+        assert_eq!(pm.get("after").unwrap().config.id, id);
+    }
+
+    #[test]
+    fn moving_a_project_to_another_root_preserves_the_id() {
+        // The supported migration path: copy the project directory, manifest
+        // included. Identity travels with the manifest, not with the path.
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "movable");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+        let id = pm.get("movable").unwrap().config.id;
+
+        let new_home = tempfile::tempdir().unwrap();
+        let dest = new_home.path().join("projects/movable");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::copy(
+            home.path().join("projects/movable/project.json"),
+            dest.join("project.json"),
+        )
+        .unwrap();
+
+        let moved = JsonProjectStore::new(new_home.path()).unwrap();
+        assert_eq!(moved.get("movable").unwrap().config.id, id);
+    }
+
+    #[test]
+    fn list_sees_the_same_ids_as_get() {
+        let home = tempfile::tempdir().unwrap();
+        write_legacy_manifest(home.path(), "legacy");
+        let pm = JsonProjectStore::new(home.path()).unwrap();
+
+        let via_list = pm.list().unwrap().remove(0).config.id;
+        let via_get = pm.get("legacy").unwrap().config.id;
+        assert_eq!(via_list, via_get);
+        assert!(!via_list.is_empty());
     }
 
     #[test]

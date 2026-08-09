@@ -8,8 +8,10 @@ import {
   markOnboardingComplete,
   pickFolder,
   setPreference,
+  setTelemetryConsent,
   startDaemon,
 } from "@/lib/native";
+import { markStartupPhase } from "@/lib/startupMarks";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -714,11 +716,15 @@ export default function Welcome({ onFinish }: { onFinish: () => void }) {
     try {
       await setPreference("workspaceDir",    workspaceDir);
       await setPreference("modelDir",        modelDir);
-      await setPreference("telemetryEnabled", telemetry);
+      // One yes/no here maps to both real toggles — Settings → Privacy has
+      // the granular analytics/crash split for anyone who wants to change
+      // just one later. See native.ts's TelemetryConsent.
+      await setTelemetryConsent({ analytics: telemetry, crash: telemetry });
       await setPreference("dockIcon",        dockIcon);
       await setPreference("termsAccepted",   true);
       await markOnboardingComplete();
-      await startDaemon(workspaceDir);
+      await startDaemon(workspaceDir, modelDir);
+      markStartupPhase("daemon_ready_ms");
       markDone("install");
       onFinish();
     } catch (e) {

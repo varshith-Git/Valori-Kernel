@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as daemon from "@/lib/server/daemon";
-import { projectNodePaths, unprotectAll, touchProject, type ProjectEmbedConfig } from "@/lib/server/projects";
+import { unprotectAll, touchProject, type ProjectEmbedConfig } from "@/lib/server/projects";
 import { toLegacyEntry, resolveProjectsDir } from "@/lib/server/project-adapter";
-import { pm } from "@/lib/server/process-manager";
 import { setApiUrl } from "@/lib/server/connection";
 import { errorResponse } from "@/lib/server/http";
 
@@ -40,17 +39,13 @@ function extractRecordCount(h: HealthBody): number | undefined {
 // POST — ensure the project's node(s) are up, point the UI at the primary
 // node, and record the open.
 //
-// Single-node (replication 1, RFC-0006 Phase B.1): launches entirely through
-// valori-daemon, which already owns health-wait/idempotency/crash-recovery —
-// none of the old orphan/stale-log detection dance is needed here, that
-// existed only to cope with `pm`'s in-memory state surviving a Next.js
-// dev-mode hot-reload out of sync with reality. The daemon is a separate,
-// stable process; that whole class of bug doesn't apply to it.
-//
-// Cluster (replication 3): the daemon can't launch a cluster yet, so this is
-// the ORIGINAL pm-based multi-node logic, unchanged — only the project
-// metadata now comes from the daemon (via `toLegacyEntry`) instead of the
-// (now retired) `ui-projects.json`.
+// RFC-0007: `valori-daemon` now owns launch/supervise/health for BOTH
+// single-node and cluster (replication 3) projects — `daemon.startProject()`
+// already handles the "launch N processes, wait for all N healthy" logic on
+// the Rust side (see `LocalRuntime::start_cluster` in
+// `crates/valori-daemon/src/runtime/local.rs`). This route no longer spawns
+// or supervises any process itself; it just calls the daemon and shapes the
+// response the same way for both cases.
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
@@ -70,79 +65,24 @@ export async function POST(
   const entry = toLegacyEntry(daemonProject, await resolveProjectsDir());
   const embed = entry.embed ?? DIM_TO_EMBED[entry.dim];
 
-  // ── Single-node: the common, daemon-native path ──────────────────────────
-  if (entry.replication === 1) {
-    // Undo close/route.ts's protectAll() (chflags uchg) — otherwise the node
-    // can't write its WAL/snapshot and fails to start.
-    unprotectAll(entry);
-    try {
-      const status = await daemon.startProject(name);
-      const url = `http://127.0.0.1:${status.port}`;
-      const primary = status.port ? await probeHealth(status.port, 3000) : null;
-      const recordCount = primary ? extractRecordCount(primary) : undefined;
+  // Undo close/route.ts's protectAll() (chflags uchg) — otherwise the
+  // node(s) can't write their WAL/snapshot/raft log and fail to start.
+  unprotectAll(entry);
 
-      setApiUrl(url, primary ? { dim: primary.dim as number | undefined, records: recordCount } : undefined);
-
-      return NextResponse.json({
-        ok: true,
-        url,
-        port: status.port,
-        reachable: status.status === "running",
-        nodesReachable: status.status === "running" ? 1 : 0,
-        nodesTotal: 1,
-        ...(primary ?? {}),
-        ...(embed ? { embed } : {}),
-      });
-    } catch (e) {
-      return errorResponse(e, 503);
-    }
+  try {
+    await daemon.startProject(name);
+  } catch (e) {
+    return errorResponse(e, 503);
   }
 
-  // ── Cluster: unchanged from the pre-migration implementation ─────────────
   const primaryNode = entry.nodes[0];
   const url = `http://127.0.0.1:${primaryNode.httpPort}`;
 
-  unprotectAll(entry);
-
-  const preHealth = await Promise.all(entry.nodes.map((n) => probeHealth(n.httpPort, 400)));
-
-  for (let i = 0; i < entry.nodes.length; i++) {
-    const nodeHealth = preHealth[i] as (HealthBody & { event_log_height?: number | null }) | null;
-    if (nodeHealth && nodeHealth.event_log_height == null) {
-      const port = entry.nodes[i].httpPort;
-      const { snapshotPath } = projectNodePaths(entry, entry.nodes[i].id);
-      await pm.snapshotThenStop(port, snapshotPath);
-      await pm.waitForExit(port, 3000);
-      preHealth[i] = null;
-    }
-  }
-
-  preHealth.forEach((nodeHealth, i) => { if (nodeHealth) pm.markRunning(entry.nodes[i].httpPort); });
-
-  const anyToStart = entry.nodes.some((n, i) => !preHealth[i] && !pm.isRunning(n.httpPort));
-  if (anyToStart) {
-    const nodeSpecs = entry.nodes.map((n) => {
-      const { snapshotPath, eventLogPath, raftLogPath } = projectNodePaths(entry, n.id);
-      return {
-        id: n.id,
-        httpPort: n.httpPort,
-        raftPort: n.raftPort,
-        eventLogPath,
-        snapshotPath,
-        raftLogPath,
-        clusterInit: entry.replication > 1 && n.id === primaryNode.id,
-      };
-    });
-    pm.startProjectNodes({
-      dim: entry.dim,
-      index: entry.index,
-      maxRecords: entry.maxRecords,
-      nodes: nodeSpecs,
-      shardCount: entry.shardCount,
-    });
-  }
-
-  const results: (HealthBody | null)[] = [...preHealth];
+  // Poll every node's own /health directly rather than round-tripping
+  // through the daemon's aggregation endpoint — this route already needs
+  // per-node health bodies (dim, live record count) for the response shape
+  // clients expect, which the daemon's /cluster endpoint doesn't carry.
+  const results: (HealthBody | null)[] = new Array(entry.nodes.length).fill(null);
   for (let i = 0; i < 120; i++) {
     if (results.every((h) => h)) break;
     if (i > 0) await new Promise((r) => setTimeout(r, 150));
@@ -150,13 +90,6 @@ export async function POST(
       if (results[idx]) return;
       results[idx] = await probeHealth(n.httpPort, 1500);
     }));
-    const stillWaiting = entry.nodes.some((n, idx) => !results[idx]);
-    if (stillWaiting) {
-      const allErrored = entry.nodes.every((n, idx) =>
-        results[idx] || pm.getStatus(n.httpPort)?.status === "error"
-      );
-      if (allErrored) break;
-    }
   }
 
   const primary = results[0];

@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import Link from "next/link";
 import { useEmbeddingConfig } from "@/lib/hooks/useEmbeddingConfig";
 import { useLLMConfig, LLM_PROVIDER_DEFAULTS } from "@/lib/hooks/useLLMConfig";
+import { nativeAvailable, credentialGet } from "@/lib/native";
 import { finalizeReceipt, type AnswerReceipt, type ServerReceiptPart } from "@/lib/receipts";
 import { printHtml } from "@/lib/print";
 import { CopyBtn } from "@/components/ui/copy-btn";
@@ -118,13 +119,23 @@ export function AskTab({
 
   const [rerankerCfg, setRerankerCfg] = useState<{ provider: string; apiKey: string; model: string; endpoint: string } | null>(null);
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem("valori:reranker_config");
-      if (raw) {
+    (async () => {
+      try {
+        const raw = localStorage.getItem("valori:reranker_config");
+        if (!raw) return;
         const c = JSON.parse(raw);
-        if (c.provider && c.provider !== "none") setRerankerCfg(c);
-      }
-    } catch {}
+        if (!c.provider || c.provider === "none") return;
+        // Studio S3: desktop persists `credentialRef`, not `apiKey` — resolve
+        // the secret here (read-only consumer; SettingsModal.tsx / the
+        // settings page own writing/migrating this localStorage key).
+        if (nativeAvailable() && c.credentialRef) {
+          const resolved = await credentialGet(c.credentialRef).catch(() => null);
+          setRerankerCfg({ ...c, apiKey: resolved ?? "" });
+        } else {
+          setRerankerCfg(c);
+        }
+      } catch {}
+    })();
   }, []);
 
   const [treeCache, setTreeCache] = useState<{ cache_key: string; node_count: number; doc_name: string } | null>(null);

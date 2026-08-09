@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  nativeAvailable,
+  credentialStore,
+  credentialGet,
+  credentialDelete,
+  migrateLegacyProviderCredential,
+} from "@/lib/native";
 
 export type EmbeddingProvider = "openai" | "cohere" | "ollama" | "custom";
 
@@ -54,24 +61,125 @@ const DEFAULT_CONFIG: EmbeddingConfig = {
   chunkOverlap: 200,
 };
 
+/**
+ * Persisted shape written to `localStorage[STORAGE_KEY]`. See the matching
+ * comment in `useLLMConfig.ts` — identical desktop/web split (Studio S3):
+ * desktop persists `credentialRef`, never `apiKey`; web is unchanged.
+ */
+interface PersistedEmbeddingConfig {
+  provider: EmbeddingProvider;
+  model: string;
+  endpoint: string;
+  chunkSize: number;
+  chunkOverlap: number;
+  apiKey?: string;
+  credentialRef?: string;
+}
+
 export function useEmbeddingConfig() {
   const [config, setConfigState] = useState<EmbeddingConfig>(DEFAULT_CONFIG);
   const [loaded, setLoaded] = useState(false);
+  const credentialRefState = useRef<string | null>(null);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setConfigState({ ...DEFAULT_CONFIG, ...JSON.parse(raw) });
-    } catch {}
-    setLoaded(true);
+    let cancelled = false;
+
+    async function load() {
+      if (nativeAvailable()) {
+        await migrateLegacyProviderCredential(STORAGE_KEY);
+      }
+
+      let raw: string | null = null;
+      try {
+        raw = localStorage.getItem(STORAGE_KEY);
+      } catch {}
+      const persisted: Partial<PersistedEmbeddingConfig> = raw ? JSON.parse(raw) : {};
+
+      if (nativeAvailable() && persisted.credentialRef) {
+        let resolved = "";
+        try {
+          resolved = (await credentialGet(persisted.credentialRef)) ?? "";
+        } catch {
+          resolved = "";
+        }
+        if (!cancelled) {
+          credentialRefState.current = persisted.credentialRef;
+          setConfigState({ ...DEFAULT_CONFIG, ...persisted, apiKey: resolved });
+        }
+      } else {
+        if (!cancelled) {
+          setConfigState({ ...DEFAULT_CONFIG, ...persisted, apiKey: persisted.apiKey ?? "" });
+        }
+      }
+      if (!cancelled) setLoaded(true);
+    }
+
+    load().catch(() => {
+      if (!cancelled) setLoaded(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    if (loaded) {
+    if (!loaded) return;
+
+    async function persist() {
+      if (!nativeAvailable()) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+        } catch {}
+        return;
+      }
+
+      const base = {
+        provider: config.provider,
+        model: config.model,
+        endpoint: config.endpoint,
+        chunkSize: config.chunkSize,
+        chunkOverlap: config.chunkOverlap,
+      };
+
+      if (!config.apiKey) {
+        if (credentialRefState.current) {
+          await credentialDelete(credentialRefState.current).catch(() => {});
+        }
+        credentialRefState.current = null;
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(base));
+        } catch {}
+        return;
+      }
+
+      const currentlyResolved = credentialRefState.current
+        ? await credentialGet(credentialRefState.current).catch(() => null)
+        : null;
+
+      if (currentlyResolved === config.apiKey) {
+        try {
+          localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({ ...base, credentialRef: credentialRefState.current }),
+          );
+        } catch {}
+        return;
+      }
+
+      // Reuse the existing reference if this field already has one (e.g.
+      // the user is still typing) — avoids one orphaned keychain entry
+      // per keystroke. Only mint fresh when none exists yet.
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-      } catch {}
+        const ref = await credentialStore(config.apiKey, credentialRefState.current ?? undefined);
+        credentialRefState.current = ref;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...base, credentialRef: ref }));
+      } catch {
+        // Keychain unavailable — fail closed, retry on next save.
+      }
     }
+
+    persist();
   }, [config, loaded]);
 
   const setConfig = useCallback((update: Partial<EmbeddingConfig> | ((prev: EmbeddingConfig) => EmbeddingConfig)) => {

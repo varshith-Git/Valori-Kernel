@@ -14,6 +14,8 @@ import { useHealth } from "@/lib/hooks/useHealth";
 import {
   nativeAvailable, pickFolder, revealPath,
   getPreference, setPreference, resetOnboarding,
+  getTelemetryConsent, setTelemetryConsent, type TelemetryConsent,
+  credentialStore, credentialGet, credentialDelete, migrateLegacyProviderCredential,
 } from "@/lib/native";
 import { EmbeddingSelector } from "@/components/ingestion/EmbeddingSelector";
 import { LLMSelector } from "@/components/ingestion/LLMSelector";
@@ -189,13 +191,23 @@ function GeneralSection({ user, onUserUpdate }: { user: UserData | null; onUserU
   const [saved, setSaved]   = useState(false);
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null);
   const [serverConfig, setServerConfig] = useState<{ api_url?: string; dim?: number; event_log_path?: string } | null>(null);
-  const [notifPrefs, setNotifPrefs] = useState(() => {
+  // Desktop (S7): studio.redb's "notifs" preference. Web: unchanged,
+  // localStorage["valori:notifs"] — no studio.redb there. Loaded async
+  // below (getPreference is async on desktop); starts empty and is filled
+  // in by the load effect, matching workspaceDir's existing pattern.
+  const [notifPrefs, setNotifPrefs] = useState<Record<string, boolean>>(() => {
+    if (nativeAvailable()) return {};
     try { return JSON.parse(localStorage.getItem("valori:notifs") ?? "{}"); } catch { return {}; }
   });
   const [rerankerProvider, setRerankerProvider] = useState<"none"|"cohere"|"custom">("none");
   const [rerankerKey, setRerankerKey] = useState("");
   const [rerankerModel, setRerankerModel] = useState("rerank-english-v3.0");
   const [rerankerEndpoint, setRerankerEndpoint] = useState("");
+  // Desktop only (Studio S3): the credential reference currently backing
+  // `rerankerKey`. `localStorage["valori:reranker_config"]` persists
+  // `credentialRef`, never the raw key — see native.ts's "Provider
+  // credentials" section and docs/phases/phase-studio-S3-credentials.md.
+  const rerankerCredentialRef = useRef<string | null>(null);
 
   useEffect(() => {
     setFirstName(user?.firstName ?? "");
@@ -203,20 +215,37 @@ function GeneralSection({ user, onUserUpdate }: { user: UserData | null; onUserU
   }, [user?.firstName, user?.lastName]);
 
   useEffect(() => {
-    if (nativeAvailable()) getPreference<string>("workspaceDir").then(setWorkspaceDir).catch(() => {});
+    if (nativeAvailable()) {
+      getPreference<string>("workspaceDir").then(setWorkspaceDir).catch(() => {});
+      getPreference<Record<string, boolean>>("notifs").then((v) => {
+        if (v) setNotifPrefs(v);
+      }).catch(() => {});
+    }
     fetch("/api/health").then(r => r.ok ? r.json() : null).then(d => {
       if (d) setServerConfig({ api_url: d.api_url, dim: d.dim, event_log_path: d.event_log_path });
     }).catch(() => {});
-    try {
-      const raw = localStorage.getItem("valori:reranker_config");
-      if (raw) {
+    (async () => {
+      if (nativeAvailable()) {
+        await migrateLegacyProviderCredential("valori:reranker_config").catch(() => {});
+      }
+      try {
+        const raw = localStorage.getItem("valori:reranker_config");
+        if (!raw) return;
         const c = JSON.parse(raw);
         setRerankerProvider(c.provider ?? "none");
-        setRerankerKey(c.apiKey ?? "");
         setRerankerModel(c.model ?? "rerank-english-v3.0");
         setRerankerEndpoint(c.endpoint ?? "");
-      }
-    } catch {}
+        if (nativeAvailable() && c.credentialRef) {
+          rerankerCredentialRef.current = c.credentialRef;
+          const resolved = await credentialGet(c.credentialRef).catch(() => null);
+          setRerankerKey(resolved ?? "");
+        } else {
+          // Web mode, or desktop with no credentialRef yet (migration
+          // failed / keychain unavailable) — fail-closed fallback.
+          setRerankerKey(c.apiKey ?? "");
+        }
+      } catch {}
+    })();
   }, []);
 
   const saveProfile = async () => {
@@ -234,15 +263,59 @@ function GeneralSection({ user, onUserUpdate }: { user: UserData | null; onUserU
   const saveNotif = (key: string, val: boolean) => {
     const next = { ...notifPrefs, [key]: val };
     setNotifPrefs(next);
-    try { localStorage.setItem("valori:notifs", JSON.stringify(next)); } catch {}
+    if (nativeAvailable()) {
+      setPreference("notifs", next).catch(() => {});
+    } else {
+      try { localStorage.setItem("valori:notifs", JSON.stringify(next)); } catch {}
+    }
     if (key === "desktop" && val && "Notification" in window) {
       void Notification.requestPermission();
     }
   };
 
-  const saveReranker = (update: Partial<{ provider: string; apiKey: string; model: string; endpoint: string }>) => {
-    const next = { provider: update.provider ?? rerankerProvider, apiKey: update.apiKey ?? rerankerKey, model: update.model ?? rerankerModel, endpoint: update.endpoint ?? rerankerEndpoint };
-    try { localStorage.setItem("valori:reranker_config", JSON.stringify(next)); } catch {}
+  const saveReranker = async (update: Partial<{ provider: string; apiKey: string; model: string; endpoint: string }>) => {
+    const provider = update.provider ?? rerankerProvider;
+    const apiKey = update.apiKey ?? rerankerKey;
+    const model = update.model ?? rerankerModel;
+    const endpoint = update.endpoint ?? rerankerEndpoint;
+    const base = { provider, model, endpoint };
+
+    if (nativeAvailable()) {
+      // Desktop (Studio S3): never write apiKey to localStorage.
+      if (!apiKey) {
+        if (rerankerCredentialRef.current) {
+          await credentialDelete(rerankerCredentialRef.current).catch(() => {});
+        }
+        rerankerCredentialRef.current = null;
+        try { localStorage.setItem("valori:reranker_config", JSON.stringify(base)); } catch {}
+      } else {
+        const currentlyResolved = rerankerCredentialRef.current
+          ? await credentialGet(rerankerCredentialRef.current).catch(() => null)
+          : null;
+        if (currentlyResolved === apiKey) {
+          try {
+            localStorage.setItem(
+              "valori:reranker_config",
+              JSON.stringify({ ...base, credentialRef: rerankerCredentialRef.current }),
+            );
+          } catch {}
+        } else {
+          // Reuse the existing reference if one exists (e.g. the user is
+          // still typing) — avoids one orphaned keychain entry per keystroke.
+          try {
+            const ref = await credentialStore(apiKey, rerankerCredentialRef.current ?? undefined);
+            rerankerCredentialRef.current = ref;
+            localStorage.setItem("valori:reranker_config", JSON.stringify({ ...base, credentialRef: ref }));
+          } catch {
+            // Keychain unavailable — fail closed, retry on next save.
+          }
+        }
+      }
+    } else {
+      // Web mode — unchanged behavior.
+      try { localStorage.setItem("valori:reranker_config", JSON.stringify({ ...base, apiKey })); } catch {}
+    }
+
     if (update.provider !== undefined) setRerankerProvider(update.provider as "none"|"cohere"|"custom");
     if (update.apiKey   !== undefined) setRerankerKey(update.apiKey);
     if (update.model    !== undefined) setRerankerModel(update.model);
@@ -578,31 +651,46 @@ function AccountSection({ user }: { user: UserData | null }) {
 /* ─── Privacy section ───────────────────────────────────────────────────── */
 
 function PrivacySection() {
-  const [prefs, setPrefs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("valori:privacy") ?? "{}"); } catch { return {}; }
-  });
+  // Phase 1 desktop telemetry (rfcs/desktop-telemetry): `analytics`/`crash`
+  // are the two toggles that actually gate whether anything is sent — see
+  // native.ts's getTelemetryConsent/setTelemetryConsent, backed by the same
+  // preferences.json store as every other app setting, NOT localStorage
+  // (the old "valori:privacy" key here was write-only — nothing ever read
+  // it). `diagnostics` (manual log upload) has no behavior yet — future
+  // feature, shown but inert. Both real toggles default to `false`:
+  // nothing is ever sent before an explicit opt-in.
+  const [consent, setConsent] = useState<TelemetryConsent>({ analytics: false, crash: false });
+  const [diagnostics, setDiagnostics] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  const save = (key: string, val: boolean) => {
-    const next = { ...prefs, [key]: val };
-    setPrefs(next);
-    try { localStorage.setItem("valori:privacy", JSON.stringify(next)); } catch {}
+  useEffect(() => {
+    getTelemetryConsent().then(setConsent);
+  }, []);
+
+  const saveConsent = (key: keyof TelemetryConsent, val: boolean) => {
+    const next = { ...consent, [key]: val };
+    setConsent(next);
+    setTelemetryConsent(next);
   };
 
   const clearCache = async () => {
     setClearing(true);
     try {
       localStorage.removeItem("valori:reranker_config");
-      localStorage.removeItem("valori:notifs");
-      localStorage.removeItem("valori:privacy");
+      if (nativeAvailable()) {
+        await setPreference("notifs", {}).catch(() => {});
+      } else {
+        localStorage.removeItem("valori:notifs");
+      }
+      await setTelemetryConsent({ analytics: false, crash: false });
       window.location.reload();
     } finally { setClearing(false); }
   };
 
-  const DATA_ITEMS = [
-    { key: "diagnostics", label: "Anonymous diagnostics", description: "Helps us fix crashes and improve performance" },
-    { key: "crash",       label: "Crash reports",         description: "Automatically send crash logs" },
-    { key: "analytics",   label: "Product analytics",     description: "Usage patterns to improve the product" },
+  const DATA_ITEMS: { key: "diagnostics" | keyof TelemetryConsent; label: string; description: string }[] = [
+    { key: "diagnostics", label: "Anonymous diagnostics", description: "Manual log upload when you report an issue — not sent automatically" },
+    { key: "crash",       label: "Crash reports",         description: "Automatically send a crash fingerprint (no file paths, no data) so we can fix it" },
+    { key: "analytics",   label: "Product analytics",     description: "Anonymous session/update events to improve the product — never your documents, prompts, or queries" },
   ];
 
   return (
@@ -611,9 +699,24 @@ function PrivacySection() {
         <SCardHeader title="Data Collection" description="Control what Valori collects about your usage" />
         {DATA_ITEMS.map((item, i) => (
           <SRow key={item.key} label={item.label} description={item.description} last={i === DATA_ITEMS.length - 1}>
-            <Toggle checked={prefs[item.key] !== false} onChange={v => save(item.key, v)} />
+            <Toggle
+              checked={item.key === "diagnostics" ? diagnostics : consent[item.key]}
+              onChange={v => item.key === "diagnostics" ? setDiagnostics(v) : saveConsent(item.key, v)}
+            />
           </SRow>
         ))}
+      </SCard>
+
+      <SCard>
+        <SCardHeader title="Telemetry never includes" description="Even when the toggles above are on, these never leave your machine" />
+        <div className="px-5 py-4 grid grid-cols-2 gap-x-4 gap-y-2">
+          {["Documents", "Prompts", "Vectors", "Collection contents", "API keys", "Filesystem paths"].map(item => (
+            <div key={item} className="flex items-center gap-2 text-sm text-foreground">
+              <Check size={13} className="text-emerald-500 shrink-0" />
+              {item}
+            </div>
+          ))}
+        </div>
       </SCard>
 
       <SCard>

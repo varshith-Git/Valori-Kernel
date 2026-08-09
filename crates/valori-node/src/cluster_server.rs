@@ -437,8 +437,14 @@ pub fn build_cluster_router_with_keys(
         // Phase 3.1 object store — reads + upload are per-node safe; restore
         // is a documented 501 (see cluster_storage_restore).
         .route("/v1/storage/snapshots", get(cluster_list_remote_snapshots))
-        .route("/v1/storage/snapshots/upload", post(cluster_upload_snapshot_to_store))
-        .route("/v1/storage/snapshots/restore", post(cluster_storage_restore))
+        .route(
+            "/v1/storage/snapshots/upload",
+            post(cluster_upload_snapshot_to_store),
+        )
+        .route(
+            "/v1/storage/snapshots/restore",
+            post(cluster_storage_restore),
+        )
         .route("/v1/storage/manifest", get(cluster_get_manifest))
         .route("/v1/storage/wal", get(cluster_list_remote_wal))
         .route("/v1/storage/wal/archive", post(cluster_archive_wal_segment));
@@ -5296,7 +5302,11 @@ async fn cluster_list_remote_snapshots(State(state): State<DataPlaneState>) -> R
     match os.list_snapshots().await {
         Ok(snapshots) => {
             let count = snapshots.len();
-            (StatusCode::OK, Json(serde_json::json!({ "snapshots": snapshots, "count": count }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "snapshots": snapshots, "count": count })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5313,7 +5323,11 @@ async fn cluster_get_manifest(State(state): State<DataPlaneState>) -> Response {
         Err(r) => return r,
     };
     match os.read_manifest().await {
-        Ok(manifest) => (StatusCode::OK, Json(serde_json::json!({ "manifest": manifest }))).into_response(),
+        Ok(manifest) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "manifest": manifest })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("reading manifest failed: {e}") })),
@@ -5347,7 +5361,13 @@ async fn cluster_upload_snapshot_to_store(State(state): State<DataPlaneState>) -
         }
     };
 
-    let state_hash: String = state.sm.state_hash().await.iter().map(|b| format!("{b:02x}")).collect();
+    let state_hash: String = state
+        .sm
+        .state_hash()
+        .await
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     let size_bytes = bytes.len();
 
     let entry = match os
@@ -5422,7 +5442,11 @@ async fn cluster_list_remote_wal(State(state): State<DataPlaneState>) -> Respons
     match os.list_wal_segments().await {
         Ok(segments) => {
             let count = segments.len();
-            (StatusCode::OK, Json(serde_json::json!({ "segments": segments, "count": count }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "segments": segments, "count": count })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -5480,7 +5504,11 @@ async fn cluster_archive_wal_segment(
     match os.archive_wal_segment(&candidate).await {
         Ok(key) => {
             // Keep manifest.json's WAL list current, same as standalone.
-            if let Ok(current) = os.read_manifest().await.map(|m| m.and_then(|m| m.current_snapshot)) {
+            if let Ok(current) = os
+                .read_manifest()
+                .await
+                .map(|m| m.and_then(|m| m.current_snapshot))
+            {
                 if let Ok(segments) = os.list_wal_segments().await {
                     if let Err(e) = os
                         .write_manifest(current.as_ref(), segments, env!("CARGO_PKG_VERSION"))
@@ -5490,7 +5518,11 @@ async fn cluster_archive_wal_segment(
                     }
                 }
             }
-            (StatusCode::OK, Json(serde_json::json!({ "key": key, "size_bytes": size_bytes }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "key": key, "size_bytes": size_bytes })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
