@@ -30,7 +30,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/valori-kernel/valori-node
 
 jobs:
   build:
@@ -61,6 +60,9 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY_OWNER,,}/valori-kernel/valori-node" >> "$GITHUB_ENV"
 
       - name: Extract metadata
         id: meta
@@ -118,6 +120,9 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY_OWNER,,}/valori-kernel/valori-node" >> "$GITHUB_ENV"
 
       - name: Extract metadata
         id: meta
