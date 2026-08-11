@@ -1,0 +1,50 @@
+[
+  {
+    "dimension": 768,
+    "vectors": 20000,
+    "raw_vector_memory_bytes_per_vector": 3072,
+    "actual_process_memory_bytes_per_vector": 14496.6,
+    "peak_rss_mb": 276.5,
+    "restart_rss_mb": 305.3,
+    "disk_mb": 60,
+    "insert_elapsed_secs": 123.25,
+    "insert_vectors_per_sec": 162.3,
+    "search_p50_ms": 510.15,
+    "search_p95_ms": 560.72,
+    "search_p99_ms": 564.8,
+    "restart_hash_match": true,
+    "status": "supported"
+  },
+  {
+    "dimension": 1024,
+    "vectors": 20000,
+    "raw_vector_memory_bytes_per_vector": 4096,
+    "actual_process_memory_bytes_per_vector": 19026.4,
+    "peak_rss_mb": 362.9,
+    "restart_rss_mb": 403.1,
+    "disk_mb": 80,
+    "insert_elapsed_secs": 219.28,
+    "insert_vectors_per_sec": 91.2,
+    "search_p50_ms": 692.94,
+    "search_p95_ms": 707.55,
+    "search_p99_ms": 710.12,
+    "restart_hash_match": true,
+    "status": "supported"
+  },
+  {
+    "dimension": 1536,
+    "vectors": 20000,
+    "raw_vector_memory_bytes_per_vector": 6144,
+    "actual_process_memory_bytes_per_vector": 27997.0,
+    "peak_rss_mb": 534.0,
+    "restart_rss_mb": 598.2,
+    "disk_mb": 119,
+    "insert_elapsed_secs": 486.76,
+    "insert_vectors_per_sec": 41.1,
+    "search_p50_ms": 1022.18,
+    "search_p95_ms": 1128.76,
+    "search_p99_ms": 1153.81,
+    "restart_hash_match": true,
+    "status": "supported"
+  }
+]

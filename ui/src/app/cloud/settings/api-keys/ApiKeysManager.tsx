@@ -19,6 +19,13 @@ interface ApiKeyRow {
     revoked_at: string | null
     request_count: number
     service_account_id: string | null
+    project_id: string | null
+    expires_at: string | null
+}
+
+interface ProjectOption {
+    id: string
+    name: string
 }
 
 function fmtDate(iso: string) {
@@ -30,16 +37,19 @@ export function ApiKeysManager({
     canManage,
     initialKeys,
     serviceAccounts,
+    projects,
 }: {
     orgId: string
     canManage: boolean
     initialKeys: ApiKeyRow[]
     serviceAccounts: ServiceAccountRow[]
+    projects: ProjectOption[]
 }) {
     const router = useRouter()
     const [createOpen, setCreateOpen] = useState(false)
     const [name, setName] = useState('')
-    const [scopeWrite, setScopeWrite] = useState(false)
+    const [projectId, setProjectId] = useState('')
+    const [expiresInDays, setExpiresInDays] = useState<string>('never')
     const [serviceAccountId, setServiceAccountId] = useState('')
     const [error, setError] = useState<string | null>(null)
     const [isPending, startTransition] = useTransition()
@@ -47,16 +57,21 @@ export function ApiKeysManager({
 
     const handleCreate = () => {
         setError(null)
-        const scopes = scopeWrite ? ['read', 'write'] : ['read']
+        if (!projectId) {
+            setError('Every key is bound to exactly one project — pick which one.')
+            return
+        }
+        const days = expiresInDays === 'never' ? null : Number(expiresInDays)
         startTransition(async () => {
-            const result = await createApiKey(orgId, name, scopes, serviceAccountId || null)
+            const result = await createApiKey(orgId, projectId, name, serviceAccountId || null, days)
             if (result.error || !result.key) {
                 setError(result.error ?? 'Could not create key.')
                 return
             }
             setCreateOpen(false)
             setName('')
-            setScopeWrite(false)
+            setProjectId('')
+            setExpiresInDays('never')
             setServiceAccountId('')
             setRevealedKey(result.key)
             router.refresh()
@@ -113,10 +128,12 @@ export function ApiKeysManager({
                         <thead>
                             <tr className="border-b border-border text-left text-xs text-muted-foreground uppercase tracking-widest">
                                 <th className="px-6 py-3 font-medium">Name</th>
+                                <th className="px-6 py-3 font-medium">Project</th>
                                 <th className="px-6 py-3 font-medium">Service Account</th>
                                 <th className="px-6 py-3 font-medium">Key</th>
                                 <th className="px-6 py-3 font-medium">Scopes</th>
                                 <th className="px-6 py-3 font-medium">Created</th>
+                                <th className="px-6 py-3 font-medium">Expires</th>
                                 <th className="px-6 py-3 font-medium">Last used</th>
                                 <th className="px-6 py-3 font-medium">Requests</th>
                                 <th className="px-6 py-3 font-medium">Status</th>
@@ -127,6 +144,13 @@ export function ApiKeysManager({
                             {initialKeys.map((k) => (
                                 <tr key={k.id} className="border-b border-border last:border-0">
                                     <td className="px-6 py-4 text-foreground font-medium">{k.name}</td>
+                                    <td className="px-6 py-4 text-muted-foreground">
+                                        {/* project_id = null means this key predates project scoping (P2) —
+                                            it keeps its pre-migration org-wide behavior, not narrowed. */}
+                                        {k.project_id
+                                            ? (projects.find((p) => p.id === k.project_id)?.name ?? k.project_id)
+                                            : <span title="Created before project-scoped keys existed — org-wide, unchanged">legacy (org-wide)</span>}
+                                    </td>
                                     <td className="px-6 py-4 text-muted-foreground">
                                         {serviceAccounts.find((a) => a.id === k.service_account_id)?.name ?? '—'}
                                     </td>
@@ -139,6 +163,9 @@ export function ApiKeysManager({
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-muted-foreground">{fmtDate(k.created_at)}</td>
+                                    <td className="px-6 py-4 text-muted-foreground">
+                                        {k.expires_at ? fmtDate(k.expires_at) : 'Never'}
+                                    </td>
                                     <td className="px-6 py-4 text-muted-foreground">
                                         {k.last_used_at ? fmtDate(k.last_used_at) : 'Never'}
                                     </td>
@@ -198,14 +225,35 @@ export function ApiKeysManager({
                                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
                             />
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-foreground">
-                            <input
-                                type="checkbox"
-                                checked={scopeWrite}
-                                onChange={(e) => setScopeWrite(e.target.checked)}
-                            />
-                            Allow write access (default: read-only)
-                        </label>
+                        <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground uppercase tracking-widest">Project</label>
+                            <select
+                                value={projectId}
+                                onChange={(e) => setProjectId(e.target.value)}
+                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                            >
+                                <option value="">Select a project…</option>
+                                {projects.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                            </select>
+                            <p className="text-xs text-muted-foreground">
+                                This key will only ever work against this one project.
+                            </p>
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-xs text-muted-foreground uppercase tracking-widest">Expiration</label>
+                            <select
+                                value={expiresInDays}
+                                onChange={(e) => setExpiresInDays(e.target.value)}
+                                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                            >
+                                <option value="never">Never</option>
+                                <option value="30">30 days</option>
+                                <option value="60">60 days</option>
+                                <option value="90">90 days</option>
+                            </select>
+                        </div>
                         {serviceAccounts.length > 0 && (
                             <div className="space-y-1">
                                 <label className="text-xs text-muted-foreground uppercase tracking-widest">
@@ -227,7 +275,7 @@ export function ApiKeysManager({
                             <Button variant="ghost" size="sm" onClick={() => setCreateOpen(false)}>
                                 Cancel
                             </Button>
-                            <Button size="sm" onClick={handleCreate} disabled={isPending || !name.trim()}>
+                            <Button size="sm" onClick={handleCreate} disabled={isPending || !name.trim() || !projectId}>
                                 {isPending ? 'Creating…' : 'Create'}
                             </Button>
                         </div>

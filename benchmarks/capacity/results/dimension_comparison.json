@@ -1,0 +1,33 @@
+[
+  {
+    "dimension": 384,
+    "vectors": 20000,
+    "raw_vector_memory_bytes_per_vector": 1536,
+    "actual_process_memory_bytes_per_vector": 8147.4,
+    "peak_rss_mb": 155.4,
+    "restart_rss_mb": 158.8,
+    "disk_mb": 31,
+    "insert_elapsed_secs": 30.36,
+    "insert_vectors_per_sec": 658.7,
+    "search_p50_ms": 277.45,
+    "search_p95_ms": 289.72,
+    "search_p99_ms": 292.02,
+    "restart_hash_match": true,
+    "status": "supported"
+  },
+  {
+    "dimension": 768,
+    "status": "insert_failed",
+    "detail": "413 at vec 0 (running false)"
+  },
+  {
+    "dimension": 1024,
+    "status": "insert_failed",
+    "detail": "413 at vec 0 (running false)"
+  },
+  {
+    "dimension": 1536,
+    "status": "insert_failed",
+    "detail": "413 at vec 0 (running false)"
+  }
+]

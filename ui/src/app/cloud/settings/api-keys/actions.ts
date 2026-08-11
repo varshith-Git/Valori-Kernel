@@ -4,7 +4,18 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/utils/supabase/server'
 import { AuditAction } from '@/lib/audit-actions'
 
-export async function createApiKey(orgId: string, name: string, scopes: string[], serviceAccountId?: string | null) {
+// P2.1: fixes the stale 3-arg create_api_key() call this copy had drifted
+// to — the RPC now requires p_project_id (see
+// valori-ui/supabase/migrations/20260810000000_project_scoped_api_keys.sql,
+// and this repo's docs/phases/phase-project-api-key-P2.1.md). Port of the
+// same fix already applied to valori-ui/ui's copy of this file.
+export async function createApiKey(
+    orgId: string,
+    projectId: string,
+    name: string,
+    serviceAccountId?: string | null,
+    expiresInDays?: number | null,
+) {
     const supabase = await createClient()
 
     const {
@@ -15,12 +26,17 @@ export async function createApiKey(orgId: string, name: string, scopes: string[]
         return { error: 'Not signed in.', key: null }
     }
 
+    const expiresAt = expiresInDays
+        ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString()
+        : null
+
     const { data, error } = await supabase
         .rpc('create_api_key', {
             target_org_id: orgId,
             key_name: name,
-            key_scopes: scopes,
+            p_project_id: projectId,
             p_service_account_id: serviceAccountId || null,
+            p_expires_at: expiresAt,
         })
         .single()
 
@@ -29,13 +45,20 @@ export async function createApiKey(orgId: string, name: string, scopes: string[]
     }
 
     // Best-effort — the key already exists above regardless of this outcome.
-    const created = data as { id: string; plaintext_key: string; key_prefix: string; name: string }
+    const created = data as {
+        id: string
+        plaintext_key: string
+        key_prefix: string
+        name: string
+        project_id: string
+        expires_at: string | null
+    }
     const { error: auditError } = await supabase.rpc('log_audit_event', {
         p_action: AuditAction.ApiKeyCreated,
         p_resource_type: 'api_key',
         p_resource_id: created.id,
         p_organization_id: orgId,
-        p_metadata: { name, scopes },
+        p_metadata: { name, project_id: projectId, expires_at: expiresAt },
     })
     if (auditError) console.error('audit log failed for api_key.created:', auditError.message)
 

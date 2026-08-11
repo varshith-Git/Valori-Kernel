@@ -37,10 +37,15 @@ export default async function ApiKeysPage() {
     const org = membership.organizations
     const canManage = membership.role === 'owner' || membership.role === 'admin'
 
-    const [{ data: keys }, { data: subscription }, { data: serviceAccounts }] = await Promise.all([
+    const [{ data: keys }, { data: subscription }, { data: serviceAccounts }, { data: projects }] = await Promise.all([
         supabase.from('api_keys_public').select('*').eq('org_id', org.id).order('created_at', { ascending: false }),
         supabase.from('subscriptions').select('plans(rate_limit_per_minute)').eq('org_id', org.id).single(),
         supabase.from('service_accounts').select('*').eq('org_id', org.id).order('created_at', { ascending: false }),
+        // P2: every NEW key is project-scoped (create_api_key() now requires
+        // p_project_id) — the create dialog needs the org's project list to
+        // offer as a picker. Existing rows with project_id = null (legacy,
+        // pre-P2) are unaffected and keep showing "—" in the Project column.
+        supabase.from('projects').select('id, name').eq('org_id', org.id).order('name'),
     ])
 
     const rateLimitPerMinute = (subscription?.plans as unknown as { rate_limit_per_minute: number } | null)?.rate_limit_per_minute ?? null
@@ -65,6 +70,7 @@ export default async function ApiKeysPage() {
                     canManage={canManage}
                     initialKeys={keys ?? []}
                     serviceAccounts={(serviceAccounts ?? []).filter((a) => !a.disabled_at)}
+                    projects={projects ?? []}
                 />
             </div>
         </div>

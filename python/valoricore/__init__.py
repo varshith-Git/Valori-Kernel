@@ -48,7 +48,7 @@ _warnings.filterwarnings(
 )
 
 from .local import LocalClient
-from .remote import SyncRemoteClient, AsyncRemoteClient, ClusterClient, AsyncClusterClient
+from .remote import SyncRemoteClient, AsyncRemoteClient, ClusterClient, AsyncClusterClient, Valori
 from .memory import MemoryClient
 from .protocol import ProtocolClient, ProtocolRemoteClient
 from .graph import Node, DocumentGraph
@@ -132,6 +132,7 @@ __all__ = [
     "AsyncRemoteClient",
     "ClusterClient",
     "AsyncClusterClient",
+    "Valori",
 
     # ── Adapters ───────────────────────────────────────────────────
     "ValoricoreAdapter",

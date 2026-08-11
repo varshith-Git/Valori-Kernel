@@ -6,6 +6,261 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (S11 — Index Tuning & Product Defaults — 2026-08-11)
+
+- `BqConfig { pool_factor, min_candidates }` (`crates/valori-index/src/bq.rs`)
+  — BQ's candidate-pool size, previously hardcoded (`POOL_FACTOR=10`,
+  `MIN_CANDIDATES=200`), is now runtime-configurable. Defaults reproduce
+  prior behavior exactly.
+- `VALORI_BQ_POOL_FACTOR` / `VALORI_BQ_MIN_CANDIDATES` env vars, wired
+  through `NodeConfig` → `EngineConfig` → `Engine::make_index`, following
+  the same pattern as the existing `VALORI_IVF_N_LIST`/`_N_PROBE`.
+- 2 new unit tests in `bq.rs` (`custom_config_changes_candidate_pool_without_error`,
+  `default_config_matches_prior_constants`).
+- `docs/reviews/index-tuning-audit.md` — full audit of BruteForce/HNSW/IVF/BQ
+  covering memory model, build/insert/search cost, recall, restart/recovery
+  behavior, and configuration surface. Found IVF and HNSW both have real
+  `snapshot()`/`restore()` code that `Engine::try_recover()` never calls —
+  recovery always rebuilds from the record pool from scratch, which is the
+  root cause of both indices' expensive recovery times.
+- Real Docker benchmarks (1GB/0.5vCPU, 384D, seed 42): IVF sweep (4 cells,
+  n_list×n_probe) found search p50 flat at ~660-664ms regardless of
+  configuration — no tested config achieves the 25% latency reduction
+  needed to justify IVF as a default — but recovery time scales linearly
+  with n_list (16.9s at n_list=64 vs 47.4s at auto-scale's n_list=223),
+  independent of n_probe. BQ sweep (2 cells) found `min_candidates=10000`
+  (~20% of N) reaches Recall@10=0.99 (up from the S10 default's 0.48) at
+  comparable memory/recovery cost. HNSW (1 cell, 10K) found search latency
+  statistically tied with BruteForce (115.95ms vs 118.29ms), 24-28x worse
+  insert throughput, ~150x worse recovery (187.1s vs 1.23s) — does not
+  clear its own "clearly outperforms" bar, so the mandated 50K follow-up
+  point was not run.
+- Fixed `benchmarks/capacity/scripts/bench_cell.py`'s restart-health-check
+  timeout (60s → 300s) — the same class of bug already fixed in
+  `bench_ivf_bq.py`, hit again on the first HNSW attempt this phase
+  (`status: restart_failed` was a benchmark-timeout artifact, not a real
+  integrity failure — confirmed by rerunning with the fixed timeout,
+  BLAKE3 state hash matched).
+- `benchmarks/capacity/scripts/bench_ivf_bq.py` — added
+  `--n-list`/`--n-probe`/`--bq-pool-factor`/`--bq-min-candidates` CLI flags.
+- **Recommendation (evidence-based, not applied to production)**: BruteForce
+  remains the Free-tier default index — no tuned configuration of IVF, BQ,
+  or HNSW beat it on the combined predictable-memory/predictable-latency/
+  high-recall/fast-recovery/deterministic/simple criteria at Free-tier
+  scale. Index choice is not exposed to Cloud users (Option B: Valori
+  chooses automatically); the `VectorIndex` abstraction and all four
+  implementations remain intact for future tiers. Documented a
+  forward-compatible `{"index": {"type", "config"}}` API contract as the
+  extension point for future index types/parameters, without building a
+  generic config framework the current architecture doesn't yet need.
+- `benchmarks/capacity/results/s11-summary.md`,
+  `docs/phases/phase-S11-index-tuning.md` — full results and findings.
+  No plan limits, provisioning defaults, pricing, or customer-facing
+  quotas were modified this phase.
+
+### Added (S10 — IVF/BQ Capacity Validation — 2026-08-11)
+
+- `docs/reviews/index-capacity-audit.md`,
+  `docs/phases/phase-S10-index-capacity.md`,
+  `benchmarks/capacity/scripts/bench_ivf_bq.py`,
+  `benchmarks/capacity/results/s10-summary.md`.
+- Real Docker benchmarks (IVF@50K, IVF@100K, BQ@50K, 384D, 1GB/0.5vCPU)
+  with recall@k measured against exact-L2 ground truth. Finding:
+  **neither IVF nor BQ meaningfully improves on BruteForce capacity in
+  the current implementation** — IVF's search latency is neutral-to-worse
+  at scale (664ms→1332ms p50, worse tail latency) with a severe
+  recovery-time penalty that scales as roughly N^1.5 (47s at 50K → 130s
+  at 100K, since the index is rebuilt from scratch via k-means on every
+  restart); BQ trades meaningful recall (Recall@10 ≈ 0.48 at 50K) for a
+  ~5% latency improvement at higher memory cost than either BruteForce
+  or IVF. All restart-hash checks passed (S8 fix holds for both index
+  types). **RECOMMENDED, NOT APPLIED**: the Free-tier vector quota
+  should continue to be derived from BruteForce's measured performance
+  boundary (S9's ~25,000-30,000 vectors) rather than a higher
+  index-specific number, until IVF's auto-scaled parameters are tuned
+  to actually prune the search space (currently returns perfect recall,
+  meaning it isn't pruning at all) or a different index is measured and
+  shown to help. No production plan limits, provisioning defaults, or
+  pricing were changed.
+
+### Added (S9 — Resource Capacity & Plan Limits — 2026-08-11)
+
+- `benchmarks/capacity/` — real Docker capacity benchmark harness
+  (reuses the actual `cloud-worker-a` image, real `docker run
+  --memory`/`--cpus` limits, real restart-hash verification per cell).
+  19 measured result records across RAM boundary, index-type
+  comparison, dimension sweep (384-1536), and multi-project contention.
+- `docs/reviews/resource-capacity-audit.md`,
+  `docs/phases/phase-S9-resource-capacity.md`.
+- Key findings: the existing (never benchmark-validated) free-tier
+  `max_records_per_project = 1,000,000` is ~34x higher than the
+  measured, search-latency-bound safe limit (~29,300 vectors at 384D
+  BruteForce on the planned 1GB/0.5vCPU free worker); HNSW recovery
+  takes 188s for just 10K vectors (35-160x slower than
+  brute/ivf/bq — real index is never persisted, always rebuilt from
+  the record pool on restart); actual memory per vector measured at
+  ~4.6-5.3x the raw Q16.16 byte size, not 1x. No production plan
+  limits, provisioning defaults, or pricing were changed — this phase
+  produced a **proposed**, evidence-based limits table for review.
+
+### Fixed (S8 — Deterministic Restart Integrity — 2026-08-11)
+
+Root-caused and fixed the state-hash-across-restart divergence flagged by
+the Local Cloud E2E phase (vector data and search results were
+byte-identical before/after a real container restart, but the BLAKE3
+state hash differed). Isolated via a standalone Rust reproduction
+comparing live-apply vs event-log-replay hashes directly (bypassing
+Docker/HTTP entirely), confirmed against the real `valori-node` binary
+both before and after the fix.
+
+- **Root cause**: `Engine::create_collection()` and `Engine::drop_collection()`
+  mutated `KernelState` directly via `state.apply_event_ns(...)`,
+  bypassing the durability layer entirely (`commit_and_apply_ns`, the
+  "log then apply" helper every other mutation uses). The
+  `AutoCreateNamespace`/`DropNamespace` events are no-ops on
+  records/nodes/edges, but still bump `state.version` — which IS hashed
+  — so the live process's version counter ran ahead of anything the
+  event log could ever replay.
+- **Fixed**: both now route through `commit_and_apply_ns()`.
+- **Second, related gap**: even logged, a single-event commit
+  (`commit_event_ns`) only buffers in memory (`DEFAULT_WRITE_BUFFER_SIZE
+  = 64`) — unlike a batch commit, which flushes unconditionally. The
+  buffer previously only flushed via `Engine::drop()`, which isn't
+  guaranteed to fire on graceful shutdown (`SharedEngine` is an
+  `Arc<RwLock<Engine>>`; background tasks can hold clones past
+  `with_graceful_shutdown`'s return). Added `Engine::flush_pending_events()`
+  and wired it into `main.rs`'s `shutdown_signal`, under a write lock,
+  before the snapshot save.
+- Regression test: `crates/valori-node/tests/persistence_tests.rs::test_state_hash_survives_restart_after_collection_create`.
+- Re-verified end-to-end against the real Docker container: state hash
+  now matches identically before and after a genuine `docker stop`/`start`.
+
+### Fixed (Local Cloud E2E verification — 2026-08-11)
+
+Found and fixed by standing up the real Cloud stack (Postgres + real
+migrations + PostgREST + two real `valori-node` workers + the real
+Next.js Cloud API) in Docker and running the real Python SDK against it
+end-to-end — see `e2e/cloud/` and `docs/architecture/project-api-v1.md`.
+
+- `POST /api/projects/[id]/delete` (private `valori-ui` repo) never
+  accepted `vlk_` API-key auth — 404'd for every external caller instead
+  of authenticating. Fixed to match every sibling write route.
+- `valoricore/__init__.py` unconditionally imported `adapter.py`, which
+  unconditionally imported the compiled Rust FFI extension — `import
+  valoricore` (and therefore `valoricore.remote`'s pure-HTTP `Valori`
+  client) failed without a native build present. `adapter.py`'s FFI
+  import is now guarded the same way `local.py`'s already was.
+- `create_api_key()` (private `valori-ui` repo, Postgres function) had
+  two ambiguous-column bugs — its own `RETURNS TABLE` column names
+  (`id`, `project_id`) shadowed the same-named table columns inside two
+  of its internal queries, breaking every call unconditionally. Never
+  caught before real E2E against PostgREST.
+- `proxyToNode()` (private `valori-ui` repo) hardcoded `method: 'POST'`
+  on every non-GET request regardless of the caller's actual method,
+  silently turning every `DELETE` into a `POST`; separately, it crashed
+  constructing a `NextResponse` with a `204` status and a JSON body
+  (spec-illegal). Both only surface on a route returning a real 204,
+  which only real E2E exercises.
+- `valori-node`'s `NodeConfig` printed its own `auth_token`/
+  `embed_api_key` in plaintext at INFO level on every startup (derived
+  `Debug`). Replaced with a hand-written `Debug` that redacts both.
+- `Valori(url=..., api_key=...)` required `url` positionally with no
+  default — `Valori(api_key="vlk_...")` (the documented production
+  usage) would fail. `url` now defaults to `https://app.valori.systems`.
+
+### Added (Project-Scoped API Keys — P1/P2 — 2026-08-10)
+
+- Python SDK: `valoricore.Valori` — a thin `SyncRemoteClient` subclass for
+  the Cloud project-scoped API key contract (`Valori(url=..., api_key=...)`).
+  No new authorization logic; reuses existing Bearer-auth/retry/error
+  mapping unchanged.
+- (Private `valori-ui` repo, documented here for cross-repo visibility per
+  this project's public/private split) Cloud API keys are now
+  project-scoped by construction: `api_keys.project_id`/`expires_at`,
+  `verify_api_key()` rewritten so a project-scoped key can never resolve
+  to a project other than the one it's bound to (previously org-scoped —
+  any key in an org could reach any project in that org), atomic
+  project+Default-key creation, and a fix for API auth failures
+  previously mapping to a misleading `404` (now correctly `401`/`403`).
+  Legacy org-scoped keys (`project_id = null`) keep their exact
+  pre-migration behavior, not backfilled or narrowed. See
+  `docs/architecture/project-api-key-architecture.md` and
+  `docs/phases/phase-project-api-key-P2.md`.
+
+### Fixed (Project-Scoped API Keys hardening — P2.1 — 2026-08-10)
+
+- Executed P2's security test suite for real (10/10 pass) against a real
+  Postgres instance with the full real migration chain applied — it had
+  only been written, not run, in P2. Found and fixed 3 real bugs surfaced
+  only by real execution: an invalid `CREATE OR REPLACE VIEW` column
+  reorder, a plpgsql parameter/output-column name collision, and two
+  errors in the test fixtures themselves.
+- (Private `valori-ui` repo) Fixed `Valori-Kernel/ui`'s stale
+  `create_api_key` callers — the 3-arg pre-migration shape P2's report
+  flagged, plus a second, previously-undiscovered call site
+  (`ui/src/app/settings/page.tsx`). Fixed `duplicateProject()` to show its
+  new project's Default key instead of creating it silently.
+- Verified live: FK cascade deletes a project's keys on project deletion;
+  a failed atomic project+key creation leaves no orphan rows; no raw key
+  ever reaches logs, telemetry, or browser storage in any file this work
+  touched.
+
+### Added (Cloud → Worker authentication — P2.2 — 2026-08-10)
+
+- (Private `valori-ui` repo) `VALORI_AUTH_TOKEN` defense-in-depth: every
+  Cloud project now has an internal worker auth token, set in its
+  deployed node's env by the Rust provisioner and attached by the Cloud
+  proxy on every request it forwards — closing the "every Cloud node is
+  unauthenticated at the node level" gap the original audit found. No
+  `valori-kernel`/`valori-node` code changed — reuses the node's existing
+  auth mechanism.
+- Proved the full request chain over real HTTP (PostgREST + a real
+  `valori-node` process, no simulation): worker-token enforcement,
+  cross-project key isolation, and atomic project+key creation all
+  verified live.
+- Found and fixed a real security bug this live testing caught: a
+  `REVOKE SELECT (column)` on top of a pre-existing broad table grant
+  does not actually restrict access in Postgres (they're ORed, not
+  layered) — the worker token was readable by any authenticated user
+  until this was caught by an actual HTTP request and fixed the same way
+  `api_keys.key_hash` is already protected elsewhere in this schema.
+
+### Added / Fixed (NodeClient unification, real E2E, Python SDK — P2.3 — 2026-08-10)
+
+- New `NodeClient` (`valori-ui/ui`) — the single way Cloud code talks to a
+  node; a sweep found 14 files (not 2) making ad-hoc, un-authenticated node
+  calls and converted all of them.
+- Proved the full Python SDK → Cloud API → node chain over real HTTP
+  (real Postgres, PostgREST, and a real node process) — found and fixed a
+  serious bug this caught that nothing else could have: every
+  project-scoped key's real default scope failed every real route's scope
+  check due to an exact-string-match bug in `verify_api_key()` — **every
+  newly-issued key would have 401'd on its first real request**. Fixed
+  with a wildcard match, re-verified live.
+- Corrected the Python SDK: P2.2's `Valori` class targeted the wrong route
+  shape for real Cloud use (never actually tested against it). Added
+  `client.collections.create()/upsert()/search()` and a new `GET /api/me`
+  self-discovery endpoint, so the SDK never takes a `project_id` argument —
+  proven live end-to-end, including cross-project 403 and revoked-key 401.
+- A real safety incident during setup is disclosed in full in
+  `docs/phases/phase-project-api-key-P2.3.md`: one test request briefly
+  reached a real Supabase project due to an env-var precedence assumption
+  that didn't hold. Assessed as harmless (a no-op key lookup, no data
+  touched) and fixed by isolating the test environment properly for the
+  remainder of testing.
+
+### Changed (Legacy-key cleanup, SDK URL fix — P2.4 — 2026-08-10)
+
+- Confirmed no real legacy org-scoped Cloud API keys exist anywhere (not
+  deployed yet) — removed that entire compatibility path.
+  `api_keys.project_id` is `not null`; `verify_api_key()` no longer takes
+  a `target_project_id` parameter or returns `key_kind` — one code path,
+  not two. SQL test suite updated and **re-run live: 9/9 pass**.
+- Python SDK example/docstring URL corrected from `api.valori.systems`
+  (never created, not needed) to `app.valori.systems` — the SDK's routes
+  live inside the same Next.js app as the dashboard, not a separate
+  deployment.
+
 ## [0.3.0] — 2026-08-09
 
 Kernel/workspace and desktop app both bumped to 0.3.0 (minor — this

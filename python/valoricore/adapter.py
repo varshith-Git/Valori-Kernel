@@ -12,8 +12,18 @@ event-sourced, snapshot-persisted, included in global state hash.
 import numpy as np
 from typing import Optional
 
-# Import bridge functions from Rust FFI
-from .valoricore_ffi import verify_embedding
+# Import bridge functions from Rust FFI. Guarded like local.py's own FFI
+# import: ValoricoreAdapter always constructs (or requires) a LocalClient,
+# and LocalClient.__init__ already raises a clear ImportError if the
+# extension isn't available — so nothing here silently proceeds without
+# it. The guard's real purpose is letting `import valoricore` (and
+# therefore `valoricore.remote`'s HTTP-only clients, which never touch
+# this module's contents) succeed on a machine without the compiled
+# extension, since __init__.py imports this module unconditionally.
+try:
+    from .valoricore_ffi import verify_embedding
+except ImportError:
+    verify_embedding = None
 from .local import LocalClient
 
 

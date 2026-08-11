@@ -1,0 +1,66 @@
+[
+  {
+    "n_projects": 1,
+    "per_project": {
+      "0": {
+        "status": "ok",
+        "insert_elapsed_secs": 2.65,
+        "insert_vectors_per_sec": 1889.5,
+        "peak_rss_mb": 45.4,
+        "cross_project_token_status": null
+      }
+    }
+  },
+  {
+    "n_projects": 2,
+    "per_project": {
+      "0": {
+        "status": "ok",
+        "insert_elapsed_secs": 3.88,
+        "insert_vectors_per_sec": 1287.4,
+        "peak_rss_mb": 45.4,
+        "cross_project_token_status": 401
+      },
+      "1": {
+        "status": "ok",
+        "insert_elapsed_secs": 3.89,
+        "insert_vectors_per_sec": 1284.9,
+        "peak_rss_mb": 45.1,
+        "cross_project_token_status": 401
+      }
+    }
+  },
+  {
+    "n_projects": 4,
+    "per_project": {
+      "1": {
+        "status": "ok",
+        "insert_elapsed_secs": 6.07,
+        "insert_vectors_per_sec": 823.5,
+        "peak_rss_mb": 45.4,
+        "cross_project_token_status": 401
+      },
+      "2": {
+        "status": "ok",
+        "insert_elapsed_secs": 6.04,
+        "insert_vectors_per_sec": 827.7,
+        "peak_rss_mb": 45.2,
+        "cross_project_token_status": 401
+      },
+      "3": {
+        "status": "ok",
+        "insert_elapsed_secs": 5.93,
+        "insert_vectors_per_sec": 843.2,
+        "peak_rss_mb": 45.4,
+        "cross_project_token_status": 401
+      },
+      "0": {
+        "status": "ok",
+        "insert_elapsed_secs": 6.12,
+        "insert_vectors_per_sec": 816.5,
+        "peak_rss_mb": 45.4,
+        "cross_project_token_status": 401
+      }
+    }
+  }
+]
