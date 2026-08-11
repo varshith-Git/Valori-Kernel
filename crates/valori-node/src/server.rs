@@ -287,6 +287,7 @@ pub fn build_router_with_keys(
         .route("/v1/memory/contradict", post(memory_contradict))
         .route("/v1/memory/meta/set", post(meta_set))
         .route("/v1/memory/meta/get", axum::routing::get(meta_get))
+        .route("/v1/usage", axum::routing::get(usage_handler))
         .route("/v1/proof/state", axum::routing::get(get_proof))
         .route("/v1/proof/event-log", axum::routing::get(get_event_proof))
         .route("/v1/proof/receipt", axum::routing::get(get_latest_receipt))
@@ -2072,6 +2073,75 @@ async fn get_proof(State(state): State<SharedEngine>) -> impl IntoResponse {
         .map(|b| format!("{b:02x}"))
         .collect();
     Json(serde_json::json!({ "final_state_hash": hex }))
+}
+
+/// `GET /v1/usage` — Phase P2 (Cloud plan/quota/usage accounting):
+/// read-only records/collections/storage-byte counts. Never mutates
+/// canonical state (read lock only, no audit-log write, no
+/// `KernelEvent`) and returns no plan/billing context whatsoever —
+/// `valori-node` remains completely plan-agnostic. Cloud's own control
+/// plane is the only thing that ever maps these raw numbers onto a
+/// plan's limits.
+async fn usage_handler(State(state): State<SharedEngine>) -> impl IntoResponse {
+    let engine = state.read().await;
+    let records = engine.record_count();
+    let collections = engine.list_collections().len();
+    let (event_log_bytes, snapshot_bytes) = storage_bytes_standalone(&engine);
+    Json(serde_json::json!({
+        "records": records,
+        "collections": collections,
+        "storage": {
+            "event_log_bytes": event_log_bytes,
+            "snapshot_bytes": snapshot_bytes,
+            "total_bytes": event_log_bytes + snapshot_bytes,
+        }
+    }))
+}
+
+/// Sums the live event-log segment plus every rotated archive segment
+/// (`events.log` -> `events.log.000001`, `.000002`, ... — see
+/// `EventLogWriter::rotate()`; archived segments are never deleted, so
+/// stat-ing only the live file silently undercounts after any rotation
+/// has ever happened) plus the snapshot file, if configured. Falls back
+/// to the legacy WAL path when the engine isn't using the event-log
+/// persistence mode. Missing files/paths contribute 0, never an error —
+/// this must never fail a request over a purely cosmetic accounting gap.
+fn storage_bytes_standalone(engine: &Engine) -> (u64, u64) {
+    let event_log_path = engine
+        .event_committer()
+        .map(|c| c.event_log().path().to_path_buf())
+        .or_else(|| engine.wal_path.clone());
+    let event_log_bytes = event_log_path.map(sum_log_and_archives).unwrap_or(0);
+    let snapshot_bytes = engine
+        .snapshot_path
+        .as_ref()
+        .map(|p| file_size(p))
+        .unwrap_or(0);
+    (event_log_bytes, snapshot_bytes)
+}
+
+/// Live segment size + every sibling file in the same directory whose name
+/// starts with the live segment's own filename (the rotation naming
+/// convention above).
+pub(crate) fn sum_log_and_archives(live_path: std::path::PathBuf) -> u64 {
+    let mut total = file_size(&live_path);
+    if let (Some(dir), Some(live_name)) = (live_path.parent(), live_path.file_name()) {
+        let live_name = live_name.to_string_lossy().into_owned();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name();
+                let fname = fname.to_string_lossy();
+                if fname != live_name && fname.starts_with(live_name.as_str()) {
+                    total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                }
+            }
+        }
+    }
+    total
+}
+
+fn file_size(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
 // ── C4.2: Memory consolidation ───────────────────────────────────────────────

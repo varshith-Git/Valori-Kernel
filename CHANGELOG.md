@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Cloud P2 — Usage & Quota Accounting, node-side — 2026-08-12)
+
+- `GET /v1/usage` — new read-only endpoint (standalone `server.rs` +
+  cluster `cluster_server.rs`) reporting `records`, `collections`, and
+  `storage` (`event_log_bytes`/`snapshot_bytes`/`total_bytes`) for
+  Cloud's plan/quota/usage accounting system. `valori-node` remains
+  completely plan-agnostic — the endpoint returns raw counts only, no
+  plan or billing context. Never mutates canonical state (read lock
+  only) and never affects the BLAKE3 state hash — verified directly by
+  a new test asserting `/v1/proof/state` is byte-identical whether or
+  not `/v1/usage` was ever called.
+- Storage accounting correctly sums the live event-log segment plus
+  every rotated archive segment (`events.log`, `events.log.000001`,
+  ...) — archived segments are never deleted on rotation, so a naive
+  stat of only the live file would silently undercount after any
+  rotation. Covered by a dedicated test.
+- Cluster mode sums `records`/`storage` across every shard the node
+  runs (records are genuinely partitioned by
+  `namespace_id % shard_count`); `collections` is not summed — the
+  namespace registry is a single logical registry maintained via shard
+  0's Raft group alone, not duplicated per shard.
+- Authenticated via the existing `auth_guard_v2`/`VALORI_AUTH_TOKEN`
+  mechanism — no new auth code needed.
+- 5 new tests in `crates/valori-node/tests/usage_endpoint_tests.rs`;
+  `cargo test --workspace` 1194/1194 passed, clippy clean.
+- Full design rationale (usage model, storage accounting inventory,
+  stale-worker semantics, Cloud-side scheduler/schema) lives in the
+  private `valori-ui` repo (`docs/architecture/plan-quota-p2-usage-accounting-plan.md`)
+  — Cloud business logic stays out of this public repo per this
+  project's own architecture boundary.
+
 ### Added (S11 — Index Tuning & Product Defaults — 2026-08-11)
 
 - `BqConfig { pool_factor, min_candidates }` (`crates/valori-index/src/bq.rs`)
