@@ -46,6 +46,7 @@ use crate::cluster::ClusterHandle;
 use crate::cluster_api::cluster_router;
 use crate::crypto_vault::{hex_to_key_id, key_id_to_hex, new_key_id};
 use crate::events::event_log::EventLogWriter;
+use crate::server::sum_log_and_archives;
 use axum::body::Body;
 use axum::extract::Extension;
 use axum::extract::Request as AxumRequest;
@@ -366,6 +367,7 @@ pub fn build_cluster_router_with_keys(
             post(create_collection_handler).get(list_collections_handler),
         )
         .route("/v1/namespaces/:name", delete(drop_collection_handler))
+        .route("/v1/usage", get(usage))
         .route("/v1/proof/state", get(state_proof))
         .route("/v1/proof/event-log", get(event_log_proof))
         .route("/v1/cluster/proof", get(cluster_proof))
@@ -1637,6 +1639,49 @@ async fn batch_insert(
 // ── State proof ───────────────────────────────────────────────────────────────
 // `final_state_hash` matches the standalone DeterministicProof field name the
 // SDK reads, so `get_state_hash()` works unchanged against a cluster node.
+
+/// `GET /v1/usage` — Phase P2 cluster equivalent of the standalone
+/// endpoint (`server.rs::usage_handler`). Records and storage bytes are
+/// summed across **every shard this node runs** — records because they
+/// are genuinely partitioned by `namespace_id % shard_count`, storage
+/// because each shard has its own audit-log file
+/// (`shard_event_log_paths`, the same map `/v1/proof/event-log` already
+/// sums across, S16). Collections are NOT summed across shards: the
+/// namespace registry is a single logical registry maintained via shard
+/// 0's Raft group alone (collection creation always targets
+/// `namespace_id: 0`, see `create_collection_handler` below) — it is not
+/// duplicated per shard, so shard 0's count already is the true total.
+/// Snapshot bytes are not included: cluster-mode snapshots are Raft's
+/// own log-compaction mechanism, not a single stat-able file the way the
+/// standalone engine's `snapshot_path` is — a known, explicit scope
+/// limit, not a silent gap.
+async fn usage(State(state): State<DataPlaneState>) -> Response {
+    let mut records: u64 = 0;
+    for shard in state.shards.values() {
+        records += shard
+            .state_machine
+            .with_state(|s| s.record_count() as u64)
+            .await;
+    }
+    let collections = state.sm.list_namespaces().await.len();
+    let mut event_log_bytes: u64 = 0;
+    for path in state.shard_event_log_paths.values() {
+        event_log_bytes += sum_log_and_archives(path.clone());
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "records": records,
+            "collections": collections,
+            "storage": {
+                "event_log_bytes": event_log_bytes,
+                "snapshot_bytes": 0,
+                "total_bytes": event_log_bytes,
+            }
+        })),
+    )
+        .into_response()
+}
 
 async fn state_proof(State(state): State<DataPlaneState>) -> Response {
     let hash = state.sm.state_hash().await;

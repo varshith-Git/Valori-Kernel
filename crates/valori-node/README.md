@@ -544,6 +544,69 @@ curl http://localhost:3000/v1/proof/state
 
 ---
 
+## Usage Accounting (Phase P2)
+
+Read-only records/collections/storage-byte counts for Cloud's plan/quota
+system. `valori-node` remains completely plan-agnostic — this endpoint
+returns raw numbers only, never a plan name, never a quota decision.
+Never mutates canonical state (read lock only, no audit-log write) and
+never appears in the BLAKE3 state hash.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/v1/usage` | `GET` | `{records, collections, storage: {event_log_bytes, snapshot_bytes, total_bytes}}`. In cluster mode, `records`/`storage` are summed across every shard this node runs; `collections` is shard-0's namespace registry (not duplicated per shard, so no sum needed). |
+
+```bash
+curl -H "Authorization: Bearer $VALORI_AUTH_TOKEN" http://localhost:3000/v1/usage
+# → {"records":17,"collections":11,"storage":{"event_log_bytes":2466,"snapshot_bytes":9257,"total_bytes":11723}}
+```
+
+`storage_bytes` sums the live event-log segment **plus every rotated
+archive segment** (`events.log`, `events.log.000001`, ...) — archived
+segments are never deleted on rotation, so a naive stat of only the live
+file undercounts after any rotation has ever happened.
+
+### Billable storage definition
+
+**What counts**: the live event-log segment, every rotated archive
+segment, and the snapshot file (`state.snap`). This is the actual
+on-disk footprint of a project's real data — everything a restore needs.
+
+**What does not count**: `metadata.json`/`namespaces.json` (trivial
+sidecars, a few hundred bytes), `.tmp` atomic-write files (transient,
+present only mid-crash), remote object-store copies (Cloud's own
+`infra.project_backups`/`storage_usage` tracks that allocation
+separately — including it here would double-count against that system),
+and the `~/.valori/metadata.redb` control-plane DB (not project data at
+all).
+
+**Why `snapshot_bytes` can fluctuate by a small amount across restarts,
+even with identical logical content** (observed directly: 9359 → 9257
+bytes across a real restart with the exact same 17 records / 11
+collections both before and after): the snapshot format's canonical
+section (records, graph, index heads — the part that determines the
+BLAKE3 state hash) is followed by three **non-canonical** trailing
+sections written on every save — `NSRG` (namespace registry, JSON),
+`CRTS` (per-record creation timestamps, used only for read-time decay
+ranking), and `BCRP` (BM25 reranker term-frequency corpus) — see
+`Engine::write_snapshot_to_writer` in `crates/valori-engine/src/engine.rs`.
+These sections are real, intentionally excluded from the state hash
+(hashing a wall-clock timestamp would make the hash non-reproducible on
+replay, which is the opposite of the point), and their serialized size
+can vary slightly run to run without any change to canonical data. **A
+few hundred bytes of drift on `snapshot_bytes` between two snapshots of
+logically identical data is expected and does not indicate data loss,
+corruption, or a billing discrepancy** — verified directly: the same
+real restart that produced this drift left `records`/`collections`
+(the two fields the trailing sections cannot affect) and the BLAKE3
+state hash itself completely unchanged. Anyone treating `storage_bytes`
+as an exact, restart-stable number for billing purposes should be aware
+of this before relying on byte-for-byte precision — the record/
+collection counts are exact and stable; the storage figure has this one
+documented, bounded source of natural variance.
+
+---
+
 ## API Key Management (Phase 3.5)
 
 Per-tenant scoped credentials. Three scope tiers: `read_only < read_write < admin`.
