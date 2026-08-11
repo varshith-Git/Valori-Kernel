@@ -18,7 +18,7 @@ pub mod ivf;
 pub mod quant;
 pub mod traits;
 
-pub use bq::BqIndex;
+pub use bq::{BqConfig, BqIndex};
 pub use brute_force::BruteForceIndex;
 pub use deterministic::kmeans::{deterministic_kmeans, f32_to_q16, l2_sq_q16};
 pub use hnsw::{HnswConfig, HnswIndex};

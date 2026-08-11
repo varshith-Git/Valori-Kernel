@@ -20,7 +20,7 @@ impl Default for NodeMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NodeConfig {
     pub max_records: usize,
     pub dim: usize,
@@ -122,6 +122,14 @@ pub struct NodeConfig {
     // Env: VALORI_IVF_N_PROBE — fix probe count (disables auto-scale)
     pub ivf_n_probe: Option<usize>,
 
+    // ── BQ parameter overrides (S11.3) ────────────────────────────────────────
+    // Only take effect when VALORI_INDEX=bq. Absent = BqConfig defaults
+    // (pool_factor=10, min_candidates=200 — unchanged from pre-S11 behavior).
+    // Env: VALORI_BQ_POOL_FACTOR — candidate pool = max(pool_factor*k, min_candidates)
+    pub bq_pool_factor: Option<usize>,
+    // Env: VALORI_BQ_MIN_CANDIDATES — floor on the candidate pool size
+    pub bq_min_candidates: Option<usize>,
+
     // ── Standalone sharding ──────────────────────────────────────────────────
     // Number of independent shards in standalone mode.
     // Namespaces are routed to shards via `namespace_id % shard_count`.
@@ -147,6 +155,76 @@ pub struct NodeConfig {
     pub embed_model: Option<String>,
     pub embed_url: Option<String>,
     pub embed_api_key: Option<String>,
+}
+
+// Hand-written Debug (not derived): the derived impl printed `auth_token`
+// and `embed_api_key` in plaintext on every node startup at INFO level
+// (`main.rs`'s "Initializing Valori Node with config: {:?}"), which is
+// exactly the worker's own credential (VALORI_AUTH_TOKEN — the same
+// secret Cloud attaches to every proxied request) landing in real
+// container logs. Found via the Local Cloud E2E suite's log sweep, not
+// by inspection. Every other field is printed exactly as `derive(Debug)`
+// would — only these two are redacted.
+impl std::fmt::Debug for NodeConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn redacted(v: &Option<String>) -> &'static str {
+            if v.is_some() {
+                "Some(\"[REDACTED]\")"
+            } else {
+                "None"
+            }
+        }
+        f.debug_struct("NodeConfig")
+            .field("max_records", &self.max_records)
+            .field("dim", &self.dim)
+            .field("index_kind", &self.index_kind)
+            .field("quantization_kind", &self.quantization_kind)
+            .field("max_nodes", &self.max_nodes)
+            .field("max_edges", &self.max_edges)
+            .field("bind_addr", &self.bind_addr)
+            .field("snapshot_path", &self.snapshot_path)
+            .field("wal_path", &self.wal_path)
+            .field("event_log_path", &self.event_log_path)
+            .field("event_log_rotation_bytes", &self.event_log_rotation_bytes)
+            .field(
+                "auto_snapshot_interval_secs",
+                &self.auto_snapshot_interval_secs,
+            )
+            .field("snapshot_every_events", &self.snapshot_every_events)
+            .field("snapshot_every_bytes", &self.snapshot_every_bytes)
+            .field("snapshot_keep", &self.snapshot_keep)
+            .field("zstd_compression_level", &self.zstd_compression_level)
+            .field("genesis_replay", &self.genesis_replay)
+            .field("node_id", &self.node_id)
+            .field("health_check_mode", &self.health_check_mode)
+            .field(
+                "auth_token",
+                &format_args!("{}", redacted(&self.auth_token)),
+            )
+            .field("keys_path", &self.keys_path)
+            .field("shred_log_path", &self.shred_log_path)
+            .field("mode", &self.mode)
+            .field("object_store_url", &self.object_store_url)
+            .field("object_store_keep", &self.object_store_keep)
+            .field("cors_origin", &self.cors_origin)
+            .field("hnsw_m", &self.hnsw_m)
+            .field("hnsw_ef_construction", &self.hnsw_ef_construction)
+            .field("hnsw_ef_search", &self.hnsw_ef_search)
+            .field("ivf_n_list", &self.ivf_n_list)
+            .field("ivf_n_probe", &self.ivf_n_probe)
+            .field("bq_pool_factor", &self.bq_pool_factor)
+            .field("bq_min_candidates", &self.bq_min_candidates)
+            .field("shard_count", &self.shard_count)
+            .field("decay_half_life_secs", &self.decay_half_life_secs)
+            .field("embed_provider", &self.embed_provider)
+            .field("embed_model", &self.embed_model)
+            .field("embed_url", &self.embed_url)
+            .field(
+                "embed_api_key",
+                &format_args!("{}", redacted(&self.embed_api_key)),
+            )
+            .finish()
+    }
 }
 
 impl Default for NodeConfig {
@@ -267,6 +345,13 @@ impl Default for NodeConfig {
             .ok()
             .and_then(|v| v.parse().ok());
 
+        let bq_pool_factor: Option<usize> = std::env::var("VALORI_BQ_POOL_FACTOR")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let bq_min_candidates: Option<usize> = std::env::var("VALORI_BQ_MIN_CANDIDATES")
+            .ok()
+            .and_then(|v| v.parse().ok());
+
         let decay_half_life_secs = std::env::var("VALORI_DECAY_HALF_LIFE_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -330,6 +415,8 @@ impl Default for NodeConfig {
             hnsw_ef_search,
             ivf_n_list,
             ivf_n_probe,
+            bq_pool_factor,
+            bq_min_candidates,
             shard_count,
             decay_half_life_secs,
             embed_provider,

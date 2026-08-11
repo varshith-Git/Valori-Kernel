@@ -8,21 +8,47 @@
 use crate::traits::VectorIndex;
 use std::collections::HashMap;
 
-const POOL_FACTOR: usize = 10;
-const MIN_CANDIDATES: usize = 200;
+const DEFAULT_POOL_FACTOR: usize = 10;
+const DEFAULT_MIN_CANDIDATES: usize = 200;
+
+/// S11.3: candidate-pool size was previously hardcoded (`POOL_FACTOR=10`,
+/// `MIN_CANDIDATES=200`), with no way to test whether a larger
+/// pre-rerank pool improves recall without a source change. This makes
+/// it a runtime config, defaulting to the exact prior constants so
+/// behavior is unchanged unless explicitly overridden.
+#[derive(Clone, Copy, Debug)]
+pub struct BqConfig {
+    pub pool_factor: usize,
+    pub min_candidates: usize,
+}
+
+impl Default for BqConfig {
+    fn default() -> Self {
+        Self {
+            pool_factor: DEFAULT_POOL_FACTOR,
+            min_candidates: DEFAULT_MIN_CANDIDATES,
+        }
+    }
+}
 
 pub struct BqIndex {
     dim: usize,
     words_per_vec: usize,
+    config: BqConfig,
     codes: HashMap<u32, Vec<u64>>,
     vectors: HashMap<u32, Vec<f32>>,
 }
 
 impl BqIndex {
     pub fn new() -> Self {
+        Self::new_with_config(BqConfig::default())
+    }
+
+    pub fn new_with_config(config: BqConfig) -> Self {
         Self {
             dim: 0,
             words_per_vec: 0,
+            config,
             codes: HashMap::new(),
             vectors: HashMap::new(),
         }
@@ -100,7 +126,7 @@ impl VectorIndex for BqIndex {
         }
 
         let query_code = Self::binarize(query);
-        let candidates_cap = (POOL_FACTOR * k).max(MIN_CANDIDATES);
+        let candidates_cap = (self.config.pool_factor * k).max(self.config.min_candidates);
 
         let mut candidates: Vec<(u32, u32)> = self
             .codes
@@ -169,5 +195,31 @@ mod tests {
         idx.build(&corpus);
         let res = idx.search(&[0.0, 0.0, 0.0, 0.0], 3);
         assert_eq!(res.len(), 3);
+    }
+
+    #[test]
+    fn custom_config_changes_candidate_pool_without_error() {
+        // S11.3: a larger pool must not change correctness on a small
+        // corpus (pool always covers the whole corpus either way) — this
+        // only asserts the config plumbing works end-to-end.
+        let cfg = BqConfig {
+            pool_factor: 50,
+            min_candidates: 40,
+        };
+        let mut idx = BqIndex::new_with_config(cfg);
+        let corpus: Vec<(u32, Vec<f32>)> = (0..30u32)
+            .map(|i| (i, vec![i as f32, 0.0, 0.0, 0.0]))
+            .collect();
+        idx.build(&corpus);
+        let res = idx.search(&[0.0, 0.0, 0.0, 0.0], 3);
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].0, 0);
+    }
+
+    #[test]
+    fn default_config_matches_prior_constants() {
+        let cfg = BqConfig::default();
+        assert_eq!(cfg.pool_factor, 10);
+        assert_eq!(cfg.min_candidates, 200);
     }
 }

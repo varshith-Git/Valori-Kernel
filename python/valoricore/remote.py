@@ -2318,6 +2318,7 @@ class SyncRemoteClient(
 
     # ── Backward-compat shims ─────────────────────────────────────────────────
 
+
     @property
     def session(self) -> requests.Session:
         """Expose the underlying Session for callers that read it directly."""
@@ -2341,6 +2342,194 @@ class SyncRemoteClient(
 
     def __exit__(self, *_: Any) -> None:
         self.close()
+
+
+class Collection:
+    """A single project-scoped collection (namespace), as returned by
+    `Valori.collections.create()`/`.get()`. Wraps exactly the three
+    operations `POST /api/projects/{project_id}/{insert,search}` and the
+    namespace itself support — no local state beyond the collection name.
+    """
+
+    def __init__(self, client: "Valori", name: str):
+        self._client = client
+        self.name = name
+
+    def upsert(self, vectors: List[Vector]) -> List[int]:
+        """Insert vectors into this collection. Returns the assigned
+        record ids, in the same order as `vectors`."""
+        data = self._client._cloud_post(
+            "/insert", {"batch": vectors, "collection": self.name}
+        )
+        return data.get("ids", [])
+
+    def search(self, vector: Vector, top_k: int = 10) -> List[Dict[str, Any]]:
+        """Search this collection. Returns the raw `results` list — each
+        entry at minimum has `id`/`score`, same shape `/search` already
+        returns today; not renamed, so this stays honest about not
+        inventing response fields the server doesn't send."""
+        data = self._client._cloud_post(
+            "/search", {"query": vector, "k": top_k, "collection": self.name}
+        )
+        return data.get("results", [])
+
+    def delete(self, record_id: int) -> None:
+        """Deletes one vector by the id `upsert()` returned. Wraps
+        `POST /api/projects/{id}/delete` — the same route/body shape
+        (`{id, collection}`) the dashboard's own delete action uses."""
+        self._client._cloud_post("/delete", {"id": record_id, "collection": self.name})
+
+    def drop(self) -> None:
+        """Deletes this entire collection (namespace) and everything in
+        it. Wraps `DELETE /api/projects/{id}/namespaces/{name}`."""
+        self._client._cloud_delete(f"/namespaces/{self.name}")
+
+
+class _CollectionsResource:
+    """`client.collections` — create/get collections without the caller
+    ever naming a `project_id` (P2.3). Backed by the same project-scoped
+    key the client was constructed with; which project is resolved once,
+    lazily, via `GET /api/me` (see Valori._project_id)."""
+
+    def __init__(self, client: "Valori"):
+        self._client = client
+
+    def create(self, name: str) -> Collection:
+        """Creates the collection (namespace) if it doesn't already exist
+        and returns a handle to it either way — `POST .../namespaces` is
+        already idempotent-by-name on the server side.
+
+        Note: Valori's collections do NOT have their own
+        dimension/index — those are fixed at the PROJECT level (set once
+        when the project itself was created) and shared by every
+        collection inside it. A `dimension=`/`index=` kwarg here would be
+        silently ignored by the server, so this method deliberately
+        doesn't accept them rather than pretend they do something.
+        """
+        self._client._cloud_post("/namespaces", {"name": name})
+        return Collection(self._client, name)
+
+    def get(self, name: str) -> Collection:
+        """No existence check — matches `create()`'s idempotency; a typo'd
+        name simply behaves as an empty collection until something is
+        upserted into it, same as the server's own namespace semantics."""
+        return Collection(self._client, name)
+
+    def list(self) -> List[str]:
+        """Names of every collection (namespace) that exists in this
+        project. Wraps `GET /api/projects/{id}/namespaces`, which proxies
+        the node's own `/v1/namespaces` — response shape is exactly
+        `{"collections": [{"name": str, "id": int}, ...]}` (see
+        crates/valori-node/src/api.rs::ListCollectionsResponse); this
+        method returns just the names, matching `create()`/`get()`'s
+        name-only interface."""
+        data = self._client._cloud_get("/namespaces")
+        return [c["name"] for c in data.get("collections", [])]
+
+
+DEFAULT_CLOUD_URL = "https://app.valori.systems"
+
+
+class Valori(SyncRemoteClient):
+    """The Cloud project-scoped API key contract (P2/P2.3):
+
+        from valoricore import Valori
+        client = Valori(api_key="vlk_...")   # defaults to https://app.valori.systems
+
+        collection = client.collections.create("documents")
+        collection.upsert([[0.1, 0.2, 0.3, 0.4]])
+        results = collection.search([0.1, 0.2, 0.3, 0.4], top_k=10)
+
+    `url` defaults to the Cloud dashboard's own domain
+    (`https://app.valori.systems`), not a separate API subdomain —
+    `/api/projects/{id}/...` and `/api/me` are Next.js routes living
+    inside that same app, not a second deployment. There is no
+    `api.valori.systems` to stand up; P2.4 confirmed this with the user
+    (an earlier draft of this docstring assumed a separate API subdomain
+    that was never actually created or needed). Pass `url=` to point at a
+    local/self-hosted stack instead — e.g. `Valori(url="http://localhost:3311",
+    api_key="vlk_...")` for this repo's own Local Cloud E2E environment.
+
+    `api_key` alone determines which project every call reaches — this
+    class never takes or exposes a `project_id` parameter. On first use,
+    it calls `GET {url}/api/me` (key-only, no session) to resolve its own
+    project id once, then targets every subsequent call at
+    `{url}/api/projects/{project_id}/...` — the SAME route surface the
+    Cloud dashboard's own UI calls, not a separate customer-only API.
+
+    Inherits `SyncRemoteClient` for its transport (Bearer auth via
+    `_BearerAuth`, retry-with-backoff on 307/503 only, no auth-logic of
+    its own — the Cloud API remains authoritative for every access
+    decision) but does NOT use its inherited flat-path methods
+    (`create_collection`, `insert`, `search`, etc.) for anything under
+    `.collections` — those build `/v1/...`/`/search` paths meant for a
+    request landing directly on a bare `valori-node`, which is a
+    different, incompatible route shape from Cloud's actual
+    `/api/projects/{id}/...` proxy surface (confirmed by a real end-to-end
+    test against a live Next.js dev server this phase — the previous
+    version of this class, which claimed those inherited methods "just
+    work" against a Cloud URL, was never actually verified against real
+    Cloud routes and would have 404'd). If `url` genuinely points at a
+    bare node (local/direct mode, no Cloud proxy in front of it), the
+    inherited flat methods are still there and still correct for that
+    case — just not what `.collections` uses.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        url: str = DEFAULT_CLOUD_URL,
+        max_retries: int = 3,
+        retry_backoff: float = 0.5,
+        timeout: int = 10,
+    ):
+        super().__init__(
+            base_url=url,
+            token=api_key,
+            max_retries=max_retries,
+            retry_backoff=retry_backoff,
+            timeout=timeout,
+        )
+        self._resolved_project_id: Optional[str] = None
+        self.collections = _CollectionsResource(self)
+
+    def _project_id(self) -> str:
+        if self._resolved_project_id is None:
+            try:
+                resp = self._t.get(self._t.base_url + "/api/me", timeout=10)
+                _raise_for_status(resp)
+                pid = resp.json().get("project_id")
+            except requests.exceptions.RequestException as e:
+                raise ConnectionError(f"Failed to resolve project from API key: {e}")
+            if not pid:
+                raise AuthenticationError(
+                    "This key has no single project to resolve — likely a legacy "
+                    "org-scoped key. The collections API requires a project-scoped key."
+                )
+            self._resolved_project_id = pid
+        return self._resolved_project_id
+
+    def _cloud_post(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        project_id = self._project_id()
+        return self._t.post_rpc(f"/api/projects/{project_id}{path}", body)
+
+    def _cloud_get(self, path: str) -> Any:
+        project_id = self._project_id()
+        try:
+            resp = self._t.get(f"{self._t.base_url}/api/projects/{project_id}{path}")
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Cloud API request failed: {e}")
+
+    def _cloud_delete(self, path: str) -> Any:
+        project_id = self._project_id()
+        try:
+            resp = self._t.delete(f"{self._t.base_url}/api/projects/{project_id}{path}")
+            _raise_for_status(resp)
+            return resp.json() if resp.content else None
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Cloud API request failed: {e}")
 
 
 class AsyncRemoteClient(

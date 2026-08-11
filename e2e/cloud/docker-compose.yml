@@ -1,0 +1,193 @@
+# Local Cloud E2E environment — proves the real request chain:
+#   Python SDK -> Cloud API (real ui/) -> verify_api_key() (real RPC,
+#   via real PostgREST) -> project authorization -> worker_auth_token ->
+#   real valori-node (Worker A / Worker B) -> real project data.
+#
+# Nothing here is mocked. See docs/reviews/local-cloud-e2e-audit.md for
+# exactly what's reused vs. newly added, and what a bare-Postgres stub
+# does and doesn't reproduce of real Supabase.
+#
+# Usage:
+#   cd Valori-Kernel/e2e/cloud
+#   cp .env.example .env          # edit if you want non-default secrets
+#   docker compose up -d --build
+#   docker compose run --rm python pytest -v
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5433:5432"   # non-default host port — avoids clashing with a local Postgres
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies the real migration chains from both repos, then
+  # exits. `docker compose up` waits for it to complete successfully
+  # (depends_on: condition: service_completed_successfully) before
+  # starting postgrest/ui.
+  migrate:
+    image: postgres:16
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - ./scripts/apply_migrations.sh:/apply_migrations.sh:ro
+      - ./postgres:/migrations:ro
+      - ${VALORI_UI_PATH:-../../../valori-ui}/backend/migrations:/backend-migrations:ro
+      - ${VALORI_UI_PATH:-../../../valori-ui}/supabase/migrations:/supabase-migrations:ro
+    entrypoint: ["/bin/sh", "/apply_migrations.sh"]
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.0
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PGRST_DB_URI: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET:-local-e2e-jwt-secret-do-not-use-in-prod-32ch}
+    ports:
+      - "3211:3000"
+    healthcheck:
+      # postgrest/postgrest's image has no wget/curl — only bash, which
+      # does have /dev/tcp. A bare connect is enough: PostgREST is either
+      # accepting connections on 3000 or it isn't.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/3000"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Fronts postgrest at /rest/v1/* — real Supabase serves PostgREST behind
+  # exactly this path prefix via its gateway; a bare PostgREST serves at
+  # root. Without this, @supabase/supabase-js's real request path
+  # (/rest/v1/rpc/...) 404s even though a hand-rolled curl to /rpc/...
+  # works — found the hard way in Valori-Kernel's project-api-key-P2.3
+  # phase, now made a permanent, documented part of this environment
+  # instead of a throwaway workaround.
+  rest-shim:
+    image: node:20-slim
+    depends_on:
+      postgrest:
+        condition: service_healthy
+    volumes:
+      - ./scripts/rest_v1_shim.js:/shim.js:ro
+    command: ["node", "/shim.js"]
+    environment:
+      TARGET_HOST: postgrest
+      TARGET_PORT: "3000"
+      LISTEN_PORT: "3212"
+    ports:
+      - "3212:3212"
+
+  worker-a:
+    build:
+      context: ${VALORI_KERNEL_PATH:-../..}
+      dockerfile: Dockerfile
+    environment:
+      VALORI_DIM: "4"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_AUTH_TOKEN: ${WORKER_A_TOKEN:-worker-a-secret}
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+      VALORI_MAX_RECORDS: "200000"
+    volumes:
+      - worker-a-data:/data   # isolated from worker-b — never shared
+    ports:
+      - "3301:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  worker-b:
+    build:
+      context: ${VALORI_KERNEL_PATH:-../..}
+      dockerfile: Dockerfile
+    environment:
+      VALORI_DIM: "4"
+      VALORI_BIND: "0.0.0.0:3000"
+      VALORI_AUTH_TOKEN: ${WORKER_B_TOKEN:-worker-b-secret}
+      VALORI_EVENT_LOG_PATH: /data/events.log
+      VALORI_SNAPSHOT_PATH: /data/state.snap
+      VALORI_MAX_RECORDS: "200000"
+    volumes:
+      - worker-b-data:/data   # isolated from worker-a — never shared
+    ports:
+      - "3302:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  ui:
+    build:
+      context: ${VALORI_UI_PATH:-../../../valori-ui}/ui
+      dockerfile: Dockerfile.e2e
+      args:
+        # NEXT_PUBLIC_* vars are inlined by Next.js at build time (see
+        # Dockerfile.e2e's own comment) — must be build args, not runtime
+        # env. URL is a fixed compose-internal hostname; the anon key is
+        # a real HS256 JWT signed with this same JWT_SECRET, precomputed
+        # via `node scripts/sign_jwt.js anon "" <secret> <ttl-secs>`
+        # (long-lived since this whole environment is disposable) rather
+        # than hand-fabricated. Regenerate NEXT_PUBLIC_SUPABASE_ANON_KEY
+        # in .env if you change JWT_SECRET from its default.
+        NEXT_PUBLIC_SUPABASE_URL: http://rest-shim:3212
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    depends_on:
+      rest-shim:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: http://rest-shim:3212
+      JWT_SECRET: ${JWT_SECRET:-local-e2e-jwt-secret-do-not-use-in-prod-32ch}
+      # SERVICE key is computed at container startup by entrypoint.e2e.js
+      # from JWT_SECRET (not a NEXT_PUBLIC_ var, so runtime injection
+      # works for it) — never hand-copied, never committed.
+      VALORI_CLOUD_API_URL: http://provisioning-not-used-in-this-environment:8787
+    ports:
+      - "3311:3000"
+
+  # `docker compose run --rm python pytest -v` — not started by `up -d`
+  # (tests are invoked on demand, not a long-running service).
+  python:
+    image: python:3.11-slim
+    working_dir: /e2e
+    depends_on:
+      - ui
+      - worker-a
+      - worker-b
+      - rest-shim
+    volumes:
+      - ./python:/e2e
+      - ./results:/e2e/results
+      - ${VALORI_KERNEL_PATH:-../..}/python:/valoricore-src:ro
+    environment:
+      CLOUD_API_URL: http://ui:3000
+      POSTGREST_URL: http://rest-shim:3212
+      JWT_SECRET: ${JWT_SECRET:-local-e2e-jwt-secret-do-not-use-in-prod-32ch}
+      SEED_USER_ID: "00000000-0000-0000-0000-0000000e2e01"
+      SEED_ORG_ID: "00000000-0000-0000-0000-0000000e2e0a"
+      WORKER_A_TOKEN: ${WORKER_A_TOKEN:-worker-a-secret}
+      WORKER_B_TOKEN: ${WORKER_B_TOKEN:-worker-b-secret}
+      WORKER_A_URL: http://worker-a:3000
+      WORKER_B_URL: http://worker-b:3000
+    entrypoint: ["/bin/sh", "/e2e/entrypoint.sh"]
+    command: ["pytest", "-v"]
+
+volumes:
+  pg-data:
+  worker-a-data:
+  worker-b-data:

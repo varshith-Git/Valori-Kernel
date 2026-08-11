@@ -60,3 +60,64 @@ async fn test_index_persistence() {
         println!("Truncation check passed: {:?}", res.err());
     }
 }
+
+/// S8 regression (Local Cloud E2E phase): `create_collection()` used to
+/// mutate `KernelState` (bumping the hashed `version` counter) via a
+/// direct `state.apply_event_ns()` call that bypassed the durability
+/// layer entirely — so a namespace created right before a restart made
+/// the state hash unrecoverable by replay, even though every visible
+/// record was byte-identical. Fixed by routing through
+/// `commit_and_apply_ns()` (like every other mutation) plus an explicit
+/// `flush_pending_events()` before "restart" here — mirrors what
+/// `main.rs::shutdown_signal` now does for real, since a single-event
+/// commit like this one only flushes its write buffer on demand
+/// (`DEFAULT_WRITE_BUFFER_SIZE = 64`), unlike a batch insert, which
+/// always flushes unconditionally.
+#[tokio::test]
+async fn test_state_hash_survives_restart_after_collection_create() {
+    use valori_kernel::snapshot::blake3::hash_state_blake3;
+
+    let dir = tempdir().unwrap();
+    let mut cfg = NodeConfig::default();
+    cfg.dim = 4;
+    cfg.max_records = 100;
+    cfg.event_log_path = Some(dir.path().join("events.log"));
+
+    let live_hash = {
+        let mut engine = Engine::new(&cfg);
+        let ns = engine.create_collection("s8-check").unwrap();
+        engine
+            .insert_batch_ns(
+                &[
+                    vec![1.0, 0.0, 0.0, 0.0],
+                    vec![0.0, 1.0, 0.0, 0.0],
+                    vec![0.5, 0.5, 0.0, 0.0],
+                ],
+                None,
+                ns,
+                None,
+            )
+            .unwrap();
+        let hash = hash_state_blake3(&engine.state);
+        // Mirrors main.rs's shutdown_signal: flush pending single-event
+        // commits before "restart" (dropping this engine / replaying).
+        engine.flush_pending_events().unwrap();
+        hash
+    };
+
+    let (replayed_state, _journal, count) =
+        valori_storage::events::event_replay::recover_from_event_log(
+            cfg.event_log_path.as_ref().unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        count, 4,
+        "expected AutoCreateNamespace + 3 InsertRecord events to be durably logged"
+    );
+
+    let replay_hash = hash_state_blake3(&replayed_state);
+    assert_eq!(
+        live_hash, replay_hash,
+        "state hash must be reproduced identically by event-log replay after a collection was created"
+    );
+}

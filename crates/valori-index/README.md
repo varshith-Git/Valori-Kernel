@@ -63,6 +63,19 @@ let mut idx = IvfIndex::new(IvfConfig::default(), 128);
 idx.build(&records);
 ```
 
+### BQ with a tuned candidate pool (S11)
+
+```rust
+use valori_index::{BqIndex, BqConfig};
+
+// Defaults (pool_factor=10, min_candidates=200) reproduce pre-S11
+// behavior exactly. S11 measured Recall@10=0.48 at the default on a
+// 50K-vector/384D corpus; widening the pool to ~20% of N recovers
+// most of the recall loss at the cost of BQ's latency edge:
+let cfg = BqConfig { pool_factor: 10, min_candidates: 10000 };
+let idx = BqIndex::new_with_config(cfg);
+```
+
 ### Deterministic K-Means
 
 ```rust

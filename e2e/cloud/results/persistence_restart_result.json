@@ -1,0 +1,12 @@
+{
+  "test": "worker-a stop/start persistence",
+  "data_survived": true,
+  "vector_ids_before": [18, 19, 20],
+  "vector_ids_after": [18, 19, 20],
+  "top_search_result_before": {"id": 18, "score": 0},
+  "top_search_result_after": {"id": 18, "score": 0},
+  "state_hash_before": "cd9579945edc519affa05be43599926e04a39a8d7368c91fa12df0054fe0273e",
+  "state_hash_after": "03d8efd966c113478125fd1868767025e4a6e0ea6ef29565acb76018fb524611",
+  "state_hash_matched": false,
+  "note": "Vector data and search results are byte-identical across a real docker compose stop/start of worker-a. The BLAKE3 final_state_hash from /v1/proof/state differs before vs after, which CLAUDE.md documents as an invariant ('reproduced from scratch after snapshot restore') that this run did not observe holding. Root cause not isolated in this session (candidates: worker-a's volume is shared/cumulative across this whole test session rather than isolated to this one check, so unrelated events landing in the log between the two snapshots would change the hash without touching this test's own data; or a genuine snapshot-restore hash bug). Reported as-is rather than glossed over -- data-level persistence is verified, hash-level determinism across restart is NOT independently confirmed by this run."
+}

@@ -1,0 +1,54 @@
+[
+  {
+    "index": "brute",
+    "vectors": 10000,
+    "dimension": 384,
+    "insert_elapsed_secs": 8.16,
+    "insert_vectors_per_sec": 1224.8,
+    "peak_rss_mb_after_insert": 85.1,
+    "search_p50_ms": 118.29,
+    "search_p95_ms": 169.63,
+    "recovery_secs": 1.23,
+    "restart_hash_match": true,
+    "status": "supported"
+  },
+  {
+    "index": "hnsw",
+    "vectors": 10000,
+    "dimension": 384,
+    "insert_elapsed_secs": 194.22,
+    "insert_vectors_per_sec": 51.5,
+    "peak_rss_mb_after_insert": 87.4,
+    "search_p50_ms": 115.9,
+    "search_p95_ms": 169.61,
+    "recovery_secs": 61.2,
+    "restart_hash_match": null,
+    "status": "restart_failed"
+  },
+  {
+    "index": "ivf",
+    "vectors": 10000,
+    "dimension": 384,
+    "insert_elapsed_secs": 8.41,
+    "insert_vectors_per_sec": 1188.8,
+    "peak_rss_mb_after_insert": 85.2,
+    "search_p50_ms": 121.76,
+    "search_p95_ms": 173.35,
+    "recovery_secs": 5.21,
+    "restart_hash_match": true,
+    "status": "supported"
+  },
+  {
+    "index": "bq",
+    "vectors": 10000,
+    "dimension": 384,
+    "insert_elapsed_secs": 8.8,
+    "insert_vectors_per_sec": 1136.4,
+    "peak_rss_mb_after_insert": 86.4,
+    "search_p50_ms": 114.39,
+    "search_p95_ms": 170.61,
+    "recovery_secs": 1.14,
+    "restart_hash_match": true,
+    "status": "supported"
+  }
+]

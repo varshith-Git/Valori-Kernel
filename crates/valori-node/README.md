@@ -767,6 +767,28 @@ Only takes effect when `VALORI_INDEX=hnsw`. Has no effect in cluster mode (clust
 
 Only takes effect when `VALORI_INDEX=ivf`. Setting either variable disables auto-scaling and pins the values. The auto-scaling rule (`k = sqrt(N)`) keeps average bucket size near `sqrt(N)` and scan cost at O(sqrt(N)) regardless of dataset size — this is the FAISS-recommended operating point.
 
+S11 real-measurement note: at 50K vectors/384D, search latency was
+flat (~660ms) across every tested `n_list`/`n_probe` combination — no
+configuration produced a meaningful latency win over BruteForce. A
+small fixed `n_list` (e.g. 64) does meaningfully reduce restart/recovery
+time vs the auto-scaled default (16.9s vs 47.4s at 50K), since
+`Engine::rebuild_index()` re-runs k-means on every restart regardless
+of index kind. See `docs/phases/phase-S11-index-tuning.md`.
+
+### BQ environment variables (Phase S11)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VALORI_BQ_POOL_FACTOR` | 10 | Candidate pool = `max(pool_factor * k, min_candidates)`, evaluated before the exact-L2 re-rank stage. |
+| `VALORI_BQ_MIN_CANDIDATES` | 200 | Floor on the candidate pool size. |
+
+Only takes effect when `VALORI_INDEX=bq`. The candidate pool controls
+recall: the default (200, i.e. 0.4% of a 50K corpus) measured
+Recall@10=0.48 in S10. Widening it to `VALORI_BQ_MIN_CANDIDATES=10000`
+(≈20% of a 50K corpus) measured Recall@10=0.99 in S11, at the cost of
+losing BQ's latency edge over BruteForce (both land within noise of
+each other at that setting). See `docs/phases/phase-S11-index-tuning.md`.
+
 ### Decay (Phase C4.1)
 
 | Variable | Default | Description |

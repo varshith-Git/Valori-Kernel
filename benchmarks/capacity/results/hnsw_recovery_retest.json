@@ -1,0 +1,13 @@
+{
+  "index": "hnsw",
+  "vectors": 10000,
+  "dimension": 384,
+  "ram_mb": 1024,
+  "cpu": 0.5,
+  "insert_elapsed_secs": 195.42,
+  "insert_vectors_per_sec": 51.2,
+  "recovery_secs": 188,
+  "restart_hash_match": true,
+  "status": "supported_but_recovery_severely_slow",
+  "note": "First attempt (index_comparison.json) used a 60s health-check timeout and reported restart_failed -- this retest with a 300s timeout confirms HNSW DOES recover correctly and the state hash DOES match (S8 fix holds), but takes 188s to do so for only 10K vectors at dim=384. Both insert (51 vec/s vs ~1200 vec/s for brute/ivf/bq) and recovery are disproportionately expensive for HNSW because the index is never persisted -- it is rebuilt from scratch from the record pool on every restart (confirmed in the S8 investigation), and HNSW graph construction is the most expensive of the four index types to build. This is a real, serious operational concern: any worker restart (deploy, crash, routine maintenance) on an HNSW-indexed collection means multi-minute downtime that gets worse as vector count grows, not just slower search that stays available."
+}

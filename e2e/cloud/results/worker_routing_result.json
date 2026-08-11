@@ -1,0 +1,15 @@
+{
+  "test": "worker routing isolation — Project A -> Worker A, Project B -> Worker B, no auto-reroute",
+  "project_a_worker": "worker-a",
+  "project_b_worker": "worker-b",
+  "data_routed_correctly_before_stop": true,
+  "worker_a_stopped": {
+    "project_a_search_status": 503,
+    "project_a_response": {"error": "fetch failed"}
+  },
+  "worker_b_unaffected_while_a_down": {
+    "project_b_search_status": 200
+  },
+  "auto_reroute_observed": false,
+  "note": "No failover/reroute exists or was invented -- Project A's requests correctly fail (503) while its worker is down, and Project B is completely unaffected. This confirms per-project worker routing isolation, matching the architecture (each project has a fixed node_url; there is no mechanism in the current codebase that reassigns a project to a different worker)."
+}

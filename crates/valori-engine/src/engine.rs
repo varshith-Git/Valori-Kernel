@@ -187,8 +187,15 @@ impl Engine {
                 ))
             }
             IndexKind::Bq => {
-                use valori_index::BqIndex;
-                Box::new(BqIndex::new())
+                use valori_index::{BqConfig, BqIndex};
+                let mut bq_cfg = BqConfig::default();
+                if let Some(pf) = cfg.bq_pool_factor {
+                    bq_cfg.pool_factor = pf;
+                }
+                if let Some(mc) = cfg.bq_min_candidates {
+                    bq_cfg.min_candidates = mc;
+                }
+                Box::new(BqIndex::new_with_config(bq_cfg))
             }
         }
     }
@@ -964,7 +971,22 @@ impl Engine {
                 valori_kernel::types::id::MAX_NAMESPACES
             ))
         })?;
-        self.state.apply_event_ns(
+        // S8 fix: this used to call `self.state.apply_event_ns(...)` directly,
+        // bypassing the durability layer entirely. `apply_event_ns` still
+        // bumps `state.version` (hashed by `hash_state_blake3`) even though
+        // `AutoCreateNamespace` itself is a no-op on records/nodes/edges —
+        // so the live process's version counter ran one ahead of whatever
+        // the event log could ever replay, and no snapshot/WAL replay could
+        // reproduce it either, since the mutation was never durably
+        // recorded anywhere. Found via the Local Cloud E2E suite's restart
+        // test: vector data and search results were byte-identical
+        // before/after a restart, but the BLAKE3 state hash differed —
+        // isolated to this exact code path. `commit_and_apply_ns` is the
+        // established "log then apply" helper every other mutation uses
+        // (see `insert_batch_ns`'s `log_batch_ns` + `apply_committed_event_ns`
+        // pair); using it here makes this event durable and replay-reproducible
+        // like every other one.
+        self.commit_and_apply_ns(
             &valori_kernel::event::KernelEvent::AutoCreateNamespace {
                 name: String::new(),
             },
@@ -989,7 +1011,10 @@ impl Engine {
             .iter_records_in_ns(id)
             .map(|r| r.id.0 as u64)
             .collect();
-        self.state.apply_event_ns(
+        // S8 fix — same bug and same fix as create_collection() above:
+        // route through the durable "log then apply" helper instead of
+        // mutating state (and bumping its hashed version counter) directly.
+        self.commit_and_apply_ns(
             &valori_kernel::event::KernelEvent::DropNamespace {
                 name: String::new(),
             },
@@ -1097,6 +1122,28 @@ impl Engine {
         let mut cursor = std::io::Cursor::new(Vec::with_capacity(hint));
         self.write_snapshot_to_writer(&mut cursor)?;
         Ok(cursor.into_inner())
+    }
+
+    /// S8 fix: flush any single-event commits (`commit_and_apply_ns`, used by
+    /// `create_collection`/`drop_collection`) still sitting in the
+    /// `EventCommitter`'s write buffer (`DEFAULT_WRITE_BUFFER_SIZE = 64` —
+    /// batched inserts flush every batch unconditionally, but single events
+    /// only flush once 64 of them accumulate or this is called explicitly).
+    /// Previously only `Engine::drop()` called this, which does not
+    /// reliably fire on graceful shutdown: `SharedEngine` is an
+    /// `Arc<RwLock<Engine>>`, and background tasks (auto-snapshot,
+    /// process-metrics) can hold clones past the point `with_graceful_shutdown`
+    /// returns, so the Engine's strong count may never hit zero before the
+    /// process exits. The shutdown path must call this explicitly — see
+    /// `main.rs::shutdown_signal`, which now does, under a write lock,
+    /// before saving the snapshot.
+    pub fn flush_pending_events(&mut self) -> Result<(), EngineError> {
+        if let Some(committer) = self.persistence.event_committer_mut() {
+            committer
+                .flush_pending()
+                .map_err(|e| EngineError::InvalidInput(format!("flush pending events: {e}")))?;
+        }
+        Ok(())
     }
 
     /// Stream the snapshot directly to `path` via a buffered file writer.
@@ -1773,6 +1820,8 @@ mod tests {
             hnsw_ef_search: None,
             ivf_n_list: None,
             ivf_n_probe: None,
+            bq_pool_factor: None,
+            bq_min_candidates: None,
             snapshot_path: None,
             wal_path: None,
             event_log_path: None,

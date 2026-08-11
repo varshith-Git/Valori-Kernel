@@ -212,6 +212,26 @@ async fn shutdown_signal(state: SharedEngine, snapshot_path: Option<std::path::P
         _ = terminate => {}
     }
 
+    // S8 fix: flush any single-event commits (create_collection/
+    // drop_collection) still buffered in the EventCommitter before
+    // shutdown — previously relied solely on Engine::drop(), which is not
+    // guaranteed to fire (background tasks can keep the Arc<RwLock<Engine>>
+    // alive past this point). A write lock is needed for this (unlike the
+    // read lock save_snapshot alone required), so this now takes the write
+    // lock unconditionally on shutdown, flushes, then saves the snapshot
+    // in the same locked scope.
+    tracing::info!("Shutdown signal received — flushing pending events");
+    let flush_result = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || state.blocking_write().flush_pending_events()
+    })
+    .await;
+    match flush_result {
+        Ok(Ok(())) => tracing::info!("Pending events flushed"),
+        Ok(Err(e)) => tracing::error!("Flushing pending events failed: {:?}", e),
+        Err(e) => tracing::error!("Flush task panicked: {:?}", e),
+    }
+
     if let Some(path) = snapshot_path {
         tracing::info!(
             "Shutdown signal received — saving final snapshot to {:?}",

@@ -54,6 +54,8 @@ impl EngineFromNodeConfig for Engine {
             hnsw_ef_search: cfg.hnsw_ef_search,
             ivf_n_list: cfg.ivf_n_list,
             ivf_n_probe: cfg.ivf_n_probe,
+            bq_pool_factor: cfg.bq_pool_factor,
+            bq_min_candidates: cfg.bq_min_candidates,
             snapshot_path: cfg.snapshot_path.clone(),
             wal_path: cfg.wal_path.clone(),
             event_log_path: cfg.event_log_path.clone(),

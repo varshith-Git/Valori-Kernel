@@ -62,6 +62,10 @@ pub struct EngineConfig {
     pub ivf_n_list: Option<usize>,
     pub ivf_n_probe: Option<usize>,
 
+    // ── BQ tuning (S11.3) ────────────────────────────────────────────────────
+    pub bq_pool_factor: Option<usize>,
+    pub bq_min_candidates: Option<usize>,
+
     // ── Persistence paths ─────────────────────────────────────────────────────
     pub snapshot_path: Option<PathBuf>,
     pub wal_path: Option<PathBuf>,

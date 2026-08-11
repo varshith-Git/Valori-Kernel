@@ -1,0 +1,41 @@
+{
+  "dim": 384,
+  "target_vectors": 10000,
+  "actually_inserted": 10000,
+  "insert_elapsed_secs": 8.714,
+  "insert_throughput_vec_per_sec": 1147.6,
+  "health_after_insert": {
+    "status": "ok",
+    "version": "0.3.0",
+    "dim": 384,
+    "index": "BruteForce",
+    "persistence": "event_log",
+    "records": {
+      "live": 10000,
+      "slots_used": 10000,
+      "capacity": 200000,
+      "fill_pct": 5.0
+    },
+    "nodes": {
+      "live": 0,
+      "slots_used": 0,
+      "capacity": 100000,
+      "fill_pct": 0.0
+    },
+    "edges": {
+      "live": 0,
+      "slots_used": 0,
+      "capacity": 500000,
+      "fill_pct": 0.0
+    },
+    "event_log_height": 10000,
+    "event_log_path": "/data/events.log",
+    "snapshot_path": "/data/state.snap",
+    "embed_enabled": false,
+    "shard_count": 1
+  },
+  "search_p50_ms": 119.48,
+  "search_p95_ms": 172.19,
+  "search_min_ms": 102.47,
+  "search_max_ms": 177.41
+}

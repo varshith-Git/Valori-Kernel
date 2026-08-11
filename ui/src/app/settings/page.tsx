@@ -218,6 +218,11 @@ export default function SettingsPage() {
   const [apiKeys, setApiKeys]           = useState<any[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [serviceAccounts, setServiceAccounts] = useState<any[]>([]);
+  // P2.1: ApiKeysManager's create-key flow now requires picking a project
+  // (create_api_key() requires p_project_id) — same data this page's
+  // cloud-mode siblings (cloud/settings/api-keys) already fetch.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [projects, setProjects] = useState<any[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [members, setMembers]           = useState<any[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -267,18 +272,20 @@ export default function SettingsPage() {
         setOrg(mem.organizations);
         setMyRole(mem.role);
         const oid = mem.organizations.id;
-        const [{ data: keys }, { data: accs }, { data: mems }, { data: invs }, { data: rules }] = await Promise.all([
+        const [{ data: keys }, { data: accs }, { data: mems }, { data: invs }, { data: rules }, { data: projs }] = await Promise.all([
           supabase.from("api_keys_public").select("*").eq("org_id", oid).order("created_at", { ascending: false }),
           supabase.from("service_accounts").select("*").eq("org_id", oid).order("created_at", { ascending: false }),
           supabase.rpc("list_org_members", { p_org_id: oid }),
           supabase.from("org_invitations").select("*").eq("org_id", oid).is("accepted_at", null).is("revoked_at", null).order("created_at", { ascending: false }),
           supabase.from("ip_allowlist_rules").select("*").eq("org_id", oid).order("created_at", { ascending: false }),
+          supabase.from("projects").select("id, name").eq("org_id", oid).order("name"),
         ]);
         setApiKeys(keys ?? []);
         setServiceAccounts(accs ?? []);
         setMembers(mems ?? []);
         setInvitations(invs ?? []);
         setIpRules(rules ?? []);
+        setProjects(projs ?? []);
       }
 
       const [mfaResult, { data: sess }, { data: hist }, { data: toks }] = await Promise.all([
@@ -712,6 +719,8 @@ export default function SettingsPage() {
                   initialKeys={apiKeys as any}
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   serviceAccounts={serviceAccounts.filter((a: any) => !a.disabled_at) as any}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  projects={projects as any}
                 />
               </div>
             ) : (
