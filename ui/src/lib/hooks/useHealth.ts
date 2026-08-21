@@ -30,7 +30,10 @@ export function useHealth(projectId?: string) {
     dim: data?.dim ?? null,
     fillPct: data?.records?.fill_pct ?? null,
     capacity: data?.records?.capacity ?? null,
-    index: data?.index ?? null,
+    // Phase API-2: `index` was removed. `GET /health` has never carried a
+    // node-level index kind (see `EngineHealth` in valori-engine) — the value
+    // was always `null` and rendered as "—". Index kind is per-Collection:
+    // read it from `GET /v1/namespaces` (`Collection.index`).
     version: data?.version ?? null,
     error: error ?? null,
   };

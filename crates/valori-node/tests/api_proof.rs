@@ -26,7 +26,6 @@ fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
 
 fn tiny_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;
@@ -97,10 +96,18 @@ async fn proof_state_changes_after_insert() {
     let (_, before) = get(router.clone(), "/v1/proof/state").await;
     let hash_before = before["final_state_hash"].as_str().unwrap().to_string();
 
+    let (status, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
     let (status, _) = post_json(
         router.clone(),
         "/records",
-        serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0]}),
+        serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0], "collection": "default"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -139,11 +146,19 @@ async fn proof_event_log_with_event_log_enabled() {
     cfg.event_log_path = Some(log_path);
     let (_, router) = engine_router(cfg);
 
+    let (status, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
     // Insert something so there's a committed event.
     let (status, _) = post_json(
         router.clone(),
         "/records",
-        serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0]}),
+        serde_json::json!({"values": [1.0f32, 0.0, 0.0, 0.0], "collection": "default"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);

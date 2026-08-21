@@ -316,13 +316,32 @@ impl Daemon {
         proxy_get(&format!("{base}/v1/namespaces")).await
     }
 
-    pub async fn create_collection(&self, name: &str, collection: &str) -> DaemonResult<Value> {
+    /// Proxy `POST /v1/projects/{name}/collections` to the node's
+    /// `POST /v1/namespaces`.
+    ///
+    /// Phase API-2: this used to forward `{"name": collection}` only. Since
+    /// Phase 3.3 the node requires an explicit `dimension` and `metric` for
+    /// **every** collection — `"default"` included — so that request could
+    /// only ever 400. The daemon now forwards the caller's full
+    /// configuration, and `index` when the caller supplied one.
+    pub async fn create_collection(
+        &self,
+        name: &str,
+        collection: &str,
+        dimension: u64,
+        metric: &str,
+        index: Option<&str>,
+    ) -> DaemonResult<Value> {
         let base = self.node_base(name)?;
-        proxy_post(
-            &format!("{base}/v1/namespaces"),
-            json!({ "name": collection }),
-        )
-        .await
+        let mut payload = json!({
+            "name": collection,
+            "dimension": dimension,
+            "metric": metric,
+        });
+        if let Some(idx) = index {
+            payload["index"] = json!(idx);
+        }
+        proxy_post(&format!("{base}/v1/namespaces"), payload).await
     }
 
     pub async fn delete_collection(&self, name: &str, collection: &str) -> DaemonResult<Value> {

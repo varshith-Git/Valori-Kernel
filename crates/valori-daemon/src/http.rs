@@ -234,6 +234,14 @@ async fn list_collections(
 #[derive(Deserialize)]
 struct CreateCollectionRequest {
     name: String,
+    /// Required — a Collection's dimension is fixed at creation and there is
+    /// no project- or node-level fallback to inherit it from.
+    dimension: u64,
+    /// Required. The node's only implemented metric is `squared_l2`.
+    metric: String,
+    /// Optional. Absent means index NONE (exact namespace-scoped search).
+    #[serde(default)]
+    index: Option<String>,
 }
 
 async fn create_collection(
@@ -242,7 +250,16 @@ async fn create_collection(
     Json(req): Json<CreateCollectionRequest>,
 ) -> DaemonResult<Json<Value>> {
     Ok(Json(
-        d.lock().await.create_collection(&name, &req.name).await?,
+        d.lock()
+            .await
+            .create_collection(
+                &name,
+                &req.name,
+                req.dimension,
+                &req.metric,
+                req.index.as_deref(),
+            )
+            .await?,
     ))
 }
 
@@ -324,9 +341,10 @@ async fn list_projects(State(d): State<SharedDaemon>) -> DaemonResult<Json<Value
 #[derive(Deserialize)]
 struct CreateProjectRequest {
     name: String,
-    dim: usize,
-    #[serde(default = "default_index")]
-    index: String,
+    #[serde(default)]
+    dim: Option<usize>,
+    #[serde(default)]
+    index: Option<String>,
     #[serde(default = "default_workspace")]
     workspace: String,
     #[serde(default)]
@@ -342,10 +360,6 @@ struct CreateProjectRequest {
     storage: StorageConfig,
 }
 
-fn default_index() -> String {
-    "brute".to_string()
-}
-
 fn default_workspace() -> String {
     crate::workspace::DEFAULT_WORKSPACE.to_string()
 }
@@ -357,8 +371,8 @@ async fn create_project(
     let config = ProjectManifest {
         id: crate::new_id(),
         name: req.name,
-        dim: req.dim,
-        index: req.index,
+        dim: None,
+        index: None,
         workspace: req.workspace,
         restart_policy: req.restart_policy,
         created_at: now_unix(),

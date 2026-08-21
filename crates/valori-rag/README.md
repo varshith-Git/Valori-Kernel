@@ -26,19 +26,28 @@ No circular dependencies. `valori-rag` knows nothing about axum routing beyond t
 ### `graph` — GraphRAG
 
 ```rust
-use valori_rag::graph::{resolve_seed_nodes, expand_subgraph};
+use valori_rag::graph::{resolve_seed_nodes, expand_subgraph, expand_subgraph_budgeted};
 
 // Resolve record_ids → node_ids (O(N) kernel scan)
 let seeds = resolve_seed_nodes(&kernel_state, &record_ids);
 
-// BFS subgraph expansion (depth clamped to MAX_DEPTH=4)
+// BFS subgraph expansion (depth clamped to MAX_DEPTH=4; no node/edge budget)
 let (nodes, edges) = expand_subgraph(&kernel_state, &seed_node_ids, 2);
+
+// Phase 5.4: BFS with hard stops on nodes and edges visited
+let (nodes, edges) = expand_subgraph_budgeted(
+    &kernel_state, &seed_node_ids, 2,
+    Some(500),  // max_nodes: halt before visiting >500 nodes
+    Some(2000), // max_edges: halt edge emission once >2000 edges emitted
+);
 ```
 
 Invariants:
 - Both functions take `&KernelState` — no engine lock needed; cluster path reads from its local snapshot.
 - `expand_subgraph` is de-duplicated: a node appears exactly once even if reachable from multiple seeds.
 - `MAX_DEPTH = 4` is a hard cap against hostile clients fanning out the whole graph.
+- `expand_subgraph` is a zero-budget wrapper over `expand_subgraph_budgeted(state, seeds, depth, None, None)`.
+- `expand_subgraph_budgeted` returns early once either budget is hit; edges in `edges_out` always reference a node in `nodes_out` (from-node invariant holds) but destination nodes may be absent when the node budget ran out before they were processed.
 
 ### `tree` — Tree-RAG
 
@@ -110,7 +119,10 @@ let output = extract_entities_via_llm(
 | Operation | Complexity | Notes |
 |-----------|-----------|-------|
 | `resolve_seed_nodes` | O(N nodes) | One kernel scan; no index |
-| `expand_subgraph` | O(V + E) BFS | Bounded by `MAX_DEPTH` |
+| `nodes_referencing_record` | O(N nodes) | One kernel scan; ascending `NodeId` order. Used by `Engine::delete_record`/cluster's `RecordOps::delete` (G1.3.1) to cascade-delete every graph node referencing a hard-deleted record — measured 791ns@1K, 82.2µs@100K, 1.61ms@1M nodes, well under the cost of the Raft round trip it gates. |
+| `expand_subgraph` | O(V + E) BFS | Bounded by `MAX_DEPTH`; calls `expand_subgraph_budgeted` with no budget |
+| `expand_subgraph_budgeted` | O(min(V,max_nodes) + min(E,max_edges)) BFS | Phase 5.4: hard stops on nodes and edges; early-exit when either budget is reached |
+| `graph_distances_from_seeds` | O(V + E) multi-source BFS | Bounded by `MAX_DEPTH`; Phase G1.4.1's graph-aware reranking signal. Measured 1.2µs@1K/9.6µs@10K/168µs@100K (1 seed, depth 2), scaling with reachable-set size the same way `query_graph`/`expand_subgraph` already do (G1.2), not with total graph size. |
 | `label_propagation` | O((N + E) × iters) | Typically < 10 iterations |
 | `build_community_store` | O(N × dim) | Centroid average per community |
 | `rank_communities` | O(C × dim) | Cosine over C centroids |
@@ -130,3 +142,23 @@ For integration tests that need both kernel state and RAG:
 valori-kernel = { workspace = true, features = ["std"] }
 valori-rag = { workspace = true }
 ```
+
+## The `utoipa` feature (Phase API-3.1)
+
+Optional and **off by default** — nothing in the runtime path needs it, and
+enabling it adds a dependency the shipped binary does not carry.
+
+```toml
+utoipa = ["dep:utoipa"]
+```
+
+`valori-node`'s own `utoipa` feature turns it on transitively. It adds
+`#[derive(ToSchema)]` to the `tree::*` and `community::*` request/response types, which `valori-node` serialises verbatim from
+`/v1/tree/*`, `/v1/community/*`, `/v1/ingest/extract-entities`.
+
+The point is that there is **one** type. The public OpenAPI contract references
+the same struct the handler returns, so a field added or renamed here shows up
+in the contract automatically instead of drifting away from a hand-copied mirror
+in `valori-node/src/api.rs`. `scripts/verify-api-route-contract.py` and the
+byte-equality test in `crates/valori-node/tests/openapi_generated.rs` enforce it.
+

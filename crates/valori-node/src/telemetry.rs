@@ -107,7 +107,7 @@ pub fn init_telemetry() {
         "valori_edge_fill_ratio",
         "Live edges divided by capacity (0.0–1.0)"
     );
-    metrics::describe_gauge!("valori_dim", "Configured vector dimension (VALORI_DIM)");
+    metrics::describe_gauge!("valori_collections", "Number of registered collections");
     metrics::describe_gauge!(
         "valori_event_log_height",
         "Number of committed events in the event journal"
@@ -121,6 +121,36 @@ pub fn init_telemetry() {
     metrics::describe_counter!(
         "valori_raft_divergence_detections_total",
         "Number of times this node detected a state-hash mismatch with any peer"
+    );
+
+    // ── Cluster ANN index lifecycle (Phase 4.4) ──────────────────────────────
+    metrics::describe_counter!(
+        "valori_cluster_ann_build_started_total",
+        "Number of node-local ANN index builds started (labels: collection, index_type)"
+    );
+    metrics::describe_counter!(
+        "valori_cluster_ann_build_completed_total",
+        "Number of node-local ANN index builds that completed and activated (labels: collection, index_type)"
+    );
+    metrics::describe_counter!(
+        "valori_cluster_ann_build_failed_total",
+        "Number of node-local ANN index builds that failed (labels: collection, index_type)"
+    );
+    metrics::describe_histogram!(
+        "valori_cluster_ann_build_duration_seconds",
+        "Wall-clock seconds for a node-local ANN build (labels: collection)"
+    );
+    metrics::describe_gauge!(
+        "valori_cluster_ann_generation_active",
+        "Currently active local ANN index generation number (labels: collection)"
+    );
+    metrics::describe_counter!(
+        "valori_cluster_ann_stale_activation_skipped_total",
+        "Number of builds that finished but were discarded because the desired generation advanced (labels: collection)"
+    );
+    metrics::describe_counter!(
+        "valori_cluster_ann_search_fallback_total",
+        "Number of cluster searches that fell back to exact brute-force because no ANN index was active (labels: collection)"
     );
 
     // ── Liveness sentinel ─────────────────────────────────────────────────────

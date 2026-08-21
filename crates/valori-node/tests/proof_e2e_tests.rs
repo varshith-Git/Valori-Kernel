@@ -28,7 +28,6 @@ const DIM: usize = 4;
 
 fn make_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = 64;
     cfg.event_log_path = Some(dir.join("events.log"));
     cfg
@@ -114,7 +113,6 @@ fn test_hash_deterministic_across_runs() {
         let dir = tempdir().unwrap();
         let cfg = {
             let mut c = NodeConfig::default();
-            c.dim = DIM;
             c.max_records = 64;
             c.event_log_path = Some(dir.path().join("events.log"));
             c

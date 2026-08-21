@@ -42,12 +42,46 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const chunkOverlap = parseInt((form.get("chunkOverlap") as string) || "200", 10);
     const chunkMode = (form.get("chunkMode") as string) || "fixed"; // "fixed" | "tree"
 
-    if (collection !== "default") {
-      await fetchWithTimeout(`${nodeUrl}/v1/namespaces`, {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({ name: collection }),
-      }).catch(() => {});
+    // Require the target collection to already exist — Phase 3.3: there is
+    // no unconfigured Collection creation path any more, "default"
+    // included, and embedding happens entirely on the node here (no
+    // client-visible dimension to auto-create with). Same reasoning as the
+    // local-project ingest route's fix — see its comment for the full
+    // audit.
+    // Phase API-2: an unreachable node is reported as an unreachable node,
+    // not as a missing Collection.
+    let collectionExists = false;
+    try {
+      const listRes = await fetchWithTimeout(`${nodeUrl}/v1/namespaces`, { headers: JSON_HEADERS });
+      if (!listRes.ok) {
+        return NextResponse.json(
+          {
+            error: `Could not list collections on the node (HTTP ${listRes.status}). ` +
+              `Cannot verify that "${collection}" exists, so the upload was not started.`,
+          },
+          { status: 502 }
+        );
+      }
+      const listBody = (await listRes.json()) as { collections?: { name: string }[] };
+      collectionExists = (listBody.collections ?? []).some((c) => c.name === collection);
+    } catch {
+      return NextResponse.json(
+        {
+          error: `Node unreachable — cannot verify that collection "${collection}" exists, ` +
+            `so the upload was not started.`,
+        },
+        { status: 503 }
+      );
+    }
+    if (!collectionExists) {
+      return NextResponse.json(
+        {
+          error:
+            `Collection "${collection}" does not exist. Create it with a dimension and metric ` +
+            `before uploading documents.`,
+        },
+        { status: 400 }
+      );
     }
 
     const rawText = await extractText(file);

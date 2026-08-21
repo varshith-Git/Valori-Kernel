@@ -78,6 +78,7 @@ fn push_token(out: &mut Vec<String>, cur: &mut String) {
 
 // ── Tree types ────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// One section of a document — a node in the table-of-contents tree.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeNode {
@@ -98,6 +99,7 @@ pub struct TreeNode {
     pub children: Vec<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// A hierarchical, line-addressable index of one document.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeIndex {
@@ -106,16 +108,23 @@ pub struct TreeIndex {
     pub nodes: BTreeMap<String, TreeNode>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// A compact table-of-contents entry (title + summary, no body).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StructureNode {
     pub node_id: String,
     pub title: String,
     pub summary: String,
+    /// Child sections. `no_recursion` stops utoipa's schema builder from
+    /// descending into this type forever — the generated document emits a
+    /// `$ref` back to `StructureNode` instead of an infinitely nested inline
+    /// schema.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    #[cfg_attr(feature = "utoipa", schema(no_recursion))]
     pub nodes: Vec<StructureNode>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeCitation))]
 /// A citation back to the exact section + line range an answer came from.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Citation {
@@ -372,6 +381,7 @@ impl TreeIndex {
 
 // ── Answer result ─────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeAnswerResult))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AnswerResult {
     pub query: String,
@@ -386,6 +396,7 @@ pub struct AnswerResult {
 
 // ── Receipt ───────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeReceipt))]
 /// One tamper-evident record of a single retrieval, chained with BLAKE3.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Receipt {
@@ -478,6 +489,7 @@ pub fn verify_chain(receipts: &[Receipt]) -> bool {
 
 // ── HTTP request / response types ─────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeBuildRequest))]
 #[derive(Deserialize)]
 pub struct BuildRequest {
     pub text: String,
@@ -485,6 +497,7 @@ pub struct BuildRequest {
     pub doc_name: Option<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeBuildResponse))]
 #[derive(Serialize)]
 pub struct BuildResponse {
     pub cache_key: String,
@@ -494,6 +507,7 @@ pub struct BuildResponse {
     pub tree: TreeIndex,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeQueryRequest))]
 #[derive(Deserialize)]
 pub struct QueryRequest {
     #[serde(default)]
@@ -511,17 +525,20 @@ fn default_k() -> usize {
     2
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeVerifyRequest))]
 #[derive(Deserialize)]
 pub struct VerifyRequest {
     pub tree: TreeIndex,
     pub receipt: Receipt,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeVerifyResponse))]
 #[derive(Serialize)]
 pub struct VerifyResponse {
     pub valid: bool,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeHybridHit))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HybridHit {
     pub source: String,
@@ -542,6 +559,7 @@ pub struct HybridHit {
     pub distance: Option<f32>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeHybridRequest))]
 #[derive(Deserialize)]
 pub struct HybridRequest {
     #[serde(default)]
@@ -567,6 +585,7 @@ fn default_tree_weight() -> f64 {
     0.6
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeHybridResponse))]
 #[derive(Serialize, Deserialize)]
 pub struct HybridResponse {
     pub query: String,
@@ -579,6 +598,21 @@ pub struct HybridResponse {
 
 // ── Stateless handlers (drop into both routers, no engine access) ─────────────
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/tree/verify",
+    operation_id = "tree_verify",
+    tag = "tree",
+    summary = "Replay one receipt against its tree",
+    description = "Stateless and side-effect free: re-derives the receipt's hashes from the supplied tree and reports whether they match. A caller can run the same check offline.",
+    request_body = VerifyRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Verification verdict", body = VerifyResponse),
+        (status = 400, description = "Malformed or invalid request"),
+        (status = 401, description = "Missing or invalid credentials"),
+    ),
+))]
 /// `POST /v1/tree/verify` — replay a receipt against the tree.
 pub async fn tree_verify(Json(payload): Json<VerifyRequest>) -> Json<VerifyResponse> {
     Json(VerifyResponse {
@@ -586,17 +620,34 @@ pub async fn tree_verify(Json(payload): Json<VerifyRequest>) -> Json<VerifyRespo
     })
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeChainVerifyRequest))]
 #[derive(Deserialize)]
 pub struct ChainVerifyRequest {
     pub receipts: Vec<Receipt>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = TreeChainVerifyResponse))]
 #[derive(Serialize)]
 pub struct ChainVerifyResponse {
     pub valid: bool,
     pub broken_at: Option<usize>,
 }
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/tree/chain-verify",
+    operation_id = "tree_chain_verify",
+    tag = "tree",
+    summary = "Verify an ordered chain of receipts",
+    description = "Checks each receipt individually and that each `prev_hash` matches its predecessor. `broken_at` is the index of the first receipt that fails, or null.",
+    request_body = ChainVerifyRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Chain verdict", body = ChainVerifyResponse),
+        (status = 400, description = "Malformed or invalid request"),
+        (status = 401, description = "Missing or invalid credentials"),
+    ),
+))]
 /// `POST /v1/tree/chain-verify` — verify an ordered sequence of receipts forms
 /// an unbroken BLAKE3 chain.
 pub async fn tree_chain_verify(

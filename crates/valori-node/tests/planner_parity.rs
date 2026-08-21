@@ -48,7 +48,6 @@ struct TestEnv {
 
 fn standalone_env() -> TestEnv {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 500;
     cfg.max_nodes = 200;
     cfg.max_edges = 200;
@@ -83,7 +82,7 @@ async fn cluster_env() -> TestEnv {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 4).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -160,6 +159,20 @@ async fn post(router: &axum::Router, uri: &str, body: Value) -> (StatusCode, Val
     (status, json)
 }
 
+/// Create the "default" collection and return its namespace id — every
+/// planner graph below targets this namespace explicitly (Phase 3.3: no
+/// collection, "default" included, exists until created).
+async fn create_default_collection(env: &TestEnv) -> u16 {
+    let (status, resp) = post(
+        &env.router,
+        "/v1/namespaces",
+        json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {resp}");
+    resp["id"].as_u64().expect("missing collection id") as u16
+}
+
 /// Insert four vectors through whichever router the env provides.
 /// Returns the assigned record IDs in insertion order.
 async fn seed_vectors(env: &TestEnv) -> Vec<u64> {
@@ -171,7 +184,12 @@ async fn seed_vectors(env: &TestEnv) -> Vec<u64> {
     ];
     let mut ids = Vec::new();
     for v in vecs {
-        let (status, resp) = post(&env.router, "/records", json!({ "values": v })).await;
+        let (status, resp) = post(
+            &env.router,
+            "/records",
+            json!({ "values": v, "collection": "default" }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "insert failed: {resp}");
         ids.push(resp["id"].as_u64().unwrap_or(0));
     }
@@ -216,9 +234,9 @@ fn cluster_ctx() -> PlanningContextHash {
     })
 }
 
-fn memory_search_graph(ctx: PlanningContextHash, query: &[f32; 4]) -> Arc<ExecutionGraph> {
+fn memory_search_graph(ctx: PlanningContextHash, query: &[f32; 4], ns: u16) -> Arc<ExecutionGraph> {
     let inputs_json = json!({
-        "shard_id": 0u8, "namespace_id": 0u16,
+        "shard_id": 0u8, "namespace_id": ns,
         "vector": query, "k": 4u32,
         "decay_half_life_secs": null, "rerank": false, "metadata_filter": null,
     })
@@ -249,9 +267,9 @@ fn memory_search_graph(ctx: PlanningContextHash, query: &[f32; 4]) -> Arc<Execut
     ))
 }
 
-fn graph_rag_graph(ctx: PlanningContextHash, query: &[f32; 4]) -> Arc<ExecutionGraph> {
+fn graph_rag_graph(ctx: PlanningContextHash, query: &[f32; 4], ns: u16) -> Arc<ExecutionGraph> {
     let inputs_json = json!({
-        "shard_id": 0u8, "namespace_id": 0u16,
+        "shard_id": 0u8, "namespace_id": ns,
         "vector": query, "k": 4u32, "depth": 1u32,
     })
     .to_string();
@@ -381,6 +399,8 @@ async fn memory_search_rank_order_matches() {
     let s = standalone_env();
     let c = cluster_env().await;
 
+    let s_ns = create_default_collection(&s).await;
+    let c_ns = create_default_collection(&c).await;
     seed_vectors(&s).await;
     seed_vectors(&c).await;
 
@@ -388,8 +408,8 @@ async fn memory_search_rank_order_matches() {
     let (s_out, c_out) = run_both(
         &s,
         &c,
-        memory_search_graph(standalone_ctx(), &query),
-        memory_search_graph(cluster_ctx(), &query),
+        memory_search_graph(standalone_ctx(), &query, s_ns),
+        memory_search_graph(cluster_ctx(), &query, c_ns),
     )
     .await;
 
@@ -421,6 +441,8 @@ async fn graph_rag_seed_nodes_match() {
     let s = standalone_env();
     let c = cluster_env().await;
 
+    let s_ns = create_default_collection(&s).await;
+    let c_ns = create_default_collection(&c).await;
     seed_vectors(&s).await;
     seed_vectors(&c).await;
 
@@ -428,8 +450,8 @@ async fn graph_rag_seed_nodes_match() {
     let (s_out, c_out) = run_both(
         &s,
         &c,
-        graph_rag_graph(standalone_ctx(), &query),
-        graph_rag_graph(cluster_ctx(), &query),
+        graph_rag_graph(standalone_ctx(), &query, s_ns),
+        graph_rag_graph(cluster_ctx(), &query, c_ns),
     )
     .await;
 
@@ -463,6 +485,8 @@ async fn snapshot_state_hash_matches() {
     let c = cluster_env().await;
 
     // Insert the same 4 vectors into both paths.
+    create_default_collection(&s).await;
+    create_default_collection(&c).await;
     seed_vectors(&s).await;
     seed_vectors(&c).await;
 

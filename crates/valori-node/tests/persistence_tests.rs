@@ -6,11 +6,9 @@ use valori_node::EngineFromNodeConfig;
 
 fn make_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.max_nodes = 100;
     cfg.max_edges = 500;
-    cfg.index_kind = valori_node::config::IndexKind::Hnsw;
     cfg.snapshot_path = Some(dir.join("snapshot.bin"));
     cfg
 }
@@ -79,13 +77,19 @@ async fn test_state_hash_survives_restart_after_collection_create() {
 
     let dir = tempdir().unwrap();
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.event_log_path = Some(dir.path().join("events.log"));
 
     let live_hash = {
         let mut engine = Engine::new(&cfg);
-        let ns = engine.create_collection("s8-check").unwrap();
+        let ns = engine
+            .create_collection_with_config(
+                "s8-check",
+                4,
+                valori_domain::Metric::SquaredL2,
+                valori_domain::IndexKind::Brute,
+            )
+            .unwrap();
         engine
             .insert_batch_ns(
                 &[
@@ -111,8 +115,8 @@ async fn test_state_hash_survives_restart_after_collection_create() {
         )
         .unwrap();
     assert_eq!(
-        count, 4,
-        "expected AutoCreateNamespace + 3 InsertRecord events to be durably logged"
+        count, 5,
+        "expected AutoCreateNamespace + ConfigureNamespace + 3 InsertRecord events to be durably logged"
     );
 
     let replay_hash = hash_state_blake3(&replayed_state);

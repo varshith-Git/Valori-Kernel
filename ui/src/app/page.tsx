@@ -15,6 +15,7 @@ import { CreateProjectDialog } from "@/components/projects/CreateProjectDialog";
 import { ProjectModePicker } from "@/components/projects/ProjectModePicker";
 import { GettingStarted } from "@/components/home/GettingStarted";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { LocalRenameDialog } from "@/components/projects/LocalRenameDialog";
 import { useRelativeTime } from "@/lib/hooks/useRelativeTime";
 import { timeAgo } from "@/lib/time";
 import { EVENT_DOT } from "@/lib/event-types";
@@ -23,6 +24,7 @@ import type { ActivityEvent } from "@/app/api/activity/route";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { MetricCard } from "@/components/ui/metric-card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ProjectCard, type LocalProjectCardData } from "@/components/projects/ProjectCard";
 
 // ── Count-up hook ─────────────────────────────────────────────────────────────
 
@@ -117,7 +119,7 @@ function StatusPill({ status, nodesRunning, nodesTotal }: {
 // ── Overview card ─────────────────────────────────────────────────────────────
 
 function OverviewCard({ projects }: { projects: ManifestProject[] }) {
-  const { online, recordCount, chainHeight, dim, fillPct, index, version, status } = useHealth();
+  const { online, recordCount, chainHeight, dim, fillPct, version, status } = useHealth();
   const [activity, setActivity] = useState<Record<string, number>>({});
   const [prevChain, setPrevChain] = useState<number | null>(null);
   const [chainGlowing, setChainGlowing] = useState(false);
@@ -155,7 +157,6 @@ function OverviewCard({ projects }: { projects: ManifestProject[] }) {
 
   const cells    = buildDayGrid(activity);
   const maxDelta = Math.max(...cells.map(c => c.delta), 1);
-  const fmtIndex = index ? (index === "BruteForce" ? "Brute-force" : index) : "—";
 
   const stats = [
     { label: "Records",      value: recordDisplay },
@@ -166,7 +167,6 @@ function OverviewCard({ projects }: { projects: ManifestProject[] }) {
 
   const metaStats = [
     { label: "dim",      value: dim ? String(dim) : "—" },
-    { label: "index",    value: fmtIndex },
     { label: "capacity", value: fillPct != null ? `${fillPct.toFixed(1)}%` : "—" },
     { label: "status",   value: online ? (status ?? "ok") : "offline", accent: online && status === "ok" },
   ];
@@ -438,60 +438,7 @@ function ProjectRowMenu({ name, onRename, onDuplicate, onArchive }: {
   );
 }
 
-function LocalRenameDialog({ name, onClose, onSuccess }: {
-  name: string;
-  onClose: () => void;
-  onSuccess: (newName: string) => void;
-}) {
-  const [value, setValue] = useState(name);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    if (trimmed === name) { onClose(); return; }
-    setLoading(true);
-    const res = await fetch(`/api/projects/${encodeURIComponent(name)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: trimmed }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({})) as { error?: string };
-      setError(d.error ?? "Rename failed");
-      setLoading(false);
-      return;
-    }
-    onSuccess(trimmed);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 space-y-4"
-      >
-        <h2 className="text-base font-semibold text-foreground">Rename project</h2>
-        <input
-          autoFocus
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-[var(--v-accent-ring)]"
-        />
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <div className="flex gap-2 pt-1">
-          <button type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 border border-border text-foreground rounded-lg hover:bg-accent transition text-sm">Cancel</button>
-          <button type="submit" disabled={loading || !value.trim()} className="flex-1 px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-lg hover:opacity-90 transition disabled:opacity-50 text-sm">
-            {loading ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
 
 function LocalArchiveDialog({ name, onClose, onSuccess }: {
   name: string;
@@ -615,8 +562,8 @@ function ProjectsPanel({
         ))}
       </div>
 
-      {/* Project rows */}
-      <div className="flex-1 overflow-y-auto divide-y divide-border/60">
+      {/* Project card grid */}
+      <div className="flex-1 overflow-y-auto p-4">
         {visibleProjects.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <div className="h-10 w-10 rounded-xl border border-dashed border-border flex items-center justify-center">
@@ -638,96 +585,35 @@ function ProjectsPanel({
             <p className="text-xs text-muted-foreground">No {tab} projects</p>
           </div>
         ) : (
-          shown.map(p => {
-            const isRunning = p.status === "running" || p.status === "starting";
-            return (
-              <div
-                key={p.name}
-                onClick={() => !busyName && onOpen(p.name)}
-                className="group flex items-center gap-3 px-4 py-3 hover:bg-accent/30 transition-colors cursor-pointer"
-              >
-                {/* Icon */}
-                <div className="h-7 w-7 rounded-lg bg-[var(--v-accent-muted)] border border-[var(--v-accent)]/20 flex items-center justify-center shrink-0">
-                  <Layers size={12} className="text-[var(--v-accent)]" />
-                </div>
-
-                {/* Name + meta */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-foreground truncate group-hover:text-[var(--v-accent)] transition-colors">
-                    {p.name}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    {(p.records ?? 0).toLocaleString()} records
-                    {p.collections && p.collections.length > 0 && ` · ${p.collections.length} collection${p.collections.length !== 1 ? "s" : ""}`}
-                    {p.dim && ` · dim ${p.dim}`}
-                  </p>
-                </div>
-
-                {/* Controls */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <StatusPill status={p.status} nodesRunning={p.nodesRunning} nodesTotal={p.nodesTotal} />
-
-                  {/* Favorite */}
-                  <button
-                    onClick={e => { e.stopPropagation(); onToggleFavorite(p.name); }}
-                    className={cn(
-                      "rounded p-1 transition-all",
-                      favorites.includes(p.name)
-                        ? "text-amber-500"
-                        : "opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-amber-500",
-                    )}
-                    title={favorites.includes(p.name) ? "Remove favorite" : "Favorite"}
-                  >
-                    <Star size={12} className={favorites.includes(p.name) ? "fill-current" : ""} />
-                  </button>
-
-                  {/* Pause / Play */}
-                  {isRunning ? (
-                    <button
-                      onClick={e => { e.stopPropagation(); onClose(p.name); }}
-                      disabled={!!busyName}
-                      className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center rounded-md border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20 disabled:opacity-40 transition-all"
-                      title="Pause"
-                    >
-                      {busyName === p.name ? <Loader2 size={10} className="animate-spin" /> : <Pause size={10} className="fill-current" />}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={e => { e.stopPropagation(); onOpen(p.name); }}
-                      disabled={!!busyName}
-                      className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-40 transition-all"
-                      title="Resume"
-                    >
-                      {busyName === p.name ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} className="fill-current ml-0.5" />}
-                    </button>
-                  )}
-
-                  {/* Three-dot menu */}
-                  <ProjectRowMenu
-                    name={p.name}
-                    onRename={() => onRename(p.name)}
-                    onDuplicate={() => onDuplicate(p)}
-                    onArchive={() => {
-                      const list = readArchived();
-                      if (!list.includes(p.name)) writeArchived([...list, p.name]);
-                      setArchived(readArchived());
-                    }}
-                  />
-
-                  {/* Delete */}
-                  <button
-                    onClick={e => { e.stopPropagation(); onDelete(p.name); }}
-                    className="opacity-0 group-hover:opacity-100 rounded p-1 text-muted-foreground hover:text-red-600 hover:bg-red-500/10 transition-all"
-                    title="Delete"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-
-                  <ArrowRight size={13} className="text-muted-foreground/40 ml-1" />
-                </div>
-              </div>
-            );
-          })
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {shown.map(p => {
+              const cardData: LocalProjectCardData = {
+                kind:        "local",
+                name:        p.name,
+                status:      p.status,
+                port:        p.port,
+                nodesRunning: p.nodesRunning,
+                nodesTotal:   p.nodesTotal,
+                shardCount:   p.shardCount,
+                records:      p.records,
+                collections:  p.collections,
+                href:        `/projects/${encodeURIComponent(p.name)}`,
+              };
+              return (
+                <ProjectCard
+                  key={p.name}
+                  data={cardData}
+                  onRename={() => onRename(p.name)}
+                  onDuplicate={() => onDuplicate(p)}
+                  onArchive={() => {
+                    const list = readArchived();
+                    if (!list.includes(p.name)) writeArchived([...list, p.name]);
+                    setArchived(readArchived());
+                  }}
+                />
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -857,11 +743,8 @@ export default function HomePage() {
   const handleDuplicate = async (p: ManifestProject) => {
     await create({
       name: `${p.name}-copy`,
-      dim: p.dim,
-      index: p.index,
       replication: p.replication,
       shardCount: p.shardCount,
-      embed: p.embed,
     });
   };
 
@@ -963,8 +846,8 @@ export default function HomePage() {
       <CreateProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreate={async (name, dim, index, replication, shardCount, embed) => {
-          const entry = await create({ name, dim, index, replication, shardCount, embed });
+        onCreate={async (name, replication, shardCount) => {
+          const entry = await create({ name, replication, shardCount });
           if (!entry) return;
           setBusyName(name);
           const ok = await open(name);

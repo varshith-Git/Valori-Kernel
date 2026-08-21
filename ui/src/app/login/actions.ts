@@ -43,7 +43,7 @@ export async function login(formData: FormData) {
     }
 
     revalidatePath('/', 'layout')
-    const next = (formData.get('next') as string) || '/dashboard'
+    const next = (formData.get('next') as string)?.trim() || '/dashboard'
     const mfaRedirect = await mfaChallengeRedirect(supabase, next)
     redirect(await appRedirectUrl(mfaRedirect ?? next))
 }
@@ -92,7 +92,7 @@ export async function signup(formData: FormData) {
     }
 
     revalidatePath('/', 'layout')
-    const next = (formData.get('next') as string) || '/dashboard'
+    const next = (formData.get('next') as string)?.trim() || '/dashboard'
     redirect(await appRedirectUrl(next))
 }
 

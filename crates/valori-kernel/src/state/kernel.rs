@@ -7,7 +7,8 @@ use crate::graph::adjacency::{add_edge, OutEdgeIterator};
 use crate::graph::node::GraphNode;
 use crate::graph::pool::{EdgePool, NodePool};
 use crate::index::{
-    ActiveIndex, BinaryQuantizationIndex, BruteForceIndex, IndexVariant, SearchResult, VectorIndex,
+    ActiveIndex, BinaryQuantizationIndex, BruteForceIndex, IndexVariant, Metric, SearchResult,
+    VectorIndex,
 };
 use crate::math::l2::fxp_l2_sq;
 use crate::storage::pool::RecordPool;
@@ -18,6 +19,25 @@ use crate::types::vector::FxpVector;
 
 #[derive(Clone)]
 pub struct KernelState {
+    /// The legacy, single, process-wide dimension fallback — used ONLY by
+    /// namespaces with no explicit entry in `namespace_configs` (see
+    /// `validate_dim_for_ns`). Self-locks to whatever the first insert into
+    /// any such namespace uses.
+    ///
+    /// # Classification (Phase 3.2 audit)
+    ///
+    /// **Still active product logic — not dead code, not legacy-only** —
+    /// but deliberately narrowed in scope: as of Phase 3.2, the only
+    /// namespace the live REST API can still reach without an explicit
+    /// `configure_namespace` call is `DEFAULT_NS` (`"default"`, id 0), the
+    /// built-in zero-config collection every deployment gets for free (see
+    /// `valori_engine::Engine::create_collection`'s doc comment). Every
+    /// other collection is created via `configure_namespace` before its
+    /// first insert can succeed, so this field is simply never consulted
+    /// for them. It is also what a V1–V8 snapshot's header `dim` field
+    /// still decodes into (`SNAPSHOT FORMAT` classification: legacy
+    /// decode target) — kept for that reason even independent of the
+    /// `"default"` namespace's own use of it.
     pub dim: Option<usize>,
     pub(crate) version: Version,
     pub(crate) records: RecordPool,
@@ -36,6 +56,33 @@ pub struct KernelState {
     /// Replicated metadata sidecar — set via `KernelEvent::SetMeta`.
     /// Key: arbitrary string (e.g. "record:42"). Value: pre-serialised JSON string.
     pub meta: alloc::collections::BTreeMap<alloc::string::String, alloc::string::String>,
+    /// Collection-scoped vector configuration, set via
+    /// `KernelEvent::ConfigureNamespace`. A namespace absent from this map has
+    /// no explicit collection config and continues to use the legacy,
+    /// process-wide `dim`/`index` fields — this is what makes an old project
+    /// (or any namespace nobody ever configured) behave exactly as before.
+    ///
+    /// `BTreeMap` (not `HashMap`): `no_std`-compatible via `alloc`, and
+    /// iteration order is key-sorted, matching the existing `meta` field's
+    /// determinism rationale — relevant if this ever joins the hashed state
+    /// (it does not yet; see the `ConfigureNamespace` doc comment).
+    pub namespace_configs: alloc::collections::BTreeMap<u16, NamespaceConfig>,
+}
+
+/// Collection-scoped vector configuration for one namespace.
+///
+/// Recorded, replicated, and snapshotted (V8+), but **not enforced** by the
+/// kernel itself in this phase — `valori-engine` validates inserts against
+/// this before committing, on both the standalone and cluster paths. See
+/// `KernelEvent::ConfigureNamespace`'s doc comment for why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NamespaceConfig {
+    pub dim: u32,
+    pub metric: Metric,
+    /// Opaque engine-level index-kind tag (`valori_engine::config::IndexKind`
+    /// as `u8`). The kernel does not interpret this — it only carries it so
+    /// every replica and every snapshot restore reconstructs the same value.
+    pub index_kind: u8,
 }
 
 impl KernelState {
@@ -52,6 +99,7 @@ impl KernelState {
             #[cfg(feature = "std")]
             encrypted_record_keys: rustc_hash::FxHashMap::default(),
             meta: alloc::collections::BTreeMap::new(),
+            namespace_configs: alloc::collections::BTreeMap::new(),
         }
     }
 
@@ -88,6 +136,105 @@ impl KernelState {
     /// Return the currently active index variant.
     pub fn index_variant(&self) -> IndexVariant {
         self.index.variant()
+    }
+
+    // ── Collection-scoped configuration ──────────────────────────────────────
+
+    /// Record collection-scoped config for `namespace_id`. Idempotent when the
+    /// dimension matches an existing entry; rejects a conflicting dimension —
+    /// configuration is immutable after first set (`CLAUDE.md`'s "immutable
+    /// after first insert" convention, applied at configure time instead).
+    pub fn configure_namespace(
+        &mut self,
+        namespace_id: u16,
+        dim: u32,
+        metric: Metric,
+        index_kind: u8,
+    ) -> Result<()> {
+        if namespace_id as usize >= MAX_NAMESPACES {
+            return Err(KernelError::InvalidOperation);
+        }
+        if dim == 0 {
+            return Err(KernelError::InvalidOperation);
+        }
+        if let Some(existing) = self.namespace_configs.get(&namespace_id) {
+            if existing.dim != dim {
+                return Err(KernelError::NamespaceAlreadyConfigured {
+                    namespace_id,
+                    existing_dim: existing.dim,
+                });
+            }
+            return Ok(()); // idempotent re-apply (e.g. replay)
+        }
+        self.namespace_configs.insert(
+            namespace_id,
+            NamespaceConfig {
+                dim,
+                metric,
+                index_kind,
+            },
+        );
+        Ok(())
+    }
+
+    /// The effective dimension for `namespace_id`: its own explicit config if
+    /// one exists, otherwise the legacy process-wide `dim`. `None` means
+    /// "not yet known" (no config, no insert yet) — matches the pre-existing
+    /// meaning of `self.dim == None`.
+    pub fn namespace_dim(&self, namespace_id: u16) -> Option<usize> {
+        self.namespace_configs
+            .get(&namespace_id)
+            .map(|c| c.dim as usize)
+            .or(self.dim)
+    }
+
+    /// The effective metric for `namespace_id` — always `SquaredL2` today,
+    /// explicit config or not (see `Metric`'s doc comment).
+    pub fn namespace_metric(&self, namespace_id: u16) -> Metric {
+        self.namespace_configs
+            .get(&namespace_id)
+            .map(|c| c.metric)
+            .unwrap_or_default()
+    }
+
+    /// `true` if `namespace_id` has an explicit collection config — i.e. was
+    /// created through the new per-collection configuration path rather than
+    /// inheriting the legacy process-wide `dim`/index.
+    pub fn has_namespace_config(&self, namespace_id: u16) -> bool {
+        self.namespace_configs.contains_key(&namespace_id)
+    }
+
+    /// Validate an incoming vector's length against `namespace_id`'s
+    /// effective dimension, auto-locking the legacy `self.dim` on first
+    /// insert exactly as before this phase. This is the single dimension
+    /// gate shared by `InsertRecord` and `AutoInsertRecord` below.
+    ///
+    /// Enforced here (not only in `valori-engine`) because the cluster
+    /// state machine (`valori-consensus::ValoriStateMachine`) applies
+    /// events directly against `KernelState`, bypassing `Engine` entirely —
+    /// enforcement at the engine layer alone would leave cluster-mode
+    /// inserts to explicitly-configured collections unvalidated. Namespaces
+    /// with **no** explicit config are unaffected: this reproduces the
+    /// pre-existing `self.dim` check byte-for-byte.
+    fn validate_dim_for_ns(&mut self, namespace_id: u16, d: usize) -> Result<()> {
+        if let Some(cfg) = self.namespace_configs.get(&namespace_id) {
+            let expected = cfg.dim as usize;
+            if d != expected {
+                return Err(KernelError::DimensionMismatch { expected, found: d });
+            }
+            return Ok(());
+        }
+        if let Some(dim) = self.dim {
+            if d != dim {
+                return Err(KernelError::DimensionMismatch {
+                    expected: dim,
+                    found: d,
+                });
+            }
+        } else {
+            self.dim = Some(d);
+        }
+        Ok(())
     }
 
     // ── Crypto-shredding (Phase 3.6) ─────────────────────────────────────────
@@ -152,6 +299,33 @@ impl KernelState {
     /// Iterate over all live graph nodes (excludes deleted/hole slots).
     pub fn iter_nodes(&self) -> impl Iterator<Item = &crate::graph::node::GraphNode> {
         self.nodes.nodes.iter().filter_map(|slot| slot.as_ref())
+    }
+
+    /// Iterate over all live graph nodes belonging to `namespace_id`.
+    pub fn iter_nodes_in_ns(
+        &self,
+        namespace_id: u16,
+    ) -> impl Iterator<Item = &crate::graph::node::GraphNode> {
+        self.iter_nodes()
+            .filter(move |n| n.namespace_id == namespace_id)
+    }
+
+    /// Iterate over all live graph edges.
+    pub fn iter_edges(&self) -> impl Iterator<Item = &crate::graph::edge::GraphEdge> {
+        self.edges.edges.iter().filter_map(|slot| slot.as_ref())
+    }
+
+    /// Iterate over all live graph edges connecting nodes in `namespace_id`.
+    pub fn iter_edges_in_ns(
+        &self,
+        namespace_id: u16,
+    ) -> impl Iterator<Item = &crate::graph::edge::GraphEdge> {
+        self.iter_edges().filter(move |e| {
+            self.nodes
+                .get(e.from)
+                .map(|n| n.namespace_id == namespace_id)
+                .unwrap_or(false)
+        })
     }
 
     /// Iterate over all live records in a given namespace.
@@ -322,16 +496,7 @@ impl KernelState {
                     return Err(KernelError::InvalidOperation);
                 }
                 let d = vector.len();
-                if let Some(dim) = self.dim {
-                    if d != dim {
-                        return Err(KernelError::DimensionMismatch {
-                            expected: dim,
-                            found: d,
-                        });
-                    }
-                } else {
-                    self.dim = Some(d);
-                }
+                self.validate_dim_for_ns(namespace_id, d)?;
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
                     if m.len() > MAX_METADATA_SIZE {
@@ -450,16 +615,7 @@ impl KernelState {
                     return Err(KernelError::InvalidOperation);
                 }
                 let d = vector.len();
-                if let Some(dim) = self.dim {
-                    if d != dim {
-                        return Err(KernelError::DimensionMismatch {
-                            expected: dim,
-                            found: d,
-                        });
-                    }
-                } else {
-                    self.dim = Some(d);
-                }
+                self.validate_dim_for_ns(namespace_id, d)?;
                 use crate::config::MAX_METADATA_SIZE;
                 if let Some(m) = metadata {
                     if m.len() > MAX_METADATA_SIZE {
@@ -615,6 +771,17 @@ impl KernelState {
                     }
                 }
                 self.namespace_node_heads[ns] = NS_LIST_NIL;
+                self.namespace_configs.remove(&namespace_id);
+            }
+
+            KernelEvent::ConfigureNamespace {
+                namespace_id: ns_id,
+                dim,
+                metric,
+                index_kind,
+            } => {
+                let metric = Metric::from_u8(*metric).ok_or(KernelError::InvalidOperation)?;
+                self.configure_namespace(*ns_id, *dim, metric, *index_kind)?;
             }
 
             KernelEvent::InsertRecordEncrypted {
@@ -636,7 +803,17 @@ impl KernelState {
                 if ciphertext.len() > MAX_METADATA_SIZE + 28 {
                     return Err(KernelError::MetadataTooLarge);
                 }
-                let dim = self.dim.ok_or(KernelError::InvalidOperation)?;
+                // Phase 3.3 fix: this used to read the legacy global `self.dim`
+                // directly, ignoring `namespace_id` entirely — every other
+                // insert path resolves dimension through `namespace_dim`
+                // (namespace-specific config, falling back to the legacy
+                // global only for an unconfigured namespace). A configured
+                // non-legacy namespace with no insert yet (so `self.dim` is
+                // still `None`) would incorrectly 500 here even though its
+                // own `NamespaceConfig` has a perfectly good dimension.
+                let dim = self
+                    .namespace_dim(namespace_id)
+                    .ok_or(KernelError::InvalidOperation)?;
                 let zero_vec = FxpVector::new_zeros(dim);
                 let allocated_id =
                     self.records

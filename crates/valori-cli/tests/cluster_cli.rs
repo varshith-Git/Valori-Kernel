@@ -33,7 +33,7 @@ async fn serve_node() -> (String, tokio::task::JoinHandle<()>) {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))

@@ -33,10 +33,25 @@
 pub mod collections;
 pub mod explain;
 pub mod graph;
+pub mod index_lifecycle;
 pub mod memory;
 pub mod meta;
+pub mod query_planner;
 pub mod records;
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/version",
+    operation_id = "get_version",
+    tag = "meta",
+    summary = "Node build version",
+    description = "Plain text, not JSON — the crate version string and nothing else. \
+                   Authenticated like any other read: a read-only key is enough.",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Version string", content_type = "text/plain", body = String),
+    ),
+))]
 /// `GET /v1/version` — stateless, literally the same function on both routers.
 pub async fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

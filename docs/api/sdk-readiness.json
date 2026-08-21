@@ -1,0 +1,8 @@
+{
+  "sdk_ready": true,
+  "computed_by": "scripts/api-contract-gate.sh",
+  "computed_at": "2026-08-21T06:26:19+00:00",
+  "gate_result": "PASS",
+  "blocker_count": 0,
+  "blockers": []
+}

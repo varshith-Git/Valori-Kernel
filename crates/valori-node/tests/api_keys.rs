@@ -20,7 +20,6 @@ async fn spawn_node(
 ) -> (reqwest::Client, String) {
     let mut cfg = NodeConfig::default();
     cfg.max_records = 100;
-    cfg.dim = 4;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;
 
@@ -40,10 +39,24 @@ async fn spawn_node(
     (client, format!("http://{}", addr))
 }
 
+async fn create_default_collection(
+    client: &reqwest::Client,
+    base: &str,
+    bearer: Option<&str>,
+) -> reqwest::Response {
+    let mut req = client
+        .post(format!("{base}/v1/namespaces"))
+        .json(&serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}));
+    if let Some(t) = bearer {
+        req = req.bearer_auth(t);
+    }
+    req.send().await.unwrap()
+}
+
 async fn insert(client: &reqwest::Client, base: &str, bearer: Option<&str>) -> reqwest::Response {
     let mut req = client
         .post(format!("{base}/records"))
-        .json(&serde_json::json!({ "values": [1.0, 0.0, 0.0, 0.0] }));
+        .json(&serde_json::json!({ "values": [1.0, 0.0, 0.0, 0.0], "collection": "default" }));
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
@@ -51,9 +64,9 @@ async fn insert(client: &reqwest::Client, base: &str, bearer: Option<&str>) -> r
 }
 
 async fn search(client: &reqwest::Client, base: &str, bearer: Option<&str>) -> reqwest::Response {
-    let mut req = client
-        .post(format!("{base}/search"))
-        .json(&serde_json::json!({ "query": [1.0, 0.0, 0.0, 0.0], "k": 3 }));
+    let mut req = client.post(format!("{base}/search")).json(
+        &serde_json::json!({ "query": [1.0, 0.0, 0.0, 0.0], "k": 3, "collection": "default" }),
+    );
     if let Some(t) = bearer {
         req = req.bearer_auth(t);
     }
@@ -107,6 +120,10 @@ async fn revoke_key(client: &reqwest::Client, base: &str, bearer: &str, id: &str
 #[tokio::test]
 async fn no_auth_all_requests_pass() {
     let (client, base) = spawn_node(None, Arc::new(KeyStore::new(None))).await;
+    assert!(create_default_collection(&client, &base, None)
+        .await
+        .status()
+        .is_success());
     assert!(insert(&client, &base, None).await.status().is_success());
     assert!(search(&client, &base, None).await.status().is_success());
 }
@@ -127,6 +144,12 @@ async fn legacy_token_accept_and_reject() {
         401
     );
     // Correct token → 200.
+    assert!(
+        create_default_collection(&client, &base, Some("super-secret"))
+            .await
+            .status()
+            .is_success()
+    );
     assert!(insert(&client, &base, Some("super-secret"))
         .await
         .status()
@@ -137,6 +160,10 @@ async fn legacy_token_accept_and_reject() {
 #[tokio::test]
 async fn create_key_and_use_it() {
     let (client, base) = spawn_node(Some("admin"), Arc::new(KeyStore::new(None))).await;
+    assert!(create_default_collection(&client, &base, Some("admin"))
+        .await
+        .status()
+        .is_success());
 
     // Create a read_write key using the legacy admin token.
     let body = create_key(&client, &base, "admin", "read_write").await;
@@ -186,6 +213,10 @@ async fn list_keys_requires_admin() {
 #[tokio::test]
 async fn read_only_key_cannot_write() {
     let (client, base) = spawn_node(Some("admin"), Arc::new(KeyStore::new(None))).await;
+    assert!(create_default_collection(&client, &base, Some("admin"))
+        .await
+        .status()
+        .is_success());
 
     // Pre-insert a record with admin token.
     assert!(insert(&client, &base, Some("admin"))
@@ -216,6 +247,10 @@ async fn read_only_key_cannot_write() {
 #[tokio::test]
 async fn revoke_key_stops_access() {
     let (client, base) = spawn_node(Some("admin"), Arc::new(KeyStore::new(None))).await;
+    assert!(create_default_collection(&client, &base, Some("admin"))
+        .await
+        .status()
+        .is_success());
 
     let body = create_key(&client, &base, "admin", "read_write").await;
     let token = body["token"].as_str().unwrap().to_string();

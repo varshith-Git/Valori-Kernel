@@ -21,10 +21,13 @@ use axum::Json;
 use serde::Deserialize;
 
 use valori_kernel::types::enums::{EdgeKind, NodeKind};
+use valori_kernel::types::id::NodeId;
+use valori_rag::graph::{Direction, GraphQuery, GraphQueryHit};
 
 use crate::api::{
     CreateEdgeRequest, CreateEdgeResponse, CreateNodeRequest, CreateNodeResponse,
-    DeleteNodeResponse, EdgeData, GetEdgesResponse, GetNodeResponse, ListNodesResponse, NodeInfo,
+    DeleteNodeResponse, EdgeData, GetEdgesResponse, GetNodeResponse, GraphQueryHitDto,
+    GraphQueryResponse, ListNodesResponse, NodeInfo,
 };
 
 /// A committed graph write: the allocated id plus, on the cluster path, the
@@ -72,16 +75,30 @@ pub trait GraphOps: Send + Sync {
         root: u32,
         depth: u32,
     ) -> Result<(serde_json::Value, serde_json::Value), Response>;
+    /// G1.1 — deterministic, filterable, depth-bounded graph query. `Ok(None)`
+    /// = the query's `start` node does not exist in `ns` (including "exists,
+    /// but in a different namespace" — the shared handler maps both to 404,
+    /// never distinguishing them, per `valori_rag::graph::query_graph`'s own
+    /// tenant-isolation-safe contract).
+    async fn query(
+        &self,
+        ns: u16,
+        query: GraphQuery,
+    ) -> Result<Option<Vec<GraphQueryHit>>, Response>;
 }
 
 // ── Shared query types ────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
 #[derive(Deserialize)]
 pub struct CollectionQuery {
     #[serde(default)]
     pub collection: Option<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
 #[derive(Deserialize)]
 pub struct ListNodesQuery {
     #[serde(default)]
@@ -95,6 +112,8 @@ pub struct ListNodesQuery {
     pub limit: Option<usize>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
 #[derive(Deserialize)]
 pub struct SubgraphQuery {
     pub root: u32,
@@ -107,21 +126,38 @@ fn default_depth() -> u32 {
     2
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
+/// G1.1 — `GET /v1/graph/query` request. Only `start` is required; every
+/// other field has a documented default (see `valori_rag::graph::GraphQuery`).
+#[derive(Deserialize)]
+pub struct GraphQueryParams {
+    pub start: u32,
+    /// `"outgoing"` (default) | `"incoming"` | `"both"` — case-insensitive.
+    #[serde(default)]
+    pub direction: Option<String>,
+    /// Restrict traversal to a single edge kind (same u8 encoding as
+    /// `CreateEdgeRequest::kind`). Absent = no restriction.
+    #[serde(default)]
+    pub edge_kind: Option<u8>,
+    /// Restrict traversal to a single node kind (same u8 encoding as
+    /// `ListNodesQuery::kind`). Absent = no restriction.
+    #[serde(default)]
+    pub node_kind: Option<u8>,
+    #[serde(default = "valori_rag::graph::default_query_depth")]
+    pub depth: u32,
+    #[serde(default = "valori_rag::graph::default_query_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub collection: Option<String>,
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async fn resolve<O: GraphOps>(ops: &O, collection: Option<&str>) -> Result<u16, Response> {
-    ops.resolve_collection(collection).await.ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "unknown collection '{}' — create it first with POST /v1/namespaces",
-                    collection.unwrap_or("default")
-                )
-            })),
-        )
-            .into_response()
-    })
+    ops.resolve_collection(collection)
+        .await
+        .ok_or_else(|| crate::error_codes::collection_not_found(collection))
 }
 
 fn node_not_found(id: u32) -> Response {
@@ -147,6 +183,7 @@ pub async fn create_node<O: GraphOps>(
     })?;
     let ns = resolve(ops, req.collection.as_deref()).await?;
     let w = ops.create_node(ns, kind, req.record_id).await?;
+    metrics::counter!("valori_graph_node_create_total", 1u64);
     Ok(Json(CreateNodeResponse {
         node_id: w.id,
         log_index: w.log_index,
@@ -166,6 +203,7 @@ pub async fn create_edge<O: GraphOps>(
     })?;
     let ns = resolve(ops, req.collection.as_deref()).await?;
     let w = ops.create_edge(ns, req.from, req.to, kind).await?;
+    metrics::counter!("valori_graph_edge_create_total", 1u64);
     Ok(Json(CreateEdgeResponse {
         edge_id: w.id,
         log_index: w.log_index,
@@ -237,5 +275,77 @@ pub async fn get_subgraph<O: GraphOps>(
 ) -> Result<Json<serde_json::Value>, Response> {
     let ns = resolve(ops, q.collection.as_deref()).await?;
     let (nodes, edges) = ops.subgraph(ns, q.root, q.depth).await?;
+    let node_count = nodes.as_array().map_or(0, |a| a.len());
+    let edge_count = edges.as_array().map_or(0, |a| a.len());
+    metrics::histogram!("valori_graph_traversal_nodes", node_count as f64);
+    metrics::histogram!("valori_graph_traversal_edges", edge_count as f64);
     Ok(Json(serde_json::json!({ "nodes": nodes, "edges": edges })))
+}
+
+// ── G1.1 — GET /v1/graph/query ────────────────────────────────────────────────
+
+fn bad_request(msg: String) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
+}
+
+pub async fn query<O: GraphOps>(
+    ops: &O,
+    q: GraphQueryParams,
+) -> Result<Json<GraphQueryResponse>, Response> {
+    let direction = match q
+        .direction
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("outgoing") => Direction::Outgoing,
+        Some("incoming") => Direction::Incoming,
+        Some("both") => Direction::Both,
+        Some(other) => {
+            return Err(bad_request(format!(
+                "unknown direction '{other}' — expected outgoing, incoming, or both"
+            )))
+        }
+    };
+    let edge_kind = q
+        .edge_kind
+        .map(|v| EdgeKind::from_u8(v).ok_or_else(|| bad_request(format!("unknown edge kind: {v}"))))
+        .transpose()?;
+    let node_kind = q
+        .node_kind
+        .map(|v| NodeKind::from_u8(v).ok_or_else(|| bad_request(format!("unknown node kind: {v}"))))
+        .transpose()?;
+
+    let ns = resolve(ops, q.collection.as_deref()).await?;
+    let query = GraphQuery {
+        start: NodeId(q.start),
+        direction,
+        edge_kind,
+        node_kind,
+        max_depth: q.depth,
+        limit: q.limit,
+    };
+
+    match ops.query(ns, query).await? {
+        Some(hits) => {
+            let count = hits.len();
+            metrics::counter!("valori_graph_query_total", 1u64);
+            metrics::histogram!("valori_graph_traversal_nodes", count as f64);
+            let hits = hits
+                .into_iter()
+                .map(|h| GraphQueryHitDto {
+                    node_id: h.node_id,
+                    kind: h.kind as u8,
+                    record_id: h.record_id,
+                    depth: h.depth,
+                })
+                .collect();
+            Ok(Json(GraphQueryResponse { hits, count }))
+        }
+        None => Err(node_not_found(q.start)),
+    }
 }

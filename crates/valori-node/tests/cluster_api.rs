@@ -31,7 +31,7 @@ async fn boot(node_id: u64, init: bool) -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    bootstrap_cluster(&cfg, None, None, 0).await.unwrap()
+    bootstrap_cluster(&cfg, None, None).await.unwrap()
 }
 
 async fn wait_for_leader(h: &ClusterHandle, id: u64) {

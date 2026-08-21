@@ -1,14 +1,12 @@
 import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCurrentMembership } from '@/utils/supabase/dal'
 import { redirect } from 'next/navigation'
 import { CreateProjectDialog } from './CreateProjectDialog'
 import { CloudProjectsClient } from './CloudProjectsClient'
 
 export default async function DashboardPage() {
     const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
@@ -19,15 +17,7 @@ export default async function DashboardPage() {
     // Every user has at least a personal org (see supabase/migrations —
     // handle_new_user trigger). Org switching isn't built yet, so this
     // dashboard always shows the first org the user is a member of.
-    const { data: memberships } = await supabase
-        .from('org_members')
-        .select('role, organizations(id, name, is_personal)')
-        .eq('user_id', user.id)
-        .limit(1)
-
-    const membership = memberships?.[0] as
-        | { role: string; organizations: { id: string; name: string; is_personal: boolean } }
-        | undefined
+    const membership = await getCurrentMembership()
 
     if (!membership) {
         // Should be unreachable — the signup trigger always creates one —

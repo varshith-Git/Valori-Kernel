@@ -25,7 +25,6 @@ async fn test_replication_stream_endpoint() {
         event_log_path: Some(dir.path().join("events.log")),
         mode: valori_node::config::NodeMode::Leader,
         max_records: 128,
-        dim: 4,
         max_nodes: 128,
         max_edges: 256,
         ..Default::default()
@@ -81,7 +80,8 @@ async fn test_replication_stream_endpoint() {
     // ── 6. Insert a live record ───────────────────────────────────────────────
     {
         let mut engine_lock = state.write().await;
-        engine_lock.insert_record_from_f32(&vec).unwrap();
+        let vec2 = vec![0.2f32; 4];
+        engine_lock.insert_record_from_f32(&vec2).unwrap();
     }
 
     // ── 7. Second chunk: live event ───────────────────────────────────────────

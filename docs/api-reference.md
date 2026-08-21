@@ -4,6 +4,34 @@ The `valori-node` server exposes the kernel over HTTP, allowing it to be used as
 
 **Base URL**: `http://localhost:3000` (Default)
 
+> The canonical machine-readable contract for every route below is
+> [`api/openapi/valori-v1.yaml`](../api/openapi/valori-v1.yaml).
+
+## Error responses
+
+Every error, on every endpoint, in both standalone and cluster mode:
+
+```json
+{ "error": "unknown collection 'ghost' — create it first with POST /v1/namespaces",
+  "code": "collection_not_found" }
+```
+
+**Branch on `code`, never on `error`.** `error` is a human-readable message
+that may be reworded at any time; `code` is stable and drawn from a closed set
+of 16 values: `validation_error`, `unauthorized`, `forbidden`, `not_found`,
+`collection_not_found`, `record_not_found`, `dimension_mismatch`,
+`invalid_metric`, `invalid_index`, `index_build_failed`, `conflict`,
+`capacity_exceeded`, `not_leader`, `unavailable`, `not_implemented`,
+`internal_error`.
+
+## Idempotency
+
+`POST /v1/records` and `POST /v1/vectors/batch-insert` accept a `request_id`
+idempotency token — a 16-byte array or a 32-character hex string (UUID dashes
+optional). Replaying the same token returns the record the first request
+created and performs no second write. This works in **both** standalone and
+cluster mode; a malformed token is rejected rather than ignored.
+
 ## Endpoints
 
 ### 1. Memory Protocol v1 (High Level)

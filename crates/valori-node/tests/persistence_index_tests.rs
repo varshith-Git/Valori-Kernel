@@ -9,11 +9,9 @@ const N: usize = 200;
 
 fn ivf_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = N;
     cfg.max_nodes = N;
     cfg.max_edges = N;
-    cfg.index_kind = IndexKind::Ivf;
     cfg.quantization_kind = QuantizationKind::None;
     cfg.snapshot_path = Some(dir.join("ivf_snap.bin"));
     cfg
@@ -28,6 +26,14 @@ fn test_ivf_persistence() {
     // ── 1. Build ──────────────────────────────────────────────────────────────
     {
         let mut engine = Engine::new(&cfg);
+        engine
+            .create_collection_with_config(
+                "default",
+                DIM as u32,
+                valori_domain::Metric::SquaredL2,
+                valori_domain::IndexKind::Ivf,
+            )
+            .unwrap();
 
         for i in 0..100usize {
             let val = i as f32 / 100.0;

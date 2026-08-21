@@ -1,4 +1,4 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCloudProject } from '@/utils/supabase/dal'
 import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ProjectWorkspace } from './ProjectWorkspace'
@@ -6,17 +6,13 @@ import { ProjectActions } from './ProjectActions'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: project } = await supabase.from('projects').select('*').eq('id', id).single()
+    const project = await getCloudProject(id)
 
     if (!project) {
         notFound()

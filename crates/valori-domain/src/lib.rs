@@ -94,5 +94,5 @@ pub use id::{
     SessionId, SnapshotId,
 };
 pub use project::{
-    ApiProject, IndexKind, LocalProject, Project, ProjectName, ProjectTopology, Timestamp,
+    ApiProject, IndexKind, LocalProject, Metric, Project, ProjectName, ProjectTopology, Timestamp,
 };

@@ -20,7 +20,6 @@ async fn spawn() -> (reqwest::Client, String, TempDir) {
     let dir = TempDir::new().unwrap();
     let mut cfg = NodeConfig::default();
     cfg.max_records = 200;
-    cfg.dim = 4;
     cfg.max_nodes = 100;
     cfg.max_edges = 100;
     cfg.event_log_path = Some(dir.path().join("events.log"));
@@ -35,10 +34,20 @@ async fn spawn() -> (reqwest::Client, String, TempDir) {
     (reqwest::Client::new(), format!("http://{}", addr), dir)
 }
 
+async fn create_default_collection(client: &reqwest::Client, base: &str) {
+    let resp = client
+        .post(format!("{base}/v1/namespaces"))
+        .json(&serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "collection create failed");
+}
+
 async fn insert(client: &reqwest::Client, base: &str, vec: [f32; 4]) -> u32 {
     let resp = client
         .post(format!("{base}/records"))
-        .json(&serde_json::json!({ "values": vec }))
+        .json(&serde_json::json!({ "values": vec, "collection": "default" }))
         .send()
         .await
         .unwrap();
@@ -55,7 +64,7 @@ async fn search(
     k: usize,
     half_life: Option<u64>,
 ) -> serde_json::Value {
-    let mut body = serde_json::json!({ "query": q, "k": k });
+    let mut body = serde_json::json!({ "query": q, "k": k, "collection": "default" });
     if let Some(h) = half_life {
         body["decay_half_life_secs"] = serde_json::json!(h);
     }
@@ -77,6 +86,7 @@ async fn search(
 #[tokio::test]
 async fn no_decay_is_pure_distance_and_clean_response() {
     let (client, base, _d) = spawn().await;
+    create_default_collection(&client, &base).await;
     let near = insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     let _far = insert(&client, &base, [0.0, 0.0, 0.0, 1.0]).await;
 
@@ -104,6 +114,7 @@ async fn no_decay_is_pure_distance_and_clean_response() {
 #[tokio::test]
 async fn decay_reports_factor_and_ages_records() {
     let (client, base, _d) = spawn().await;
+    create_default_collection(&client, &base).await;
     let a = insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     let b = insert(&client, &base, [0.9, 0.1, 0.0, 0.0]).await;
 
@@ -134,6 +145,7 @@ async fn decay_reports_factor_and_ages_records() {
 #[tokio::test]
 async fn decay_does_not_mutate_state_hash() {
     let (client, base, _d) = spawn().await;
+    create_default_collection(&client, &base).await;
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     insert(&client, &base, [0.0, 1.0, 0.0, 0.0]).await;
     insert(&client, &base, [0.0, 0.0, 1.0, 0.0]).await;
@@ -145,7 +157,7 @@ async fn decay_does_not_mutate_state_hash() {
     // that bracket the decayed search — i.e. decay wrote nothing.
     let hash_a = client
         .post(format!("{base}/search"))
-        .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2 }))
+        .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2, "collection": "default" }))
         .send()
         .await
         .unwrap()
@@ -160,7 +172,7 @@ async fn decay_does_not_mutate_state_hash() {
 
     let hash_b = client
         .post(format!("{base}/search"))
-        .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2 }))
+        .json(&serde_json::json!({ "query": [1.0,0.0,0.0,0.0], "k": 3, "as_of_log_index": 2, "collection": "default" }))
         .send()
         .await
         .unwrap()
@@ -183,6 +195,7 @@ async fn decay_does_not_mutate_state_hash() {
 #[tokio::test]
 async fn explicit_zero_half_life_disables_decay() {
     let (client, base, _d) = spawn().await;
+    create_default_collection(&client, &base).await;
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     let body = search(&client, &base, [1.0, 0.0, 0.0, 0.0], 1, Some(0)).await;
     let results = body["results"].as_array().unwrap();

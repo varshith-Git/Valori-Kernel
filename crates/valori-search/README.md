@@ -2,7 +2,7 @@
 
 Post-retrieval search primitives for the Valori platform.
 
-Three independent, pure modules — no kernel, no engine, no I/O.
+Four independent, pure modules — no kernel, no engine, no I/O.
 
 ## Modules
 
@@ -11,6 +11,7 @@ Three independent, pure modules — no kernel, no engine, no I/O.
 | `decay` | Time-decay re-ranking — penalises stale records by inflating their L2 distance using a geometric half-life |
 | `reranker` | BM25 Okapi hybrid reranker — blends vector similarity with term-frequency scoring for lexical precision |
 | `filter` | Metadata predicate matching — exact equality and numeric range operators (`gt`, `gte`, `lt`, `lte`, `eq`) |
+| `graph_rerank` | Phase G1.4.1 — graph-aware reranking: penalises graph-distant candidates by inflating their score, same multiplicative shape as `decay`. Takes a precomputed `Option<u32>` hop distance per candidate (computed by `valori_rag::graph::graph_distances_from_seeds`) — this crate never touches `KernelState` itself |
 
 ## Usage
 
@@ -48,6 +49,20 @@ let reranked = r.rerank("AdamW optimizer", candidates);
 assert_eq!(reranked[0].0, 42); // exact term match rises to top
 ```
 
+### Graph-aware reranking (Phase G1.4.1)
+
+```rust
+use valori_search::{GraphRerankHit, graph_rerank_apply};
+
+let hits = vec![
+    GraphRerankHit { id: 1, score: 1.0, graph_distance: Some(2) }, // 2 hops from a seed
+    GraphRerankHit { id: 2, score: 1.2, graph_distance: Some(0) }, // is a seed itself
+];
+// adjusted = score * (1 + weight * distance); weight = 0.15 -> id 1: 1.3, id 2: 1.2
+let ranked = graph_rerank_apply(hits, 0.15, 2);
+assert_eq!(ranked[0].id, 2); // graph-adjacent candidate overtakes
+```
+
 ### Metadata filter
 
 ```rust
@@ -75,5 +90,6 @@ assert!(matches_metadata_filter(&meta, &filter));
 | `ValoriReranker::rerank` | O(candidates × query_terms) |
 | `decay_rerank` | O(n log n) sort |
 | `matches_metadata_filter` | O(filter_keys) |
+| `graph_rerank_apply` | O(n log n) sort — the graph-distance computation itself lives in `valori-rag::graph::graph_distances_from_seeds` (O(reachable nodes) bounded BFS), not here |
 
 At `k = 100` candidates and `POOL_FACTOR = 20`, rerank processes at most 2 000 candidates. This is negligible even at millions of records.

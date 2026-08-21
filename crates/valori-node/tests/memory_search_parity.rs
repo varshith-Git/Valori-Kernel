@@ -22,16 +22,24 @@ use valori_node::EngineFromNodeConfig;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Standalone router: in-memory engine, no WAL, no auth.
-fn standalone_router() -> axum::Router {
+/// Standalone router: in-memory engine, no WAL, no auth. Creates the
+/// "default" collection every test in this file targets.
+async fn standalone_router() -> axum::Router {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 500;
     cfg.max_nodes = 200;
     cfg.max_edges = 200;
     let engine = Engine::new(&cfg);
     let state = std::sync::Arc::new(tokio::sync::RwLock::new(engine));
-    build_router(state, None, None)
+    let router = build_router(state, None, None);
+    let (status, body) = post(
+        router.clone(),
+        "/v1/namespaces",
+        json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+    router
 }
 
 /// Single-node cluster router bootstrapped as sole leader.
@@ -53,7 +61,7 @@ async fn cluster_router() -> axum::Router {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -61,6 +69,13 @@ async fn cluster_router() -> axum::Router {
         .await
         .unwrap();
     let router = build_cluster_router(&handle, None);
+    let (status, body) = post(
+        router.clone(),
+        "/v1/namespaces",
+        json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
     // Keep handle alive for the duration of the test via a leak.
     // Tests are short-lived processes so this is acceptable.
     std::mem::forget(handle);
@@ -90,7 +105,7 @@ async fn post(router: axum::Router, uri: &str, body: Value) -> (StatusCode, Valu
 /// Insert a record with metadata via /v1/memory/upsert_vector and return its memory_id.
 /// Note: does NOT populate the BM25 reranker — use insert_with_text for rerank tests.
 async fn upsert(router: axum::Router, vec: [f32; 4], metadata: Option<Value>) -> Value {
-    let mut body = json!({ "vector": vec });
+    let mut body = json!({ "vector": vec, "collection": "default" });
     if let Some(m) = metadata {
         body["metadata"] = m;
     }
@@ -103,14 +118,14 @@ async fn upsert(router: axum::Router, vec: [f32; 4], metadata: Option<Value>) ->
 /// (standalone) and the cluster text_corpus (cluster) are both populated.
 /// Returns the record_id.
 async fn insert_with_text(router: axum::Router, vec: [f32; 4], text: &str) -> u64 {
-    let body = json!({ "batch": [vec], "texts": [text] });
+    let body = json!({ "batch": [vec], "texts": [text], "collection": "default" });
     let (status, resp) = post(router, "/v1/vectors/batch-insert", body).await;
     assert_eq!(status, StatusCode::OK, "insert_with_text failed: {resp}");
     resp["ids"].as_array().unwrap()[0].as_u64().unwrap()
 }
 
 async fn memory_search(router: axum::Router, query: [f32; 4], extra: Value) -> Value {
-    let mut body = json!({ "query_vector": query, "k": 10 });
+    let mut body = json!({ "query_vector": query, "k": 10, "collection": "default" });
     if let Value::Object(map) = extra {
         for (k, v) in map {
             body[k] = v;
@@ -157,7 +172,7 @@ async fn seed_metadata_scenario(router: axum::Router) -> (u64, u64) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_metadata_filter_excludes_non_matching() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     let (alice_id, _bob_id) = seed_metadata_scenario(router.clone()).await;
 
     let resp = memory_search(
@@ -199,7 +214,7 @@ async fn cluster_metadata_filter_excludes_non_matching() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_no_filter_returns_all() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     let (alice_id, bob_id) = seed_metadata_scenario(router.clone()).await;
 
     let resp = memory_search(router, [1.0, 0.0, 0.0, 0.0], json!({})).await;
@@ -243,7 +258,7 @@ async fn seed_rerank_scenario(router: axum::Router) -> (u64, u64) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_rerank_promotes_lexical_match() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     let (fruit_id, quantum_id) = seed_rerank_scenario(router.clone()).await;
 
     // Without rerank: quantum is geometrically closer → should rank first
@@ -314,7 +329,7 @@ async fn cluster_rerank_promotes_lexical_match() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_rerank_false_ignores_query_text() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     let (fruit_id, quantum_id) = seed_rerank_scenario(router.clone()).await;
 
     let resp = memory_search(
@@ -402,7 +417,7 @@ async fn insert_with_text_and_meta(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_filter_plus_rerank_both_apply() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     // Bob record at same vector — should be excluded by filter
     insert_with_text_and_meta(
         router.clone(),
@@ -469,7 +484,7 @@ async fn cluster_filter_plus_rerank_both_apply() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_filter_respects_k() {
-    let router = standalone_router();
+    let router = standalone_router().await;
     // Insert 5 Alice records and 5 Bob records.
     for _ in 0..5 {
         upsert(
@@ -486,7 +501,7 @@ async fn standalone_filter_respects_k() {
         .await;
     }
     let mut body = json!({ "query_vector": [1.0, 0.0, 0.0, 0.0], "k": 3,
-                            "metadata_filter": {"author": "Alice"} });
+                            "metadata_filter": {"author": "Alice"}, "collection": "default" });
     let (status, resp) = post(router, "/v1/memory/search_vector", body.take()).await;
     assert_eq!(status, StatusCode::OK);
     let ids = record_ids(&resp);
@@ -516,7 +531,7 @@ async fn cluster_filter_respects_k() {
         .await;
     }
     let mut body = json!({ "query_vector": [1.0, 0.0, 0.0, 0.0], "k": 3,
-                            "metadata_filter": {"author": "Alice"} });
+                            "metadata_filter": {"author": "Alice"}, "collection": "default" });
     let (status, resp) = post(router, "/v1/memory/search_vector", body.take()).await;
     assert_eq!(status, StatusCode::OK);
     let ids = record_ids(&resp);

@@ -379,6 +379,11 @@ hits = db.search(vec, k=5, query_text="my query")                   # hybrid rer
 hits = db.search(vec, k=5, decay_half_life_secs=86400)              # recency-aware
 hits = db.search(vec, k=5, metadata_filter={"author": "Alice"})     # metadata filter
 hits = db.search(vec, k=5, metadata_filter={"year": {"gte": 2020}}) # range filter
+
+# Phase 5 — cross-collection search: fan-out to multiple collections, merge by Squared L2
+result = db.search_multi(vec, k=10, collections=["products", "docs", "faq"])
+# → {"results": [{"collection": "products", "id": 7, "score": 0.02}, ...],
+#    "collections_searched": ["products", "docs", "faq"]}
 ```
 
 Edit `docker-compose.yml` to change `VALORI_DIM` (default: 1536), add auth, or mount S3.
@@ -486,6 +491,8 @@ Key docs directly:
 |---|---|
 | [docs/getting-started.md](docs/getting-started.md) | First insert, search, collections, auth — all deployment modes |
 | [docs/api-reference.md](docs/api-reference.md) | Complete HTTP API reference (all `/v1/` endpoints) |
+| [api/openapi/valori-v1.yaml](api/openapi/valori-v1.yaml) | The canonical machine-readable REST contract (OpenAPI 3.1.0). **Generated, never hand-written** — `cargo run -p valori-node --features utoipa --bin valori-openapi -- --output api/openapi/valori-v1.yaml`. All 74 public routes; admin and operator-internal routes are served but deliberately excluded. Every operation's contract is complete enough to generate an SDK from — 74/74, verified per run against the Rust handler signatures ([sdk-readiness.md](docs/api/sdk-readiness.md)). See [api/README.md](api/README.md) |
+| [docs/api/contract-conformance.md](docs/api/contract-conformance.md) | Where the running node matches that contract, and where it does not |
 | [docs/python-reference.md](docs/python-reference.md) | Full Python SDK reference — all four clients |
 | [docs/CLUSTER.md](docs/CLUSTER.md) | Cluster setup, operations, failover |
 | [docs/DR.md](docs/DR.md) | Backup, restore, cross-region DR runbook |

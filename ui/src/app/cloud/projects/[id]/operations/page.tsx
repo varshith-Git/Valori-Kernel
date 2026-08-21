@@ -1,20 +1,17 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCloudProject } from '@/utils/supabase/dal'
 import { redirect, notFound } from 'next/navigation'
-import { OperationsExplorer } from '@/components/operations/OperationsExplorer'
+import { OperationsExplorer } from '@valori/studio'
+import { CloudStudioProvider } from '@/lib/cloud-runtime/CloudStudioProvider'
 
 export default async function ProjectOperationsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: project } = await supabase.from('projects').select('*').eq('id', id).single()
+    const project = await getCloudProject(id)
 
     if (!project) {
         notFound()
@@ -28,7 +25,12 @@ export default async function ProjectOperationsPage({ params }: { params: Promis
                         <p className="text-sm text-muted-foreground">Project is {project.status}.</p>
                     </div>
                 ) : (
-                    <OperationsExplorer projectId={project.id} />
+                    <CloudStudioProvider>
+                        <OperationsExplorer
+                            projectId={project.id}
+                            operationHref={(opId) => `/cloud/projects/${project.id}/operations/${encodeURIComponent(opId)}`}
+                        />
+                    </CloudStudioProvider>
                 )}
             </div>
         </div>

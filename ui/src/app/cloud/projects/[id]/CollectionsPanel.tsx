@@ -6,14 +6,14 @@ import { Layers, Plus, Trash2, Upload } from 'lucide-react'
 import { useCollections } from '@/lib/hooks/useCollections'
 import { Button } from '@/components/ui/button'
 
-// Simplified port of valori-kernel/ui's CollectionList — kernel's version
-// groups namespaces by a "project--collection" prefix because it has one
-// node shared across projects; here each project IS its own node, so
-// collections are just that node's namespaces directly (see useCollections).
+// Simplified port of valori-kernel/ui's CollectionList — every project
+// (local or Cloud) already owns its own dedicated node, so collections are
+// just that node's namespaces directly (see useCollections's module doc).
 export function CollectionsPanel({ projectId }: { projectId: string }) {
-    const { collections, isLoading, create, drop } = useCollections(projectId)
+    const { collections, isLoading, create, drop } = useCollections(projectId, projectId)
     const [creating, setCreating] = useState(false)
     const [name, setName] = useState('')
+    const [dim, setDim] = useState('')
     const [error, setError] = useState<string | null>(null)
     const [pending, setPending] = useState(false)
     const [dropping, setDropping] = useState<string | null>(null)
@@ -21,11 +21,17 @@ export function CollectionsPanel({ projectId }: { projectId: string }) {
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!name.trim()) return
+        const dimNum = parseInt(dim, 10)
+        if (Number.isNaN(dimNum) || dimNum < 1 || dimNum > 65535) {
+            setError('Dimension must be a whole number between 1 and 65535')
+            return
+        }
         setPending(true)
         setError(null)
         try {
-            await create(name.trim())
+            await create(name.trim(), dimNum)
             setName('')
+            setDim('')
             setCreating(false)
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to create collection')
@@ -68,20 +74,31 @@ export function CollectionsPanel({ projectId }: { projectId: string }) {
             </div>
 
             {creating && (
-                <form onSubmit={handleCreate} className="flex items-center gap-2">
-                    <input
-                        autoFocus
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="collection name"
-                        className="flex-1 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground text-sm"
-                    />
-                    <Button type="submit" size="sm" disabled={pending || !name.trim()}>
-                        {pending ? 'Creating…' : 'Create'}
-                    </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => { setCreating(false); setError(null) }}>
-                        Cancel
-                    </Button>
+                <form onSubmit={handleCreate} className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                        <input
+                            autoFocus
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            placeholder="collection name"
+                            className="flex-1 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground text-sm"
+                        />
+                        <input
+                            type="number"
+                            min={1}
+                            max={65535}
+                            value={dim}
+                            onChange={(e) => setDim(e.target.value)}
+                            placeholder="dimension (e.g. 768)"
+                            className="w-40 px-3 py-1.5 rounded-lg border border-input bg-background text-foreground text-sm"
+                        />
+                        <Button type="submit" size="sm" disabled={pending || !name.trim()}>
+                            {pending ? 'Creating…' : 'Create'}
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => { setCreating(false); setError(null) }}>
+                            Cancel
+                        </Button>
+                    </div>
                 </form>
             )}
 
@@ -103,7 +120,7 @@ export function CollectionsPanel({ projectId }: { projectId: string }) {
                 </p>
             ) : (
                 <div className="flex flex-col gap-1.5">
-                    {collections.map((c) => (
+                    {Array.from(new Set(collections)).map((c) => (
                         <div
                             key={c}
                             className="flex items-center gap-2.5 rounded-lg border border-border bg-background/60 pl-3 pr-2 py-2 hover:border-ring transition-colors"

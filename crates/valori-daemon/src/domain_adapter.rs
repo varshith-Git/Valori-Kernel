@@ -22,6 +22,7 @@
 //! | `embedding` | Provider config, and its `api_key_ref` is a secret handle |
 //! | `storage` | Deployment configuration |
 //! | `cluster.nodes[]` | Port allocations — runtime state that changes each start |
+//! | `dim`, `index` | **Removed from `valori_domain::Project` entirely** (collection-index-lifecycle phase) — vector configuration is Collection-scoped, not Project-scoped. `ProjectManifest.dim`/`.index` remain on disk for now (still what spawns a local node's `VALORI_DIM`/`VALORI_INDEX`, per that phase's Phase 20, not yet reached) but this adapter no longer reads or writes either field — there is nothing on the domain side to map them to or from. |
 //!
 //! | Domain-only field | Where the manifest keeps it |
 //! |---|---|
@@ -36,8 +37,7 @@
 use std::str::FromStr;
 
 use valori_domain::{
-    DomainError, IndexKind, Project as DomainProject, ProjectId, ProjectName, ProjectTopology,
-    Timestamp,
+    DomainError, Project as DomainProject, ProjectId, ProjectName, ProjectTopology, Timestamp,
 };
 
 use crate::project::{ClusterConfig, ProjectManifest};
@@ -68,14 +68,6 @@ pub enum ProjectAdapterError {
         source: DomainError,
     },
 
-    /// The manifest's `index` string matched no known algorithm.
-    #[error("project `{name}` has an unknown index: {source}")]
-    UnknownIndex {
-        name: String,
-        #[source]
-        source: DomainError,
-    },
-
     /// Replica or shard counts were zero, or the shard count exceeded 255.
     ///
     /// `ClusterConfig::shard_count` is a `u32` on disk while the domain model
@@ -83,17 +75,6 @@ pub enum ProjectAdapterError {
     /// rejected rather than silently truncated.
     #[error("project `{name}` has an unrepresentable topology: {reason}")]
     InvalidTopology { name: String, reason: String },
-
-    /// A vector dimension did not fit the target width.
-    ///
-    /// Saturating would silently rewrite the project's dimension, which is
-    /// immutable after the first insert — so it is rejected instead.
-    #[error("project `{name}` has a vector dimension `{dim}` that does not fit in {limit}")]
-    DimensionOutOfRange {
-        name: String,
-        dim: String,
-        limit: &'static str,
-    },
 
     /// A topology transition this adapter refuses to perform silently.
     #[error("project `{name}`: unsupported topology change — {reason}")]
@@ -124,27 +105,11 @@ pub fn manifest_to_domain(
             source,
         })?;
 
-    let index = IndexKind::from_str(&manifest.index).map_err(|source| {
-        ProjectAdapterError::UnknownIndex {
-            name: manifest.name.clone(),
-            source,
-        }
-    })?;
-
     let topology = topology_from_cluster(manifest.cluster.as_ref(), &manifest.name)?;
 
     Ok(DomainProject {
         id,
         name,
-        // `dim` is a `usize` on disk and a `u32` in the domain model. Saturating
-        // here would silently rewrite a project's vector dimension, so an
-        // unrepresentable value is an error (review finding F6).
-        dim: u32::try_from(manifest.dim).map_err(|_| ProjectAdapterError::DimensionOutOfRange {
-            name: manifest.name.clone(),
-            dim: manifest.dim.to_string(),
-            limit: "u32",
-        })?,
-        index,
         topology,
         created_at: Timestamp::from_unix_secs(manifest.created_at),
         last_opened_at: manifest.last_opened_at.map(Timestamp::from_unix_secs),
@@ -176,8 +141,7 @@ pub fn manifest_to_domain(
 ///
 /// # Errors
 ///
-/// [`ProjectAdapterError::UnsupportedTopologyChange`] on cluster → standalone;
-/// [`ProjectAdapterError::DimensionOutOfRange`] if `dim` exceeds `usize`.
+/// [`ProjectAdapterError::UnsupportedTopologyChange`] on cluster → standalone.
 pub fn manifest_from_domain(
     manifest: &mut ProjectManifest,
     project: &DomainProject,
@@ -191,19 +155,11 @@ pub fn manifest_from_domain(
         });
     }
 
-    // u32 -> usize is lossless on every supported target, but it is checked
-    // rather than cast so a 16-bit target would fail loudly instead of wrapping.
-    let dim =
-        usize::try_from(project.dim).map_err(|_| ProjectAdapterError::DimensionOutOfRange {
-            name: manifest.name.clone(),
-            dim: project.dim.to_string(),
-            limit: "usize",
-        })?;
-
+    // `dim`/`index` are deliberately NOT written here — they no longer exist
+    // on the domain model (vector configuration is Collection-scoped). The
+    // manifest's own `dim`/`index` fields are left exactly as they were.
     manifest.id = project.id.to_string();
     manifest.name = project.name.to_string();
-    manifest.dim = dim;
-    manifest.index = project.index.as_str().to_string();
     manifest.created_at = project.created_at.as_unix_secs();
     manifest.last_opened_at = project.last_opened_at.map(Timestamp::as_unix_secs);
 
@@ -258,8 +214,8 @@ mod tests {
         ProjectManifest {
             id: "7c9e6679-7425-40de-944b-e07fc1f90ae7".to_string(),
             name: "research-notes".to_string(),
-            dim: 384,
-            index: "hnsw".to_string(),
+            dim: Some(384),
+            index: Some("hnsw".to_string()),
             workspace: "default".to_string(),
             restart_policy: Default::default(),
             created_at: 1_750_000_000,
@@ -275,8 +231,6 @@ mod tests {
         let project = manifest_to_domain(&manifest()).unwrap();
 
         assert_eq!(project.name.as_str(), "research-notes");
-        assert_eq!(project.dim, 384);
-        assert_eq!(project.index, IndexKind::Hnsw);
         assert_eq!(project.topology, ProjectTopology::STANDALONE);
         assert!(!project.topology.is_cluster());
         assert_eq!(project.created_at.as_unix_secs(), 1_750_000_000);
@@ -424,19 +378,11 @@ mod tests {
         assert_eq!(cluster.shard_count, 2);
     }
 
-    #[test]
-    fn oversized_dimension_is_rejected_not_saturated() {
-        // F6: `dim` is usize on disk and u32 in the domain model. Saturating
-        // would silently rewrite a dimension that is immutable after first insert.
-        if usize::BITS > 32 {
-            let mut m = manifest();
-            m.dim = (u32::MAX as usize) + 1;
-            assert!(matches!(
-                manifest_to_domain(&m),
-                Err(ProjectAdapterError::DimensionOutOfRange { .. })
-            ));
-        }
-    }
+    // `oversized_dimension_is_rejected_not_saturated` and `unknown_index_is_rejected`
+    // were removed here: the domain model no longer carries `dim`/`index` at
+    // all (collection-index-lifecycle phase), so this adapter has nothing to
+    // reject them into. `ProjectManifest.dim`/`.index` themselves are
+    // untouched by this adapter now — see the module doc's field table.
 
     #[test]
     fn malformed_id_is_rejected_not_silently_replaced() {
@@ -446,29 +392,6 @@ mod tests {
             manifest_to_domain(&m),
             Err(ProjectAdapterError::MalformedId { .. })
         ));
-    }
-
-    #[test]
-    fn unknown_index_is_rejected() {
-        let mut m = manifest();
-        m.index = "quantum".to_string();
-        assert!(matches!(
-            manifest_to_domain(&m),
-            Err(ProjectAdapterError::UnknownIndex { .. })
-        ));
-    }
-
-    #[test]
-    fn index_aliases_are_accepted_exactly_as_the_node_accepts_them() {
-        for (input, expected) in [
-            ("bruteforce", IndexKind::Brute),
-            ("mstg", IndexKind::Auto),
-            ("auto", IndexKind::Auto),
-        ] {
-            let mut m = manifest();
-            m.index = input.to_string();
-            assert_eq!(manifest_to_domain(&m).unwrap().index, expected);
-        }
     }
 
     #[test]

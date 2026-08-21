@@ -22,10 +22,27 @@ import { toast } from "@/lib/toast";
 import { reportSessionEnded, reportSessionStarted } from "@/lib/telemetry";
 import { markStartupPhase } from "@/lib/startupMarks";
 import { createClient } from "@/utils/supabase/client";
+import { LocalStudioProvider } from "@/lib/local-runtime/LocalStudioProvider";
 
 // Paths that render full-screen without the sidebar/topbar shell.
 // These must never be saved as "last page" or shown inside the app chrome.
 const SHELL_EXEMPT = ["/login", "/signup", "/forgot-password", "/auth/"];
+
+// `/cloud/*` is the hosted Valori Cloud dashboard — an entirely separate
+// application sharing this codebase (see cloud/layout.tsx's own header +
+// Supabase-backed auth). It is not exempt in the same sense as the auth
+// pages above (it's a real, chrome-ful destination, not a transient
+// full-screen step), but it must never mount the desktop Sidebar/TopBar:
+// that shell's nav links (/cluster, /metrics, /proof, /playground, ...)
+// point at the *local* single-workspace routes, and its StatusFooter polls
+// useHealth()/useCluster() against a local daemon (/api/health,
+// /api/cluster) that doesn't exist on the Cloud deployment. Cloud pages
+// resolve their own auth/org/project data server-side (see
+// utils/supabase/dal.ts) — none of AppShellGate's desktop-onboarding or
+// "sign in to sync" machinery applies there either.
+function isCloudRoute(path: string) {
+  return path.startsWith("/cloud");
+}
 
 // Module-load time as a proxy for "app start" — not a true process-launch
 // timestamp (that would need a Rust-side mark threaded through), but this
@@ -57,9 +74,14 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const restoredRef = useRef(false);
+  const isCloud = isCloudRoute(pathname);
 
   useEffect(() => {
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+    // Cloud pages resolve their own session server-side (cloud/layout.tsx
+    // redirects unauthenticated users itself) — this "sign in to sync"
+    // gate is desktop-only and would otherwise fire a redundant
+    // getSession() + onAuthStateChange subscription on every Cloud page.
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || isCloud) return;
     const supabase = createClient();
 
     // Check current session state immediately
@@ -229,8 +251,12 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
   if (!ready) return null;
 
   // Auth pages (login, signup, forgot-password, auth callbacks) must fill the
-  // whole window — no sidebar, no topbar, no chrome.
-  if (isExempt(pathname)) {
+  // whole window — no sidebar, no topbar, no chrome. Cloud pages get their
+  // own chrome from cloud/layout.tsx and must never mount the desktop
+  // Sidebar/TopBar (see isCloudRoute's comment above) — also skips the
+  // desktop-only Welcome/SignIn gates below, since Cloud auth is already
+  // resolved server-side by the time a Cloud page renders.
+  if (isExempt(pathname) || isCloud) {
     return <>{children}</>;
   }
 
@@ -271,7 +297,7 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
+    <LocalStudioProvider>
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar />
@@ -279,6 +305,6 @@ export function AppShellGate({ children }: { children: React.ReactNode }) {
       </div>
       <Toaster />
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-    </>
+    </LocalStudioProvider>
   );
 }

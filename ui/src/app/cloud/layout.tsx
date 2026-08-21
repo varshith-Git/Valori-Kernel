@@ -1,4 +1,4 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCurrentMembership } from '@/utils/supabase/dal'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Cloud } from 'lucide-react'
@@ -10,23 +10,13 @@ import { Cloud } from 'lucide-react'
 // collide with this app's own local-mode Sidebar. This is a lightweight
 // header instead; the desktop shell's global sidebar stays the primary nav.
 export default async function CloudLayout({ children }: { children: React.ReactNode }) {
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: memberships } = await supabase
-        .from('org_members')
-        .select('organizations(id, name)')
-        .eq('user_id', user.id)
-        .limit(1)
-
-    const membership = memberships?.[0] as { organizations: { id: string; name: string } } | undefined
+    const membership = await getCurrentMembership()
     const org = membership?.organizations
 
     return (

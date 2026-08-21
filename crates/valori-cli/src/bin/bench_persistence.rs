@@ -29,8 +29,6 @@ fn main() -> Result<()> {
 
     // ── 1. Build Engine ──────────────────────────────────────────────────────
     let cfg = NodeConfig {
-        dim: DIM,
-        index_kind: IndexKind::BruteForce,
         quantization_kind: QuantizationKind::None,
         wal_path: None,
         snapshot_path: None,

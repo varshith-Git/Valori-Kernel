@@ -13,6 +13,7 @@ use crate::chunker::{chunk_document, IngestChunk, MAX_INGEST_TEXT_BYTES};
 
 // ── Request / Response ────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Deserialize)]
 pub struct IngestDocumentRequest {
     /// Raw text content of the document.
@@ -29,6 +30,7 @@ pub struct IngestDocumentRequest {
     pub chunk_overlap: Option<usize>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct IngestDocumentResponse {
     /// Strategy that was actually used (useful when `strategy="auto"`).
@@ -44,6 +46,21 @@ pub struct IngestDocumentResponse {
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/ingest/document",
+    operation_id = "chunk_document",
+    tag = "ingest",
+    summary = "Chunk a document without embedding or storing it",
+    description = "Stateless: no embedding provider is called and nothing is written. Use it to preview how a strategy will split a document before committing to an ingest.",
+    request_body = IngestDocumentRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Chunks, with the strategy that produced them", body = IngestDocumentResponse),
+        (status = 400, description = "Empty text, or text over the size limit"),
+        (status = 401, description = "Missing or invalid credentials"),
+    ),
+))]
 /// `POST /v1/ingest/document` — chunk a document server-side, no embedding.
 ///
 /// Stateless: no `State<>` parameter — compiles into both routers unchanged.

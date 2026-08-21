@@ -27,7 +27,6 @@ fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
 
 fn tiny_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;

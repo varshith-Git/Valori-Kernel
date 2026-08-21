@@ -110,18 +110,9 @@ pub trait MemoryOps: Send + Sync {
 }
 
 async fn resolve<O: MemoryOps>(ops: &O, collection: Option<&str>) -> Result<u16, Response> {
-    ops.resolve_collection(collection).await.ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "unknown collection '{}'",
-                    collection.unwrap_or("default")
-                )
-            })),
-        )
-            .into_response()
-    })
+    ops.resolve_collection(collection)
+        .await
+        .ok_or_else(|| crate::error_codes::collection_not_found(collection))
 }
 
 pub async fn memory_upsert<O: MemoryOps>(

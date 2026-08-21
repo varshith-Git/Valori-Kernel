@@ -28,7 +28,6 @@ async fn spawn_node() -> String {
     let path = dir.keep().join("events.log");
 
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = 1000;
     cfg.event_log_path = Some(path);
     cfg.wal_path = None;

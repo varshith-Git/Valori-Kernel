@@ -16,8 +16,6 @@ fn project() -> Project {
     Project {
         id: ProjectId::from_str("7c9e6679-7425-40de-944b-e07fc1f90ae7").unwrap(),
         name: ProjectName::parse("research-notes").unwrap(),
-        dim: 384,
-        index: IndexKind::Hnsw,
         topology: ProjectTopology::STANDALONE,
         created_at: Timestamp::from_unix_secs(1_750_000_000),
         last_opened_at: None,
@@ -225,8 +223,11 @@ fn api_project_wire_shape_is_pinned() {
 
     assert_eq!(json["id"], "7c9e6679-7425-40de-944b-e07fc1f90ae7");
     assert_eq!(json["name"], "research-notes");
-    assert_eq!(json["dim"], 384);
-    assert_eq!(json["index"], "hnsw");
+    assert!(
+        json.get("dim").is_none() && json.get("index").is_none(),
+        "Project/ApiProject must never carry dim/index again — see \
+         docs/phases/phase-collection-index-lifecycle.md"
+    );
     assert_eq!(json["replicas"], 1);
     assert_eq!(json["shards"], 1);
     assert_eq!(json["is_cluster"], false);

@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useRef, useEffect, useTransition } from "react"
+import { useState, useTransition } from "react"
 import Link from "next/link"
-import { MoreVertical, Pencil, Copy, Archive, Layers, ArrowRight } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Layers } from "lucide-react"
+import { ProjectCard, type CloudProjectCardData } from "@/components/projects/ProjectCard"
 import { duplicateProject } from "./actions"
 
 export type CloudProject = {
@@ -25,61 +25,7 @@ const STATUS_STYLE: Record<string, string> = {
   suspended: "bg-amber-500/10 text-amber-500 border-amber-500/30",
 }
 
-// ── Three-dot menu ────────────────────────────────────────────────────────────
-
-function ProjectMenu({ onRename, onDuplicate, onArchive, duplicating }: {
-  onRename: () => void
-  onDuplicate: () => void
-  onArchive: () => void
-  duplicating: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener("mousedown", handler)
-    return () => document.removeEventListener("mousedown", handler)
-  }, [])
-
-  return (
-    <div ref={ref} className="relative" onClick={(e) => e.preventDefault()}>
-      <button
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(v => !v) }}
-        className="flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-        aria-label="Project actions"
-      >
-        <MoreVertical size={14} />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-card shadow-lg py-1 overflow-hidden">
-          <button
-            onClick={(e) => { e.stopPropagation(); setOpen(false); onRename() }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-left"
-          >
-            <Pencil size={13} /> Rename
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); setOpen(false); onDuplicate() }}
-            disabled={duplicating}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-left disabled:opacity-50"
-          >
-            <Copy size={13} /> {duplicating ? "Duplicating…" : "Duplicate"}
-          </button>
-          <div className="mx-2 my-0.5 border-t border-border/60" />
-          <button
-            onClick={(e) => { e.stopPropagation(); setOpen(false); onArchive() }}
-            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors text-left"
-          >
-            <Archive size={13} /> Archive
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
+// ── (ProjectMenu moved to shared ProjectCard component) ───────────────────────
 
 // ── Rename dialog ─────────────────────────────────────────────────────────────
 
@@ -189,9 +135,9 @@ function ArchiveDialog({ project, onClose, onSuccess }: {
   )
 }
 
-// ── Project card ──────────────────────────────────────────────────────────────
+// ── Project card (wraps shared ProjectCard) ───────────────────────────────────
 
-function ProjectCard({ project, orgId, onUpdate, onRemove }: {
+function CloudProjectCard({ project, orgId, onUpdate, onRemove }: {
   project: CloudProject
   orgId: string
   onUpdate: (id: string, updates: Partial<CloudProject>) => void
@@ -199,8 +145,7 @@ function ProjectCard({ project, orgId, onUpdate, onRemove }: {
 }) {
   const [renaming, setRenaming] = useState(false)
   const [archiving, setArchiving] = useState(false)
-  const [isPending, startTransition] = useTransition()
-  const href = `/cloud/projects/${project.id}`
+  const [, startTransition] = useTransition()
 
   function handleDuplicate() {
     startTransition(async () => {
@@ -208,67 +153,25 @@ function ProjectCard({ project, orgId, onUpdate, onRemove }: {
     })
   }
 
+  const cardData: CloudProjectCardData = {
+    kind:        "cloud",
+    id:          project.id,
+    name:        project.name,
+    status:      project.status,
+    region:      project.region,
+    replication: project.replication,
+    nodeUrl:     project.node_url,
+    href:        `/cloud/projects/${project.id}`,
+  }
+
   return (
     <>
-      <div className="rounded-xl border border-border bg-card hover:border-input transition-colors group">
-        {/* Header */}
-        <div className="flex items-start justify-between p-4 pb-3">
-          <Link href={href} className="flex items-start gap-3 min-w-0 flex-1">
-            <div className="w-9 h-9 rounded-lg bg-[var(--v-accent-muted)] border border-[var(--v-accent)]/20 flex items-center justify-center shrink-0">
-              <Layers size={16} className="text-[var(--v-accent)]" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground truncate group-hover:text-[var(--v-accent)] transition-colors">
-                {project.name}
-              </p>
-              <p className="text-[11px] text-muted-foreground font-mono truncate">
-                {project.region} · {project.dim}d · {project.index_type}
-              </p>
-            </div>
-          </Link>
-          <ProjectMenu
-            onRename={() => setRenaming(true)}
-            onDuplicate={handleDuplicate}
-            onArchive={() => setArchiving(true)}
-            duplicating={isPending}
-          />
-        </div>
-
-        {/* Status */}
-        <div className="px-4 pb-3">
-          <span className={cn(
-            "inline-block px-2 py-0.5 rounded-full text-xs border",
-            STATUS_STYLE[project.status] ?? STATUS_STYLE.stopped
-          )}>
-            {project.status}
-          </span>
-        </div>
-
-        {/* Divider */}
-        <div className="mx-4 border-t border-border/60" />
-
-        {/* Node URL */}
-        <div className="px-4 py-3">
-          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Node URL</p>
-          <p className="text-xs font-mono text-muted-foreground truncate mt-0.5">
-            {project.node_url ?? "—"}
-          </p>
-        </div>
-
-        {/* Divider */}
-        <div className="mx-4 border-t border-border/60" />
-
-        {/* Footer */}
-        <div className="flex items-center justify-end px-4 py-3">
-          <Link
-            href={href}
-            className="flex items-center gap-1 text-xs font-medium text-[var(--v-accent)] hover:opacity-80 transition-opacity border border-[var(--v-accent)]/30 rounded-lg px-2.5 py-1"
-          >
-            Open <ArrowRight size={12} />
-          </Link>
-        </div>
-      </div>
-
+      <ProjectCard
+        data={cardData}
+        onRename={() => setRenaming(true)}
+        onDuplicate={handleDuplicate}
+        onArchive={() => setArchiving(true)}
+      />
       {renaming && (
         <RenameDialog
           project={project}
@@ -318,7 +221,7 @@ export function CloudProjectsClient({ projects: initial, orgId }: {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {projects.map(p => (
-        <ProjectCard key={p.id} project={p} orgId={orgId} onUpdate={update} onRemove={remove} />
+        <CloudProjectCard key={p.id} project={p} orgId={orgId} onUpdate={update} onRemove={remove} />
       ))}
     </div>
   )

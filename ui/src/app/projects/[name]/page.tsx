@@ -2,6 +2,7 @@
 
 import { use, useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CollectionList } from "@/components/collections/CollectionList";
 import { useCollections } from "@/lib/hooks/useCollections";
@@ -9,6 +10,10 @@ import { useHealth } from "@/lib/hooks/useHealth";
 import { useProof } from "@/lib/hooks/useProof";
 import { CopyBtn } from "@/components/ui/copy-btn";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { Button } from "@/components/ui/button";
+import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
+import { useProjectManifest } from "@/lib/hooks/useProjectManifest";
+import { forgetProject } from "@/lib/native";
 
 export default function ProjectPage({
   params,
@@ -54,11 +59,12 @@ export default function ProjectPage({
 }
 
 function CollectionsTab({ project }: { project: string }) {
-  const { collections, isLoading, create, drop } = useCollections(project);
+  const { collections, collectionDetails, isLoading, create, drop } = useCollections(project);
   return (
     <CollectionList
       project={project}
       collections={collections}
+      collectionDetails={collectionDetails}
       isLoading={isLoading}
       onCreate={create}
       onDrop={drop}
@@ -219,7 +225,52 @@ function SettingsTab({ project }: { project: string }) {
           )}
         </div>
       </Section>
+
+      <DangerZone project={project} />
     </div>
+  );
+}
+
+function DangerZone({ project }: { project: string }) {
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const { remove } = useProjectManifest();
+  const router = useRouter();
+
+  return (
+    <>
+      <Section title="Danger zone">
+        <div className="px-4 py-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium text-destructive">Delete project</p>
+            <p className="text-xs text-muted-foreground">
+              Permanently removes this project, its data, and all its collections.
+            </p>
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => setDeleteOpen(true)}
+            className="shrink-0 text-xs"
+          >
+            Delete project
+          </Button>
+        </div>
+      </Section>
+
+      {deleteOpen && (
+        <DeleteProjectDialog
+          name={project}
+          open={deleteOpen}
+          onClose={() => setDeleteOpen(false)}
+          onDelete={async () => {
+            await remove(project);
+            forgetProject(project).catch(() => {});
+            setDeleteOpen(false);
+            router.push("/projects");
+          }}
+        />
+      )}
+    </>
   );
 }
 

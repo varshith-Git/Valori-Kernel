@@ -17,11 +17,9 @@ use tower::ServiceExt;
 
 fn cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 256;
     cfg.max_nodes = 64;
     cfg.max_edges = 64;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     cfg.snapshot_path = None;
@@ -80,10 +78,16 @@ async fn search_rejects_k_above_ceiling() {
 #[tokio::test]
 async fn search_accepts_k_within_bounds() {
     let shared = make_shared();
+    post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
     let (status, body) = post_json(
         shared,
         "/search",
-        serde_json::json!({"query": [0.0, 0.0, 0.0, 0.0], "k": 10}),
+        serde_json::json!({"query": [0.0, 0.0, 0.0, 0.0], "k": 10, "collection": "default"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -92,10 +96,16 @@ async fn search_accepts_k_within_bounds() {
 #[tokio::test]
 async fn search_accepts_k_at_ceiling() {
     let shared = make_shared();
+    post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
     let (status, body) = post_json(
         shared,
         "/search",
-        serde_json::json!({"query": [0.0, 0.0, 0.0, 0.0], "k": 5000}),
+        serde_json::json!({"query": [0.0, 0.0, 0.0, 0.0], "k": 5000, "collection": "default"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");

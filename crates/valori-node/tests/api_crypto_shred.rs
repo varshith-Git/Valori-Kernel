@@ -16,7 +16,6 @@ use valori_node::{config::NodeConfig, engine::Engine, server::build_router};
 
 fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg
 }
@@ -73,9 +72,26 @@ async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, Value) {
     (status, json)
 }
 
+// Helper: create the "default" collection all these tests target.
+async fn create_default_collection(app: &axum::Router) {
+    let (status, body) = post_json(
+        app,
+        "/v1/namespaces",
+        json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+}
+
 // Helper: insert a plain record to prime the dim
 async fn prime_dim(app: &axum::Router) {
-    post_json(app, "/records", json!({"values": [0.1, 0.2, 0.3, 0.4]})).await;
+    create_default_collection(app).await;
+    post_json(
+        app,
+        "/records",
+        json!({"values": [0.1, 0.2, 0.3, 0.4], "collection": "default"}),
+    )
+    .await;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -89,7 +105,7 @@ async fn test_insert_encrypted_returns_key_id() {
     let (status, body) = post_json(
         &app,
         "/v1/records/encrypted",
-        json!({ "payload": payload, "tag": 1 }),
+        json!({ "payload": payload, "tag": 1, "collection": "default" }),
     )
     .await;
 
@@ -115,8 +131,12 @@ async fn test_shred_key_makes_status_return_false() {
     prime_dim(&app).await;
 
     let payload = base64::engine::general_purpose::STANDARD.encode(b"secret data");
-    let (ins_status, ins_body) =
-        post_json(&app, "/v1/records/encrypted", json!({ "payload": payload })).await;
+    let (ins_status, ins_body) = post_json(
+        &app,
+        "/v1/records/encrypted",
+        json!({ "payload": payload, "collection": "default" }),
+    )
+    .await;
     assert_eq!(
         ins_status,
         StatusCode::CREATED,
@@ -149,21 +169,31 @@ async fn test_shred_key_makes_status_return_false() {
 #[tokio::test]
 async fn test_encrypted_record_not_in_search_results() {
     let app = make_app();
+    create_default_collection(&app).await;
 
     // Insert a searchable record at [1,0,0,0]
-    let (_, plain_body) =
-        post_json(&app, "/records", json!({"values": [1.0, 0.0, 0.0, 0.0]})).await;
+    let (_, plain_body) = post_json(
+        &app,
+        "/records",
+        json!({"values": [1.0, 0.0, 0.0, 0.0], "collection": "default"}),
+    )
+    .await;
     let plain_id = plain_body["id"].as_u64().unwrap_or(99);
 
     // Insert an encrypted record (stored as zero vector internally)
     let payload = base64::engine::general_purpose::STANDARD.encode(b"PII data");
-    post_json(&app, "/v1/records/encrypted", json!({ "payload": payload })).await;
+    post_json(
+        &app,
+        "/v1/records/encrypted",
+        json!({ "payload": payload, "collection": "default" }),
+    )
+    .await;
 
     // Search with k=5 — zero vector (encrypted record) must not rank #1
     let (s, results) = post_json(
         &app,
         "/search",
-        json!({"query": [1.0, 0.0, 0.0, 0.0], "k": 5}),
+        json!({"query": [1.0, 0.0, 0.0, 0.0], "k": 5, "collection": "default"}),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
@@ -196,7 +226,7 @@ async fn test_encrypt_two_records_under_same_key_then_shred() {
     let (r1_s, r1_b) = post_json(
         &app,
         "/v1/records/encrypted",
-        json!({ "payload": payload, "key_id": key_id }),
+        json!({ "payload": payload, "key_id": key_id, "collection": "default" }),
     )
     .await;
     assert_eq!(r1_s, StatusCode::CREATED, "r1: {r1_b}");
@@ -205,7 +235,7 @@ async fn test_encrypt_two_records_under_same_key_then_shred() {
     let (r2_s, r2_b) = post_json(
         &app,
         "/v1/records/encrypted",
-        json!({ "payload": payload, "key_id": key_id }),
+        json!({ "payload": payload, "key_id": key_id, "collection": "default" }),
     )
     .await;
     assert_eq!(r2_s, StatusCode::CREATED, "r2: {r2_b}");

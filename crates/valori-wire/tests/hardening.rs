@@ -22,15 +22,12 @@ fn hardening_constants_are_sensible() {
 // ── Dim validation ────────────────────────────────────────────────────────────
 
 #[test]
-fn dim_zero_in_header_is_rejected() {
+fn dim_zero_in_header_is_accepted() {
     let mut header = encode_header_v3(0, 1, 0, &[0u8; 32]);
     // dim is bytes [4..8] in the header
     header[4..8].copy_from_slice(&0u32.to_le_bytes());
-    let err = parse_header(&header).unwrap_err();
-    assert!(
-        matches!(err, WireError::InvalidDim(0)),
-        "expected InvalidDim(0), got {err:?}"
-    );
+    let seg = parse_header(&header).unwrap();
+    assert_eq!(seg.dim, 0);
 }
 
 #[test]

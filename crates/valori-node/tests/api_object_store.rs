@@ -69,7 +69,6 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
     }
 
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;
@@ -81,13 +80,23 @@ async fn insert_vectors_then_upload_lands_a_snapshot_in_object_store() {
     );
     let shared: SharedEngine = Arc::new(RwLock::new(engine));
 
+    // Create the collection the vectors will target.
+    let router = build_router(shared.clone(), None, None);
+    let (status, body) = post_json(
+        router,
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+
     // Insert a few vectors — the "insert vectors" step of the requested test.
     for i in 0..5u32 {
         let router = build_router(shared.clone(), None, None);
         let (status, body) = post_json(
             router,
             "/records",
-            serde_json::json!({"values": [i as f32, 1.0, 2.0, 3.0]}),
+            serde_json::json!({"values": [i as f32, 1.0, 2.0, 3.0], "collection": "default"}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "insert {i} failed: {body}");

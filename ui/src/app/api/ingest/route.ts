@@ -409,13 +409,46 @@ export async function POST(req: NextRequest) {
     const chunkOverlap = parseInt((form.get("chunkOverlap") as string) || "200", 10);
     const chunkMode = (form.get("chunkMode") as string) || "fixed"; // "fixed" | "tree"
 
-    // Ensure the collection exists on the node before inserting.
-    if (collection !== "default") {
-      await fetchWithTimeout(`${getApiUrl()}/v1/namespaces`, {
-        method: "POST",
-        headers: nodeHeaders(),
-        body: JSON.stringify({ name: collection }),
-      }).catch(() => {});
+    // Require the target collection to already exist, explicitly configured
+    // with a dimension/metric — Phase 3.3: there is no unconfigured
+    // Collection creation path any more, "default" included. Ingestion
+    // cannot reliably auto-create it here: the server-delegated pipeline
+    // below embeds entirely on the node (no client-visible dimension), and
+    // the client-side pipeline creates a Document graph node (which needs
+    // the target namespace to already exist) *before* it ever embeds a
+    // single chunk — there is no point in either flow where a dimension is
+    // known before something needs the collection to exist. Rather than
+    // guess or silently swallow a failed auto-create (the Phase 3.2
+    // regression this replaces), require the collection up front and say so
+    // plainly.
+    //
+    // Phase API-2: a failure to *reach* the node is reported as a failure to
+    // reach the node. Folding it into "collection does not exist" sends the
+    // user off to create a Collection that may already be there.
+    let targetDim: number | null = null;
+    try {
+      const listRes = await fetchWithTimeout(`${getApiUrl()}/v1/namespaces`, { headers: nodeHeaders() });
+      if (!listRes.ok) {
+        return NextResponse.json({
+          error: `Could not list collections on the node (HTTP ${listRes.status}). ` +
+            `Cannot verify that "${collection}" exists, so the upload was not started.`,
+        }, { status: 502 });
+      }
+      const listBody = await listRes.json() as { collections?: { name: string; dimension?: number }[] };
+      targetDim = (listBody.collections ?? []).find((c) => c.name === collection)?.dimension ?? null;
+    } catch {
+      return NextResponse.json({
+        error: `Node unreachable — cannot verify that collection "${collection}" exists, ` +
+          `so the upload was not started.`,
+      }, { status: 503 });
+    }
+    if (targetDim === null) {
+      return NextResponse.json({
+        error:
+          `Collection "${collection}" does not exist. Create it with a dimension and metric ` +
+          `before uploading documents (e.g. POST /v1/namespaces { "name": "${collection}", ` +
+          `"dimension": <your embedding model's output size>, "metric": "squared_l2" }).`,
+      }, { status: 400 });
     }
 
     // 1. Extract raw text
@@ -574,31 +607,25 @@ export async function POST(req: NextRequest) {
     const insertedRecordIds: number[] = [];
     let dedupCount = 0;
 
-    // Fetch server dimension so we can detect mismatches before inserting
-    let serverDim: number | null = null;
-    try {
-      const healthRes = await fetchWithTimeout(`${getApiUrl()}/health`, { headers: nodeHeaders() });
-      if (healthRes.ok) {
-        const healthData = await healthRes.json() as { dim?: number };
-        serverDim = healthData.dim ?? null;
-      }
-    } catch { /* ignore — mismatch will surface on first insert */ }
-
     for (let i = 0; i < chunks.length; i += BATCH) {
       const batch = chunks.slice(i, i + BATCH);
 
       // Embed
       const vectors = await embedBatch(batch, cfg);
 
-      // Dimension pre-check on first batch
-      if (i === 0 && serverDim !== null && vectors[0]?.length !== serverDim) {
+      // Dimension pre-check on first batch — against the target Collection's
+      // own configured dimension (fetched above), not a removed node-wide
+      // default. A Collection's dimension is immutable once created, so the
+      // fix is always "use a different model or a different Collection",
+      // never "restart the server" (that env var doesn't exist any more).
+      if (i === 0 && vectors[0]?.length !== targetDim) {
         const embDim = vectors[0]?.length ?? "unknown";
         return NextResponse.json({
           error:
             `Dimension mismatch: the embedding model "${model || provider}" produces ${embDim}-dim vectors, ` +
-            `but the Valori server is configured for ${serverDim} dims. ` +
-            `Restart the server with VALORI_DIM=${embDim} (wipes existing data) ` +
-            `or switch to an embedding model that outputs ${serverDim} dims.`,
+            `but collection "${collection}" was created with dimension ${targetDim}. ` +
+            `Use a different embedding model that outputs ${targetDim} dims, or upload into a ` +
+            `collection created with dimension ${embDim}.`,
         }, { status: 400 });
       }
 
@@ -646,7 +673,7 @@ export async function POST(req: NextRequest) {
           const e = await insertRes.json().catch(() => ({})) as { error?: string };
           const detail = e.error ?? JSON.stringify(e);
           const dimHint = detail.includes("InvalidOperation")
-            ? ` (likely dimension mismatch — server dim: ${serverDim ?? "unknown"}, vector dim: ${newVectors[0]?.length ?? "unknown"})`
+            ? ` (likely dimension mismatch — collection "${collection}" dim: ${targetDim ?? "unknown"}, vector dim: ${newVectors[0]?.length ?? "unknown"})`
             : "";
           return NextResponse.json({ error: `Vector insert failed: ${detail}${dimHint}` }, { status: 502 });
         }
@@ -722,7 +749,7 @@ export async function POST(req: NextRequest) {
                 const nodeRes = await fetchWithTimeout(`${getApiUrl()}/graph/node`, {
                   method: "POST",
                   headers: nodeHeaders(),
-                  body: JSON.stringify({ kind: 1, record_id: null, collection }),
+                  body: JSON.stringify({ kind: 2, record_id: null, collection }),
                 });
                 if (nodeRes.ok) {
                   const { node_id } = await nodeRes.json() as { node_id: number };

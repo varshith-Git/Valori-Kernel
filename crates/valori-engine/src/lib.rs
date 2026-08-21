@@ -18,11 +18,16 @@
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod index_manager;
 pub mod metadata;
 pub mod persistence;
 
 pub use config::{EngineConfig, IndexKind, QuantizationKind};
 pub use engine::{Engine, EngineHealth, ExecutionResources, PoolStats, RecoveryMode};
-pub use error::{CommitError, EngineError};
+pub use error::{error_body, error_response, CommitError, EngineError, ErrorCode};
+pub use index_manager::{
+    CollectionIndexState, IndexBuildRequest, IndexGeneration, IndexSpec, IndexState,
+    IndexStatusResponse,
+};
 pub use metadata::MetadataStore;
 pub use persistence::Persistence;

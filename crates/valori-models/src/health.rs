@@ -12,6 +12,7 @@ use crate::package_store::PackageStore;
 
 // ── Per-package health ────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Per-package health entry.
 #[derive(Debug, Clone, Serialize)]
 pub struct PackageHealth {
@@ -22,6 +23,7 @@ pub struct PackageHealth {
 }
 
 /// Health status for one installed package.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageHealthStatus {
@@ -37,6 +39,7 @@ pub enum PackageHealthStatus {
 
 // ── SystemHealth ──────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Aggregate health report for the entire model package store.
 ///
 /// Returned by `GET /v1/models/health`.

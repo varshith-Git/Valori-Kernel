@@ -128,11 +128,12 @@ pub struct ProjectManifest {
     #[serde(default)]
     pub id: String,
     pub name: String,
-    /// Vector dimension — immutable after first insert (maps to `VALORI_DIM`).
-    pub dim: usize,
-    /// Index kind: `brute` | `hnsw` | `ivf` | `bq` | `auto` (maps to `VALORI_INDEX`).
-    #[serde(default = "default_index")]
-    pub index: String,
+    /// Legacy vector dimension (optional; vector config is now Collection-scoped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dim: Option<usize>,
+    /// Legacy index kind (optional; index is now Collection-scoped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<String>,
     /// Owning workspace (RFC-0006). Defaults to `default` for older manifests.
     #[serde(default = "default_workspace")]
     pub workspace: String,
@@ -311,7 +312,7 @@ impl crate::store::ProjectStore for JsonProjectStore {
                 config.name
             )));
         }
-        if config.dim == 0 {
+        if config.dim == Some(0) {
             return Err(DaemonError::InvalidInput("dim must be > 0".into()));
         }
         let dir = self.projects_root.join(&config.name);
@@ -444,8 +445,8 @@ mod tests {
         ProjectManifest {
             id: crate::new_id(),
             name: name.into(),
-            dim: 128,
-            index: "brute".into(),
+            dim: Some(128),
+            index: Some("brute".into()),
             workspace: "default".into(),
             restart_policy: crate::policy::RestartPolicy::Never,
             created_at: 0,
@@ -647,7 +648,7 @@ mod tests {
         assert_eq!(names, vec!["finance", "healthcare"]); // sorted
 
         let hc = pm.get("healthcare").unwrap();
-        assert_eq!(hc.config.dim, 128);
+        assert_eq!(hc.config.dim, Some(128));
         assert!(hc.event_log_path().ends_with("healthcare/events.log"));
 
         pm.delete("healthcare").unwrap();

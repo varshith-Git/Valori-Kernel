@@ -2,8 +2,10 @@
 //! Phase 3.7 — `valori import` subcommand.
 //!
 //! Imports vectors from an external source into a running Valori node.
-//! Every run validates that the source dimension matches the target node's
-//! declared dim before touching any data.
+//! The source's own dimension is authoritative: the target collection is
+//! created with it if it doesn't exist yet, or checked against it (hard
+//! error on mismatch, dimension is never changed) if it does. There is no
+//! node-wide dimension to fall back on — every collection carries its own.
 //!
 //! Sources supported:
 //!   - Qdrant (scroll API, cursor-based, resumable)
@@ -117,32 +119,51 @@ impl ValoriClient {
         }
     }
 
-    /// `GET /health` → dimension the node was started with.
-    fn get_dim(&self) -> Result<usize> {
+    /// The target collection's configured dimension, if it already exists.
+    /// `None` means the collection has not been created yet — never means
+    /// "inherits some node-wide default" (there is no such thing any more).
+    fn get_collection_dim(&self, name: &str) -> Result<Option<usize>> {
         let resp = self
-            .auth_header(self.agent().get(&format!("{}/health", self.url)))
+            .auth_header(self.agent().get(&format!("{}/v1/namespaces", self.url)))
             .call()
-            .context("GET /health failed — is Valori running?")?;
+            .context("GET /v1/namespaces failed — is Valori running?")?;
         let body: serde_json::Value = resp.into_json()?;
-        body["dim"]
-            .as_u64()
-            .map(|d| d as usize)
-            .context("/health response missing 'dim' field")
+        let dim = body["collections"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|c| c["name"].as_str() == Some(name))
+            .and_then(|c| c["dimension"].as_u64())
+            .map(|d| d as usize);
+        Ok(dim)
     }
 
-    /// Create a collection (idempotent — 400 if already exists is swallowed).
-    fn ensure_collection(&self, name: &str) -> Result<()> {
-        if name == "default" {
-            return Ok(());
-        }
-        let payload = serde_json::json!({ "name": name });
-        match self
-            .auth_header(self.agent().post(&format!("{}/v1/namespaces", self.url)))
-            .send_json(payload)
-        {
-            Ok(_) => Ok(()),
-            Err(ureq::Error::Status(400, _)) => Ok(()), // already exists
-            Err(e) => Err(e).context("POST /v1/namespaces failed"),
+    /// Create the target collection with the source's own dimension if it
+    /// doesn't exist yet (metric fixed at `squared_l2` — the only metric
+    /// Valori supports today), or confirm an existing collection's
+    /// dimension actually matches the source. Never changes an existing
+    /// collection's dimension — that's immutable by design (§16: a
+    /// mismatch is a hard error, not a silent overwrite or a metadata
+    /// update).
+    fn ensure_collection_with_dim(&self, name: &str, source_dim: usize) -> Result<()> {
+        match self.get_collection_dim(name)? {
+            Some(existing_dim) if existing_dim == source_dim => Ok(()),
+            Some(existing_dim) => bail!(
+                "Collection '{name}' already exists with dimension {existing_dim}, but the \
+                 source data has dimension {source_dim}. Import never changes an existing \
+                 collection's dimension — use a different target collection name."
+            ),
+            None => {
+                let payload = serde_json::json!({
+                    "name": name,
+                    "dimension": source_dim,
+                    "metric": "squared_l2",
+                });
+                self.auth_header(self.agent().post(&format!("{}/v1/namespaces", self.url)))
+                    .send_json(payload)
+                    .context("POST /v1/namespaces failed")?;
+                Ok(())
+            }
         }
     }
 
@@ -157,10 +178,10 @@ impl ValoriClient {
         let mut body = serde_json::json!({
             "values": record.vector,
             "request_id": key_bytes,
+            // Phase 3.3: "default" is not implicit any more — always name
+            // the collection explicitly, whatever it's called.
+            "collection": collection,
         });
-        if collection != "default" {
-            body["collection"] = serde_json::Value::String(collection.to_string());
-        }
         if let Some(ref meta) = record.metadata {
             body["metadata"] = serde_json::Value::String(meta.clone());
         }
@@ -311,9 +332,11 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
     let valori = ValoriClient::new(&args.target_url, args.token.clone());
     let sidecar = sidecar_path(&args.target_collection, "qdrant");
 
-    // ── Dim validation ──────────────────────────────────────────────────────────
-    let valori_dim = valori.get_dim()?;
-
+    // ── Dim determination: from the SOURCE, not the target node ──────────────────
+    // Phase 3.3: there is no node-wide dimension to compare against any more.
+    // The Qdrant source already declares its own dimension; that's the one
+    // true source of truth here — the target collection is created with it
+    // (or, if it already exists, must already match it exactly).
     let coll_info: QdrantCollectionInfo = ureq::get(&format!(
         "{qdrant_base}/collections/{}",
         args.source_collection
@@ -325,14 +348,7 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
 
     let qdrant_dim_val = qdrant_dim(&coll_info.result.config.params)
         .context("Could not determine source vector dimension from Qdrant collection info")?;
-
-    if qdrant_dim_val != valori_dim {
-        bail!(
-            "Dimension mismatch: Qdrant source has dim={qdrant_dim_val} but \
-             Valori node is configured with dim={valori_dim}.\n\
-             Restart Valori with VALORI_DIM={qdrant_dim_val} before importing."
-        );
-    }
+    let valori_dim = qdrant_dim_val;
 
     let total_hint = coll_info.result.vectors_count;
     println!(
@@ -364,7 +380,7 @@ pub fn run_qdrant(args: QdrantImportArgs) -> Result<()> {
         fresh_qdrant_state(qdrant_base, &args, valori_dim)
     };
 
-    valori.ensure_collection(&args.target_collection)?;
+    valori.ensure_collection_with_dim(&args.target_collection, valori_dim)?;
 
     let pb = make_progress(total_hint.map(|n| n.saturating_sub(state.imported)));
     let start = Instant::now();
@@ -494,20 +510,21 @@ pub struct JsonlImportArgs {
 
 pub fn run_jsonl(args: JsonlImportArgs) -> Result<()> {
     let valori = ValoriClient::new(&args.target_url, args.token.clone());
-    let valori_dim = valori.get_dim()?;
 
     let file =
         std::fs::File::open(&args.file).with_context(|| format!("Cannot open {:?}", args.file))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     let reader = BufReader::new(file);
 
-    println!(
-        "Source: {:?} (JSONL, dim expected={})",
-        args.file, valori_dim
-    );
+    println!("Source: {:?} (JSONL)", args.file);
     println!("Target: {}/{}", args.target_url, args.target_collection);
 
-    valori.ensure_collection(&args.target_collection)?;
+    // Phase 3.3: no node-wide dimension to read up front. The FIRST
+    // successfully-parsed record's vector length is the source dimension —
+    // the collection is created with it (or checked against it, if it
+    // already exists) before anything is inserted, same "known before
+    // Collection creation" contract as the Qdrant path.
+    let mut valori_dim: Option<usize> = None;
 
     // Use file size as a byte-level progress hint (not exact record count, but useful).
     let pb = make_progress(if file_size > 0 { Some(file_size) } else { None });
@@ -534,12 +551,23 @@ pub fn run_jsonl(args: JsonlImportArgs) -> Result<()> {
             }
         };
 
-        if rec.vector.len() != valori_dim {
+        let dim = match valori_dim {
+            Some(d) => d,
+            None => {
+                let d = rec.vector.len();
+                println!("Source dimension (from first record): {d}");
+                valori.ensure_collection_with_dim(&args.target_collection, d)?;
+                valori_dim = Some(d);
+                d
+            }
+        };
+
+        if rec.vector.len() != dim {
             eprintln!(
                 "Warning: line {} has dim={} (expected {}), skipping",
                 line_no + 1,
                 rec.vector.len(),
-                valori_dim
+                dim
             );
             skipped += 1;
             continue;

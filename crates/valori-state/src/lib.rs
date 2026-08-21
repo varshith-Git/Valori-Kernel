@@ -11,6 +11,7 @@
 //! The divide: `valori-storage` = bytes on disk; `valori-state` = state lifecycle.
 
 pub mod bootstrap;
+pub mod collection_bootstrap;
 pub mod error;
 
 pub use error::{StateError, StateResult};

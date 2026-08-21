@@ -20,7 +20,6 @@ async fn test_replication_divergence() {
     // ── 1. Leader ─────────────────────────────────────────────────────────────
     let mut leader_config = NodeConfig::default();
     leader_config.max_records = 100;
-    leader_config.dim = 4;
     leader_config.max_nodes = 100;
     leader_config.max_edges = 100;
     leader_config.wal_path = Some(std::env::temp_dir().join("leader_div_wal.log"));
@@ -36,7 +35,7 @@ async fn test_replication_divergence() {
         use valori_node::events::{EventCommitter, EventJournal};
 
         let log_writer =
-            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open leader event log");
+            EventLogWriter::open(&log_path, None).expect("Failed to open leader event log");
         let journal = EventJournal::new();
         let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
@@ -59,7 +58,6 @@ async fn test_replication_divergence() {
     // ── 2. Follower ───────────────────────────────────────────────────────────
     let mut follower_config = NodeConfig::default();
     follower_config.max_records = 100;
-    follower_config.dim = 4;
     follower_config.max_nodes = 100;
     follower_config.max_edges = 100;
     follower_config.mode = NodeMode::Follower {
@@ -77,7 +75,7 @@ async fn test_replication_divergence() {
         use valori_node::events::{EventCommitter, EventJournal};
 
         let log_writer =
-            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open follower event log");
+            EventLogWriter::open(&log_path, None).expect("Failed to open follower event log");
         let journal = EventJournal::new();
         let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
@@ -105,9 +103,16 @@ async fn test_replication_divergence() {
 
     // ── 3. Insert record into leader ──────────────────────────────────────────
     let client = reqwest::Client::new();
+    let ns_resp = client
+        .post(format!("{}/v1/namespaces", leader_url))
+        .json(&serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(ns_resp.status().is_success(), "collection create failed");
     let resp = client
         .post(format!("{}/records", leader_url))
-        .json(&serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4] }))
+        .json(&serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }))
         .send()
         .await
         .unwrap();

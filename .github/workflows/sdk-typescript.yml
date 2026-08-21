@@ -1,0 +1,179 @@
+---
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+#
+# Valori TypeScript SDK — Phase API-4A §19/§20/§21.
+#
+# Mirror of sdk-python.yml:
+#
+#   pull_request / push  →  generate · reproducibility · coverage · test · build
+#   tag `sdk-ts-v*`      →  the same, then publish (gated on an environment)
+#
+# Publishing is wired but NOT enabled in API-4A: the `npm` environment does not
+# exist yet, so a tag build stops at the approval gate.
+#
+# Contract-gate logic is deliberately absent here (§1): the API contract is
+# proven once, in api-contract.yml.
+
+name: SDK — TypeScript
+
+on:
+  push:
+    branches: [main]
+    paths: &sdk_paths
+      - "sdk/typescript/**"
+      - "sdk/generator.lock.json"
+      - "api/openapi/valori-v1.yaml"
+      - "scripts/sdk-coverage-check.py"
+      - "scripts/sdk-repro-check.sh"
+      - ".github/workflows/sdk-typescript.yml"
+    tags:
+      - "sdk-ts-v*"
+  pull_request:
+    paths: *sdk_paths
+  workflow_dispatch:
+
+concurrency:
+  group: sdk-typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: sdk/typescript
+
+jobs:
+  reproducibility:
+    name: Generated output is reproducible
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip pyyaml
+      # §13: regenerate twice, diff both against each other and against the
+      # committed file. A hand-edited generated/ fails here.
+      - run: ./scripts/sdk-repro-check.sh --sdk typescript
+
+  coverage:
+    name: Coverage manifest is complete and true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip pyyaml
+      - run: python3 scripts/sdk-coverage-check.py --sdk typescript
+
+  test:
+    name: Typecheck and test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      # The generated surface carries no `@ts-nocheck`, so this typechecks the
+      # machine output as well as the handwritten layer.
+      - run: npm run typecheck
+      - run: npm test
+
+  integration:
+    name: Integration against a real node
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-integration
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+
+      # Phase API-4D §9 — the node is started by the shared harness, not by an
+      # inline snippet per workflow. It picks a free port, uses a throwaway
+      # storage root, sets every VALORI_* variable explicitly (including
+      # VALORI_EVENT_LOG_PATH), waits for /health, and tears the node down
+      # afterwards. The Python workflow calls the same script, so both SDKs
+      # meet an identically configured server.
+      - name: Run the integration suite against a real node
+        env:
+          VALORI_TEST_DIM: "8"
+        run: ./scripts/sdk-integration-node.sh npm test --prefix sdk/typescript
+
+  build:
+    name: Build and pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [reproducibility, coverage, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # §16: prove the tarball is well formed without publishing it.
+      - run: npm pack --dry-run
+      - run: npm pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valori-typescript-dist
+          path: sdk/typescript/*.tgz
+
+  # ── release ────────────────────────────────────────────────────────────────
+  #
+  # NOT ENABLED IN API-4A. The `npm` environment does not exist yet, so a tag
+  # build stops here. When created, this publishes with npm provenance via OIDC
+  # (§19) — no long-lived registry token is stored.
+  publish:
+    name: Publish to npm
+    if: startsWith(github.ref, 'refs/tags/sdk-ts-v')
+    needs: [build, integration]
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@valori/sdk
+    permissions:
+      id-token: write  # OIDC provenance; no npm token in secrets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish --provenance --access public

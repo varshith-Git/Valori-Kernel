@@ -47,6 +47,125 @@ pub enum CommitError {
     NotLeader { leader_api_addr: Option<String> },
 }
 
+// ── ErrorCode ─────────────────────────────────────────────────────────────────
+
+/// Stable, machine-readable error taxonomy for the public HTTP API.
+///
+/// Phase API-2 promoted this from a reserved contract enum to a field the
+/// server actually emits. Every canonical error body carries
+/// `{"error": "<human message>", "code": "<ErrorCode>"}`. The `error` string
+/// stays for backward compatibility with clients written before codes
+/// existed; `code` is the field new clients must branch on.
+///
+/// The value set is closed and mirrors `components.schemas.ErrorCode` in
+/// `api/openapi/valori-v1.yaml` exactly. Adding a variant is a non-breaking
+/// change; renaming or removing one is breaking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    /// Malformed or semantically invalid request input.
+    ValidationError,
+    /// Credentials missing or unparseable.
+    Unauthorized,
+    /// Credentials valid but the key's scope is insufficient.
+    Forbidden,
+    /// Generic "the addressed thing does not exist".
+    NotFound,
+    /// The named Collection is not registered.
+    CollectionNotFound,
+    /// The record id does not exist in the addressed Collection.
+    RecordNotFound,
+    /// Vector length disagrees with the Collection's fixed dimension.
+    DimensionMismatch,
+    /// Unrecognised or unsupported distance metric.
+    InvalidMetric,
+    /// Unrecognised or unsupported index kind/type.
+    InvalidIndex,
+    /// An asynchronous index build failed.
+    IndexBuildFailed,
+    /// The request conflicts with existing immutable state.
+    Conflict,
+    /// A fixed-capacity pool (records/nodes/edges) is full.
+    CapacityExceeded,
+    /// Cluster mode: this node is not the Raft leader.
+    NotLeader,
+    /// The node cannot serve the request right now.
+    Unavailable,
+    /// The capability is not built into / enabled on this deployment.
+    NotImplemented,
+    /// Unexpected server-side failure.
+    InternalError,
+}
+
+impl ErrorCode {
+    /// The exact wire string emitted in the `code` field.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ErrorCode::ValidationError => "validation_error",
+            ErrorCode::Unauthorized => "unauthorized",
+            ErrorCode::Forbidden => "forbidden",
+            ErrorCode::NotFound => "not_found",
+            ErrorCode::CollectionNotFound => "collection_not_found",
+            ErrorCode::RecordNotFound => "record_not_found",
+            ErrorCode::DimensionMismatch => "dimension_mismatch",
+            ErrorCode::InvalidMetric => "invalid_metric",
+            ErrorCode::InvalidIndex => "invalid_index",
+            ErrorCode::IndexBuildFailed => "index_build_failed",
+            ErrorCode::Conflict => "conflict",
+            ErrorCode::CapacityExceeded => "capacity_exceeded",
+            ErrorCode::NotLeader => "not_leader",
+            ErrorCode::Unavailable => "unavailable",
+            ErrorCode::NotImplemented => "not_implemented",
+            ErrorCode::InternalError => "internal_error",
+        }
+    }
+
+    /// Every variant, in contract order. Used by the conformance test that
+    /// diffs this enum against the OpenAPI `ErrorCode` enum.
+    pub const ALL: [ErrorCode; 16] = [
+        ErrorCode::ValidationError,
+        ErrorCode::Unauthorized,
+        ErrorCode::Forbidden,
+        ErrorCode::NotFound,
+        ErrorCode::CollectionNotFound,
+        ErrorCode::RecordNotFound,
+        ErrorCode::DimensionMismatch,
+        ErrorCode::InvalidMetric,
+        ErrorCode::InvalidIndex,
+        ErrorCode::IndexBuildFailed,
+        ErrorCode::Conflict,
+        ErrorCode::CapacityExceeded,
+        ErrorCode::NotLeader,
+        ErrorCode::Unavailable,
+        ErrorCode::NotImplemented,
+        ErrorCode::InternalError,
+    ];
+}
+
+impl std::fmt::Display for ErrorCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl serde::Serialize for ErrorCode {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+/// Build the one canonical error body: `{"error": …, "code": …}`.
+///
+/// Every hand-rolled `json!({"error": …})` site in the HTTP layer should call
+/// this instead so no response can carry a message without a code.
+pub fn error_body(code: ErrorCode, message: impl Into<String>) -> serde_json::Value {
+    json!({ "error": message.into(), "code": code.as_str() })
+}
+
+/// Build a complete axum error response with the canonical body.
+pub fn error_response(status: StatusCode, code: ErrorCode, message: impl Into<String>) -> Response {
+    (status, Json(error_body(code, message))).into_response()
+}
+
 // ── EngineError ───────────────────────────────────────────────────────────────
 
 /// Engine-layer error, returned by all `Engine` methods.
@@ -59,6 +178,21 @@ pub enum EngineError {
     Kernel(valori_kernel::error::KernelError),
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+    /// The named Collection is not registered.
+    ///
+    /// Phase API-2: split out of [`EngineError::InvalidInput`] so that an
+    /// unknown Collection is a **404 / `collection_not_found`** on every code
+    /// path and in both execution modes. Before this split, standalone
+    /// answered 400 while cluster answered 404 for the same request — the
+    /// single most-hit status-code fork in the audit.
+    #[error("{0}")]
+    CollectionNotFound(String),
+    /// The request conflicts with existing state that cannot be changed to
+    /// satisfy it. Phase API-2: introduced so "collection exists but has no
+    /// vector configuration" is a 409 on **both** paths instead of 400
+    /// standalone / 500 cluster.
+    #[error("{0}")]
+    Conflict(String),
     #[error("Internal server error")]
     Internal,
     #[error("Network error: {0}")]
@@ -67,41 +201,54 @@ pub enum EngineError {
     Unknown(String),
 }
 
-impl IntoResponse for EngineError {
-    fn into_response(self) -> Response {
+impl EngineError {
+    /// Decompose into the exact `(HTTP status, machine code, human message)`
+    /// triple the wire carries. Kept separate from [`IntoResponse`] so tests
+    /// (and the cluster adapter, which builds its own responses) can assert
+    /// the mapping without going through axum.
+    pub fn parts(self) -> (StatusCode, ErrorCode, String) {
         use valori_kernel::error::KernelError;
-        let (status, message) = match self {
+        match self {
             EngineError::Kernel(k_err) => match k_err {
                 KernelError::NotFound => (
                     StatusCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Record, node, or edge not found".to_string(),
                 ),
                 KernelError::CapacityExceeded => (
                     StatusCode::INSUFFICIENT_STORAGE,
+                    ErrorCode::CapacityExceeded,
                     "Record pool is full — increase VALORI_MAX_RECORDS and restart".to_string(),
                 ),
                 KernelError::DimensionMismatch { expected, found } => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::DimensionMismatch,
                     format!(
-                        "Dimension mismatch: node expects {expected}-element vectors, got {found}. \
-                         Check GET /health for the locked dimension, or set VALORI_DIM={expected}."
+                        "Dimension mismatch: this collection expects {expected}-element vectors, \
+                         got {found}. A collection's dimension is fixed when it is created \
+                         (POST /v1/namespaces) and cannot be changed — create a new collection \
+                         with the correct dimension instead."
                     ),
                 ),
                 KernelError::InvalidOperation => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     "Invalid operation: record ID out of sequence or duplicate insert.".to_string(),
                 ),
                 KernelError::InvalidInput => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     "Invalid input: vector values are out of the Q16.16 fixed-point range."
                         .to_string(),
                 ),
                 KernelError::MetadataTooLarge => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     "Metadata too large (max 4 KB per record)".to_string(),
                 ),
                 KernelError::QueryOutOfRange(v) => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     format!(
                         "Query vector value {v} is out of the Q16.16 fixed-point range \
                          (−32768.0 to +32767.9999847412)."
@@ -109,43 +256,76 @@ impl IntoResponse for EngineError {
                 ),
                 KernelError::InvalidPayloadLength { expected, found } => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     format!("Payload length mismatch: expected {expected} bytes, got {found}."),
                 ),
                 KernelError::InvalidCommand(code) => (
                     StatusCode::BAD_REQUEST,
+                    ErrorCode::ValidationError,
                     format!("Unknown kernel command code {code:#04x}."),
                 ),
                 KernelError::Overflow => (
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorCode::InternalError,
                     "Numeric overflow in Q16.16 arithmetic".to_string(),
                 ),
                 KernelError::DistanceOverflow => (
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorCode::InternalError,
                     "Distance computation overflowed Q16.16 range".to_string(),
                 ),
                 KernelError::NotImplemented => (
                     StatusCode::NOT_IMPLEMENTED,
+                    ErrorCode::NotImplemented,
                     "This operation is not implemented in the current kernel version".to_string(),
                 ),
                 KernelError::IoError(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    ErrorCode::InternalError,
                     format!("Kernel I/O error: {e}"),
                 ),
+                KernelError::NamespaceAlreadyConfigured {
+                    namespace_id,
+                    existing_dim,
+                } => (
+                    StatusCode::CONFLICT,
+                    ErrorCode::Conflict,
+                    format!(
+                        "Collection (namespace {namespace_id}) is already configured with \
+                         dimension {existing_dim} — dimension is immutable after creation."
+                    ),
+                ),
             },
-            EngineError::InvalidInput(msg) => (StatusCode::BAD_REQUEST, msg),
+            EngineError::InvalidInput(msg) => {
+                (StatusCode::BAD_REQUEST, ErrorCode::ValidationError, msg)
+            }
+            EngineError::CollectionNotFound(msg) => {
+                (StatusCode::NOT_FOUND, ErrorCode::CollectionNotFound, msg)
+            }
+            EngineError::Conflict(msg) => (StatusCode::CONFLICT, ErrorCode::Conflict, msg),
             EngineError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::InternalError,
                 "Internal server error".to_string(),
             ),
-            EngineError::Network(msg) => {
-                (StatusCode::BAD_GATEWAY, format!("Upstream error: {}", msg))
-            }
+            EngineError::Network(msg) => (
+                StatusCode::BAD_GATEWAY,
+                ErrorCode::Unavailable,
+                format!("Upstream error: {}", msg),
+            ),
             EngineError::Unknown(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::InternalError,
                 format!("Unknown error: {}", msg),
             ),
-        };
-        (status, Json(json!({ "error": message }))).into_response()
+        }
+    }
+}
+
+impl IntoResponse for EngineError {
+    fn into_response(self) -> Response {
+        let (status, code, message) = self.parts();
+        error_response(status, code, message)
     }
 }
 

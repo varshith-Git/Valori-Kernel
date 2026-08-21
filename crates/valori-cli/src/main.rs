@@ -134,8 +134,10 @@ enum Commands {
 
     /// Import vectors from an external source into a running Valori node.
     ///
-    /// Validates that the source dimension matches the target node's VALORI_DIM
-    /// before touching any data. Supports resumable imports via a sidecar file.
+    /// Creates the target collection with the source's own dimension if it
+    /// doesn't exist yet, or validates a mismatch as a hard error if it
+    /// does — never touches an existing collection's dimension. Supports
+    /// resumable imports via a sidecar file.
     Import {
         #[command(subcommand)]
         source: ImportSource,

@@ -19,11 +19,9 @@ fn main() {
 
     let config = NodeConfig {
         max_records: 1024,
-        dim: DIM,
         max_nodes: 1024,
         max_edges: 2048,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
-        index_kind: IndexKind::BruteForce,
         quantization_kind: QuantizationKind::None,
         snapshot_path: Some(dir.path().join("demo.snapshot")),
         wal_path: None,

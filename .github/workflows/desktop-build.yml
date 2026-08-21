@@ -85,6 +85,18 @@ jobs:
         run: npm install
         working-directory: ui
 
+      - name: Verify single React resolution (@valori/studio workspace)
+        # Guards against the nested-node_modules/react duplication hazard fixed
+        # in Phase D.1: @valori/studio is an npm workspace member so its React
+        # peer deps must dedupe to the host's single copy, never install their own.
+        run: |
+          if [ -d studio/node_modules/react ] || [ -d studio/node_modules/react-dom ]; then
+            echo "::error::@valori/studio has its own nested react/react-dom install — workspace hoisting is broken"
+            exit 1
+          fi
+          npm ls react react-dom
+        working-directory: ui
+
       - name: Install desktop/ dependencies
         run: npm install
         working-directory: desktop

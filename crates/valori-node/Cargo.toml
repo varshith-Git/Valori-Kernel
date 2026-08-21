@@ -20,6 +20,7 @@ valori-core     = { workspace = true, features = ["std"] }
 valori-planner  = { workspace = true }
 valori-effect   = { workspace = true }
 valori-metadata = { workspace = true }
+valori-domain   = { workspace = true }
 async-trait = "0.1"
 openraft = { version = "0.9", features = ["serde", "storage-v2"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -57,10 +58,41 @@ subtle = "2.6"
 # Cross-platform CSPRNG for token generation (H-3)
 getrandom = "0.2"
 sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+utoipa = { version = "5.5.0", features = ["axum_extras", "yaml"], optional = true }
+# Renders the generated document. Used instead of utoipa's own `to_yaml` so the
+# output is byte-reproducible — see the note on `to_yaml` in src/openapi.rs.
+serde_norway = { version = "0.9", optional = true }
 
 [dev-dependencies] 
+# Already in the tree via utoipa's `yaml` feature; the contract tests parse the
+# generated document instead of substring-matching it.
+serde_norway = "0.9"
 tempfile = "3.23.0"
 tower = { version = "0.5.2", features = ["util"] }
 
 [lints]
 workspace = true
+
+[features]
+# Phase API-2: code-first OpenAPI generation. Opt-in so the shipped node
+# binary carries no schema-generation code. See src/openapi.rs.
+#
+# The workspace crates listed here own public request/response types that the
+# data-plane API returns verbatim (tree-RAG, community, ingest, index
+# lifecycle, model health). Turning their `utoipa` feature on here means the
+# contract references the *same* Rust type the handler serialises, so the
+# schema cannot drift from the wire.
+utoipa = [
+    "dep:utoipa",
+    "dep:serde_norway",
+    "valori-engine/utoipa",
+    "valori-rag/utoipa",
+    "valori-ingest/utoipa",
+    "valori-models/utoipa",
+    "valori-storage/utoipa",
+]
+
+[[bin]]
+name = "valori-openapi"
+path = "src/bin/valori-openapi.rs"
+required-features = ["utoipa"]

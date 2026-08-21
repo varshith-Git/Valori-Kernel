@@ -23,7 +23,6 @@ async fn spawn_node_with_event_log() -> (reqwest::Client, String, TempDir) {
 
     let mut cfg = NodeConfig::default();
     cfg.max_records = 200;
-    cfg.dim = 4;
     cfg.max_nodes = 100;
     cfg.max_edges = 100;
     cfg.event_log_path = Some(log_path); // Engine::new sets up the event committer from this
@@ -42,10 +41,24 @@ async fn spawn_node_with_event_log() -> (reqwest::Client, String, TempDir) {
     (client, base, dir)
 }
 
+async fn create_default_collection(client: &reqwest::Client, base: &str) {
+    let resp = client
+        .post(format!("{base}/v1/namespaces"))
+        .json(&serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "create default collection failed: {}",
+        resp.status()
+    );
+}
+
 async fn insert(client: &reqwest::Client, base: &str, vec: [f32; 4]) -> u32 {
     let resp = client
         .post(format!("{base}/records"))
-        .json(&serde_json::json!({ "values": vec }))
+        .json(&serde_json::json!({ "values": vec, "collection": "default" }))
         .send()
         .await
         .unwrap();
@@ -71,7 +84,8 @@ async fn search_as_of_index(
         .json(&serde_json::json!({
             "query": query,
             "k": k,
-            "as_of_log_index": log_index
+            "as_of_log_index": log_index,
+            "collection": "default"
         }))
         .send()
         .await
@@ -86,46 +100,55 @@ async fn search_as_of_index(
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
-/// Insert 3 records, then search with as_of_log_index=0 (after the first insert only).
-/// The search must return only the first record and include a valid BLAKE3 state hash.
+// Phase 3.3: creating a collection via `POST /v1/namespaces` commits its own
+// `AutoCreateNamespace` + `ConfigureNamespace` events to the audit log before
+// any record is inserted. Every log-index/timeline assertion below is offset
+// by this fixed count.
+const NS_EVENTS: u64 = 2;
+
+/// Insert 3 records, then search with as_of_log_index right after the first
+/// insert only. The search must return only the first record and include a
+/// valid BLAKE3 state hash.
 #[tokio::test]
 async fn as_of_log_index_returns_past_state() {
     let (client, base, _dir) = spawn_node_with_event_log().await;
+    create_default_collection(&client, &base).await;
 
     let id0 = insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     let _id1 = insert(&client, &base, [0.0, 1.0, 0.0, 0.0]).await;
     let _id2 = insert(&client, &base, [0.0, 0.0, 1.0, 0.0]).await;
 
-    // After log_index 0 only the first record exists.
-    let body = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, 0).await;
+    // After the first insert only (index NS_EVENTS) only the first record exists.
+    let body = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, NS_EVENTS).await;
 
     let results = body["results"].as_array().unwrap();
     assert_eq!(
         results.len(),
         1,
-        "only 1 record should exist at log_index 0"
+        "only 1 record should exist right after the first insert"
     );
     assert_eq!(results[0]["id"].as_u64().unwrap(), id0 as u64);
 
     // Proof fields must be present.
-    assert_eq!(body["as_of_log_index"].as_u64().unwrap(), 0);
+    assert_eq!(body["as_of_log_index"].as_u64().unwrap(), NS_EVENTS);
     let hash = body["as_of_state_hash"].as_str().unwrap();
     assert_eq!(hash.len(), 64, "BLAKE3 hex must be 64 chars");
     assert!(body.get("as_of_timestamp_iso").is_some());
 }
 
-/// Verify that the state hash at log_index=0 differs from log_index=2
-/// (more events → different hash).
+/// Verify that the state hash right after the first insert differs from the
+/// state hash after all 3 inserts (more events → different hash).
 #[tokio::test]
 async fn as_of_state_hash_advances_with_new_events() {
     let (client, base, _dir) = spawn_node_with_event_log().await;
+    create_default_collection(&client, &base).await;
 
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     insert(&client, &base, [0.0, 1.0, 0.0, 0.0]).await;
     insert(&client, &base, [0.0, 0.0, 1.0, 0.0]).await;
 
-    let body0 = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, 0).await;
-    let body2 = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, 2).await;
+    let body0 = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, NS_EVENTS).await;
+    let body2 = search_as_of_index(&client, &base, [1.0, 0.0, 0.0, 0.0], 5, NS_EVENTS + 2).await;
 
     let hash0 = body0["as_of_state_hash"].as_str().unwrap();
     let hash2 = body2["as_of_state_hash"].as_str().unwrap();
@@ -134,7 +157,7 @@ async fn as_of_state_hash_advances_with_new_events() {
         "state hash must change as more events are applied"
     );
 
-    // log_index 2 should find all 3 records.
+    // After all 3 inserts, the search should find all 3 records.
     assert_eq!(body2["results"].as_array().unwrap().len(), 3);
 }
 
@@ -142,6 +165,7 @@ async fn as_of_state_hash_advances_with_new_events() {
 #[tokio::test]
 async fn as_of_log_index_out_of_range_returns_error() {
     let (client, base, _dir) = spawn_node_with_event_log().await;
+    create_default_collection(&client, &base).await;
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
 
     let resp = client
@@ -165,6 +189,7 @@ async fn as_of_log_index_out_of_range_returns_error() {
 #[tokio::test]
 async fn timeline_returns_structured_events() {
     let (client, base, _dir) = spawn_node_with_event_log().await;
+    create_default_collection(&client, &base).await;
 
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
     insert(&client, &base, [0.0, 1.0, 0.0, 0.0]).await;
@@ -174,16 +199,24 @@ async fn timeline_returns_structured_events() {
         .send()
         .await
         .unwrap();
-    assert!(resp.status().is_success());
-    let body: serde_json::Value = resp.json().await.unwrap();
+    let status = resp.status();
+    let text = resp.text().await.unwrap();
+    assert!(status.is_success(), "timeline failed with {status}: {text}");
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     let events = body["events"].as_array().unwrap();
-    assert_eq!(events.len(), 2);
-    assert_eq!(body["total"].as_u64().unwrap(), 2);
+    // NS_EVENTS collection-creation events + 2 InsertRecord events.
+    assert_eq!(events.len() as u64, NS_EVENTS + 2);
+    assert_eq!(body["total"].as_u64().unwrap(), NS_EVENTS + 2);
 
-    for (i, ev) in events.iter().enumerate() {
-        assert_eq!(ev["log_index"].as_u64().unwrap(), i as u64);
-        assert_eq!(ev["event_type"].as_str().unwrap(), "InsertRecord");
+    let insert_events: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|ev| ev["event_type"].as_str().unwrap() == "InsertRecord")
+        .collect();
+    assert_eq!(insert_events.len(), 2);
+
+    for (i, ev) in insert_events.iter().enumerate() {
+        assert_eq!(ev["log_index"].as_u64().unwrap(), NS_EVENTS + i as u64);
         assert!(ev["record_id"].as_u64().is_some());
         // timestamp_iso must look like an ISO 8601 date.
         let iso = ev["timestamp_iso"].as_str().unwrap();
@@ -197,6 +230,8 @@ async fn timeline_returns_structured_events() {
 /// GET /v1/timeline with no events returns an empty list (not an error).
 #[tokio::test]
 async fn timeline_empty_when_no_events() {
+    // No collection creation either — this test asserts the log is truly
+    // empty before anything (not even a collection) has been committed.
     let (client, base, _dir) = spawn_node_with_event_log().await;
 
     let resp = client
@@ -214,6 +249,7 @@ async fn timeline_empty_when_no_events() {
 #[tokio::test]
 async fn timeline_from_filter_excludes_past_events() {
     let (client, base, _dir) = spawn_node_with_event_log().await;
+    create_default_collection(&client, &base).await;
     insert(&client, &base, [1.0, 0.0, 0.0, 0.0]).await;
 
     // Use a timestamp far in the future.

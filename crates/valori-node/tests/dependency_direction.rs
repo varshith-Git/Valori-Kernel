@@ -84,15 +84,13 @@ const SEALED_CRATES: &[(&str, &[&str])] = &[
 /// V4, and the BLAKE3 audit chain. `valori-domain` carries product concepts
 /// (Project, Model, Runtime) that must never influence those bytes.
 ///
-/// `valori-metadata`, `valori-planner` and `valori-effect` are intentionally
-/// **absent** — the control plane is a legitimate future consumer of the
-/// canonical domain model (Stage-2 step M3).
+/// `valori-storage` and `valori-state` are intentionally **absent** — the Phase 2
+/// storage architecture (`StorageProvider`, `ProjectManifest`, `CollectionManifest`)
+/// is a consumer of canonical domain identity.
 const DOMAIN_FIREWALL: &[&str] = &[
     "valori-core",
     "valori-kernel",
     "valori-wire",
-    "valori-storage",
-    "valori-state",
     "valori-index",
     "valori-rag",
     "valori-verify",

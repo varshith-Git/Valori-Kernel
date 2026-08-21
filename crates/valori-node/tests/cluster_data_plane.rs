@@ -31,7 +31,7 @@ async fn boot_leader() -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -69,17 +69,28 @@ async fn post_json(
     (status, location, json)
 }
 
+async fn create_default_collection(router: axum::Router, dim: usize) {
+    let (status, _, body) = post_json(
+        router,
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": dim, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn insert_then_search_over_http() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
+    create_default_collection(router.clone(), 2).await;
 
     // Three points on a line; query nearest to the middle one.
     for v in [[0.0f32, 0.0], [1.0, 1.0], [5.0, 5.0]] {
         let (status, _, body) = post_json(
             router.clone(),
             "/records",
-            serde_json::json!({ "values": v }),
+            serde_json::json!({ "values": v, "collection": "default" }),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -88,7 +99,7 @@ async fn insert_then_search_over_http() {
     let (status, _, body) = post_json(
         router.clone(),
         "/search",
-        serde_json::json!({ "query": [1.1, 0.9], "k": 2 }),
+        serde_json::json!({ "query": [1.1, 0.9], "k": 2, "collection": "default" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -103,6 +114,7 @@ async fn insert_then_search_over_http() {
 async fn concurrent_inserts_all_land_despite_id_races() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
+    create_default_collection(router.clone(), 2).await;
 
     // Fire 16 inserts concurrently — they race on the sequential record id;
     // the retry loop must absorb the conflicts.
@@ -113,7 +125,7 @@ async fn concurrent_inserts_all_land_despite_id_races() {
             post_json(
                 r,
                 "/records",
-                serde_json::json!({ "values": [i as f32, 0.0] }),
+                serde_json::json!({ "values": [i as f32, 0.0], "collection": "default" }),
             )
             .await
             .0
@@ -133,9 +145,11 @@ async fn concurrent_inserts_all_land_despite_id_races() {
 async fn request_id_deduplicates_an_http_retry() {
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
+    create_default_collection(router.clone(), 2).await;
 
     let rid: Vec<u8> = vec![9; 16];
-    let body = serde_json::json!({ "values": [1.0, 2.0], "request_id": rid });
+    let body =
+        serde_json::json!({ "values": [1.0, 2.0], "request_id": rid, "collection": "default" });
     let (s1, _, b1) = post_json(router.clone(), "/records", body.clone()).await;
     assert_eq!(s1, StatusCode::OK);
     assert_eq!(b1["deduplicated"], false);
@@ -162,7 +176,7 @@ async fn write_to_a_follower_redirects_with_location() {
         tls: None,
         shard_count: 1,
     };
-    let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, None, None).await.unwrap();
 
     h1.raft
         .add_learner(
@@ -192,11 +206,15 @@ async fn write_to_a_follower_redirects_with_location() {
         .await
         .unwrap();
 
+    // Create the collection through the leader and let it replicate before
+    // targeting the follower.
+    create_default_collection(build_cluster_router(&h1, None), 2).await;
+
     let follower_router = build_cluster_router(&h2, None);
     let (status, location, body) = post_json(
         follower_router,
         "/records",
-        serde_json::json!({ "values": [1.0, 2.0] }),
+        serde_json::json!({ "values": [1.0, 2.0], "collection": "default" }),
     )
     .await;
 

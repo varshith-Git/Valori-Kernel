@@ -59,7 +59,10 @@ pub enum KernelCommandBody {
         values: Vec<f32>,
         text: Option<String>,
         metadata: Option<serde_json::Value>,
-        tag: u8,
+        /// Phase API-2: widened from `u8` to `u64` so the effect-bus command
+        /// can carry the same `tag` the cluster insert path has always
+        /// accepted on the wire, instead of truncating it.
+        tag: u64,
     },
     SoftDeleteRecord {
         record_id: u32,

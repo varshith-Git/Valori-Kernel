@@ -1,0 +1,4161 @@
+{
+  "generated_by": "scripts/audit-public-api-operations.py",
+  "untyped_schema_properties": [],
+  "contract": "api/openapi/valori-v1.yaml",
+  "openapi_version": "3.1.0",
+  "totals": {
+    "public_operations": 74,
+    "complete": 74,
+    "incomplete": 0,
+    "operations_with_request_body": 37,
+    "complete_requests": 37,
+    "incomplete_requests": 0,
+    "complete_responses": 74,
+    "incomplete_responses": 0,
+    "untyped_parameters": 0,
+    "parameter_mismatches": 0,
+    "error_contract_defects": 0,
+    "errors_without_body": 0,
+    "errors_not_api_error": 2,
+    "security_mismatches": 0,
+    "unresolved_handlers": 0,
+    "untyped_schema_properties": 0
+  },
+  "operations": [
+    {
+      "operationId": "get_health",
+      "method": "GET",
+      "path": "/health",
+      "classification": "PUBLIC_UNAUTH",
+      "handler": "health_check",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": "NONE",
+      "required_scope": null,
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "HealthResponse"
+      },
+      "error_response_schemas": {
+        "503": "HealthResponse"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "503"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [
+        "503"
+      ],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [
+        "error 503 carries the typed HealthResponse document rather than ApiError (deliberate status-report body)"
+      ],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_cluster_health",
+      "method": "GET",
+      "path": "/v1/cluster/health",
+      "classification": "PUBLIC_SDK",
+      "handler": "health",
+      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "modes": [
+        "cluster"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ClusterHealthResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "503": "ClusterHealthResponse"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "503"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [
+        "503"
+      ],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [
+        "error 503 carries the typed ClusterHealthResponse document rather than ApiError (deliberate status-report body)"
+      ],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_cluster_proof",
+      "method": "GET",
+      "path": "/v1/cluster/proof",
+      "classification": "PUBLIC_SDK",
+      "handler": "cluster_proof",
+      "source_file": "crates/valori-node/src/cluster_server.rs",
+      "modes": [
+        "cluster"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ClusterProofResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_cluster_role",
+      "method": "GET",
+      "path": "/v1/cluster/role",
+      "classification": "PUBLIC_SDK",
+      "handler": "role",
+      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "modes": [
+        "cluster"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ClusterRoleResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_cluster_status",
+      "method": "GET",
+      "path": "/v1/cluster/status",
+      "classification": "PUBLIC_SDK",
+      "handler": "status",
+      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "modes": [
+        "cluster"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "StatusView"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "community_detect",
+      "method": "POST",
+      "path": "/v1/community/detect",
+      "classification": "PUBLIC_SDK",
+      "handler": "community_detect",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "CommunityDetectRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CommunityDetectResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "community_overview",
+      "method": "GET",
+      "path": "/v1/community/overview",
+      "classification": "PUBLIC_SDK",
+      "handler": "community_overview",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CommunityOverviewResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "412": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "412"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "community_search",
+      "method": "POST",
+      "path": "/v1/community/search",
+      "classification": "PUBLIC_SDK",
+      "handler": "community_search",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "CommunitySearchRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CommunitySearchResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "412": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "412"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_key_status",
+      "method": "GET",
+      "path": "/v1/crypto/status/{key_id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "crypto_status_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "key_id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CryptoStatusResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "delete_record",
+      "method": "POST",
+      "path": "/v1/delete",
+      "classification": "PUBLIC_SDK",
+      "handler": "delete_record",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "DeleteRecordRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "DeleteRecordResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "create_graph_edge",
+      "method": "POST",
+      "path": "/v1/graph/edge",
+      "classification": "PUBLIC_SDK",
+      "handler": "create_edge",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "CreateEdgeRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CreateEdgeResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_node_edges",
+      "method": "GET",
+      "path": "/v1/graph/edges/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_edges",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [
+        "collection"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "GetEdgesResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "create_graph_node",
+      "method": "POST",
+      "path": "/v1/graph/node",
+      "classification": "PUBLIC_SDK",
+      "handler": "create_node",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "CreateNodeRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CreateNodeResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "delete_graph_node",
+      "method": "DELETE",
+      "path": "/v1/graph/node/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "delete_node",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [
+        "collection"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "DeleteNodeResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_graph_node",
+      "method": "GET",
+      "path": "/v1/graph/node/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_node",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [
+        "collection"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "GetNodeResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_graph_nodes",
+      "method": "GET",
+      "path": "/v1/graph/nodes",
+      "classification": "PUBLIC_SDK",
+      "handler": "list_nodes",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "collection",
+        "kind",
+        "limit",
+        "offset"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ListNodesResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "graph_query",
+      "method": "GET",
+      "path": "/v1/graph/query",
+      "classification": "PUBLIC_SDK",
+      "handler": "graph_query",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "collection",
+        "depth",
+        "direction",
+        "edge_kind",
+        "limit",
+        "node_kind",
+        "start"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "GraphQueryResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_subgraph",
+      "method": "GET",
+      "path": "/v1/graph/subgraph",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_subgraph",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "collection",
+        "depth",
+        "root"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SubgraphResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "graphrag",
+      "method": "POST",
+      "path": "/v1/graphrag",
+      "classification": "PUBLIC_SDK",
+      "handler": "graphrag",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "GraphRagRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "GraphRagResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_index_config",
+      "method": "GET",
+      "path": "/v1/index/config",
+      "classification": "PUBLIC_SDK",
+      "handler": "index_config_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IndexConfigResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "rebuild_indexes",
+      "method": "POST",
+      "path": "/v1/index/rebuild",
+      "classification": "PUBLIC_SDK",
+      "handler": "index_rebuild_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "IndexRebuildRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IndexRebuildResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "ingest_document",
+      "method": "POST",
+      "path": "/v1/ingest",
+      "classification": "PUBLIC_SDK",
+      "handler": "crate::ingest::ingest",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [
+        "async"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "IngestRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IngestResponse",
+        "202": "IngestAcceptedResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "413": "ApiError",
+        "422": "ApiError",
+        "500": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200",
+        "202"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "413",
+        "422",
+        "500",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "chunk_document",
+      "method": "POST",
+      "path": "/v1/ingest/document",
+      "classification": "PUBLIC_SDK",
+      "handler": "valori_ingest::ingest_document",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "IngestDocumentRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IngestDocumentResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "extract_entities",
+      "method": "POST",
+      "path": "/v1/ingest/extract-entities",
+      "classification": "PUBLIC_SDK",
+      "handler": "extract_entities",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "ExtractEntitiesRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ExtractEntitiesResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "422": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "422",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_ingest_status",
+      "method": "GET",
+      "path": "/v1/ingest/status/{job_id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "crate::ingest::get_ingest_status",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "job_id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IngestJobStatusResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "update_ingested_document",
+      "method": "POST",
+      "path": "/v1/ingest/update",
+      "classification": "PUBLIC_SDK",
+      "handler": "crate::ingest::ingest_update",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "IngestUpdateRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IngestUpdateResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "413": "ApiError",
+        "422": "ApiError",
+        "500": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "413",
+        "422",
+        "500",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_consolidate",
+      "method": "POST",
+      "path": "/v1/memory/consolidate",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_consolidate",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemoryConsolidateRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemoryConsolidateResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_contradict",
+      "method": "POST",
+      "path": "/v1/memory/contradict",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_contradict",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemoryContradictRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemoryContradictResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_metadata_sidecar",
+      "method": "GET",
+      "path": "/v1/memory/meta/get",
+      "classification": "PUBLIC_SDK",
+      "handler": "meta_get",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "target_id"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MetadataGetResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "set_metadata_sidecar",
+      "method": "POST",
+      "path": "/v1/memory/meta/set",
+      "classification": "PUBLIC_SDK",
+      "handler": "meta_set",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MetadataSetRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MetadataSetResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_search",
+      "method": "POST",
+      "path": "/v1/memory/search",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_search_vector",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "explain"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemorySearchVectorRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemorySearchResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_search_vector",
+      "method": "POST",
+      "path": "/v1/memory/search_vector",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_search_vector_alias",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "explain"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemorySearchVectorRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemorySearchResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_upsert",
+      "method": "POST",
+      "path": "/v1/memory/upsert",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_upsert_vector",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemoryUpsertVectorRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemoryUpsertResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "memory_upsert_vector",
+      "method": "POST",
+      "path": "/v1/memory/upsert_vector",
+      "classification": "PUBLIC_SDK",
+      "handler": "memory_upsert_vector_alias",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MemoryUpsertVectorRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MemoryUpsertResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_models_health",
+      "method": "GET",
+      "path": "/v1/models/health",
+      "classification": "PUBLIC_SDK",
+      "handler": "models_health",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SystemHealth"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_collections",
+      "method": "GET",
+      "path": "/v1/namespaces",
+      "classification": "PUBLIC_SDK",
+      "handler": "list_collections_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ListCollectionsResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "create_collection",
+      "method": "POST",
+      "path": "/v1/namespaces",
+      "classification": "PUBLIC_SDK",
+      "handler": "create_collection_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "CreateCollectionRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "CreateCollectionResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "409": "ApiError",
+        "507": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "409",
+        "507"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "delete_collection",
+      "method": "DELETE",
+      "path": "/v1/namespaces/{name}",
+      "classification": "PUBLIC_SDK",
+      "handler": "drop_collection_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [
+        "name"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "204": null
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "204"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_collection_index",
+      "method": "GET",
+      "path": "/v1/namespaces/{name}/index",
+      "classification": "PUBLIC_SDK",
+      "handler": "index_lifecycle_status_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "name"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IndexStatusResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "set_collection_index",
+      "method": "POST",
+      "path": "/v1/namespaces/{name}/index",
+      "classification": "PUBLIC_SDK",
+      "handler": "index_lifecycle_create_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [
+        "name"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "IndexBuildRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "IndexStatusResponse",
+        "202": "IndexStatusResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "409": "ApiError",
+        "501": "ApiError"
+      },
+      "success_statuses": [
+        "200",
+        "202"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "409",
+        "501"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_operations",
+      "method": "GET",
+      "path": "/v1/operations",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_operations",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "OperationsListResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "501": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "501"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_operation",
+      "method": "GET",
+      "path": "/v1/operations/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_operation_by_id",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "OperationDetailResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "501": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404",
+        "501"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_operation_execution",
+      "method": "GET",
+      "path": "/v1/operations/{id}/execution",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_operation_execution",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ExecutionRecord"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_event_log_proof",
+      "method": "GET",
+      "path": "/v1/proof/event-log",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_event_proof",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "EventProofResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_latest_receipt",
+      "method": "GET",
+      "path": "/v1/proof/receipt",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_latest_receipt",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "Receipt"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_receipt",
+      "method": "GET",
+      "path": "/v1/proof/receipt/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_receipt_by_id",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "Receipt"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_state_proof",
+      "method": "GET",
+      "path": "/v1/proof/state",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_proof",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "StateProofResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "insert_record",
+      "method": "POST",
+      "path": "/v1/records",
+      "classification": "PUBLIC_SDK",
+      "handler": "insert_record",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "InsertRecordRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "InsertRecordResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError",
+        "507": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500",
+        "507"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "insert_encrypted_record",
+      "method": "POST",
+      "path": "/v1/records/encrypted",
+      "classification": "PUBLIC_SDK",
+      "handler": "insert_encrypted_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "InsertEncryptedRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "201": "InsertEncryptedResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "201"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_record",
+      "method": "GET",
+      "path": "/v1/records/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_record_by_id",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [
+        "collection"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "RecordResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "update_record_metadata",
+      "method": "PATCH",
+      "path": "/v1/records/{id}/metadata",
+      "classification": "PUBLIC_SDK",
+      "handler": "update_record_metadata",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [
+        "collection"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "object",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "UpdateMetadataResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": true,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "search",
+      "method": "POST",
+      "path": "/v1/search",
+      "classification": "PUBLIC_SDK",
+      "handler": "search",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "SearchRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SearchResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "search_multi",
+      "method": "POST",
+      "path": "/v1/search/multi",
+      "classification": "PUBLIC_SDK",
+      "handler": "multi_search",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "MultiSearchRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "MultiSearchResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_shard_routing",
+      "method": "GET",
+      "path": "/v1/shard/routing",
+      "classification": "PUBLIC_SDK",
+      "handler": "shard_routing_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ShardRoutingResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "download_snapshot",
+      "method": "GET",
+      "path": "/v1/snapshot/download",
+      "classification": "PUBLIC_SDK",
+      "handler": "snapshot",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SnapshotBytes"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "restore_snapshot",
+      "method": "POST",
+      "path": "/v1/snapshot/restore",
+      "classification": "PUBLIC_SDK",
+      "handler": "snapshot_restore",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "SnapshotRestoreRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SnapshotRestoreResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "save_snapshot",
+      "method": "POST",
+      "path": "/v1/snapshot/save",
+      "classification": "PUBLIC_SDK",
+      "handler": "snapshot_save",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "SnapshotSaveRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "SnapshotSaveResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "upload_snapshot",
+      "method": "POST",
+      "path": "/v1/snapshot/upload",
+      "classification": "PUBLIC_SDK",
+      "handler": "restore",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/octet-stream",
+      "request_schema": "SnapshotBytes",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": null
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "soft_delete_record",
+      "method": "POST",
+      "path": "/v1/soft-delete",
+      "classification": "PUBLIC_SDK",
+      "handler": "soft_delete_record",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "DeleteRecordRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "DeleteRecordResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "404": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "404",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_storage_manifest",
+      "method": "GET",
+      "path": "/v1/storage/manifest",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_manifest",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ManifestResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_object_store_snapshots",
+      "method": "GET",
+      "path": "/v1/storage/snapshots",
+      "classification": "PUBLIC_SDK",
+      "handler": "list_remote_snapshots",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ListRemoteSnapshotsResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "restore_snapshot_from_object_store",
+      "method": "POST",
+      "path": "/v1/storage/snapshots/restore",
+      "classification": "PUBLIC_SDK",
+      "handler": "restore_from_store",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "RestoreFromStoreRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "RestoreFromStoreResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "upload_snapshot_to_object_store",
+      "method": "POST",
+      "path": "/v1/storage/snapshots/upload",
+      "classification": "PUBLIC_SDK",
+      "handler": "upload_snapshot_to_store",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "StorageSnapshotUploadResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "list_archived_wal_segments",
+      "method": "GET",
+      "path": "/v1/storage/wal",
+      "classification": "PUBLIC_SDK",
+      "handler": "list_remote_wal",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ListRemoteWalResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "archive_wal_segment",
+      "method": "POST",
+      "path": "/v1/storage/wal/archive",
+      "classification": "PUBLIC_SDK",
+      "handler": "archive_wal_segment",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "admin",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "ArchiveWalRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "ArchiveWalResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "502": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "502"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_timeline",
+      "method": "GET",
+      "path": "/v1/timeline",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_timeline",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [
+        "collection",
+        "from",
+        "limit",
+        "to"
+      ],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TimelineResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": true,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "tree_build",
+      "method": "POST",
+      "path": "/v1/tree/build",
+      "classification": "PUBLIC_SDK",
+      "handler": "tree_build",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "TreeBuildRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TreeBuildResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "tree_chain_verify",
+      "method": "POST",
+      "path": "/v1/tree/chain-verify",
+      "classification": "PUBLIC_SDK",
+      "handler": "valori_rag::tree::tree_chain_verify",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "TreeChainVerifyRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TreeChainVerifyResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "tree_hybrid",
+      "method": "POST",
+      "path": "/v1/tree/hybrid",
+      "classification": "PUBLIC_SDK",
+      "handler": "tree_hybrid",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "TreeHybridRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TreeHybridResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "tree_query",
+      "method": "POST",
+      "path": "/v1/tree/query",
+      "classification": "PUBLIC_SDK",
+      "handler": "tree_query",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "TreeQueryRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TreeAnswerResult"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "tree_verify",
+      "method": "POST",
+      "path": "/v1/tree/verify",
+      "classification": "PUBLIC_SDK",
+      "handler": "valori_rag::tree::tree_verify",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "TreeVerifyRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "TreeVerifyResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_usage",
+      "method": "GET",
+      "path": "/v1/usage",
+      "classification": "PUBLIC_SDK",
+      "handler": "usage_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "UsageResponse"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "insert_records_batch",
+      "method": "POST",
+      "path": "/v1/vectors/batch-insert",
+      "classification": "PUBLIC_SDK",
+      "handler": "batch_insert",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "BatchInsertRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "BatchInsertResponse"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "507": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "507"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "get_version",
+      "method": "GET",
+      "path": "/v1/version",
+      "classification": "PUBLIC_SDK",
+      "handler": "version_handler",
+      "source_file": "crates/valori-node/src/server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "string"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    }
+  ]
+}

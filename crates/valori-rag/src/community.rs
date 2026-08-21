@@ -39,6 +39,7 @@ pub struct CommunityStore {
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize)]
 pub struct CommunitySummary {
     pub community_id: u32,
@@ -46,6 +47,7 @@ pub struct CommunitySummary {
     pub centroid_record_id: Option<u32>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = CommunityDetectResponse))]
 #[derive(Serialize, Deserialize)]
 pub struct DetectResponse {
     pub community_count: usize,
@@ -55,6 +57,7 @@ pub struct DetectResponse {
     pub receipt: String,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = CommunityDetectRequest))]
 #[derive(Deserialize)]
 pub struct DetectRequest {
     #[serde(default)]
@@ -63,6 +66,7 @@ pub struct DetectRequest {
     pub max_iter: Option<u32>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = CommunitySearchRequest))]
 #[derive(Deserialize)]
 pub struct SearchRequest {
     pub vector: Vec<f32>,
@@ -83,6 +87,7 @@ fn default_depth() -> u32 {
     1
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize)]
 pub struct CommunityHit {
     pub community_id: u32,
@@ -91,6 +96,7 @@ pub struct CommunityHit {
     pub sample_node_ids: Vec<u32>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema), schema(as = CommunitySearchResponse))]
 #[derive(Serialize, Deserialize)]
 pub struct SearchResponse {
     pub communities: Vec<CommunityHit>,
@@ -99,6 +105,7 @@ pub struct SearchResponse {
 
 // ── Entity extraction types ───────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Deserialize)]
 pub struct ExtractEntitiesRequest {
     pub text: String,
@@ -110,6 +117,7 @@ pub struct ExtractEntitiesRequest {
     pub model: Option<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtractedEntity {
     pub name: String,
@@ -118,6 +126,7 @@ pub struct ExtractedEntity {
     pub description: String,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtractedRelationship {
     pub source: String,
@@ -133,6 +142,7 @@ pub struct LlmExtractionOutput {
     pub relationships: Vec<ExtractedRelationship>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct InsertedEntity {
     pub name: String,
@@ -143,6 +153,7 @@ pub struct InsertedEntity {
     pub record_id: Option<u32>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct InsertedRelationship {
     pub source_name: String,
@@ -151,6 +162,7 @@ pub struct InsertedRelationship {
     pub edge_id: u32,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct ExtractEntitiesResponse {
     pub entities: Vec<InsertedEntity>,

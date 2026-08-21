@@ -50,4 +50,4 @@ pub use collection::{Collection, CollectionRegistry, MAX_COLLECTIONS};
 pub use db::MetadataDb;
 pub use error::{MetadataError, MetadataResult};
 pub use planner_cache::{PlannerCacheEntry, PlannerCacheKey};
-pub use project::{ClusterNodeConfig, IndexKind, Project, ProjectMode};
+pub use project::{ClusterNodeConfig, Project, ProjectMode};

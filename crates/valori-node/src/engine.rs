@@ -43,11 +43,9 @@ impl EngineFromNodeConfig for Engine {
         };
 
         let engine_cfg = EngineConfig {
-            dim: cfg.dim,
             max_records: cfg.max_records,
             max_nodes: cfg.max_nodes,
             max_edges: cfg.max_edges,
-            index_kind: cfg.index_kind,
             quantization_kind: cfg.quantization_kind,
             hnsw_m: cfg.hnsw_m,
             hnsw_ef_construction: cfg.hnsw_ef_construction,

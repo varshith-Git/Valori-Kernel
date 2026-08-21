@@ -29,6 +29,46 @@ pub enum IndexKind {
     Auto,
 }
 
+impl IndexKind {
+    /// Wire tag carried opaquely inside `KernelEvent::ConfigureNamespace` —
+    /// the kernel does not interpret it, only `Engine` does (via
+    /// `Engine::index_kind_from_wire`). Append-only, never renumber.
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            IndexKind::BruteForce => 0,
+            IndexKind::Hnsw => 1,
+            IndexKind::Ivf => 2,
+            IndexKind::Bq => 3,
+            IndexKind::Auto => 4,
+        }
+    }
+
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(IndexKind::BruteForce),
+            1 => Some(IndexKind::Hnsw),
+            2 => Some(IndexKind::Ivf),
+            3 => Some(IndexKind::Bq),
+            4 => Some(IndexKind::Auto),
+            _ => None,
+        }
+    }
+
+    /// Convert from the canonical `valori_domain::IndexKind` used at the API
+    /// boundary. A single, explicit adapter at this one crossing — not a
+    /// second copy of the enum — per `valori_domain::IndexKind`'s own doc
+    /// comment declaring it the target canonical type.
+    pub const fn from_domain(k: valori_domain::IndexKind) -> Self {
+        match k {
+            valori_domain::IndexKind::Brute => IndexKind::BruteForce,
+            valori_domain::IndexKind::Hnsw => IndexKind::Hnsw,
+            valori_domain::IndexKind::Ivf => IndexKind::Ivf,
+            valori_domain::IndexKind::Bq => IndexKind::Bq,
+            valori_domain::IndexKind::Auto => IndexKind::Auto,
+        }
+    }
+}
+
 /// Which quantization scheme to apply to stored vectors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuantizationKind {
@@ -44,13 +84,11 @@ pub enum QuantizationKind {
 /// dependency on `valori-node`.
 pub struct EngineConfig {
     // ── Capacity ─────────────────────────────────────────────────────────────
-    pub dim: usize,
     pub max_records: usize,
     pub max_nodes: usize,
     pub max_edges: usize,
 
-    // ── Index selection ───────────────────────────────────────────────────────
-    pub index_kind: IndexKind,
+    // ── Quantization ─────────────────────────────────────────────────────────
     pub quantization_kind: QuantizationKind,
 
     // ── HNSW tuning ───────────────────────────────────────────────────────────

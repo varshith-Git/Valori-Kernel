@@ -17,16 +17,27 @@ const N_VECTORS: usize = 200;
 
 fn make_ivf_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = 512;
     cfg.max_nodes = 512;
     cfg.max_edges = 1024;
-    cfg.index_kind = IndexKind::Ivf;
     cfg.quantization_kind = QuantizationKind::None;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     cfg.snapshot_path = None;
     cfg
+}
+
+fn make_ivf_engine() -> Engine {
+    let mut engine = Engine::new(&make_ivf_cfg());
+    engine
+        .create_collection_with_config(
+            "default",
+            DIM as u32,
+            valori_domain::Metric::SquaredL2,
+            valori_domain::IndexKind::Ivf,
+        )
+        .unwrap();
+    engine
 }
 
 /// Generate a deterministic unit-ish vector for slot `i`.
@@ -46,7 +57,7 @@ fn make_vec(i: usize) -> Vec<f32> {
 
 #[test]
 fn test_ivf_returns_results_after_insert() {
-    let mut engine = Engine::new(&make_ivf_cfg());
+    let mut engine = make_ivf_engine();
 
     for i in 0..N_VECTORS {
         engine.insert_record_from_f32(&make_vec(i)).expect("insert");
@@ -69,7 +80,7 @@ fn test_ivf_returns_results_after_insert() {
 
 #[test]
 fn test_ivf_recall_at_1() {
-    let mut engine = Engine::new(&make_ivf_cfg());
+    let mut engine = make_ivf_engine();
 
     let mut inserted_ids = Vec::new();
     for i in 0..N_VECTORS {
@@ -108,7 +119,7 @@ fn test_ivf_recall_at_1() {
 
 #[test]
 fn test_ivf_excludes_soft_deleted_records() {
-    let mut engine = Engine::new(&make_ivf_cfg());
+    let mut engine = make_ivf_engine();
 
     // Insert a cluster of very similar vectors, all near [0, 0, ..., 0].
     // Record 0 will be soft-deleted; the others remain.
@@ -233,7 +244,7 @@ fn test_ivf_needs_rebuild_after_2x_growth() {
 
 #[test]
 fn test_ivf_rebuild_index_consistency() {
-    let mut engine = Engine::new(&make_ivf_cfg());
+    let mut engine = make_ivf_engine();
 
     for i in 0..N_VECTORS {
         engine.insert_record_from_f32(&make_vec(i)).expect("insert");

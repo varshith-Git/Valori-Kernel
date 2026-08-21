@@ -246,6 +246,94 @@ fn record_id_mismatch_is_rejected() {
     );
 }
 
+// ── G0.1 regression: non-tail node/edge deletion + snapshot round-trip ──────
+//
+// `encode_state` writes only LIVE node/edge slots (unlike records, which
+// write an explicit present/absent flag per slot), so the wire format only
+// carries a live count, not a total-slot count. `decode_state` used to
+// pre-size its node/edge pools to that live count and reject any id >= it —
+// which broke as soon as a node/edge NOT at the tail of the id range was
+// deleted, because the surviving entry with the highest id could then
+// exceed the (now smaller) live count. Fixed by growing the pool to fit the
+// ids actually encountered instead of pre-sizing to the live count. This
+// is a decode-side-only fix — the wire bytes are unchanged, so it does not
+// affect the pinned fixtures in `snapshot_compat.rs`.
+#[test]
+fn snapshot_roundtrips_after_deleting_a_non_tail_node() {
+    let mut state = KernelState::new();
+    for i in 0u32..3 {
+        state
+            .apply_event(&KernelEvent::CreateNode {
+                id: NodeId(i),
+                kind: NodeKind::Concept,
+                record: None,
+            })
+            .unwrap();
+    }
+    // Delete the MIDDLE node (id 1), leaving a hole — node 2 (the surviving
+    // highest id) is now >= the post-deletion live count (2).
+    state
+        .apply_event(&KernelEvent::DeleteNode { id: NodeId(1) })
+        .unwrap();
+    assert_eq!(state.node_count(), 2);
+
+    let buf = encode(&state);
+    let restored = decode_state(&buf).expect(
+        "snapshot with a non-tail node deletion must decode — this used to \
+         fail with InvalidOperation (G0.1 finding)",
+    );
+    assert_eq!(hash_state_blake3(&restored), hash_state_blake3(&state));
+    assert!(restored.get_node(NodeId(0)).is_some());
+    assert!(
+        restored.get_node(NodeId(1)).is_none(),
+        "deleted node must stay deleted"
+    );
+    assert!(restored.get_node(NodeId(2)).is_some());
+}
+
+#[test]
+fn snapshot_roundtrips_after_deleting_a_non_tail_edge() {
+    let mut state = KernelState::new();
+    for i in 0u32..2 {
+        state
+            .apply_event(&KernelEvent::CreateNode {
+                id: NodeId(i),
+                kind: NodeKind::Concept,
+                record: None,
+            })
+            .unwrap();
+    }
+    for i in 0u32..3 {
+        state
+            .apply_event(&KernelEvent::CreateEdge {
+                id: EdgeId(i),
+                from: NodeId(0),
+                to: NodeId(1),
+                kind: EdgeKind::Relation,
+            })
+            .unwrap();
+    }
+    // Delete the MIDDLE edge (id 1) — edge 2 (surviving highest id) is now
+    // >= the post-deletion live count (2).
+    state
+        .apply_event(&KernelEvent::DeleteEdge { id: EdgeId(1) })
+        .unwrap();
+    assert_eq!(state.edge_count(), 2);
+
+    let buf = encode(&state);
+    let restored = decode_state(&buf).expect(
+        "snapshot with a non-tail edge deletion must decode — this used to \
+         fail with InvalidOperation (G0.1 finding)",
+    );
+    assert_eq!(hash_state_blake3(&restored), hash_state_blake3(&state));
+    assert!(restored.get_edge(EdgeId(0)).is_some());
+    assert!(
+        restored.get_edge(EdgeId(1)).is_none(),
+        "deleted edge must stay deleted"
+    );
+    assert!(restored.get_edge(EdgeId(2)).is_some());
+}
+
 #[test]
 fn unsupported_schema_version_is_rejected() {
     let state = KernelState::new();

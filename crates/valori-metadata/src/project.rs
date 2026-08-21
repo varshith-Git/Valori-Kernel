@@ -3,47 +3,21 @@
 //!
 //! Each project maps to exactly one valori-node process (or one cluster of nodes),
 //! its own WAL/snapshot directory, and an independent KernelState.
+//!
+//! # Project does not own vector configuration
+//!
+//! `dim`/`index` used to live here (mirroring the same fields that used to
+//! live on `valori_domain::Project`). Both were removed, with no
+//! backward-compat shim, in the collection-index-lifecycle phase — Valori
+//! has no production users, so there was no reason to keep a second,
+//! competing scalar source of truth alive next to `Collection`'s per-namespace
+//! `CollectionVectorConfig`. See `docs/phases/phase-collection-index-lifecycle.md`.
+//! The local `IndexKind` enum that used to exist here was deleted with them —
+//! it had exactly one consumer (`Project.index`) and `valori_domain::IndexKind`
+//! was already the intended canonical replacement (see that type's own doc
+//! comment).
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-
-/// The index algorithm a project's node was started with.
-/// Immutable after the first insert.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum IndexKind {
-    #[default]
-    Brute,
-    Hnsw,
-    Ivf,
-    Bq,
-    Auto,
-}
-
-impl std::fmt::Display for IndexKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IndexKind::Brute => write!(f, "brute"),
-            IndexKind::Hnsw => write!(f, "hnsw"),
-            IndexKind::Ivf => write!(f, "ivf"),
-            IndexKind::Bq => write!(f, "bq"),
-            IndexKind::Auto => write!(f, "auto"),
-        }
-    }
-}
-
-impl std::str::FromStr for IndexKind {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "brute" | "bruteforce" => Ok(IndexKind::Brute),
-            "hnsw" => Ok(IndexKind::Hnsw),
-            "ivf" => Ok(IndexKind::Ivf),
-            "bq" => Ok(IndexKind::Bq),
-            "auto" | "mstg" => Ok(IndexKind::Auto),
-            other => Err(format!("Unknown index kind: {}", other)),
-        }
-    }
-}
 
 /// Whether the project is a single-node standalone or a Raft cluster.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -66,10 +40,6 @@ pub struct Project {
     pub dir: PathBuf,
     /// HTTP port the node listens on. Allocated by the process manager at creation.
     pub port: u16,
-    /// Vector dimension. Immutable after the first insert.
-    pub dim: u16,
-    /// Index algorithm. Immutable after the first insert.
-    pub index: IndexKind,
     /// Number of shards. Immutable after creation.
     pub shard_count: u8,
     /// Number of Raft replica nodes (cluster mode only). 1 = standalone.
@@ -122,25 +92,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn index_kind_roundtrip() {
-        for (s, expected) in [
-            ("brute", IndexKind::Brute),
-            ("hnsw", IndexKind::Hnsw),
-            ("auto", IndexKind::Auto),
-        ] {
-            assert_eq!(s.parse::<IndexKind>().unwrap(), expected);
-            assert_eq!(expected.to_string(), s);
-        }
-    }
-
-    #[test]
     fn project_paths() {
         let p = Project {
             name: "test".into(),
             dir: PathBuf::from("/home/user/.valori/projects/test"),
             port: 3010,
-            dim: 768,
-            index: IndexKind::Brute,
             shard_count: 2,
             node_count: 1,
             mode: ProjectMode::Standalone,

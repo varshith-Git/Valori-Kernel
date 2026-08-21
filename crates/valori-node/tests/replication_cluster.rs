@@ -21,7 +21,6 @@ async fn test_replication_cluster() {
         event_log_path: Some(leader_dir.path().join("events.log")),
         mode: valori_node::config::NodeMode::Leader,
         max_records: 128,
-        dim: 4,
         max_nodes: 128,
         max_edges: 256,
         ..Default::default()
@@ -60,7 +59,6 @@ async fn test_replication_cluster() {
             leader_url: leader_url.clone(),
         },
         max_records: 128,
-        dim: 4,
         max_nodes: 128,
         max_edges: 256,
         ..Default::default()

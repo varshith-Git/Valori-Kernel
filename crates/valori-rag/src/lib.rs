@@ -19,6 +19,6 @@ pub use community::{
     ExtractEntitiesResponse, ExtractedEntity, ExtractedRelationship, InsertedEntity,
     InsertedRelationship, LlmExtractionOutput, SearchRequest, SearchResponse, DEFAULT_MAX_ITER,
 };
-pub use graph::{expand_subgraph, resolve_seed_nodes, MAX_DEPTH};
+pub use graph::{expand_subgraph, expand_subgraph_budgeted, resolve_seed_nodes, MAX_DEPTH};
 pub use llm::{extract_entities_via_llm, LlmConfig};
 pub use tree::{Receipt, TreeIndex, TreeNode, GENESIS};

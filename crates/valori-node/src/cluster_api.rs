@@ -20,6 +20,10 @@
 //! Admin-action audit events (`NodeJoined`/`NodeLeft` in the chained log)
 //! land in Phase 2.9; these endpoints are the place they'll be emitted.
 
+#[cfg(feature = "utoipa")]
+#[allow(unused_imports)]
+use crate::openapi::ApiError;
+
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -85,16 +89,18 @@ fn record_admin(state: &ClusterApiState, event: AdminEvent) {
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
-struct MemberView {
+pub(crate) struct MemberView {
     id: NodeId,
     raft_addr: String,
     api_addr: String,
     voter: bool,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
-struct StatusView {
+pub(crate) struct StatusView {
     node_id: NodeId,
     current_leader: Option<NodeId>,
     is_leader: bool,
@@ -104,6 +110,18 @@ struct StatusView {
     members: Vec<MemberView>,
 }
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/cluster/status",
+    operation_id = "get_cluster_status",
+    tag = "cluster",
+    summary = "Raft membership and replication position",
+    description = "Reported from this node's own metrics. `current_leader` is this node's current belief, not a quorum-confirmed fact.",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Cluster status", body = StatusView),
+    ),
+))]
 async fn status(State(state): State<ClusterApiState>) -> Json<StatusView> {
     let m = state.raft.metrics().borrow().clone();
 
@@ -200,32 +218,86 @@ async fn read_index(
 // distinction lets the LB steer writes without the SDK needing to follow
 // redirects for every request.
 
-async fn role(State(state): State<ClusterApiState>) -> Json<serde_json::Value> {
+/// `GET /v1/cluster/role` response.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Serialize)]
+pub(crate) struct ClusterRoleResponse {
+    /// `leader` or `follower`. Both are healthy.
+    role: String,
+    node_id: NodeId,
+    /// The leader this node currently believes in, if any.
+    current_leader: Option<NodeId>,
+}
+
+/// `GET /v1/cluster/health` response.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Serialize)]
+pub(crate) struct ClusterHealthResponse {
+    /// `ok` when a leader is visible, `no-leader` otherwise.
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    leader: Option<NodeId>,
+    /// Present only on the `no-leader` path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/cluster/role",
+    operation_id = "get_cluster_role",
+    tag = "cluster",
+    summary = "Whether this node is the leader",
+    description = "Always 200 — both `leader` and `follower` are healthy. A load balancer can steer writes with this instead of following redirects on every request.",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "This node's Raft role", body = ClusterRoleResponse),
+    ),
+))]
+async fn role(State(state): State<ClusterApiState>) -> Json<ClusterRoleResponse> {
     let m = state.raft.metrics().borrow().clone();
     let is_leader = m.current_leader == Some(m.id);
-    Json(serde_json::json!({
-        "role": if is_leader { "leader" } else { "follower" },
-        "node_id": m.id,
-        "current_leader": m.current_leader,
-    }))
+    Json(ClusterRoleResponse {
+        role: if is_leader { "leader" } else { "follower" }.to_string(),
+        node_id: m.id,
+        current_leader: m.current_leader,
+    })
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/cluster/health",
+    operation_id = "get_cluster_health",
+    tag = "cluster",
+    summary = "Whether this node sees an elected leader",
+    description = "503 with `status: no-leader` during an election. Distinct from `GET /health`, which reports this node's own serving capacity.",
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "A leader is elected", body = ClusterHealthResponse),
+        (status = 503, description = "No leader currently visible from this node", body = ClusterHealthResponse),
+    ),
+))]
 async fn health(State(state): State<ClusterApiState>) -> Response {
     let m = state.raft.metrics().borrow().clone();
     match m.current_leader {
         Some(leader) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "status": "ok", "leader": leader })),
+            Json(ClusterHealthResponse {
+                status: "ok".to_string(),
+                leader: Some(leader),
+                detail: None,
+            }),
         )
             .into_response(),
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "status": "no-leader",
-                "detail": "this node currently sees no elected leader",
-            })),
+            Json(ClusterHealthResponse {
+                status: "no-leader".to_string(),
+                leader: None,
+                detail: Some("this node currently sees no elected leader".to_string()),
+            }),
         )
             .into_response(),
     }

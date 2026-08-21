@@ -28,3 +28,22 @@ impl From<valori_kernel::error::KernelError> for StateError {
         StateError::Kernel(e)
     }
 }
+
+/// The Phase 2 logical-artifact storage error (`valori_storage::provider::StorageError`)
+/// is a distinct, more granular type from the legacy `valori_storage::StorageError`
+/// above — see that module's doc comment. Both fold into `StateError::InvalidInput`
+/// here since `valori-state`'s error surface doesn't yet distinguish storage-layer
+/// failure modes (not found / corrupt / conflict) from any other recovery failure;
+/// widen this if a caller ever needs to react differently to, say,
+/// `ChecksumMismatch` vs `NotFound`.
+impl From<valori_storage::provider::StorageError> for StateError {
+    fn from(e: valori_storage::provider::StorageError) -> Self {
+        StateError::InvalidInput(e.to_string())
+    }
+}
+
+impl From<valori_storage::events::event_replay::ReplayError> for StateError {
+    fn from(e: valori_storage::events::event_replay::ReplayError) -> Self {
+        StateError::InvalidInput(e.to_string())
+    }
+}

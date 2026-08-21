@@ -32,7 +32,6 @@ fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
 
 fn tiny_cfg_with_event_log(event_log_path: std::path::PathBuf) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 10_000;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;
@@ -88,10 +87,9 @@ async fn usage_reports_zero_records_and_default_collection_on_a_fresh_engine() {
     let (status, body) = get(router, "/v1/usage").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["records"], 0);
-    // The kernel always has a "default" namespace even with no explicit
-    // collection ever created — see routes/collections.rs's own doc comment
-    // ("list: 200 with every collection incl. 'default'").
-    assert_eq!(body["collections"], 1);
+    // Phase 3.3: a brand-new engine has zero collections — "default"
+    // included — until one is explicitly created via POST /v1/namespaces.
+    assert_eq!(body["collections"], 0);
     assert!(body["storage"]["total_bytes"].as_u64().is_some());
 }
 
@@ -101,11 +99,19 @@ async fn usage_tracks_real_inserted_records() {
     let cfg = tiny_cfg_with_event_log(dir.path().join("events.log"));
     let (_shared, router) = engine_router(cfg);
 
+    let (status, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
     for _ in 0..5 {
         let (status, _) = post_json(
             router.clone(),
             "/v1/records",
-            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4] }),
+            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -125,13 +131,15 @@ async fn usage_tracks_collection_create_and_drop() {
     let (status, _) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({"name": "tenant-a", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
     let (_, body) = get(router.clone(), "/v1/usage").await;
-    assert_eq!(body["collections"], 2, "default + tenant-a");
+    // Phase 3.3: only "tenant-a" was ever explicitly created — no implicit
+    // "default" collection exists.
+    assert_eq!(body["collections"], 1, "tenant-a only");
 
     let resp = router
         .oneshot(
@@ -157,11 +165,19 @@ async fn usage_storage_bytes_includes_rotated_event_log_segments() {
     let cfg = tiny_cfg_with_event_log(live_path.clone());
     let (shared, router) = engine_router(cfg);
 
+    let (status, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
     for _ in 0..3 {
         let (status, _) = post_json(
             router.clone(),
             "/v1/records",
-            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4] }),
+            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -197,11 +213,19 @@ async fn usage_endpoint_never_mutates_canonical_state() {
     let cfg = tiny_cfg_with_event_log(dir.path().join("events.log"));
     let (_shared, router) = engine_router(cfg);
 
+    let (status, body) = post_json(
+        router.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
     for _ in 0..3 {
         let (status, _) = post_json(
             router.clone(),
             "/v1/records",
-            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4] }),
+            serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }),
         )
         .await;
         assert_eq!(status, StatusCode::OK);

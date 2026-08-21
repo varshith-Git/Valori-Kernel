@@ -193,6 +193,23 @@ registry (never from `KernelState`) and calls `KernelState::apply_event_ns`
 with the id already decided, mirroring how `AutoInsertRecord` pre-allocates
 a record id before the kernel ever sees the event.
 
+**Collection-scoped vector configuration** (added alongside `AutoCreateNamespace`,
+not replacing it): `KernelEvent::ConfigureNamespace { namespace_id, dim, metric, index_kind }`
+is a second, separate event `valori-node`'s cluster router commits right
+after `AutoCreateNamespace` when a collection is created with an explicit
+dimension/metric/index. `apply()` applies it to `KernelState` (the
+authoritative, replicated, snapshotted record — unlike the name registry
+above, this one *is* stored inside `KernelState.namespace_configs`, not only
+in this crate's own bookkeeping) and mirrors it into
+`namespace_registry.configs` for cheap local reads via the new
+`ValoriStateMachine::namespace_config()` accessor. **Known limitation**: this
+crate has no `dyn VectorIndex` concept at all — dimension isolation is
+correct and replicated, but a cluster-mode collection's search always uses
+`KernelState::search_l2_ns`'s brute-force-equivalent path regardless of the
+configured `index`, since there is no `valori-engine::Engine` in this
+process to build a dedicated per-collection index. See
+`docs/phases/phase-collection-scoped-vector-config.md`.
+
 ### Creation timestamps for decay (Phase C4.1b)
 
 `StateMachineInner.created_at: HashMap<u32, u64>` records the unix-second

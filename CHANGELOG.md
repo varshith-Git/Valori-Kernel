@@ -6,6 +6,993 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Phase API-4D — Python SDK Parity, Type-Safety Hardening & Real-Node Validation (2026-08-21)
+
+Fixed the Python `metadata` wire bug API-4C found by inspection, removed the casts
+that made that class of bug possible, and validated **both** SDKs against a real
+node from a reproducible disposable environment. Contract gate **PASS**,
+`SDK READY = YES`, 74 operations. **Nothing published.**
+
+#### Fixed
+- **Python `metadata` was encoded wrong on both write paths** — the same bug
+  API-4C fixed in TypeScript. `records.insert` sent a JSON map where
+  `POST /v1/records` requires opaque UTF-8 JSON **bytes** (`list[int]`), and
+  `records.insert_batch` sent maps where `POST /v1/vectors/batch-insert`
+  requires UTF-8 JSON **strings**. The generated model's permissive `from_dict`
+  accepted the mapping and passed it straight through. Now encoded at the
+  domain→wire boundary by a new centralised `valori/_wire.py`, so callers still
+  pass a plain dict.
+- **Cross-SDK byte identity.** The Python encoder matches `JSON.stringify`
+  exactly (no whitespace, real UTF-8, insertion order). `POST /v1/records`
+  commits metadata bytes *inside* the `InsertRecord` event, so they are covered
+  by the BLAKE3 audit chain — a divergence would give the same logical write two
+  different state hashes depending on which SDK issued it.
+- **Contract bug: scalar metadata values were unrepresentable.** Five schema
+  fields were annotated `HashMap<String, Object>`, rendering as
+  `additionalProperties: {type: object}` — "every value must be an object" —
+  while the Rust type is `serde_json::Value` and the field's own doc comment
+  claims generators should emit `Dict[str, Any]`. `update_metadata(7, {"a": 1})`
+  raised `TypeError`. Fixed at the Rust source in `valori-node/src/api.rs` and
+  `server.rs`; contract and both `generated/` trees regenerated.
+- **Two TypeScript type holes**, exposed by removing the casts: `collections.create()`
+  took `metric: string` / `index?: string` and `index.build()` took `type?: string`,
+  where the contract has closed enums. `metric: "cosine"` — not a contract metric —
+  compiled, and two committed tests were passing it.
+- **Three long-broken Python integration tests**: `request_id` must be 32 hex
+  characters, `CreateNodeResponse` exposes `node_id` (not `id`), and a 404 from
+  `GET /v1/operations/{id}/execution` is contract-valid.
+- **`.github/workflows/sdk-python.yml`** started its integration node without
+  `VALORI_EVENT_LOG_PATH` — API-4C fixed this only on the TypeScript side, so the
+  Python proof cases were testing an error path.
+
+#### Changed
+- **All 13 `as unknown as` casts removed** from `sdk/typescript/src/`. Public
+  signatures now use string unions *derived from* the generated enums, so callers
+  still write `"hnsw"` but `"hsnw"` is a compile error. TypeScript enums are
+  nominal, so one bridge remains — isolated in a single documented `asEnum`
+  helper with runtime membership validation that makes the assertion sound and
+  throws before any request is made.
+- Python `metadata_filter`, memory upsert/consolidate and both metadata-sidecar
+  paths now route through the wire layer so they are validated at the boundary
+  rather than coerced by a permissive `from_dict`.
+- Both SDK CI workflows now start their node via one shared harness instead of
+  each carrying an inline snippet.
+
+#### Added
+- `scripts/sdk-integration-node.sh` — disposable node for the integration suites:
+  free port, throwaway storage root, every `VALORI_*` variable set explicitly,
+  health wait, guaranteed teardown. Never touches a developer's own node.
+- `sdk/metadata-wire-fixtures.json` — 12 canonical metadata cases with their exact
+  wire forms, read by **both** test suites so cross-SDK parity is mechanical.
+- `docs/api/known-server-issues.md` — **`metadata_filter` is broken in the server**
+  (confirmed with raw curl, no SDK involved): it consults only the metadata
+  sidecar keyed `rec:{id}`, so a predicate that exactly matches a record's
+  committed metadata returns zero hits. Deliberately **not** worked around in
+  either SDK; both integration suites pin the broken behaviour so a server fix
+  cannot land silently.
+- `docs/sdk/release-readiness.md` — npm/PyPI verification results and the exact
+  trusted-publishing/OIDC configuration Phase API-4E must create.
+- `sdk/python/tests/test_metadata_wire.py` (46 cases),
+  `sdk/typescript/tests/enum-boundary.test.ts` (8),
+  `sdk/typescript/tests/wire-parity.test.ts` (26), and metadata round-trip
+  integration tests in both SDKs that read the value back and compare semantically
+  rather than asserting HTTP 200.
+- `publishConfig` on `@valori/sdk` (`access: public`, required for a scoped
+  package; `provenance: true`).
+
+#### Validation
+Python **307 unit + 18 integration**; TypeScript **223 including integration**
+(3 cluster-only skipped in each). Both suites were also run against the **same
+node process** in one harness invocation. `tsc --noEmit` clean, 0
+`as unknown as` remaining. Both packages build, install and typecheck from their
+published artifacts; `twine check` PASSED. **Nothing published, no registry
+credential created.**
+
+### Phase API-4C — Official Valori TypeScript SDK (2026-08-21)
+
+Validated the `@valori/sdk` TypeScript package against a **real running node** for
+the first time and closed the remaining ergonomic gaps. No REST API change; the
+contract remains 74 operations, gate PASS.
+
+#### Fixed
+- **`metadata` was encoded wrong on both write paths.** `Records.insert` sent a JSON
+  map where `POST /v1/records` requires opaque UTF-8 JSON **bytes** (`number[]`), and
+  `Records.insertBatch` sent an array of maps where
+  `POST /v1/vectors/batch-insert` requires UTF-8 JSON **strings**
+  (`(string | null)[]`). Both are rejected with a 422 by a live node. The ergonomic
+  layer now encodes at the domain→wire boundary, so callers still pass a plain
+  object. The bug was masked by the `as unknown as X` casts the wrapper bodies use
+  to reach the generated types.
+- **`sdk/typescript/README.md` documented an SDK that does not exist** — wrong
+  constructor options (`baseUrl`/`token` vs `endpoint`/`apiKey`), wrong method shapes
+  on every call in the quickstart, and a "Zero Hand-Written Types" claim that is the
+  opposite of the architecture. Rewritten against the real surface.
+- **`.github/workflows/sdk-typescript.yml`** started the integration node without
+  `VALORI_EVENT_LOG_PATH`, so `GET /v1/proof/event-log` answers "Event log not
+  enabled" and the proof case could never have passed. Now set.
+- Two integration tests encoded false beliefs about the contract: `request_id` must
+  be 32 hex characters (not a free-form string), and `GET /v1/operations/{id}/execution`
+  correctly 404s for operations the planner never ran.
+
+#### Added
+- **§21 per-call abort and timeout** — `CallOptions.timeoutMs`, honoured by
+  `Transport.params()`, and a trailing `CallOptions` argument on
+  `Collection.search()` and `Collection.graphrag()`.
+- **§22 pagination** — `Graph.listAllNodes()`, an async iterator over
+  `GET /v1/graph/nodes`. A contract scan confirmed this is the only operation with
+  true offset/limit pagination; nothing else got an iterator.
+- **`sdk/typescript/examples/quickstart.ts`** — a runnable end-to-end tour, added to
+  `tsconfig.json` `include` so it is typechecked rather than decorative.
+- `tests/call-options.test.ts` (8 cases) and a batch-metadata encoding case.
+
+#### Known issue
+- The **Python SDK has the identical `metadata` bug**, confirmed by inspection in
+  `sdk/python/handwritten/valori/resources/records.py`. Not fixed in this
+  TypeScript-scoped phase; owned by the next one.
+
+Validation: **186 tests pass against a live node** (171 unit + 18 integration, 3
+cluster-only skipped), typecheck clean, coverage 74/74, generation byte-reproducible,
+`npm run build` and `npm pack --dry-run` clean. **Not published.**
+
+### Phase API-3.3 — Public Operation Contract Completeness & SDK Preflight (2026-08-20)
+
+Phase API-3.2 proved the right 74 operations exist. This phase proves their HTTP
+contracts are **complete** enough to generate a high-quality multi-language SDK.
+**Verdict: `SDK READY = YES`, 0 computed blockers.** No route was added or
+removed; the operation count is unchanged at 74.
+
+#### Added
+- **`scripts/audit-public-api-operations.py`** — audits every public operation
+  for contract completeness, cross-checking the OpenAPI document against the
+  **Rust handler signature**. Completeness is never inferred from path
+  existence: a `requestBody` counts only if the contract declares one *and* the
+  handler has a body extractor, and a `query?: never` only if the handler has no
+  `Query<..>`. Emits `docs/api/public-operation-audit.{json,md}` and exits
+  non-zero on any incomplete operation.
+- **Step `3b/9` "Public operation completeness"** in
+  `scripts/api-contract-gate.sh`, plus `OPERATION COMPLETENESS` (13 figures) and
+  `GENERATED CLIENT QUALITY` (4 figures) reporting blocks. All discovered per
+  run; a missing artifact reports `UNKNOWN` and blocks rather than defaulting.
+- **Typed DTOs replacing `body = Object` / `Vec<Object>` placeholders**:
+  `Receipt` + `ReceiptFragment` (the flagship proof artifact, previously an
+  opaque blob in every SDK), `IngestJobStatusResponse` + `IngestJobState`,
+  `GraphRagHit`, `SubgraphNode`, `SubgraphEdge`, `OperationOverview`,
+  `OperationResults`, `OperationMetrics`, `OperationDetails`,
+  `IndexBuildParameters`, `BuildableIndexKind`, `SnapshotBytes`.
+- `docs/api/typescript-contract-quality.md` — every `unknown`/`any`/`never` in
+  the generated TypeScript classified EXPECTED or BUG. Zero BUG-class.
+
+#### Fixed
+- **401/403 declared an empty body on all 73 authenticated operations — 146
+  wrong responses.** Phase API-3.2 attached them bodyless, reasoning that axum
+  renders a bare `StatusCode` with no body. True of the auth guard alone, false
+  of the router: `attach_error_code` is the **outermost** layer on both routers
+  and synthesises a full `ApiError` for any empty error body. An existing
+  passing test already proved it. They now declare `body = ApiError`.
+- **The 16 remaining bodyless error responses**, via a new `ErrorBodyAddon`
+  `Modify` pass — the contract-side mirror of `attach_error_code`, so the two
+  cannot drift. This also reached `/v1/tree/*` and `/v1/ingest/document`, which
+  are annotated in `valori-rag` / `valori-ingest` and cannot name `ApiError`
+  (it is declared in `valori-node`), making per-call-site edits impossible.
+- **`GET /v1/crypto/status/{key_id}` returned `text/plain` on 400** — the one
+  error in the public surface escaping `ApiError`, since the middleware passes
+  non-JSON bodies through by design, and a fork from its cluster twin, which
+  already answered JSON. Converged onto `error_response`.
+- **`GET /health` and `GET /v1/cluster/health` had their 503 body corrupted at
+  runtime.** Both answer 503 with a full typed health document; the error
+  middleware mapped 503 → `Unavailable` and spliced `error` and `code` into the
+  documented DTO, so the bytes did not match the advertised schema. Both paths
+  are now exempt — a 503 health report is a status signal, not an error.
+- **`GET /health` advertised `x-required-scope: read_only`** despite declaring
+  `security: []`. The middleware never runs there, so the value was the scope
+  function's default — telling every SDK that the one deliberately open endpoint
+  needed a key. The extension is now emitted only for authenticated operations.
+- **`/v1/snapshot/{download,upload}` typed binary payloads as
+  `array<integer>`.** `body = Vec<u8>` rendered literally, so a generated Python
+  client typed the download as `list[int]`. Now `type: string, format: binary`
+  → `File` / `Blob`.
+- **`IndexBuildRequest` was effectively undocumented**: `parameters` had no
+  schema at all (the only genuinely untyped field in the surface) and `type` was
+  a bare `string`. Now `IndexBuildParameters` (the five keys both routers
+  actually read) and the closed `BuildableIndexKind` enum.
+- `MetadataSetRequest.metadata`, `GraphRagHit.metadata`,
+  `OperationDetailResponse.proof` and the PATCH-metadata body now emit
+  `additionalProperties`, rendering as `Record<string, unknown>` /
+  `Dict[str, Any]` instead of a property-less `object`.
+- `scripts/verify-api-route-contract.py` no longer blanket-exempts `401`/`403`
+  from the empty-body check — the exemption rested on the same false premise as
+  the bug it should have caught.
+
+#### Changed
+- `api_contract.rs::every_operation_documents_the_scope_the_server_enforces` now
+  asserts a conditional invariant: authenticated ⇒ scope matches
+  `required_scope()`; unauthenticated ⇒ **no** scope declared.
+- New `api_contract.rs::receipt_dto_matches_the_runtime_receipt` diffs the
+  hand-written `ReceiptDto` against a serialised `valori_effect::Receipt` so the
+  mirror cannot drift.
+
+#### Validation
+74/74 operations complete; 0 untyped parameters, 0 parameter mismatches, 0
+untyped schema properties, 0 unexpected `unknown`/`any` in the generated
+TypeScript. `cargo test -p valori-node` 449 passed; kernel 83, engine 18, state
+24, storage 78, consensus 32; pytest 101 passed. Clippy 0 errors. wasm32 build
+clean (`no_std` intact). Throwaway Python (`openapi-python-client`) and
+TypeScript (`swagger-typescript-api`) clients generated and inspected — both
+PASS; the TS client compiles under `tsc --strict`. Contract gate PASS, exit 0.
+
+### Phase API-3.2 — Final API Contract Readiness Gate (2026-08-20)
+
+Audits the *content* of the 74 operations Phase API-3.1 aligned, rather than
+their coverage. **Verdict: `SDK READY = NO`, 2 computed blockers.** No route was
+added or removed; the operation count is unchanged at 74.
+
+#### Fixed
+- **`401` documented a body that has never existed.** 70 handler annotations
+  declared `401` with `body = ApiError`, but `auth_guard_v2` returns a bare
+  `StatusCode::UNAUTHORIZED`, which axum renders with an empty body. A client
+  trusting the contract would have tried to parse an empty body as JSON on every
+  expired token.
+- **`403` is now documented.** It is reachable on all 73 authenticated
+  operations whenever a key's scope does not satisfy `x-required-scope`, and was
+  documented on none of them.
+  Both responses are now attached by a single `AuthResponsesAddon` modifier in
+  `crates/valori-node/src/openapi.rs`, from the one place that knows the
+  middleware's behaviour, instead of being restated per handler.
+- **`POST /v1/ingest` `202` had no documented body** despite returning
+  `job_id` — the value the entire async flow depends on. It now carries
+  `IngestAcceptedResponse`. `413` and `500` are documented on `/v1/ingest` and
+  `/v1/ingest/update`; the `400` description no longer claims to cover oversize
+  text, which is a `413`.
+- **Ingest errors now use the canonical `ApiError` shape** via
+  `valori_engine::error_response`, gaining the `code` field (additive). The
+  `/v1/ingest/update` error paths previously serialized a raw `Vec<u8>` with an
+  empty header map, so they were served as `application/octet-stream` rather
+  than JSON.
+- **`redocly.yaml` no longer weakens `operation-4xx-response` for the whole
+  document.** `GET /health` — the one operation that legitimately has no 4xx —
+  is pinned in a new `.redocly.lint-ignore.yaml`, and the rule is enforced at
+  full strength by `scripts/verify-api-route-contract.py`. Lint is clean with no
+  fabricated `400`.
+
+#### Changed
+- **`CreateCollectionRequest` now requires `name`, `dimension`, and `metric`**
+  in the schema, matching what `parse_collection_config` has enforced since
+  Phase 3.3. The stale "required except for `default`" wording is gone —
+  `"default"` has no exception.
+- **`metric` and `index` are closed enums**, no longer bare strings. The
+  accepted set and the emitted set are separate schemas
+  (`MetricInput`/`Metric`, `IndexKindInput`/`IndexKind`) because `FromStr`
+  accepts `l2`, `l2sq`, `bruteforce`, and `mstg` while `as_str` never emits
+  them. Every previously-valid value remains valid; the wire is unchanged.
+  Both of the above are breaking for a *regenerated SDK's* method signatures
+  and non-breaking on the wire — corrections to a contract that under-specified
+  what the server already enforced.
+- Schemas: 138 → **143**.
+
+#### Documentation
+- `docs/api/non-public-routes.md` **regenerated from the route manifest.** The
+  previous inventory was wrong: it listed `/v1/storage/*`, `/v1/snapshot/*`, and
+  `/v1/memory/*` as non-public when all 13 are `PUBLIC_SDK`, and missed the real
+  `OPERATOR_INTERNAL` and `DEPRECATED` sets.
+- `docs/api/security-contract.md` corrected — ten *public* operations require
+  `admin` scope (`/v1/snapshot/*`, `/v1/storage/*`), which the previous version
+  denied.
+- `docs/api/operation-id-policy.md` corrected (`delete_collection`, not
+  `drop_collection`) and expanded with the naming rules.
+- `docs/api/x-status-decision.md` rewritten: `x-status` is documentation-only
+  and deliberately **not** reintroduced; the two facts it conflated are owned by
+  `deprecated: true` and the route manifest. Also records that `x-sdk` is a
+  constant `true` and carries no information.
+- `docs/api/sdk-readiness.md`, `docs/api/openapi-version-decision.md`,
+  `api/README.md` updated.
+
+#### Known blockers (deferred to Phase API-3.3)
+- **16 documented responses declare no body while the handler returns JSON**, so
+  a generated SDK sees `never` and cannot surface the error message.
+- **Root cause: two error shapes in the runtime.** ~126 sites across
+  `server.rs` and `cluster_server.rs` emit a bare `{error}` with no `code`
+  instead of `ApiError`, and `GET /v1/crypto/status/{key_id}` returns a plain
+  string. `crates/valori-node/src/ingest.rs` was converged as the reference
+  pattern; the rest is too large to fix surgically here.
+
+#### Tooling
+- `scripts/verify-api-route-contract.py` now also enforces 4xx coverage and
+  response-body typing against a source-reviewed allowlist.
+- `scripts/api-contract-gate.sh` surfaces an "Untyped JSON responses" count and
+  raises it as a computed blocker. Readiness remains calculated, never
+  hand-written: `docs/api/sdk-readiness.json` now reports
+  `"sdk_ready": false, "blocker_count": 2`.
+
+### Phase API-3.1 — Complete Public Utoipa Coverage & Contract Convergence (2026-08-20)
+
+Finishes the code-first migration the recovery phase below scoped. The
+canonical contract is now generated end-to-end from Rust.
+
+- **All 74 public routes annotated.** The 63 handlers that had no
+  `#[utoipa::path]` now carry one, with a real request body, per-status
+  responses, and a `BearerAuth` requirement, and every one is registered on
+  `ValoriApi`. Three-way equality holds: **Rust public routes (74) == utoipa
+  operations (74) == OpenAPI operations (74)**, 0 discrepancies — down from 79
+  at the start of the phase.
+- **`api/openapi/valori-v1.yaml` is now the generator's byte-exact output.**
+  `tests/openapi_generated.rs` asserts byte equality, replacing a
+  subset-with-allowlist check that a hand-written superset could have passed.
+  Schemas: 26 → **138**. Write operations documenting a request body: 4 of 40
+  → **37 of 38**. Distinct response descriptions: 2 → 60+.
+- **OpenAPI target is now 3.1.0**, not 3.0.3. utoipa 5.5.0 cannot emit 3.0.x by
+  construction, and `openapi-typescript@7` — the generator this repo runs — is
+  3.1-first. Rationale, alternatives, and the revisit condition:
+  `docs/api/openapi-version-decision.md`. No HTTP-surface change.
+- **Admin routes removed from the public contract.** `/v1/keys*`,
+  `/v1/crypto/shred/{key_id}`, and `/v1/cluster/{add-node,remove-node,snapshot}`
+  are still served by the node; they are simply not part of the SDK surface.
+- **Two SDK paths added.** `POST /v1/memory/search_vector` and
+  `/v1/memory/upsert_vector` — the spellings `python/valoricore` actually calls
+  — were missing from the contract entirely.
+- **operationIds are declared in Rust**, once, in the handler's own annotation;
+  the route manifest reads them rather than deriving them from a function name.
+  Net churn versus the previously published contract: **0**.
+- **`x-required-scope` / `x-sdk` restored**, stamped by a Rust `Modify` pass
+  that reads `api_keys::required_scope` — the same function the auth middleware
+  calls, so the contract cannot document a scope the server does not enforce.
+  A new test checks all 74, not a sample.
+- **Generation is byte-reproducible.** Rendering through `serde_json::Value`
+  removes the `HashMap`-ordering nondeterminism that made consecutive runs
+  differ.
+- **Cross-crate `utoipa` features** (optional, default-off) on `valori-engine`,
+  `valori-rag`, `valori-ingest`, `valori-models`, `valori-storage`, so the
+  contract references the same type the handler serialises instead of a mirror
+  that can drift. `valori-kernel` is untouched and remains `no_std`.
+- **Fixes found on the way.** Cluster `/health` had silently dropped the
+  top-level `leader` and `dim` fields the UI still reads — restored. Five DTOs
+  added by the retracted Phase API-3 described an index-lifecycle model no
+  handler implements — deleted in favour of the real
+  `valori_engine::index_manager::IndexStatusResponse`. A self-referential
+  tree-RAG type sent the schema builder into unbounded recursion.
+- **Contract gate: PASS, 11/11 steps. `SDK READY = YES`, 0 computed blockers**
+  (`docs/api/sdk-readiness.json`, written by the gate, never by hand).
+  SDK generation itself remains deliberately out of scope.
+
+
+### Phase API-3 Recovery — Genuine Code-First Utoipa Architecture (2026-08-20)
+
+Corrects the retracted Phase API-Contract-3 entry below.
+
+- **Honest route discovery.** `scripts/generate-route-manifest.py` derives the
+  route inventory from the axum router source in `server.rs`,
+  `cluster_server.rs`, `cluster_api.rs`, and `routes/**`. It never reads
+  `api/openapi/valori-v1.yaml`, never emits OpenAPI, and exits non-zero on any
+  router construct it cannot resolve. Real surface: **100 routes** (74 public
+  SDK, 14 deprecated, 7 admin, 5 operator-internal) — not the 75 previously
+  claimed.
+- **Three-way contract verifier.** `scripts/verify-api-route-contract.py`
+  diffs Rust public routes vs live utoipa operations vs the committed contract
+  on method, path, operationId, and classification. Verification only.
+- **First real `#[utoipa::path]` annotations.** 11 operations across 10 paths on
+  the registered handlers, each with a genuine request body, per-status
+  responses, and a `BearerAuth` requirement. `ValoriApi` now has a real
+  `paths(...)` list and a `SecurityAddon` modifier.
+- **Contract gate reports measured numbers.** `scripts/api-contract-gate.sh`
+  no longer prints a `$TOTAL/$TOTAL` tautology or a hardcoded fallback, and
+  computes `docs/api/sdk-readiness.json` from step outcomes.
+- **SDK READINESS: NO** — 5 computed blockers, chiefly that 63 of 74 public
+  routes are still unannotated and the committed contract is not yet the
+  generator's output.
+
+### Phase API-Contract-3 — RETRACTED (2026-08-20)
+
+This entry claimed 100% code-first generation and `SDK READINESS: YES`. Both
+were false: the workspace contained zero `#[utoipa::path]` annotations, the
+generator emitted zero paths, the contract was reconstructed by an uncommitted
+script, and `sdk_ready` was hand-written. See
+`docs/phases/phase-api-3-recovery.md`.
+
+### Added (Phase API-2.5 — Conformance Diff Review & Pre-SDK Gate — 2026-08-20)
+
+- **Official API Contract Gate (`scripts/api-contract-gate.sh`).** Single permanent executable pipeline enforcing Utoipa subset generation, OpenAPI linting, route parity, TypeScript type generation, zero git diff on generated artifacts, and Python SDK compatibility.
+- **Working-Tree Forensics & Diff Audit (`docs/api/phase-api-2.5-diff-audit.md`).** Classified all 328 working-tree files relative to baseline `eee123d`. Category F ("Cannot determine") count reached 0. Deep-audited API-2 changes (31 files), dependencies (96 files), and isolated 11 suspicious/unrelated platform files (Index Manager, Snapshot v8, Graph/Storage manifests) without deletion or modification.
+- **API-2 Claim Verification Matrix (`docs/api/api-2-verified.md`).** Re-verified all 11 claims of Phase API-2 against source implementation and test suite with explicit regression risk ratings.
+- **Utoipa Migration Matrix & Generator Reproducibility (`docs/api/utoipa-migration-matrix.md`).** Documented Utoipa generated subset (14 schemas, 0 paths) vs canonical hand-maintained contract (102 schemas, 79 paths), metadata preservation strategy, and `@valori/api-types` wire model isolation.
+- **Contract Governance Policy (`docs/api/contract-gate.md`).** Documented breaking vs non-breaking contract drift budget rules.
+- **Domain SDK Readiness Matrix & Pre-SDK Gate Verdict (`docs/api/sdk-readiness.md`).** Issued formal **SDK READY = NO** verdict, detailing explicit blockers for Phase 3 and Phase 4.
+- **Documentation-Only Analysis Items.** Created `docs/api/health-migration.md` (/health shape divergence) and `docs/api/api-key-scope.md` (ApiKeyRecord collection authorization) as analysis items without modifying runtime code.
+
+### Added (Phase API-2 — API contract convergence — 2026-08-20)
+
+- **Machine-readable error codes.** Every error response on every route now
+  returns `{"error": "<human string>", "code": "<stable code>"}`. `code` is
+  drawn from a closed 16-variant set (`validation_error`, `unauthorized`,
+  `forbidden`, `not_found`, `collection_not_found`, `record_not_found`,
+  `dimension_mismatch`, `invalid_metric`, `invalid_index`,
+  `index_build_failed`, `conflict`, `capacity_exceeded`, `not_leader`,
+  `unavailable`, `not_implemented`, `internal_error`), each mapped from a real
+  `EngineError`/`KernelError` variant. `error` is unchanged — this is
+  additive. **Branch on `code`, not on the message.** `401`/`403` now carry a
+  parseable JSON body; previously they had none at all.
+- **`request_id` idempotency on standalone.** `POST /v1/records` and
+  `POST /v1/vectors/batch-insert` honour a client idempotency token on the
+  standalone path, not only in cluster mode. Replaying a token returns the
+  record the first request created and performs no second write. Both wire
+  spellings are accepted — a 16-byte array or a 32-character hex string with
+  optional UUID dashes. A malformed token is now an error rather than a
+  silently ignored field.
+- **`@valori/api-types`** — internal TypeScript workspace package generated
+  from `api/openapi/valori-v1.yaml` by `scripts/generate-api-types.sh`.
+  Consumed by both `ui/` and `ui/studio/`; neither keeps a hand-written copy
+  of the wire model any more.
+- **Code-first OpenAPI generation (partial).** `cargo run -p valori-node
+  --features utoipa --bin valori-openapi` emits a generated document covering
+  16 schemas (Collections, Records, Search, Multi-Search, Errors).
+  `tests/openapi_generated.rs` fails the build if a Rust DTO drifts from the
+  committed contract. 90 of the 102 committed schemas and all 79 path items are
+  still hand-maintained — see `docs/api/contract-conformance.md`.
+- **`docs/api/contract-conformance.md`** — per-domain implementation status,
+  resolved and open divergences, and the intentionally-unsupported list.
+
+### Changed (Phase API-2)
+
+- **`POST /v1/records` accepts one canonical request body on both paths.**
+  Standalone previously accepted `{values, collection, text}` and cluster
+  `{values, collection, metadata, tag, request_id}`, each silently dropping
+  the other's fields. All six are now accepted and honoured everywhere.
+- **`k` is required on `POST /v1/search` in cluster mode.** It previously
+  defaulted to 10 there and was required on standalone. **Potentially
+  breaking** for a cluster client that omitted `k`.
+- **Unknown Collection returns `404 collection_not_found`** on
+  `POST /v1/search/multi` in standalone mode; it previously returned `400`
+  while cluster returned `404`.
+- **`POST /v1/cluster/add-node`, `/v1/cluster/remove-node` and
+  `/v1/cluster/snapshot` now require an `admin` key.** They previously
+  accepted `read_write`, so any writer key could reconfigure cluster
+  membership. **Breaking** for automation using a read-write key.
+- **`POST /v1/search/multi` and `POST /v1/graphrag` now require only
+  `read_only`.** A read-only key previously could not run a cross-collection
+  or GraphRAG query.
+- **Python SDK: no implicit `collection="default"`.** Every
+  `SyncRemoteClient`/`AsyncRemoteClient` method that targets a Collection now
+  requires one. A new project has zero Collections, so the old default turned
+  every call into a 404 behind an argument the caller never typed.
+  **Breaking** for code relying on the default. `filter_tag` now raises
+  instead of silently doing nothing — no server request type has ever carried
+  it.
+- **UI ingest no longer auto-creates the target Collection.** It fails fast
+  with an actionable message instead of POSTing `{"name": collection}` with no
+  dimension or metric.
+- **`valori import` derives the target dimension from the source**, not from
+  `/health.dim`. An existing target Collection is validated against it and
+  never mutated.
+
+### Removed (Phase API-2)
+
+- `ui/src/lib/valori-client.ts` — dead code with a `createCollection` that
+  sent no dimension or metric. It had no importers.
+
+### Added (Phase API-1 — Canonical OpenAPI v1 contract + API audit — 2026-08-20)
+
+- **`api/openapi/valori-v1.yaml`** — the canonical public REST contract for the
+  Valori **data plane**. OpenAPI 3.0.3; 75 paths, 79 operations, 101 reusable
+  schemas, one `bearerAuth` security scheme. Every operation carries
+  `x-status` (all `current` — nothing aspirational is presented as live),
+  `x-required-scope`, and `x-cluster-status` / `x-standalone-status` where a
+  mode does not implement it. Validates clean under
+  `npx @redocly/cli lint` (0 errors).
+- **`api/README.md`** — contract ownership, validation commands, the
+  control-plane/data-plane boundary, breaking vs non-breaking vs deprecation
+  rules, the embedded-`.so`-vs-remote-SDK separation, and the *documented but
+  not implemented* future SDK-generation and gRPC architecture.
+- **`docs/api/api-inventory.md`** — every externally reachable route across
+  `valori-node` (standalone + cluster), `cluster_api.rs` and `valori-daemon`,
+  with auth scope, standalone/cluster support, request/response detail, real
+  status codes, idempotency, consistency and pagination behaviour.
+- **`docs/api/current-vs-target.md`** — 52-row severity-ranked gap analysis
+  with a P0-first Phase-2 priority order.
+- **`docs/api/ui-parity.md`** — TypeScript/UI drift against the contract.
+- **`docs/phases/phase-api-1-contract-audit.md`** — phase report.
+
+Audit-only: no route, request struct, response struct or status code was
+changed; no SDK was generated; no protobuf or gRPC was introduced. The
+deprecated legacy path aliases (`/records`, `/search`, `/graph/*`,
+`/timeline`, `/operations`, `/version`, `/v1/vectors/batch_insert`), the
+internal replication endpoints and `GET /metrics` are deliberately excluded
+from the contract and inventoried separately.
+
+### Added (Phase 5.4 — GraphRAG Graph-Aware Reranking + Traversal Budgeting — 2026-08-19)
+
+- **`graph_weight` request field** on `POST /v1/graphrag`: β coefficient in the combined
+  ranking formula `final_score = (1-β)×vector_relevance + β×graph_relevance`. Range [0.0, 1.0];
+  default 0.3 (vector-dominant). At `graph_weight=1.0` the ranking is purely graph-based and
+  graph-only candidates can outrank pure vector hits with no graph node.
+- **`graph_score` hit field** on `POST /v1/graphrag`: normalised graph relevance ∈ [0, 1]
+  present on every hit (`0.0` for no-graph vector hits, `1.0` for seeds at distance 0,
+  `1/(1+N)` for graph-only candidates at hop N). Always numeric (never null).
+- **`final_score` now always numeric**: Phase 5.3 left `final_score: null` for graph-only
+  hits. Phase 5.4 computes `final_score = β × graph_relevance` for graph-only candidates,
+  making all hits comparable in one sorted list.
+- **Unified sorted hit list**: all candidates (vector and graph-only) are merged and sorted
+  by `final_score` descending, `record_id` ascending as tie-breaker. Phase 5.3 separated
+  vector hits and graph-only hits into two appended buckets; Phase 5.4 merges them.
+- **`max_nodes` request field** on `POST /v1/graphrag`: halt BFS before visiting more than
+  this many nodes (enforced inside `expand_subgraph_budgeted`). `None`/absent = unlimited.
+- **`max_edges` request field** on `POST /v1/graphrag`: halt edge emission once this count
+  is reached per BFS traversal. `None`/absent = unlimited.
+- **`expand_subgraph_budgeted`** (`valori_rag::graph`): new function with `max_nodes` and
+  `max_edges` parameters. `expand_subgraph` is now a wrapper calling it with `None, None`.
+  No existing call sites changed.
+- **`final_k` defaults to `retrieval_k`**: absent `final_k` now defaults to `retrieval_k`
+  (was unlimited in Phase 5.3). A request with `retrieval_k=5` returns at most 5 hits
+  unless `final_k` is explicitly set larger.
+
+### Changed (Phase 5.4)
+
+- **Hit sort order**: hits are now sorted by `final_score` DESC (higher = better), not by
+  L2 distance ascending then graph distance ascending. The backward-compat `score` field
+  still carries the raw L2 distance.
+- **`final_k` default**: changed from unlimited (`None`) to `retrieval_k`. Callers that
+  relied on graph-only candidates being returned beyond `retrieval_k` must now pass an
+  explicit `final_k`.
+- **Python SDK** (`graphrag` on all 4 clients): `max_nodes`, `max_edges`, `graph_weight`
+  optional parameters added. `final_k` doc updated to note the new default behaviour.
+
+### Added (Phase 5.3 — GraphRAG Semantic Hardening and Contract Finalization — 2026-08-19)
+
+- **`retrieval_k` request field** on `POST /v1/graphrag`: explicit name for vector seed count
+  (how many ANN candidates become graph expansion seeds). Legacy `k` field continues to work
+  as an alias — existing clients require no changes.
+- **`final_k` request field** on `POST /v1/graphrag`: optional cap on returned hits. When
+  absent all candidates are returned (same as Phase 5.2 behaviour). Example: `retrieval_k=20,
+  final_k=10` expands from 20 seeds but returns at most 10 results.
+- **`max_graph_candidates` request field** on `POST /v1/graphrag`: optional budget on
+  graph-only candidates before `final_k` is applied. Default 100. Sorted by `graph_distance`
+  ascending before truncation so the closest graph neighbours are preferred.
+- **`vector_score` and `final_score` hit fields** on `POST /v1/graphrag`: explicit type-safe
+  names alongside backward-compat `score`. `vector_score` = L2 distance for vector hits,
+  `null` for graph-only. `final_score` = `vector_score` until a reranker lands. `score`
+  continues to carry the same value for backward compat.
+- **Deterministic graph-only candidate ordering**: graph-only candidates are now sorted
+  ascending by `graph_distance`, then ascending by `record_id` as a tie-breaker. Ordering
+  is no longer dependent on HashMap iteration or BFS discovery order.
+- **Minimum graph-distance guarantee**: when a record is referenced by multiple graph nodes
+  at different hop counts, `graph_distance` now reports the shortest discovered path. Phase
+  5.2 used `HashSet::insert` (first-seen wins) which could report a longer path when a
+  shorter-distance node was encountered later; replaced with `HashMap<record_id, min_dist>`.
+- **Python SDK** (`SyncRemoteClient`, `AsyncRemoteClient`, `SyncClusterClient`,
+  `AsyncClusterClient`): `graphrag()` method gains optional `retrieval_k`, `final_k`, and
+  `max_graph_candidates` parameters with full docstrings documenting Phase 5.3 semantics.
+
+### Added (Phase 5.2 — GraphRAG Query Orchestration and Retrieval Composition — 2026-08-19)
+
+- **`source` field on all `POST /v1/graphrag` hits**: `"vector"` (no graph node),
+  `"vector_and_graph"` (vector hit with graph node), or `"graph"` (record reached only
+  via graph expansion, not in top-k vector results). Additive — existing clients ignore
+  the new field.
+- **`graph_distance` field on all `POST /v1/graphrag` hits**: `0` for seed nodes,
+  hop count `N` for graph-expanded records, `null` for vector-only hits with no graph node.
+- **Graph-only candidates in `hits`**: records referenced by expanded subgraph nodes that
+  were NOT in the vector top-k now appear in `hits` with `score: null`, `source: "graph"`,
+  and `graph_distance: N`. Deduplication ensures each record appears at most once; a record
+  that is both a vector hit and a graph neighbor keeps its vector provenance (`"vector_and_graph"`).
+- **4 new GraphRAG Prometheus metrics**: `valori_graphrag_seed_count` (histogram — seeds per call),
+  `valori_graphrag_expanded_nodes` (histogram — expanded nodes per call),
+  `valori_graphrag_expanded_edges` (histogram — expanded edges per call),
+  `valori_graphrag_no_graph_seed` (counter — vector hits present but no graph seeds).
+
+### Fixed (Phase 5.2 — 2026-08-19)
+
+- **UI GraphRAG sample body** (`PlaygroundView.tsx`): the "GraphRAG" playground panel
+  was sending `query:` instead of the correct field name `query_vector:`. Requests from
+  the playground would have failed with a 400 deserialization error.
+
+### Added (Phase 5.1 — Graph Query Architecture Audit and Metrics — 2026-08-19)
+
+- **7 new Prometheus metrics for graph operations** (both standalone + cluster):
+  `valori_graph_node_create_total` (counter), `valori_graph_edge_create_total` (counter),
+  `valori_graph_query_total` (counter), `valori_graph_traversal_nodes` (histogram),
+  `valori_graph_traversal_edges` (histogram), `valori_graphrag_total` (counter),
+  `valori_graph_rerank_total` (counter). Node/edge/query/subgraph metrics are added
+  to the shared `routes/graph.rs` module (fires on both standalone and cluster paths
+  automatically). GraphRAG and graph-rerank counters are added to the path-specific
+  handlers in `server.rs` and `cluster_server.rs`.
+
+### Added (Phase 5 — Cross-Collection (Orchestrated) Search — 2026-08-19)
+
+- **`POST /v1/search/multi`** (standalone + cluster). New cross-collection
+  vector search endpoint. Fans the query out to each listed Collection
+  independently in parallel, then merges results globally by Squared L2
+  (smaller = better). All Collections must share the same `dim` and `metric`;
+  different index types are allowed within the same request.
+- **`routes/query_planner.rs`** (new module). Pure orchestration helpers shared
+  by both routers: `check_compatibility` (validates dim + metric across all
+  Collections), `merge_top_k` (sort by score ascending + truncate), `CollectionHits`.
+- **`MultiSearchRequest` / `MultiSearchHit` / `MultiSearchResponse` / `PartialSearchFailure`**
+  added to `api.rs`. Hits carry a `collection: String` field. Partial runtime
+  failures (one Collection's search fails at runtime) are surfaced in
+  `partial_failures` without suppressing results from other Collections.
+- **Metadata filter in multi-search**: the `metadata_filter` predicate is applied
+  per-Collection after vector search, before the global merge.
+- **Decay in multi-search**: `decay_half_life_secs` applies the C4.1 age-based
+  re-ranking per-Collection; `decay_factor` and `age_secs` propagate to merged hits.
+- **Python SDK `search_multi`** on `SyncRemoteClient` and `AsyncRemoteClient`.
+
+### Added (Phase 4.4 — Cluster ANN Hardening — 2026-08-19)
+
+- **Stale-build detection.** After a node-local ANN build completes (in
+  `spawn_blocking`), the activation path re-reads the Raft-replicated desired
+  generation before calling `mark_ready` + `activate`. If the desired generation
+  has advanced (or the collection was deleted), the just-built index is silently
+  discarded and `mark_failed` is called so the watcher can trigger a fresh build
+  for the new generation. Prevents a slow gen-N build from overwriting a faster
+  gen-(N+1) build.
+- **FAILED retry debounce (60 s).** `ClusterCollectionIndex` now tracks
+  `last_build_started_at: Option<Instant>`. Before retrying a FAILED generation,
+  `trigger_local_build` checks the elapsed time; attempts within 60 s of the
+  previous one are silently skipped. Prevents tight retry storms on persistent
+  build failures.
+- **Watcher drop-path fix.** When `SetMeta(null)` is committed (index dropped),
+  `check_and_trigger_pending_builds` now clears both `building_generation` and
+  `active_generation` in the local index state. Previously only the active pointer
+  was cleared, leaving a stale `building_generation` that could confuse the next
+  trigger call.
+- **Single `list_namespaces()` call in watcher.** The cleanup and build-trigger
+  loops within `check_and_trigger_pending_builds` now share one snapshot of the
+  namespace set, halving the number of state-machine lock acquisitions per tick.
+- **`GET /v1/namespaces/{name}/index` now reports `desired_type` from Raft state.**
+  `IndexOps::get_index_state` always populates `state.desired` from
+  `sm.get_meta_json` (authoritative replicated state) before returning. Followers
+  that haven't built their local index yet correctly report the cluster's desired
+  type (e.g. `"desired_type": "hnsw"`) instead of a blank value.
+- **7 Prometheus metrics for cluster ANN lifecycle.** All emitted by
+  `trigger_local_build` and the search fallback path:
+  `valori_cluster_ann_build_started_total`,
+  `valori_cluster_ann_build_completed_total`,
+  `valori_cluster_ann_build_failed_total`,
+  `valori_cluster_ann_build_duration_seconds`,
+  `valori_cluster_ann_generation_active`,
+  `valori_cluster_ann_stale_activation_skipped_total`,
+  `valori_cluster_ann_search_fallback_total`.
+- **9 cluster ANN hardening tests** (`tests/cluster_ann_hardening.rs`): watcher
+  build trigger, ANN vs brute-force result agreement, search fallback when no
+  index, drop clears state, status API reports Raft desired, build doesn't corrupt
+  records, collection re-creation doesn't inherit old index, successive requests
+  handled safely, graph state unaffected by index lifecycle.
+- **`ClusterHandle::cluster_indexes` field.** The per-collection ANN index map is
+  now initialised once at bootstrap (`Arc<RwLock<HashMap>>`) and cloned into every
+  `DataPlaneState` built by `build_cluster_router_with_keys`. This means multiple
+  router instances (common in tests) share the same index lifecycle state.
+
+### Added (Phase 4.3 — Cluster ANN — 2026-08-19)
+
+- **Cluster ANN indexes (HNSW, IVF, BQ).** `POST /v1/namespaces/{name}/index` and
+  `GET /v1/namespaces/{name}/index` now work in cluster mode — the previous 501 is gone.
+  The desired spec and generation are replicated through Raft via `KernelEvent::SetMeta`
+  (`"__valori_idx_spec:{ns_id}"`) so all nodes agree on the logical generation id and
+  parameters. Each node builds and activates its own local ANN index independently
+  (node-local activation model). Search uses the local active ANN index and falls back
+  to exact brute-force transparently while a build is in progress or if it fails.
+- **Background index-propagation watcher.** A per-node background task polls every 5 s,
+  reads the replicated desired spec for each collection, and triggers a local build on any
+  node that is behind the committed generation. This ensures followers pick up new index
+  requests automatically without any additional signalling.
+- **`cluster_index_config` updated.** Now reports the actual `VALORI_INDEX` env-var
+  setting with a note about per-collection endpoints, instead of hardcoding
+  `"brute_force"`.
+
+### Added (Phase 4.2 — Index Lifecycle UI — 2026-08-18)
+
+- **`IndexLifecycleTab` in Studio.** The Analyze menu now includes an Index tab on every
+  collection page (local and cloud). Shows all lifecycle states (none/building/active/failed)
+  with inline Create, Change, and Remove action panels. HNSW and IVF parameter inputs wired
+  through to the backend. Cluster nodes return 501 for build actions; the tab shows the backend
+  message inline instead of hiding the limitation.
+- **`useCollectionIndex` hook.** Polls `GET /v1/namespaces/{name}/index` at 3 s during transient
+  states; stops for terminal states. Revalidates on window focus so a page return after navigation
+  always shows the latest lifecycle state.
+- **Collection header shows live index status.** `CollectionHeader` in ToolsWorkspace now reads
+  `GET /v1/namespaces/{name}/index` (per-collection, live) instead of the node-wide `/health`
+  `index` field.
+- **"View details" → Index tab.** The header button now opens the Index lifecycle tab directly.
+- **Python SDK: extended test coverage (21 tests).** Added error-scenario tests (409 conflict,
+  501 cluster, 404 not found) and status-model validation tests (building with active generation,
+  active, failed-with-error, none) for both sync and async clients.
+
+### Fixed (Phase 4.2)
+
+- **CollectionList "BRUTE INDEX" display bug.** Collections without an ANN index now show
+  "No Index" (both grid and list view modes) instead of "BRUTE INDEX".
+
+### Added (Phase 4.1 — Index Lifecycle Hardening — 2026-08-18)
+
+- **Durable index artifacts.** After `finish_index_build`, the engine writes
+  the index bytes as an immutable `StorageKey::IndexArtifact` blob via the
+  configured `StorageProvider`. HNSW and IVF artifacts are full roundtrips
+  (`snapshot()` / `restore()`). BQ skips artifact writing (rebuilds from
+  records on restart; fast).
+- **`CollectionManifest` index tracking.** Three new optional fields record
+  which generation is active, its algorithm name, and the WAL position the
+  artifact was written at (`active_index_generation`, `active_index_type`,
+  `active_index_base_lsn`). Backward-compatible (`#[serde(default)]`).
+- **Artifact-driven restart (no blind rebuild).** `try_recover()` now calls
+  `try_restore_index_artifacts` instead of rebuilding every index from scratch.
+  If the artifact's `base_lsn` equals `recovered_lsn`, the artifact is loaded
+  directly (fast path). Stale or missing artifacts fall back to a synchronous
+  rebuild from `KernelState` records.
+- **`drop_collection_index` now durable.** Clears the manifest's index fields
+  and deletes the artifact bytes from the provider.
+- **IVF build parameters wired.** `POST /v1/namespaces/{name}/index` with
+  `{"type":"ivf","parameters":{"n_list":64,"n_probe":8}}` now builds the IVF
+  index with exactly those centroids. Without parameters, auto-scale heuristic
+  (`sqrt(N)` centroids) is used as before.
+- **HNSW build parameters wired.** `m`, `ef_construction`, `ef_search` in
+  `parameters` override the library defaults. `m_max0` is automatically
+  set to `2 * m` when `m` is provided.
+- **7 Rust persistence integration tests** (`index_artifact_persistence.rs`):
+  HNSW round-trip, IVF round-trip, missing-artifact fallback, stale-artifact
+  rebuild, HNSW explicit params, IVF explicit params, drop clears manifest.
+- **11 Python SDK tests** (`test_index_lifecycle.py`): payload/URL contracts
+  for all four index lifecycle SDK methods (sync + async).
+
+### Added (Phase 4 — Mutable Collection Index Lifecycle — 2026-08-18)
+
+- **`POST /v1/namespaces/{name}/index`** — create, replace, or drop the ANN
+  index for a collection. Returns `202 Accepted` immediately; the build runs
+  in a background task. Supported types: `"hnsw"`, `"ivf"`, `"bq"`. Pass
+  `{"type": null}` to drop the index and revert to exact search.
+- **`GET /v1/namespaces/{name}/index`** — poll the index lifecycle status.
+  Response fields: `collection`, `active_type`, `active_generation`,
+  `desired_type`, `status` (`none`/`building`/`active`/`failed`/`retiring`),
+  `building_generation`, `base_lsn`, `build_started_at`, `error`.
+- **Background build with WAL catch-up.** Records inserted while a build is
+  in-flight are caught up automatically before the new index is activated.
+  The active index (if any) continues to serve searches until the new one is
+  atomically swapped in.
+- **Generation tracking.** Each built index gets a monotonically increasing
+  collection-scoped generation id. A generation is immutable once created.
+- **`409 Conflict` on concurrent build.** A second build request while a
+  build is in-flight is rejected.
+- **Cluster path returns honest `501 Not Implemented`** for build requests.
+  Cluster nodes use exact brute-force search for linearizable consistency.
+  The status endpoint returns `200 {"active_type":"none","status":"none"}`.
+- **`valori-engine::index_manager` module** — `CollectionIndexState`,
+  `IndexSpec`, `IndexGeneration`, `IndexState`, `IndexBuildRequest`,
+  `IndexStatusResponse`.
+- **Python SDK** — `collection_index_status(collection)`,
+  `create_collection_index(collection, type, parameters=None)`,
+  `change_collection_index(collection, type, parameters=None)`,
+  `drop_collection_index(collection)` on both `SyncRemoteClient` and
+  `AsyncRemoteClient`.
+
+### Changed (Phase 3.3 — Zero-Collection Projects — 2026-08-18)
+
+- **New projects have zero collections.** `"default"` is no longer
+  auto-created; every collection must be explicitly created via
+  `POST /v1/namespaces` with `dimension` + `metric` before any insert.
+- **`Engine::create_collection(name)` deleted.** The only way to create a
+  collection is `create_collection_with_config(name, dim, metric, index)`.
+  This is a correctness boundary enforced at the type level.
+- **`CollectionRegistry` no longer special-cases `"default"` or `None`.**
+  `resolve(None)` → `None`. `resolve(Some("default"))` → `None` unless
+  a collection named `"default"` was explicitly created. First allocated
+  id is 1 (id 0 stays unallocated — the kernel's `DropNamespace` rejects
+  `namespace_id == 0`, unrelated to naming).
+- **Ingest routes require an existing collection.** Both standalone and
+  cluster ingest paths (`POST /v1/ingest`, `POST /v1/ingest_update`) now
+  return HTTP 400 with a clear message if the target collection does not
+  exist, instead of silently creating an unconfigured namespace.
+- **Document ingest UI returns a clear error** when the target collection
+  does not exist instead of swallowing the failure.
+- **`valori-cli import` determines dimension from source data** (Qdrant
+  collection-info API or JSONL first record) instead of reading the
+  dead `/health.dim` field.
+- **Bug fix (kernel):** `InsertRecordEncrypted` was reading the legacy
+  process-wide `self.dim` instead of `namespace_dim(namespace_id)`, causing
+  500s for encrypted inserts into explicitly-configured namespaces that had
+  no prior plain inserts. Fixed.
+- **Python SDK contract tests (5 new):** confirm the `create_collection`
+  wire payload shape including `dimension`/`metric` required, `index` absent
+  when `None`, `"default"` treated identically to any other name.
+
+### Changed (Phase 3.2 — Eliminate Implicit Unconfigured Collection Fallback — 2026-08-18)
+
+- **`POST /v1/namespaces` now requires explicit `dimension` and `metric`
+  for every Collection name except `"default"`.** Creating a Collection
+  with only `{"name": "x"}` returns 400 — a Collection can no longer
+  silently lock onto whatever dimension its first insert happens to use.
+  `index` remains optional (absence means "no dedicated ANN index",
+  not a fake `BruteForce` object). `"default"` keeps its zero-config
+  behavior deliberately (disclosed, load-bearing exception) and now
+  explicitly rejects being passed config at all.
+- Fixed the `DimensionMismatch` HTTP error message, which used to tell
+  callers to `set VALORI_DIM={expected}` — that env var stopped being
+  read several phases ago. It now explains that a Collection's dimension
+  is fixed at creation and points at creating a new Collection instead.
+- No SDK or UI changes were required: the Python SDK's `create_collection`
+  and the local-project UI's `useCollections.create()` already sent
+  `dimension`/`metric` explicitly.
+- **Found, not fixed (logged as follow-ups)**: `ui/`'s document-ingest
+  flow (`api/ingest/route.ts`) silently fails to pre-create a new
+  collection under the stricter contract (fails safely downstream with a
+  confusing error, not a data-integrity issue); `valori-cli import`'s
+  dimension lookup was already broken by an earlier phase's removal of
+  `/health`'s `dim` field, unrelated to this change.
+
+### Changed (Phase 3.0 — Remove Process-Wide Vector Config from Project Creation UI — 2026-08-17)
+
+- **Project creation no longer asks for dimension, index, or embedding.**
+  `CreateProjectDialog` (local wizard + sidebar) now only collects `name`,
+  `replication`, and `shardCount`. An informational callout guides users to
+  configure dimensions per-collection after project creation.
+- **Collection creation now requires dimension.**
+  `CreateCollectionDialog` has new required "Dimension" (integer, 1–65535) and
+  optional "Index" (brute / auto / hnsw / ivf / bq) fields. Both are forwarded to
+  `POST /v1/namespaces { dimension, index }`, matching the server-side
+  `CreateCollectionRequest` schema added in the previous phase.
+- `POST /api/projects` (Next.js route) no longer accepts or forwards `dim` / `index`
+  from the UI client. The daemon manifest receives `dim = 0` as an internal sentinel
+  (no process-wide default). Existing projects are unaffected.
+- Cloud `CollectionsPanel` inline form gains a dimension number input alongside the
+  name field, maintaining parity with the local collection-creation dialog.
+
+### Added (Phase 2.4 — Complete Storage Coherence — 2026-08-17)
+
+- **Graph Durability in Collection Snapshots**: Bumped collection snapshot schema to V3 (`COLLECTION_SNAPSHOT_SCHEMA_VERSION = 3`). Snapshots now serialize and restore collection-owned `GraphNode` and `GraphEdge` structures alongside records.
+- **Multi-Collection Hole Filling**: `collection_snapshot::restore_project_into` restores records, graph nodes, and graph edges with monotonic slab allocator hole filling, advancing global slot counters up to each collection's ceiling without inter-collection corruption.
+- **StorageProvider WAL Rotation Publishing**: `EventCommitter::maybe_rotate` and `rotate_log` publish sealed WAL segments directly to `StorageProvider` (`StorageKey::WalSegment`) as immutable artifacts upon rotation.
+- **Streaming WAL Replay via StorageProvider**: `stream_events_from_provider` replays WAL tails across sealed segments and active WAL without whole-log heap allocations, enforcing namespace-specific `snapshot_base_lsn` filtering during recovery.
+- **StorageProvider Recovery Decoupling**: `recover_project_from_storage` and `Engine::try_recover` recover full project state from `StorageProvider` abstractions rather than hardcoded raw filesystem paths.
+- **Namespace-Scoped Graph Iterators in Kernel**: `KernelState::iter_nodes_in_ns`, `iter_edges`, and `iter_edges_in_ns` provide clean, zero-allocation iterators over graph entities for snapshot extraction.
+
+### Added (Collection-Scoped Vector Configuration — 2026-08-16)
+
+- **Architecture change**: vector dimension, metric, and index algorithm
+  move from Project scope (one value shared by every namespace in a
+  `valori-node` process) to Collection scope (one value per namespace).
+  One node process still hosts every collection — no per-collection OS
+  process was introduced, and Project/node/topology isolation is
+  unchanged.
+- `POST /v1/namespaces` gains optional `dimension`, `metric`
+  (`"squared_l2"` only today), and `index` (`brute`/`hnsw`/`ivf`/`bq`/`auto`)
+  fields. Omitting all three keeps a collection's exact pre-existing
+  behavior: it inherits the project's legacy `VALORI_DIM`/`VALORI_INDEX`.
+  `index` without `dimension` is rejected — an index is built for a
+  specific dimension at creation time. `GET /v1/namespaces` now reports
+  each collection's explicit config, when it has one.
+- New `KernelEvent::ConfigureNamespace` (append-only, kernel snapshot
+  `SCHEMA_VERSION` 7→8) makes collection config part of the replicated,
+  audited, replayed state on both the standalone and cluster paths — the
+  mechanism that keeps every Raft replica in agreement on a collection's
+  dimension. V1–V7 snapshots continue to decode unchanged; a V8 snapshot
+  with zero explicitly-configured collections is behaviorally identical
+  to a V7 one.
+- `valori-engine::Engine` gains a dedicated `dyn VectorIndex` per
+  explicitly-configured collection (standalone path), replacing "one
+  shared index, post-filtered by namespace" for anything that opts in.
+  Existing single-collection projects are unaffected — proven by test.
+- New `valori_domain::Metric` (`SquaredL2` only — the metric is now
+  representable as data; no new distance calculation was introduced).
+- **Known limitations, disclosed and tested, not silently shipped**:
+  cluster-mode search for any collection currently uses the
+  brute-force-equivalent path regardless of the requested `index`
+  (cluster mode's Raft state machine applies directly to `KernelState`,
+  with no `Engine` in that path); a collection whose dimension differs
+  from every other namespace in the same snapshot does not yet survive
+  a snapshot/restore cycle (the kernel's record section stores one
+  vector byte-width per file). See
+  [phase-collection-scoped-vector-config.md](docs/phases/phase-collection-scoped-vector-config.md)
+  for the full breakdown, including what was deliberately deferred
+  (Python SDK, UI, `Project.dim`/`.index` deprecation).
+- `cargo test` clean across `valori-kernel`, `valori-domain`,
+  `valori-metadata`, `valori-engine`, `valori-consensus`; 52/52
+  pre-existing `valori-node` namespace/collection/search-isolation
+  tests unaffected; `route_parity` 2/2; `wasm32-unknown-unknown` build
+  verified after every kernel change.
+
+### Fixed (G1.4.2 — Cluster Vector Search Namespace Isolation — 2026-08-13)
+
+- **Critical**: cluster's `POST /search` ignored namespace/collection
+  scoping entirely whenever more than one namespace mapped to the same
+  shard — including the default `VALORI_SHARD_COUNT=1` deployment, where
+  *every* namespace shares shard 0. It called `KernelState::search_l2`
+  ("ALL records regardless of namespace — backward-compat, single-tenant")
+  and relied solely on shard routing for isolation, which enforces nothing
+  once two namespaces share a shard. Confirmed directly: two collections,
+  colliding vectors, a search scoped to one collection returned both.
+  Found while building G1.4.1, unrelated to and not caused by graph-aware
+  reranking — the plain vector search path had the bug regardless.
+- Fixed via a new `shard_search_ns()` helper in `cluster_server.rs`,
+  mirroring standalone's existing `Engine::search_l2_ns` split: the exact,
+  namespace-scoped kernel function
+  (`KernelState::search_l2_ns`) for `BruteForce` (the only index variant
+  cluster mode ever configures — confirmed, cluster never calls
+  `set_index_kind()`), falling back to a global search + post-filter
+  otherwise. Fixes every downstream search mode (plain, BM25 rerank, decay,
+  metadata_filter, the new G1.4.1 `graph_rerank`) since they all operate on
+  this one root candidate list.
+- 7 new tests in `crates/valori-node/tests/cluster_search_namespace_isolation.rs`
+  covering 1-shard/2-namespace isolation for every search mode, a
+  3-shard/2-namespace sanity check (confirms the already-safe-by-routing
+  case stays safe), soft-delete exclusion, and the default namespace.
+  Revert-and-confirmed non-vacuous (4/7 fail when reverted to the old
+  namespace-blind call). `cargo test -p valori-node` 363/363 passed (up
+  from 356), fmt/clippy clean.
+
+### Added (G1.4.1 — Graph-Aware Vector Reranking — 2026-08-13)
+
+- `POST /search` gains an optional `graph_rerank` field
+  (`{seed_count, weight, direction, max_depth}`, all defaulted) — reranks
+  vector results by graph proximity to the search's own top hits. Seeds are
+  resolved from the top `seed_count` hits' graph nodes (no separate
+  seed-node lookup required); each candidate's graph distance is the
+  minimum hop count (bounded BFS) across every live graph node referencing
+  its record (a record may have several — G1.3.1). Formula:
+  `adjusted = score × (1 + weight × distance)` — a multiplicative penalty,
+  same shape as the existing decay re-ranker's `distance / factor`. Missing
+  or unreachable graph data is neutral: never penalizes, never drops a
+  candidate.
+- Hits gain `graph_distance: Option<u32>` (present only when `graph_rerank`
+  was requested).
+- Composes with either the existing BM25 rerank or decay re-rank — runs as
+  an independent final pass over whichever score they already produced.
+  Absence of `graph_rerank` is a byte-identical no-op to pre-G1.4.1
+  behavior.
+- New `valori_rag::graph::graph_distances_from_seeds` — multi-source,
+  bounded, direction-scoped BFS, deterministic and path-independent.
+- New `valori_search::graph_rerank` module — pure scoring math, mirrors
+  `decay`'s existing shape/conventions exactly.
+- Read-time only: never mutates canonical state, never touches
+  `KernelEvent`/snapshot/WAL format, never affects the BLAKE3 state hash.
+- Standalone and cluster both wired (`server.rs`/`cluster_server.rs`);
+  Python SDK's `search()` gained `graph_rerank=` on both
+  `SyncRemoteClient` and `AsyncRemoteClient`.
+- 34 new tests across `valori-rag`, `valori-search`, and two `valori-node`
+  HTTP integration test files (standalone + a real single-node Raft
+  cluster); revert-and-confirmed non-vacuous. `cargo test -p valori-node`
+  356/356 passed (up from 338), `route_parity` clean, fmt/clippy clean.
+- Design doc:
+  [docs/reviews/graph-g1.4.1-graph-aware-reranking-design.md](docs/reviews/graph-g1.4.1-graph-aware-reranking-design.md).
+  Implements "Option 1" from
+  [docs/reviews/graph-g1.4-hybrid-retrieval-design.md](docs/reviews/graph-g1.4-hybrid-retrieval-design.md);
+  graph-reachability pre-filtering and independent-signal/RRF fusion remain
+  explicitly deferred.
+- **Found, not fixed** (flagged as a separate task): a pre-existing bug
+  where cluster's `/search` ignores namespace/collection scoping entirely
+  when `VALORI_SHARD_COUNT=1` — unrelated to and not caused by this
+  feature; see the phase doc's Findings section.
+
+### Fixed (G1.3.1 — Record → GraphNode Cascade Fix — 2026-08-12)
+
+- **Critical**: hard-deleting a record (`POST /v1/delete`) that still had one
+  or more graph nodes referencing it left those nodes dangling
+  (`node.record` pointing at a freed record slot) — the resulting state's
+  own snapshot then failed to decode on restart. Reachable using only
+  shipped endpoints (`/v1/memory/consolidate` and `/v1/memory/contradict`
+  each create a fresh node per record with no reuse check, so a record with
+  2+ live nodes is a normal outcome, not an edge case).
+- `Engine::delete_record` now cascade-deletes every live node referencing
+  the record (ascending `NodeId` order, via the new
+  `valori_rag::graph::nodes_referencing_record` enumeration primitive) —
+  and, because `delete_node` already frees a node's incident edges, those
+  go too — before freeing the record itself. Fixes the pre-existing partial
+  cascade (only the last-created node was ever cleaned up, via the removed
+  `record_to_node` single-valued cache).
+- `Engine::soft_delete_record` no longer touches the graph at all: the
+  record row survives a soft delete, so any node referencing it stays
+  valid — the pre-fix code's partial node cascade there was itself a bug.
+- Cluster's `DataPlaneState::delete` previously performed **zero** cascade
+  of any kind on record deletion; it now mirrors the standalone cascade via
+  sequential `raft_write_data` `DeleteNode` writes before the record delete.
+- Both `POST /v1/delete` and `POST /v1/soft-delete` now reject (404) a
+  `collection` that doesn't own the target record, on both standalone and
+  cluster paths — previously a record in namespace A could be deleted
+  through a request scoped to namespace B.
+- Hard delete now also calls `reranker.remove()` (previously only soft
+  delete did, an asymmetry with no justification).
+- Removed the now-fully-dead `record_to_node: HashMap<u32, u32>` cache from
+  `Engine` — its only two consumers were the two delete paths fixed above.
+- 14 new tests across `crates/valori-node/tests/graph_cascade_delete.rs`,
+  `api_graph_cascade_delete.rs`, and `cluster_graph_cascade_delete.rs`
+  (standalone/cluster parity, revert-and-confirmed non-vacuous against the
+  pre-fix code). `cargo test -p valori-node` 338/338 passed (up from 324).
+  See [docs/phases/phase-G1.3.1-record-graph-cascade-fix.md](docs/phases/phase-G1.3.1-record-graph-cascade-fix.md).
+
 ### Added (Cloud P2 — Usage & Quota Accounting, node-side — 2026-08-12)
 
 - `GET /v1/usage` — new read-only endpoint (standalone `server.rs` +

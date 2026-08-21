@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Phase API-4A §2 — pinned SDK generation toolchain.",
+    "Every generator used to produce sdk/*/generated/ is pinned to an exact",
+    "version here. Nothing in the SDK pipeline may use `latest`: a floating",
+    "generator makes `generated == regenerated` unprovable, which is the whole",
+    "point of §13. Bumping a version here is a deliberate, reviewed act — it",
+    "must be accompanied by a regeneration commit and a CHANGELOG entry."
+  ],
+  "contract": {
+    "path": "api/openapi/valori-v1.yaml",
+    "openapi_version": "3.1.0",
+    "api_contract_version": "1.0",
+    "info_version": "1.0.0"
+  },
+  "python": {
+    "generator": "openapi-python-client",
+    "version": "0.26.2",
+    "formatter": "ruff",
+    "formatter_version": "0.13.3",
+    "template": "builtin",
+    "output": "sdk/python/generated/valori_generated",
+    "runtime_deps": {
+      "httpx": ">=0.23.0,<0.29.0",
+      "attrs": ">=22.2.0",
+      "python-dateutil": ">=2.8.0"
+    },
+    "invocation": "sdk/python/scripts/generate.sh"
+  },
+  "typescript": {
+    "generator": "swagger-typescript-api",
+    "version": "13.12.6",
+    "template": "builtin",
+    "http_client": "fetch",
+    "output": "sdk/typescript/generated/valori-api.ts",
+    "invocation": "sdk/typescript/scripts/generate.sh"
+  },
+  "ui_wire_types": {
+    "_comment": "Pre-existing, unchanged by API-4A. Listed so the pin inventory is complete.",
+    "generator": "openapi-typescript",
+    "version": "7",
+    "output": "ui/api-types/src/valori-v1.ts",
+    "invocation": "scripts/generate-api-types.sh"
+  }
+}

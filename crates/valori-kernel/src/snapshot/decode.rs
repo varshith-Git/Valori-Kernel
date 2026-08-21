@@ -165,7 +165,7 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
     off += 4;
 
     let schema_ver = read_u32(buf, &mut off)?;
-    if schema_ver < 1 || schema_ver > 7 {
+    if schema_ver < 1 || schema_ver > 8 {
         return Err(KernelError::InvalidOperation); // unsupported version
     }
 
@@ -282,21 +282,35 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
     }
 
     // ── Nodes ────────────────────────────────────────────────────────────────
+    //
+    // G0.1 fix: `node_live_count` below is the number of LIVE (non-deleted)
+    // nodes the encoder wrote — it is NOT the total slot count (encode_state
+    // only emits present slots for nodes/edges, unlike records, which emit
+    // an explicit present/absent flag per slot). A node deleted anywhere
+    // other than the very tail of the id range leaves the surviving node
+    // with the highest id >= node_live_count, so the array must be sized to
+    // fit the actual ids encountered, not pre-sized to the live count. This
+    // does not change the wire format (bytes are unaffected) — only how the
+    // decoder allocates the in-memory pool, so it is fully backward
+    // compatible with every snapshot ever written by `encode_state`.
 
-    let node_count = read_u32(buf, &mut off)? as usize;
-    if node_count > MAX_NODES {
+    let node_live_count = read_u32(buf, &mut off)? as usize;
+    if node_live_count > MAX_NODES {
         return Err(KernelError::InvalidOperation);
     }
-    if node_count > buf.len().saturating_sub(off) {
+    if node_live_count > buf.len().saturating_sub(off) {
         return Err(KernelError::InvalidOperation);
     }
 
-    state.nodes.nodes.resize(node_count, None);
-
-    for _ in 0..node_count {
+    for _ in 0..node_live_count {
         let id_val = read_u32(buf, &mut off)? as usize;
-        if id_val >= node_count {
+        // DoS guard: an adversarial id_val must not drive an unbounded
+        // allocation, even though it no longer needs to be < the live count.
+        if id_val >= MAX_NODES {
             return Err(KernelError::InvalidOperation);
+        }
+        if id_val >= state.nodes.nodes.len() {
+            state.nodes.nodes.resize(id_val + 1, None);
         }
 
         let kind_val = read_u8(buf, &mut off)?;
@@ -344,21 +358,26 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
     }
 
     // ── Edges ────────────────────────────────────────────────────────────────
+    //
+    // Same G0.1 fix as nodes above: `edge_live_count` is the live-edge count,
+    // not a total-slot count, so the pool must grow to fit the ids actually
+    // encountered rather than being pre-sized to it.
 
-    let edge_count = read_u32(buf, &mut off)? as usize;
-    if edge_count > MAX_EDGES {
+    let edge_live_count = read_u32(buf, &mut off)? as usize;
+    if edge_live_count > MAX_EDGES {
         return Err(KernelError::InvalidOperation);
     }
-    if edge_count > buf.len().saturating_sub(off) {
+    if edge_live_count > buf.len().saturating_sub(off) {
         return Err(KernelError::InvalidOperation);
     }
 
-    state.edges.edges.resize(edge_count, None);
-
-    for _ in 0..edge_count {
+    for _ in 0..edge_live_count {
         let id_val = read_u32(buf, &mut off)? as usize;
-        if id_val >= edge_count {
+        if id_val >= MAX_EDGES {
             return Err(KernelError::InvalidOperation);
+        }
+        if id_val >= state.edges.edges.len() {
+            state.edges.edges.resize(id_val + 1, None);
         }
 
         let kind_val = read_u8(buf, &mut off)?;
@@ -367,11 +386,15 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
         let from = NodeId(read_u32(buf, &mut off)?);
         let to = NodeId(read_u32(buf, &mut off)?);
 
-        // Validate that both endpoints exist in the node pool.
-        if from.0 as usize >= node_count || state.nodes.nodes[from.0 as usize].is_none() {
+        // Validate that both endpoints exist in the node pool. Bound against
+        // the node pool's ACTUAL (now hole-correct) length, not the live
+        // node count read from the wire above.
+        if from.0 as usize >= state.nodes.nodes.len()
+            || state.nodes.nodes[from.0 as usize].is_none()
+        {
             return Err(KernelError::InvalidOperation);
         }
-        if to.0 as usize >= node_count || state.nodes.nodes[to.0 as usize].is_none() {
+        if to.0 as usize >= state.nodes.nodes.len() || state.nodes.nodes[to.0 as usize].is_none() {
             return Err(KernelError::InvalidOperation);
         }
 
@@ -426,7 +449,9 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
         }
         for i in 0..MAX_NAMESPACES {
             let head = read_u32(buf, &mut off)?;
-            if head != NS_LIST_NIL && head as usize >= node_count {
+            // Bound against the node pool's actual (hole-correct) length —
+            // see the G0.1 fix note on `node_live_count` above.
+            if head != NS_LIST_NIL && head as usize >= state.nodes.nodes.len() {
                 return Err(KernelError::InvalidOperation);
             }
             state.namespace_node_heads[i] = head;
@@ -446,6 +471,41 @@ pub fn decode_state(buf: &[u8]) -> Result<KernelState> {
             let key = read_str(buf, &mut off, MAX_METADATA_SIZE)?;
             let value = read_str(buf, &mut off, MAX_METADATA_SIZE)?;
             state.meta.insert(key, value);
+        }
+    }
+
+    // ── V8+: KernelState.namespace_configs ───────────────────────────────────
+    // Absent (schema_ver < 8, or a V8 snapshot with zero explicit collections)
+    // means: every namespace falls back to the legacy process-wide `dim` —
+    // this is exactly the required "old projects behave exactly as before"
+    // migration behavior, with no separate migration code needed.
+
+    if schema_ver >= 8 {
+        let cfg_count = read_u32(buf, &mut off)? as usize;
+        if cfg_count > MAX_NAMESPACES {
+            return Err(KernelError::InvalidOperation);
+        }
+        for _ in 0..cfg_count {
+            let ns = read_u16(buf, &mut off)?;
+            if ns as usize >= MAX_NAMESPACES {
+                return Err(KernelError::InvalidOperation);
+            }
+            let cfg_dim = read_u32(buf, &mut off)?;
+            if cfg_dim == 0 || cfg_dim as usize > MAX_DIM {
+                return Err(KernelError::InvalidOperation);
+            }
+            let metric_byte = read_u8(buf, &mut off)?;
+            let metric =
+                crate::index::Metric::from_u8(metric_byte).ok_or(KernelError::InvalidOperation)?;
+            let index_kind = read_u8(buf, &mut off)?;
+            state.namespace_configs.insert(
+                ns,
+                crate::state::kernel::NamespaceConfig {
+                    dim: cfg_dim,
+                    metric,
+                    index_kind,
+                },
+            );
         }
     }
 

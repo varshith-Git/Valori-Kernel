@@ -101,7 +101,7 @@ async fn raft_committer_writes_a_verifiable_audit_log() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None)
         .await
         .unwrap();
 
@@ -177,7 +177,7 @@ async fn single_shard_event_log_path_is_unsuffixed_and_matches_pre_s13_naming() 
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None)
         .await
         .unwrap();
     handle
@@ -240,7 +240,7 @@ async fn deterministic_rejection_surfaces_as_rejected_not_io() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -288,7 +288,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
 
     // ── Life 1: write 5 records, record the hash, then crash ─────────────────
     let hash_before = {
-        let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+        let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
         handle
             .raft
             .wait(Some(Duration::from_secs(10)))
@@ -323,7 +323,7 @@ async fn node_restart_recovers_state_from_the_persistent_raft_log() {
     // ── Life 2: same redb file, fresh everything else ────────────────────────
     // init: true is safe — openraft refuses a second initialize and the
     // bootstrap treats that as "fine" (membership is in the log).
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -385,7 +385,7 @@ async fn raft_metrics_appear_in_prometheus_output() {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))

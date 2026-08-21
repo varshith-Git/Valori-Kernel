@@ -15,11 +15,9 @@ use tower::ServiceExt;
 
 fn cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 256;
     cfg.max_nodes = 64;
     cfg.max_edges = 64;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     cfg.snapshot_path = None;
@@ -91,32 +89,64 @@ fn validation_accepts_none_and_default() {
 }
 
 #[test]
-fn validation_rejects_unknown_collections() {
-    let err = validate_collection(Some("tenant-42")).unwrap_err();
+fn validation_rejects_empty_name() {
+    // Phase 3.3: `validate_collection` is unused by any live handler (real
+    // resolution goes through `engine.resolve_collection`, which consults
+    // the actual registry) — the only thing left for a name-only,
+    // registry-less check to assert is syntactic well-formedness.
+    let err = validate_collection(Some("")).unwrap_err();
     let msg = format!("{err:?}");
-    assert!(
-        msg.contains("tenant-42"),
-        "error must name the collection: {msg}"
-    );
+    assert!(msg.contains("empty"), "error must say why: {msg}");
 }
 
-// ── HTTP: legacy behavior unchanged ──────────────────────────────────────────
+// ── HTTP: zero-collection-by-default behavior (Phase 3.3) ────────────────────
+// A brand-new engine has no collections at all, "default" included — see
+// the module doc and CLAUDE.md's product invariant: Collections = [] until
+// the caller explicitly creates one.
 
 #[tokio::test]
-async fn insert_without_collection_works() {
-    let (status, _) = post_json(
+async fn insert_without_collection_is_rejected_on_a_fresh_engine() {
+    let (status, r) = post_json(
         make_shared(),
         "/records",
         serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4] }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    // Phase API-2: an unknown Collection is 404 / `collection_not_found` on
+    // every path and in both modes. Standalone used to answer 400 here while
+    // cluster answered 404 for the identical request.
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(r["code"], "collection_not_found");
+    let msg = r["error"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("default"),
+        "error should name the collection that doesn't exist: {msg}"
+    );
 }
 
 #[tokio::test]
-async fn insert_with_default_collection_works() {
+async fn insert_with_default_collection_is_rejected_until_explicitly_created() {
     let (status, _) = post_json(
         make_shared(),
+        "/records",
+        serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn insert_works_once_default_is_explicitly_created() {
+    let shared = make_shared();
+    let (s, _) = post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (status, _) = post_json(
+        shared,
         "/records",
         serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "default" }),
     )
@@ -125,14 +155,15 @@ async fn insert_with_default_collection_works() {
 }
 
 #[tokio::test]
-async fn insert_with_unknown_collection_is_400() {
-    let (status, _) = post_json(
+async fn insert_with_unknown_collection_is_404() {
+    let (status, body) = post_json(
         make_shared(),
         "/records",
         serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "tenant-42" }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "collection_not_found");
 }
 
 #[tokio::test]
@@ -144,18 +175,23 @@ async fn rejected_collection_does_not_mutate_state() {
         serde_json::json!({ "values": [0.1, 0.2, 0.3, 0.4], "collection": "nope" }),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(shared.read().await.record_count(), 0);
 }
 
 // ── HTTP: collection CRUD ─────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn default_collection_appears_in_list() {
+async fn new_engine_lists_zero_collections() {
+    // Phase 3.3: a brand-new engine has Collections = [] — no automatic
+    // "default", no implicit vector namespace.
     let (status, body) = get_json(make_shared(), "/v1/namespaces").await;
     assert_eq!(status, StatusCode::OK);
     let cols = body["collections"].as_array().unwrap();
-    assert!(cols.iter().any(|c| c["name"] == "default" && c["id"] == 0));
+    assert!(
+        cols.is_empty(),
+        "fresh engine must list zero collections, got {cols:?}"
+    );
 }
 
 #[tokio::test]
@@ -165,7 +201,7 @@ async fn create_and_list_collections() {
     let (s, r) = post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "tenantA"}),
+        serde_json::json!({"name": "tenantA", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
     assert_eq!(s, StatusCode::OK);
@@ -176,7 +212,7 @@ async fn create_and_list_collections() {
     let (_, r2) = post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "tenantB"}),
+        serde_json::json!({"name": "tenantB", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
     assert_eq!(r2["id"], 2);
@@ -188,9 +224,152 @@ async fn create_and_list_collections() {
         .iter()
         .map(|c| c["name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"default"));
+    assert_eq!(
+        names.len(),
+        2,
+        "only the two explicitly-created collections exist, got {names:?}"
+    );
     assert!(names.contains(&"tenantA"));
     assert!(names.contains(&"tenantB"));
+}
+
+// ── HTTP: Phase 3.2/3.3 required-config contract ─────────────────────────────
+// No collection — "default" included — can be created without an explicit
+// dimension and metric — no inference from first insert, no project-level
+// or env-var fallback.
+
+#[tokio::test]
+async fn missing_dimension_rejected() {
+    let (s, r) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let msg = r["error"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("dimension"),
+        "error must name the missing field: {msg}"
+    );
+    assert!(
+        !msg.to_uppercase().contains("VALORI_DIM"),
+        "error must never point at the removed VALORI_DIM env var: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn missing_metric_rejected() {
+    let (s, r) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 384}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let msg = r["error"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("metric"),
+        "error must name the missing field: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn missing_index_allowed() {
+    let (s, r) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 384, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["created"], true);
+}
+
+#[tokio::test]
+async fn explicit_squared_l2_accepted() {
+    let shared = make_shared();
+    let (s, _) = post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 384, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, list) = get_json(shared, "/v1/namespaces").await;
+    let docs = list["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "docs")
+        .unwrap();
+    assert_eq!(docs["metric"], "squared_l2");
+    assert_eq!(docs["dimension"], 384);
+}
+
+#[tokio::test]
+async fn invalid_dimension_rejected() {
+    let (s, _) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 0, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn invalid_metric_rejected() {
+    let (s, _) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 384, "metric": "cosine"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn invalid_index_rejected() {
+    let (s, _) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "docs", "dimension": 384, "metric": "squared_l2", "index": "quantum"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn default_name_requires_configuration_like_any_other_name() {
+    // Phase 3.3: "default" has NO special architectural meaning — creating
+    // it bare, exactly like any other name, is rejected.
+    let (s, r) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let msg = r["error"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("dimension"),
+        "error must name the missing field: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn explicit_default_name_works() {
+    // A collection literally named "default" is ordinary once it carries
+    // explicit config — no name-based exception either way.
+    let (s, r) = post_json(
+        make_shared(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 384, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["created"], true);
 }
 
 #[tokio::test]
@@ -199,18 +378,38 @@ async fn create_collection_is_idempotent() {
     let (_, r1) = post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "dup"}),
+        serde_json::json!({"name": "dup", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
-    let (_, r2) = post_json(shared, "/v1/namespaces", serde_json::json!({"name": "dup"})).await;
+    let (_, r2) = post_json(
+        shared,
+        "/v1/namespaces",
+        serde_json::json!({"name": "dup", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
     assert_eq!(r1["id"], r2["id"]);
     assert_eq!(r2["created"], false);
 }
 
 #[tokio::test]
-async fn cannot_drop_default_collection() {
+async fn dropping_default_before_it_exists_is_404_not_special() {
+    // Phase 3.3: "default" is not undroppable — it's just unknown on a
+    // fresh engine, exactly like any other name would be.
     let status = delete_req(make_shared(), "/v1/namespaces/default").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn explicitly_created_default_can_be_dropped() {
+    let shared = make_shared();
+    post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    let status = delete_req(shared, "/v1/namespaces/default").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -228,11 +427,18 @@ async fn drop_unknown_collection_is_404() {
 async fn search_is_scoped_to_collection() {
     let shared = make_shared();
 
-    // create tenantA
+    // create tenantA and default (Phase 3.3: "default" needs explicit
+    // config now too — no implicit vector namespace)
     post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "tenantA"}),
+        serde_json::json!({"name": "tenantA", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
 
@@ -270,11 +476,14 @@ async fn search_is_scoped_to_collection() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["id"].as_u64().unwrap(), tenant_id);
 
-    // search default — does NOT include tenantA record
+    // search default (named explicitly — Phase 3.3: omitting "collection"
+    // never implicitly resolves to anything, "default" included, even
+    // when a collection literally named "default" exists) — does NOT
+    // include tenantA record
     let (_, hits_default) = post_json(
         shared,
         "/search",
-        serde_json::json!({"query": vec4(100.0), "k": 10}),
+        serde_json::json!({"query": vec4(100.0), "k": 10, "collection": "default"}),
     )
     .await;
     let default_ids: Vec<u64> = hits_default["results"]
@@ -292,7 +501,7 @@ async fn batch_insert_scoped_to_collection() {
     post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "batch_ns"}),
+        serde_json::json!({"name": "batch_ns", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
 
@@ -304,11 +513,18 @@ async fn batch_insert_scoped_to_collection() {
     .await;
     assert_eq!(resp["ids"].as_array().unwrap().len(), 3);
 
-    // default search must not see them
+    // an unrelated collection (also explicitly created, per Phase 3.3) must
+    // not see batch_ns's records.
+    post_json(
+        shared.clone(),
+        "/v1/namespaces",
+        serde_json::json!({"name": "other_ns", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
     let (_, hits) = post_json(
         shared,
         "/search",
-        serde_json::json!({"query": vec4(2.0), "k": 10}),
+        serde_json::json!({"query": vec4(2.0), "k": 10, "collection": "other_ns"}),
     )
     .await;
     assert_eq!(hits["results"].as_array().unwrap().len(), 0);
@@ -320,7 +536,7 @@ async fn drop_collection_removes_records_from_search() {
     post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "drop_me"}),
+        serde_json::json!({"name": "drop_me", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
     post_json(
@@ -353,14 +569,16 @@ async fn drop_collection_removes_records_from_search() {
         .collect();
     assert!(!names.contains(&"drop_me"));
 
-    // searching dropped collection is now 400
-    let (s, _) = post_json(
+    // Phase API-2: searching a dropped collection is 404, not 400 — the
+    // Collection genuinely does not exist any more.
+    let (s, body) = post_json(
         shared,
         "/search",
         serde_json::json!({"query": vec4(5.0), "k": 5, "collection": "drop_me"}),
     )
     .await;
-    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "collection_not_found");
 }
 
 // ── Snapshot persistence ──────────────────────────────────────────────────────
@@ -372,7 +590,7 @@ async fn snapshot_preserves_collections_and_data() {
     post_json(
         shared.clone(),
         "/v1/namespaces",
-        serde_json::json!({"name": "persist_me"}),
+        serde_json::json!({"name": "persist_me", "dimension": 4, "metric": "squared_l2"}),
     )
     .await;
     let (_, ins) = post_json(

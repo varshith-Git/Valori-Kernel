@@ -216,8 +216,8 @@ fn import_one(
     let manifest = ProjectManifest {
         id: crate::new_id(),
         name: entry.name.clone(),
-        dim: entry.dim,
-        index: entry.index.clone(),
+        dim: Some(entry.dim),
+        index: Some(entry.index.clone()),
         workspace: DEFAULT_WORKSPACE.to_string(),
         restart_policy: RestartPolicy::Never,
         created_at: parse_iso8601_to_unix(&entry.created_at).unwrap_or(0),
@@ -285,8 +285,8 @@ mod tests {
             .unwrap();
 
         let project = store.get("healthcare").unwrap();
-        assert_eq!(project.config.dim, 768);
-        assert_eq!(project.config.index, "hnsw");
+        assert_eq!(project.config.dim, Some(768));
+        assert_eq!(project.config.index.as_deref(), Some("hnsw"));
         assert_eq!(project.config.storage.max_records, 500_000);
         assert!(project.config.storage.protect_at_rest);
         assert_eq!(project.config.cluster, None);
@@ -323,8 +323,8 @@ mod tests {
             .create(ProjectManifest {
                 id: crate::new_id(),
                 name: "finance".into(),
-                dim: 1536,
-                index: "brute".into(),
+                dim: Some(1536),
+                index: Some("brute".into()),
                 workspace: DEFAULT_WORKSPACE.to_string(),
                 restart_policy: RestartPolicy::Never,
                 created_at: 0,
@@ -348,7 +348,7 @@ mod tests {
         Migration001ProjectRegistry
             .run(home.path(), &store)
             .unwrap();
-        assert_eq!(store.get("finance").unwrap().config.dim, 1536); // untouched
+        assert_eq!(store.get("finance").unwrap().config.dim, Some(1536)); // untouched
     }
 
     #[test]

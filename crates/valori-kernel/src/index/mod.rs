@@ -45,6 +45,41 @@ pub trait VectorIndex {
     ) -> usize;
 }
 
+/// The mathematical distance definition used to score vectors — distinct from
+/// *how* it is evaluated (Q16.16 fixed-point here; `f32` in the node-level
+/// `valori-index` crate). Only `SquaredL2` exists today; Valori's determinism
+/// guarantee depends on avoiding a square root, so `SquaredL2` (not `L2`) is
+/// the metric, not an implementation shortcut.
+///
+/// This is data now, not a hard-coded call site — see
+/// `crate::math::l2::fxp_l2_sq`, which every kernel-native index still calls
+/// directly regardless of this enum's value. Adding a second variant here
+/// does not change any arithmetic; it only makes the choice representable
+/// (per-collection config) and is unsupported until a corresponding function
+/// exists and every call site is threaded through it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Metric {
+    #[default]
+    SquaredL2,
+}
+
+impl Metric {
+    /// Wire tag used by `KernelEvent::ConfigureNamespace` and the V8 snapshot
+    /// section. Append-only — never renumber.
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Metric::SquaredL2 => 0,
+        }
+    }
+
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Metric::SquaredL2),
+            _ => None,
+        }
+    }
+}
+
 /// Which kernel-native index variant is active.
 ///
 /// Only `no_std`-compatible (fixed-point, alloc-only) variants live here.

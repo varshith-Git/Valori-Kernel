@@ -52,7 +52,7 @@ export async function GET() {
         const nsData = JSON.parse(fs.readFileSync(nsPath, "utf8"));
         const names = Object.keys(nsData.map || {});
         const prefix = `${shape.name}--`;
-        collections = names.filter((n) => n.startsWith(prefix)).map((n) => n.slice(prefix.length));
+        collections = names.map((n) => (n.startsWith(prefix) ? n.slice(prefix.length) : n));
       }
     } catch {
       collections = [];
@@ -73,8 +73,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
       name?: string;
-      dim?: number;
-      index?: "brute" | "hnsw" | "ivf" | "bq" | "auto";
       maxRecords?: number;
       replication?: number;
       shardCount?: number;
@@ -94,8 +92,6 @@ export async function POST(req: NextRequest) {
     }
 
     const replication = (body.replication as 1 | 3 | undefined) ?? 1;
-    const dim = body.dim ?? 768;
-    const index = body.index ?? "brute";
     const projectsDir = await resolveProjectsDir();
 
     let cluster: daemon.DaemonClusterConfig | undefined;
@@ -113,8 +109,6 @@ export async function POST(req: NextRequest) {
 
     const created = await daemon.createProject({
       name: body.name,
-      dim,
-      index,
       cluster,
       embedding: body.embed
         ? { provider: body.embed.provider, model: body.embed.model, endpoint: body.embed.endpoint }

@@ -41,6 +41,15 @@ pub enum KernelError {
 
     #[error("Not implemented (reserved for future phase)")]
     NotImplemented,
+
+    /// A namespace was already configured (collection-scoped dim/metric) with
+    /// a different value than requested. Configuration is immutable after
+    /// first set — see `KernelState::configure_namespace`.
+    #[error("Namespace {namespace_id} is already configured (dim={existing_dim})")]
+    NamespaceAlreadyConfigured {
+        namespace_id: u16,
+        existing_dim: u32,
+    },
 }
 
 pub type Result<T> = core::result::Result<T, KernelError>;

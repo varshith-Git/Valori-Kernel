@@ -24,11 +24,9 @@ use valori_node::server::{build_router, SharedEngine}; // for `.oneshot()`
 
 fn tiny_cfg(max_records: usize) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = max_records;
     cfg.max_nodes = 8;
     cfg.max_edges = 16;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     cfg.snapshot_path = None;
@@ -99,14 +97,15 @@ fn test_health_full_at_100_pct() {
 }
 
 #[test]
-fn test_health_dim_and_version_populated() {
+fn test_health_collections_and_version_populated() {
     let cfg = tiny_cfg(50);
     let engine = Engine::new(&cfg);
     let h = engine.health();
 
-    assert_eq!(h.dim, 4, "dim must match config");
+    // Phase 3.3: a brand-new engine has zero collections — "default"
+    // included — until one is explicitly created.
+    assert_eq!(h.collections, 0);
     assert!(!h.version.is_empty(), "version must be set");
-    assert_eq!(h.index, "BruteForce");
 }
 
 #[test]
@@ -372,14 +371,22 @@ async fn test_http_insert_returns_507_when_full() {
     let shared = make_shared(&cfg);
     {
         let mut engine = shared.write().await;
+        let ns = engine
+            .create_collection_with_config(
+                "default",
+                4,
+                valori_domain::Metric::SquaredL2,
+                valori_domain::IndexKind::Brute,
+            )
+            .unwrap();
         for i in 0u32..2 {
             let v: Vec<f32> = (0..4).map(|j| (i + j as u32) as f32 * 0.1).collect();
-            engine.insert_record_from_f32(&v).unwrap();
+            engine.insert_record_from_f32_ns(&v, ns).unwrap();
         }
     }
     let app = build_router(shared, None, None);
 
-    let payload = serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0] });
+    let payload = serde_json::json!({ "values": [1.0, 2.0, 3.0, 4.0], "collection": "default" });
     let resp = app
         .oneshot(
             Request::builder()
@@ -451,7 +458,10 @@ fn test_update_prometheus_metrics_gauge_names_in_output() {
             text.contains("valori_edges_live"),
             "must expose valori_edges_live gauge"
         );
-        assert!(text.contains("valori_dim"), "must expose valori_dim gauge");
+        assert!(
+            text.contains("valori_collections"),
+            "must expose valori_collections gauge"
+        );
     }
     // If not installed: test still passes — the important thing is no panic.
 }

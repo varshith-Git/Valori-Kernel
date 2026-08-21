@@ -151,6 +151,28 @@ pub enum KernelEvent {
     /// Raft-apply critical section, so there is no time-of-check/time-of-use
     /// race between resolving and dropping.
     DropNamespace { name: alloc::string::String },
+
+    /// Record collection-scoped vector configuration (dimension, metric,
+    /// index kind) for a namespace that was already created via
+    /// `AutoCreateNamespace`. A separate, additive event rather than new
+    /// fields on `AutoCreateNamespace` — appending fields to an existing
+    /// struct variant would corrupt every already-persisted WAL entry of
+    /// that variant; a new append-only variant does not.
+    ///
+    /// This makes collection configuration part of the replicated,
+    /// snapshotted, replayed kernel state (so every Raft replica and every
+    /// snapshot/WAL restore agrees on a collection's dimension), but the
+    /// kernel itself does not enforce `dim` against it on insert in this
+    /// phase — enforcement happens in `valori-engine`, before an insert is
+    /// ever committed, on both the standalone and cluster paths. `metric`
+    /// and `index_kind` are opaque wire tags here (`Metric::as_u8` /
+    /// engine-level `IndexKind`); the kernel does not interpret them.
+    ConfigureNamespace {
+        namespace_id: u16,
+        dim: u32,
+        metric: u8,
+        index_kind: u8,
+    },
 }
 
 impl KernelEvent {
@@ -174,6 +196,7 @@ impl KernelEvent {
             KernelEvent::SetMeta { .. } => "SetMeta",
             KernelEvent::AutoCreateNamespace { .. } => "AutoCreateNamespace",
             KernelEvent::DropNamespace { .. } => "DropNamespace",
+            KernelEvent::ConfigureNamespace { .. } => "ConfigureNamespace",
         }
     }
 }
@@ -350,6 +373,24 @@ impl Serialize for KernelEvent {
                 state.serialize_field("metadata", &RawMetadata(metadata.as_ref()))?;
                 state.end()
             }
+            KernelEvent::ConfigureNamespace {
+                namespace_id,
+                dim,
+                metric,
+                index_kind,
+            } => {
+                let mut state = serializer.serialize_struct_variant(
+                    "KernelEvent",
+                    17,
+                    "ConfigureNamespace",
+                    4,
+                )?;
+                state.serialize_field("namespace_id", namespace_id)?;
+                state.serialize_field("dim", dim)?;
+                state.serialize_field("metric", metric)?;
+                state.serialize_field("index_kind", index_kind)?;
+                state.end()
+            }
         }
     }
 }
@@ -464,6 +505,12 @@ impl<'de> Deserialize<'de> for KernelEvent {
                 #[serde(with = "raw_metadata_serde")]
                 metadata: Option<alloc::vec::Vec<u8>>,
             },
+            ConfigureNamespace {
+                namespace_id: u16,
+                dim: u32,
+                metric: u8,
+                index_kind: u8,
+            },
         }
 
         // Delegate to the Helper
@@ -539,6 +586,17 @@ impl<'de> Deserialize<'de> for KernelEvent {
             KernelEventHelper::UpdateRecordMetadata { id, metadata } => {
                 KernelEvent::UpdateRecordMetadata { id, metadata }
             }
+            KernelEventHelper::ConfigureNamespace {
+                namespace_id,
+                dim,
+                metric,
+                index_kind,
+            } => KernelEvent::ConfigureNamespace {
+                namespace_id,
+                dim,
+                metric,
+                index_kind,
+            },
         })
     }
 }

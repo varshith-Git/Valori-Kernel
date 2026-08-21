@@ -3,9 +3,8 @@ use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
 use valori_node::EngineFromNodeConfig;
 
-fn make_cfg(dim: usize) -> NodeConfig {
+fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = dim;
     cfg.max_records = 16;
     cfg.max_nodes = 16;
     cfg.max_edges = 32;
@@ -14,7 +13,7 @@ fn make_cfg(dim: usize) -> NodeConfig {
 
 #[test]
 fn test_engine_workflow() {
-    let cfg = make_cfg(4);
+    let cfg = make_cfg();
     let mut engine = Engine::new(&cfg);
 
     let id1 = engine
@@ -48,7 +47,7 @@ fn test_engine_workflow() {
 
 #[test]
 fn test_input_bounds_validation() {
-    let cfg = make_cfg(4);
+    let cfg = make_cfg();
     let mut engine = Engine::new(&cfg);
 
     // Values within the Q16.16 safe range are accepted.
@@ -68,32 +67,39 @@ fn test_input_bounds_validation() {
     assert!(engine.search_l2(&[1.0, 1.0, 33000.0, 1.0], 2).is_err());
 }
 
-// Regression test: VALORI_DIM must be enforced from the first insert.
-// Before the fix, a node started with dim=4 would silently accept a 6-element
-// vector as the first insert and lock to dim=6, rejecting all subsequent
-// correctly-sized vectors.
+// Regression test: Collection dimension must be enforced from configuration or first insert.
 #[test]
 fn test_dim_enforced_from_config() {
-    let cfg = make_cfg(4);
+    let cfg = make_cfg();
     let mut engine = Engine::new(&cfg);
+    let ns = engine
+        .create_collection_with_config(
+            "default",
+            4,
+            valori_domain::Metric::SquaredL2,
+            valori_domain::IndexKind::Brute,
+        )
+        .unwrap();
 
     // A wrong-size vector on the very first insert must be rejected.
-    let result = engine.insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let result = engine.insert_record_from_f32_ns(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], ns);
     assert!(
         result.is_err(),
-        "6-element vector must be rejected when VALORI_DIM=4, got: {result:?}"
+        "6-element vector must be rejected when collection dim=4, got: {result:?}"
     );
 
     // A correctly-sized vector must be accepted.
     assert!(
-        engine.insert_record_from_f32(&[1.0, 0.0, 0.0, 0.0]).is_ok(),
-        "4-element vector must be accepted when VALORI_DIM=4"
+        engine
+            .insert_record_from_f32_ns(&[1.0, 0.0, 0.0, 0.0], ns)
+            .is_ok(),
+        "4-element vector must be accepted when collection dim=4"
     );
 
     // And a second wrong-size vector after a correct insert must also be rejected.
     assert!(
         engine
-            .insert_record_from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+            .insert_record_from_f32_ns(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], ns)
             .is_err(),
         "6-element vector must still be rejected after a valid insert"
     );
@@ -101,7 +107,7 @@ fn test_dim_enforced_from_config() {
 
 #[test]
 fn test_search_dim_validated() {
-    let cfg = make_cfg(4);
+    let cfg = make_cfg();
     let mut engine = Engine::new(&cfg);
 
     // Insert a valid record to lock the dim.

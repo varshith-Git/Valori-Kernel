@@ -559,9 +559,6 @@ function ProofBanner() {
           <span className="rounded border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
             VERIFIABLE
           </span>
-          {data.event_count !== undefined && (
-            <p className="text-[10px] text-muted-foreground font-mono">{data.event_count} events</p>
-          )}
         </div>
       </div>
     </div>

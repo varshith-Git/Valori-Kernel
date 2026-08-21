@@ -23,6 +23,8 @@ use valori_planner::graph::ExecutionGraph;
 ///   A15+ = structural planner, cached ExecutionPlan + runtime bindings
 pub const PLANNER_VERSION: &str = "A13";
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
 /// `?explain=true` query flag. Absent/false ⇒ no `_execution` block.
 #[derive(Deserialize, Default)]
 pub struct ExplainParams {

@@ -1,0 +1,193 @@
+---
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+#
+# Valori Python SDK — Phase API-4A §19/§20/§21.
+#
+# Two shapes, one pipeline:
+#
+#   pull_request / push  →  generate · reproducibility · coverage · test · build
+#   tag `sdk-python-v*`  →  the same, then publish (gated on an environment)
+#
+# Publishing is wired but NOT enabled in API-4A: the `publish` job requires the
+# `pypi` environment, which does not exist yet, so a tag build stops at the
+# approval gate. See docs/sdk/sdk-release-process.md.
+#
+# Contract-gate logic is deliberately absent here (§1): the API contract is
+# proven once, in api-contract.yml. This workflow's job is to prove that the SDK
+# tracks whatever that contract says.
+
+name: SDK — Python
+
+on:
+  push:
+    branches: [main]
+    paths: &sdk_paths
+      - "sdk/python/**"
+      - "sdk/generator.lock.json"
+      - "api/openapi/valori-v1.yaml"
+      - "scripts/sdk-coverage-check.py"
+      - "scripts/sdk-repro-check.sh"
+      - ".github/workflows/sdk-python.yml"
+    tags:
+      - "sdk-python-v*"
+  pull_request:
+    paths: *sdk_paths
+  workflow_dispatch:
+
+concurrency:
+  group: sdk-python-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Where sdk/python/scripts/generate.sh provisions the pinned toolchain.
+  VALORI_SDK_GEN_VENV: ${{ github.workspace }}/.sdk-toolchain/python
+
+jobs:
+  # ── generation is reproducible, and the committed tree is current ──────────
+  reproducibility:
+    name: Generated output is reproducible
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PyYAML (needed by the generate script's lockfile reader)
+        run: python -m pip install --upgrade pip pyyaml
+
+      # §13: regenerate twice, diff both against each other and against the
+      # committed tree. A hand-edited generated/ fails here.
+      - name: Check generation reproducibility
+        run: ./scripts/sdk-repro-check.sh --sdk python
+
+  # ── every contract operation is exposed, and every claim resolves ──────────
+  coverage:
+    name: Coverage manifest is complete and true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip pyyaml
+      # §12/§21: fails when the contract has an operation the SDK does not name,
+      # when the SDK names one the contract does not have, or when a declared
+      # wrapper does not resolve to a real method.
+      - run: python3 scripts/sdk-coverage-check.py --sdk python
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the SDK and its dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "sdk/python[dev]"
+      # Unit, wrapper, error-mapping, retry, polling, auth, generated-client
+      # contract and version tests. The integration suite is skipped here: it
+      # needs a running node (see the `integration` job).
+      - name: Run the unit suite
+        run: python -m pytest sdk/python/tests -q -m "not integration"
+
+  # §17: "Do not rely only on mocks." A real standalone node, driven by the SDK.
+  integration:
+    name: Integration against a real node
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sdk-integration
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip && python -m pip install -e "sdk/python[dev]"
+
+      # Phase API-4D §9 — the node is started by the shared harness, not by an
+      # inline snippet per workflow. It picks a free port, uses a throwaway
+      # storage root, sets every VALORI_* variable explicitly (including
+      # VALORI_EVENT_LOG_PATH, whose absence here previously left the proof
+      # cases testing an error path), waits for /health, and tears the node
+      # down afterwards. The TypeScript workflow calls the same script, so both
+      # SDKs meet an identically configured server.
+      - name: Run the integration suite against a real node
+        env:
+          VALORI_TEST_DIM: "8"
+        run: ./scripts/sdk-integration-node.sh python -m pytest sdk/python/tests -q -m integration
+
+  build:
+    name: Build wheel and sdist
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [reproducibility, coverage, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip build twine
+
+      - name: Build
+        run: python -m build sdk/python
+
+      # §15: metadata must be publishable, whether or not we publish today.
+      - name: Check package metadata
+        run: twine check sdk/python/dist/*
+
+      - name: Verify the wheel installs and imports cleanly
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet sdk/python/dist/*.whl
+          /tmp/verify/bin/python - <<'PY'
+          import valori, valori_generated
+          print("valori", valori.__version__, "contract", valori.API_CONTRACT_VERSION)
+          client = valori.ValoriClient("http://example.invalid", api_key="secret")
+          assert "secret" not in repr(client), "the API key leaked into repr"
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valori-python-dist
+          path: sdk/python/dist/*
+
+  # ── release ────────────────────────────────────────────────────────────────
+  #
+  # NOT ENABLED IN API-4A. The `pypi` environment does not exist yet, so a tag
+  # build stops here awaiting an environment that has to be created deliberately.
+  # When it is created, this publishes via OIDC trusted publishing (§19) — no
+  # long-lived registry password is stored anywhere.
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/sdk-python-v')
+    needs: [build, integration]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/valori
+    permissions:
+      id-token: write  # OIDC trusted publishing; no API token in secrets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: valori-python-dist
+          path: dist
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

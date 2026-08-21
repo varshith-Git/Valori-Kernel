@@ -37,7 +37,7 @@ async fn boot_leader() -> ClusterHandle {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -61,7 +61,7 @@ async fn two_node_cluster() -> (ClusterHandle, ClusterHandle) {
         tls: None,
         shard_count: 1,
     };
-    let h2 = bootstrap_cluster(&cfg2, None, None, 0).await.unwrap();
+    let h2 = bootstrap_cluster(&cfg2, None, None).await.unwrap();
 
     h1.raft
         .add_learner(
@@ -184,7 +184,7 @@ async fn create_collection_via_http_replicates_to_all_nodes() {
     let (status, _, body) = post_json(
         router,
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-acme" }),
+        serde_json::json!({ "name": "tenant-acme", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -211,13 +211,13 @@ async fn create_collection_is_idempotent_across_retries() {
     let (s1, _, b1) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "docs" }),
+        serde_json::json!({ "name": "docs", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let (s2, _, b2) = post_json(
         router,
         "/v1/namespaces",
-        serde_json::json!({ "name": "docs" }),
+        serde_json::json!({ "name": "docs", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
 
@@ -242,7 +242,7 @@ async fn drop_collection_replicates_across_nodes() {
     let (_, _, create_body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-acme" }),
+        serde_json::json!({ "name": "tenant-acme", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let allocated_id = create_body["id"].as_u64().unwrap() as u16;
@@ -262,10 +262,14 @@ async fn drop_collection_replicates_across_nodes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drop_default_collection_is_rejected() {
+    // Phase 3.3: "default" has no special architectural meaning any more —
+    // dropping it before it was ever created is just "unknown collection",
+    // exactly like any other name (see collections.rs's
+    // `dropping_default_before_it_exists_is_404_not_special`).
     let handle = boot_leader().await;
     let router = build_cluster_router(&handle, None);
     let status = delete_uri(router, "/v1/namespaces/default").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -276,13 +280,13 @@ async fn list_collections_reflects_committed_creates() {
     post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "docs" }),
+        serde_json::json!({ "name": "docs", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "images" }),
+        serde_json::json!({ "name": "images", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
 
@@ -294,7 +298,8 @@ async fn list_collections_reflects_committed_creates() {
         .iter()
         .map(|c| c["name"].as_str().unwrap().to_string())
         .collect();
-    assert!(names.contains(&"default".to_string()));
+    // Phase 3.3: only the explicitly-created collections exist — no implicit
+    // "default".
     assert!(names.contains(&"docs".to_string()));
     assert!(names.contains(&"images".to_string()));
 }
@@ -308,7 +313,7 @@ async fn write_to_a_follower_redirects_for_namespace_create() {
     let (status, location, body) = post_json(
         follower_router,
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-acme" }),
+        serde_json::json!({ "name": "tenant-acme", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
 
@@ -333,7 +338,7 @@ async fn shard_count_one_is_unaffected_by_namespace_replication() {
     let (status, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "docs" }),
+        serde_json::json!({ "name": "docs", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -370,7 +375,7 @@ async fn boot_leader_with_shards(shard_count: u32) -> ClusterHandle {
         tls: None,
         shard_count,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     handle
         .raft
         .wait(Some(Duration::from_secs(10)))
@@ -397,13 +402,13 @@ async fn writes_to_different_collections_route_to_different_shards() {
     let (_, _, body_a) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let (_, _, body_b) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-b" }),
+        serde_json::json!({ "name": "tenant-b", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
@@ -493,7 +498,7 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
         tls: None,
         shard_count: 3,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None)
         .await
         .unwrap();
     handle
@@ -510,7 +515,7 @@ async fn writes_to_non_zero_shard_are_chained_to_that_shards_event_log() {
     let (_, _, body_a) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
@@ -613,7 +618,7 @@ async fn consolidate_routes_to_the_collections_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -679,13 +684,13 @@ async fn shred_key_reaches_records_on_every_shard() {
     let (_, _, body_a) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let (_, _, body_b) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-b" }),
+        serde_json::json!({ "name": "tenant-b", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
@@ -814,7 +819,7 @@ async fn memory_search_is_linearizable_on_a_non_zero_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -873,7 +878,7 @@ async fn core_crud_routes_to_the_collections_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -964,7 +969,7 @@ async fn graph_endpoints_route_to_the_collections_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -1064,7 +1069,7 @@ async fn community_detect_scoped_to_namespace_scans_the_right_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -1086,13 +1091,24 @@ async fn community_detect_scoped_to_namespace_scans_the_right_shard() {
         serde_json::json!({ "kind": 0, "collection": "tenant-a" }),
     )
     .await;
-    // One node on the default namespace, shard 0.
-    post_json(
-        router.clone(),
-        "/v1/graph/node",
-        serde_json::json!({ "kind": 0 }),
-    )
-    .await;
+    // One node directly in raw namespace 0 on shard 0 — Phase 3.3 removed
+    // the implicit "default" collection, so there is no name that resolves
+    // to namespace id 0 any more (collection ids start at 1). Write the
+    // raw kernel event straight through shard 0's Raft group, matching
+    // what the unscoped `/v1/community/detect` call below still scans.
+    handle.shards[&valori_consensus::types::ShardId(0)]
+        .raft
+        .client_write(valori_consensus::ClientRequest {
+            event: valori_kernel::event::KernelEvent::AutoCreateNode {
+                kind: valori_core::NodeKind::from_u8(0).unwrap(),
+                record: None,
+            },
+            schema_version: 0,
+            request_id: None,
+            namespace_id: 0,
+        })
+        .await
+        .unwrap();
 
     let (status, _, body) = post_json(
         router.clone(),
@@ -1169,7 +1185,7 @@ async fn ingest_routes_to_the_collections_shard() {
     let (_, _, body) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "tenant-a" }),
+        serde_json::json!({ "name": "tenant-a", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body["id"].as_u64().unwrap() as u16;
@@ -1238,7 +1254,7 @@ async fn timeline_merges_cross_shard_events_in_order() {
         tls: None,
         shard_count: 3,
     };
-    let handle = bootstrap_cluster(&cfg, Some(&log_path), None, 4)
+    let handle = bootstrap_cluster(&cfg, Some(&log_path), None)
         .await
         .unwrap();
     handle
@@ -1255,7 +1271,7 @@ async fn timeline_merges_cross_shard_events_in_order() {
     let (_, _, body_a) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "alpha" }),
+        serde_json::json!({ "name": "alpha", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_a = body_a["id"].as_u64().unwrap() as u16;
@@ -1264,7 +1280,7 @@ async fn timeline_merges_cross_shard_events_in_order() {
     let (_, _, body_b) = post_json(
         router.clone(),
         "/v1/namespaces",
-        serde_json::json!({ "name": "beta" }),
+        serde_json::json!({ "name": "beta", "dimension": 4, "metric": "squared_l2" }),
     )
     .await;
     let ns_b = body_b["id"].as_u64().unwrap() as u16;

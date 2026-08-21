@@ -359,15 +359,16 @@ from valoricore.remote import SyncRemoteClient
 
 c = SyncRemoteClient("http://localhost:3000")
 
-# Collections
-c.create_collection("tenant-acme")
-c.list_collections()           # → ["default", "tenant-acme"]
+# Collections — a brand-new project has zero; "default" has no special
+# meaning and dimension/metric are always required (Phase 3.3)
+c.create_collection("tenant-acme", dimension=3, metric="squared_l2")
+c.list_collections()           # → [] on a fresh project, else [{"name": "tenant-acme", "id": 0}, ...]
 c.drop_collection("tenant-acme")
 
 # Node health
 c.health()  # → "ok"
 
-# Data (collection= defaults to "default")
+# Data (collection= is required — no implicit namespace to fall back to)
 c.insert([0.1, 0.2, 0.3], collection="tenant-acme")
 c.insert([0.1, 0.2, 0.3], text="Section 3.1 Training — AdamW optimizer")  # Phase C5: index for Valori Reranker
 c.batch_insert([[...], [...]], collection="tenant-acme")
@@ -395,6 +396,12 @@ c.search([0.1, 0.2, 0.3], k=5, metadata_filter={"author": "Alice", "year": {"gte
 # GraphRAG — K nearest vectors + connected subgraph in one call
 c.graphrag([0.1, 0.2, 0.3], k=5, depth=2)
 # → {"hits": [...], "seed_nodes": [...], "subgraph": {"nodes": [...], "edges": [...]}}
+
+# Graph-aware reranking (Phase G1.4.1) — nudge vector ranking by graph
+# proximity to the query's own top hits. adjusted = score * (1 + weight * hops).
+# Composes with rerank/decay_half_life_secs; missing graph data is neutral.
+c.search([0.1, 0.2, 0.3], k=5, graph_rerank={"weight": 0.15, "seed_count": 1})
+# → hits gain graph_distance (hop count to nearest seed, absent if unreachable/no node)
 
 # Agent-memory primitives — return memory_id + graph nodes + decay fields
 c.memory_upsert([0.1, 0.2, 0.3], metadata={"role": "note"})  # → {"memory_id", "record_id", "document_node_id", "chunk_node_id"}
@@ -425,12 +432,12 @@ c.get_cluster_status()
 c.chunk_document(text, strategy="auto")  # chunking only — no embed
 # → {"strategy_used":"tree","chunk_count":31,"chunks":[{"index","title","text"},...]}
 
-c.ingest(text, source="paper.pdf", strategy="auto", collection="default")
+c.ingest(text, source="paper.pdf", strategy="auto", collection="tenant-acme")
 # → {"ok":True,"document_node_id":42,"chunk_count":31,"record_ids":[...],"strategy_used":"tree"}
 # Requires VALORI_EMBED_PROVIDER on the node. Returns 422 if not configured.
 
 # Document update (Phase I8) — diff by BLAKE3 content hash, re-embed only changed chunks
-c.ingest_update(42, new_text, source="paper-v2.pdf", collection="default")
+c.ingest_update(42, new_text, source="paper-v2.pdf", collection="tenant-acme")
 # → {"ok":True,"document_node_id":42,"new_chunk_count":35,"kept_count":28,
 #    "removed_count":3,"added_count":7,"record_ids":[...]}
 ```

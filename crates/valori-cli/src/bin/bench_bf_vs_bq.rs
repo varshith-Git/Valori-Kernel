@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 use std::time::Instant;
-use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
+use valori_node::config::{IndexKind, Metric, NodeConfig, QuantizationKind};
 use valori_node::engine::Engine;
 use valori_node::EngineFromNodeConfig;
 
@@ -66,11 +66,9 @@ fn percentile(sorted_ms: &[f64], p: f64) -> f64 {
     sorted_ms[idx]
 }
 
-fn base_cfg(index_kind: IndexKind, max_records: usize) -> NodeConfig {
+fn base_cfg(max_records: usize) -> NodeConfig {
     NodeConfig {
-        dim: DIM,
         max_records,
-        index_kind,
         quantization_kind: QuantizationKind::None,
         wal_path: None,
         snapshot_path: None,
@@ -79,8 +77,11 @@ fn base_cfg(index_kind: IndexKind, max_records: usize) -> NodeConfig {
     }
 }
 
-fn build_and_insert(cfg: &NodeConfig, n: usize) -> Engine {
+fn build_and_insert(cfg: &NodeConfig, index_kind: IndexKind, n: usize) -> Engine {
     let mut engine = Engine::new(cfg);
+    engine
+        .create_collection_with_config("default", DIM as u32, Metric::SquaredL2, index_kind)
+        .unwrap();
     for i in 0..n {
         let v = jittered_point(i % CLUSTERS, i as u64, DIM);
         engine.insert_record_from_f32(&v).expect("insert failed");
@@ -114,10 +115,10 @@ fn main() -> anyhow::Result<()> {
 fn run_mem_child(kind_arg: &str, n: usize) -> anyhow::Result<()> {
     let index_kind = match kind_arg {
         "bq" => IndexKind::Bq,
-        _ => IndexKind::BruteForce,
+        _ => IndexKind::Brute,
     };
-    let cfg = base_cfg(index_kind, n + 1_000);
-    let engine = build_and_insert(&cfg, n);
+    let cfg = base_cfg(n + 1_000);
+    let engine = build_and_insert(&cfg, index_kind, n);
     // Keep `engine` alive up to the RSS read — without this the optimizer
     // is free to drop it early since nothing downstream uses it.
     std::hint::black_box(&engine);
@@ -130,12 +131,12 @@ fn run_benchmark() -> anyhow::Result<()> {
 
     println!("Building brute-force engine ({N} records)...");
     let t0 = Instant::now();
-    let bf_engine = build_and_insert(&base_cfg(IndexKind::BruteForce, N + 1_000), N);
+    let bf_engine = build_and_insert(&base_cfg(N + 1_000), IndexKind::Brute, N);
     println!("  done in {:.2?}", t0.elapsed());
 
     println!("Building BQ engine ({N} records)...");
     let t0 = Instant::now();
-    let bq_engine = build_and_insert(&base_cfg(IndexKind::Bq, N + 1_000), N);
+    let bq_engine = build_and_insert(&base_cfg(N + 1_000), IndexKind::Bq, N);
     println!("  done in {:.2?}\n", t0.elapsed());
 
     // Held-out queries: same cluster distribution, never inserted.

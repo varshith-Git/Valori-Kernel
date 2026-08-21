@@ -17,7 +17,6 @@ use valori_node::EngineFromNodeConfig;
 
 fn make_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 64;
     cfg.max_nodes = 64;
     cfg.max_edges = 128;

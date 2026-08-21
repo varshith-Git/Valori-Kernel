@@ -1,0 +1,292 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+#
+# SDK COVERAGE MANIFEST — Phase API-4A §12
+#
+# Every public operationId in api/openapi/valori-v1.yaml must appear here
+# exactly once, mapped to how this SDK exposes it:
+#
+#   wrapper:   an ergonomic, human-written method in the handwritten layer
+#   generated: reachable only through the generated client (client.raw)
+#
+# scripts/sdk-coverage-check.py fails the build when the contract has an
+# operation this file does not name, when this file names an operation the
+# contract does not have, or when a declared `wrapper` does not resolve to a
+# real callable in the package. That last check is what stops this file from
+# becoming aspirational documentation.
+#
+# Handwritten semantics are NOT auto-generated. Adding a row here is a claim
+# that a human wrote and tested the wrapper.
+
+sdk: typescript
+package: "@valori/sdk"
+api_contract_version: "1.0"
+openapi_version: "3.1.0"
+contract: api/openapi/valori-v1.yaml
+total_operations: 74
+wrapped: 74
+generated_only: 0
+
+operations:
+  # ── cluster ─────────────────────────────────────────────────────
+  get_cluster_health:
+    http: GET /v1/cluster/health
+    wrapper: client.cluster.health
+  get_cluster_proof:
+    http: GET /v1/cluster/proof
+    wrapper: client.cluster.proof
+  get_cluster_role:
+    http: GET /v1/cluster/role
+    wrapper: client.cluster.role
+  get_cluster_status:
+    http: GET /v1/cluster/status
+    wrapper: client.cluster.status
+
+  # ── collections ─────────────────────────────────────────────────
+  create_collection:
+    http: POST /v1/namespaces
+    wrapper: client.collections.create
+  delete_collection:
+    http: DELETE /v1/namespaces/{name}
+    wrapper: client.collections.delete
+  list_collections:
+    http: GET /v1/namespaces
+    wrapper: client.collections.list
+
+  # ── community ───────────────────────────────────────────────────
+  community_detect:
+    http: POST /v1/community/detect
+    wrapper: client.community.detect
+  community_overview:
+    http: GET /v1/community/overview
+    wrapper: client.community.overview
+  community_search:
+    http: POST /v1/community/search
+    wrapper: client.community.search
+  extract_entities:
+    http: POST /v1/ingest/extract-entities
+    wrapper: client.ingest.extractEntities
+
+  # ── crypto ──────────────────────────────────────────────────────
+  get_key_status:
+    http: GET /v1/crypto/status/{key_id}
+    wrapper: client.crypto.keyStatus
+
+  # ── graph ───────────────────────────────────────────────────────
+  create_graph_edge:
+    http: POST /v1/graph/edge
+    wrapper: collection.graph.createEdge
+  create_graph_node:
+    http: POST /v1/graph/node
+    wrapper: collection.graph.createNode
+  delete_graph_node:
+    http: DELETE /v1/graph/node/{id}
+    wrapper: collection.graph.deleteNode
+  get_graph_node:
+    http: GET /v1/graph/node/{id}
+    wrapper: collection.graph.getNode
+  get_subgraph:
+    http: GET /v1/graph/subgraph
+    wrapper: collection.graph.subgraph
+  graph_query:
+    http: GET /v1/graph/query
+    wrapper: collection.graph.query
+  graphrag:
+    http: POST /v1/graphrag
+    wrapper: collection.graphrag
+  list_graph_nodes:
+    http: GET /v1/graph/nodes
+    wrapper: collection.graph.listNodes
+  list_node_edges:
+    http: GET /v1/graph/edges/{id}
+    wrapper: collection.graph.listEdges
+
+  # ── index ───────────────────────────────────────────────────────
+  get_collection_index:
+    http: GET /v1/namespaces/{name}/index
+    wrapper: collection.index.status
+  get_index_config:
+    http: GET /v1/index/config
+    wrapper: client.index.config
+  rebuild_indexes:
+    http: POST /v1/index/rebuild
+    wrapper: client.index.rebuild
+  set_collection_index:
+    http: POST /v1/namespaces/{name}/index
+    wrapper: collection.index.build
+
+  # ── ingest ──────────────────────────────────────────────────────
+  chunk_document:
+    http: POST /v1/ingest/document
+    wrapper: client.ingest.chunk
+  get_ingest_status:
+    http: GET /v1/ingest/status/{job_id}
+    wrapper: client.ingest.status
+  ingest_document:
+    http: POST /v1/ingest
+    wrapper: client.ingest.document
+  update_ingested_document:
+    http: POST /v1/ingest/update
+    wrapper: client.ingest.update
+
+  # ── memory ──────────────────────────────────────────────────────
+  get_metadata_sidecar:
+    http: GET /v1/memory/meta/get
+    wrapper: collection.memory.getMetadata
+  memory_consolidate:
+    http: POST /v1/memory/consolidate
+    wrapper: collection.memory.consolidate
+  memory_contradict:
+    http: POST /v1/memory/contradict
+    wrapper: collection.memory.contradict
+  memory_search:
+    http: POST /v1/memory/search
+    wrapper: collection.memory.search
+  memory_search_vector:
+    http: POST /v1/memory/search_vector
+    wrapper: collection.memory.searchVector
+  memory_upsert:
+    http: POST /v1/memory/upsert
+    wrapper: collection.memory.upsert
+  memory_upsert_vector:
+    http: POST /v1/memory/upsert_vector
+    wrapper: collection.memory.upsertVector
+  set_metadata_sidecar:
+    http: POST /v1/memory/meta/set
+    wrapper: collection.memory.setMetadata
+
+  # ── meta ────────────────────────────────────────────────────────
+  get_health:
+    http: GET /health
+    wrapper: client.meta.health
+  get_models_health:
+    http: GET /v1/models/health
+    wrapper: client.meta.modelsHealth
+  get_shard_routing:
+    http: GET /v1/shard/routing
+    wrapper: client.meta.shardRouting
+  get_usage:
+    http: GET /v1/usage
+    wrapper: client.meta.usage
+  get_version:
+    http: GET /v1/version
+    wrapper: client.meta.version
+
+  # ── operations ──────────────────────────────────────────────────
+  get_operation:
+    http: GET /v1/operations/{id}
+    wrapper: client.operations.get
+  get_operation_execution:
+    http: GET /v1/operations/{id}/execution
+    wrapper: client.operations.execution
+  list_operations:
+    http: GET /v1/operations
+    wrapper: client.operations.list
+
+  # ── proof ───────────────────────────────────────────────────────
+  get_event_log_proof:
+    http: GET /v1/proof/event-log
+    wrapper: client.proof.eventLog
+  get_latest_receipt:
+    http: GET /v1/proof/receipt
+    wrapper: client.proof.latestReceipt
+  get_receipt:
+    http: GET /v1/proof/receipt/{id}
+    wrapper: client.proof.receipt
+  get_state_proof:
+    http: GET /v1/proof/state
+    wrapper: client.proof.state
+  get_timeline:
+    http: GET /v1/timeline
+    wrapper: client.proof.timeline
+
+  # ── records ─────────────────────────────────────────────────────
+  delete_record:
+    http: POST /v1/delete
+    wrapper: collection.records.delete
+  get_record:
+    http: GET /v1/records/{id}
+    wrapper: collection.records.get
+  insert_encrypted_record:
+    http: POST /v1/records/encrypted
+    wrapper: collection.records.insertEncrypted
+  insert_record:
+    http: POST /v1/records
+    wrapper: collection.records.insert
+  insert_records_batch:
+    http: POST /v1/vectors/batch-insert
+    wrapper: collection.records.insertBatch
+  soft_delete_record:
+    http: POST /v1/soft-delete
+    wrapper: collection.records.softDelete
+  update_record_metadata:
+    http: PATCH /v1/records/{id}/metadata
+    wrapper: collection.records.updateMetadata
+
+  # ── search ──────────────────────────────────────────────────────
+  search:
+    http: POST /v1/search
+    wrapper: collection.search
+  search_multi:
+    http: POST /v1/search/multi
+    wrapper: client.collections.searchMulti
+
+  # ── snapshot ────────────────────────────────────────────────────
+  download_snapshot:
+    http: GET /v1/snapshot/download
+    wrapper: client.snapshots.download
+  restore_snapshot:
+    http: POST /v1/snapshot/restore
+    wrapper: client.snapshots.restore
+  save_snapshot:
+    http: POST /v1/snapshot/save
+    wrapper: client.snapshots.save
+  upload_snapshot:
+    http: POST /v1/snapshot/upload
+    wrapper: client.snapshots.upload
+
+  # ── storage ─────────────────────────────────────────────────────
+  archive_wal_segment:
+    http: POST /v1/storage/wal/archive
+    wrapper: client.storage.archiveWal
+  get_storage_manifest:
+    http: GET /v1/storage/manifest
+    wrapper: client.storage.manifest
+  list_archived_wal_segments:
+    http: GET /v1/storage/wal
+    wrapper: client.storage.listWalSegments
+  list_object_store_snapshots:
+    http: GET /v1/storage/snapshots
+    wrapper: client.storage.listSnapshots
+  restore_snapshot_from_object_store:
+    http: POST /v1/storage/snapshots/restore
+    wrapper: client.storage.restoreSnapshot
+  upload_snapshot_to_object_store:
+    http: POST /v1/storage/snapshots/upload
+    wrapper: client.storage.uploadSnapshot
+
+  # ── tree ────────────────────────────────────────────────────────
+  tree_build:
+    http: POST /v1/tree/build
+    wrapper: client.tree.build
+  tree_chain_verify:
+    http: POST /v1/tree/chain-verify
+    wrapper: client.tree.chainVerify
+  tree_hybrid:
+    http: POST /v1/tree/hybrid
+    wrapper: client.tree.hybrid
+  tree_query:
+    http: POST /v1/tree/query
+    wrapper: client.tree.query
+  tree_verify:
+    http: POST /v1/tree/verify
+    wrapper: client.tree.verify
+
+# ── notes ────────────────────────────────────────────────────────────────────
+#
+# `collection.*` rows are reached from a Collection handle:
+#     const collection = client.collection("docs");
+#
+# Method names are the camelCase form of the Python SDK's names, so the two
+# SDKs stay recognisably the same shape. `search_multi` lives on
+# `client.collections`, and `extract_entities` on `client.ingest` — same
+# reasoning as the Python manifest.

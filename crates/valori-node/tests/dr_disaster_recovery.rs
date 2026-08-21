@@ -81,7 +81,6 @@ fn vector_for(i: usize) -> Vec<f32> {
 
 fn dr_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = TOTAL + 1_000;
     cfg.max_nodes = 100;
     cfg.max_edges = 100;
@@ -107,13 +106,22 @@ async fn ten_thousand_vectors_survive_container_loss_via_object_store() {
     assert!(original_engine.object_store.is_some());
     let original: SharedEngine = Arc::new(RwLock::new(original_engine));
 
+    let router = build_router(original.clone(), None, None);
+    let (status, body) = post_json(
+        router,
+        "/v1/namespaces",
+        json!({"name": "default", "dimension": DIM, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+
     for chunk_start in (0..TOTAL).step_by(BATCH) {
         let batch: Vec<Vec<f32>> = (chunk_start..chunk_start + BATCH).map(vector_for).collect();
         let router = build_router(original.clone(), None, None);
         let (status, body) = post_json(
             router,
             "/v1/vectors/batch_insert",
-            json!({ "batch": batch }),
+            json!({ "batch": batch, "collection": "default" }),
         )
         .await;
         assert_eq!(
@@ -191,7 +199,7 @@ async fn ten_thousand_vectors_survive_container_loss_via_object_store() {
         let (status, search) = post_json(
             router,
             "/search",
-            json!({ "query": vector_for(i), "k": 1, "rerank": false }),
+            json!({ "query": vector_for(i), "k": 1, "rerank": false, "collection": "default" }),
         )
         .await;
         assert_eq!(

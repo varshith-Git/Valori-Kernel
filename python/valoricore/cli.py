@@ -100,7 +100,9 @@ def cmd_collections(args):
 
 def cmd_create_collection(args):
     """Create a new collection (namespace)."""
-    result = _client(_url_from_env(args), _token(args)).create_collection(args.name)
+    result = _client(_url_from_env(args), _token(args)).create_collection(
+        args.name, dimension=args.dim, metric=args.metric, index=args.index
+    )
     _print(result)
 
 
@@ -283,6 +285,9 @@ examples:
 
     s = sc_sub.add_parser("create", help="create a collection")
     s.add_argument("name")
+    s.add_argument("--dim", "--dimension", type=int, required=True, help="vector dimension")
+    s.add_argument("--metric", type=str, default="squared_l2", help="distance metric")
+    s.add_argument("--index", type=str, default=None, help="index algorithm (hnsw, ivf, bq, auto)")
     s.set_defaults(func=cmd_create_collection)
 
     s = sc_sub.add_parser("drop", help="delete a collection and all records")

@@ -131,7 +131,15 @@ struct SnapshotPayload {
     kernel: Vec<u8>,
     /// The dedup table — replicated so a restored follower makes the same
     /// dedup decisions as the leader.
-    dedup: Vec<[u8; 16]>,
+    ///
+    /// **Payload V3 (Phase API-2)**: each entry now carries the record id the
+    /// original request allocated (`0` = the request allocated no record), so
+    /// a replayed `request_id` can be answered with the *same* record id
+    /// instead of `deduplicated: true, id: 0`. This is a breaking change to
+    /// the openraft snapshot payload: a node holding a V2 payload will fail
+    /// to decode it and must be restarted with a fresh Raft log directory or
+    /// re-seeded from a leader.
+    dedup: Vec<([u8; 16], u32)>,
     /// BLAKE3 state hash the kernel bytes must decode to. The V6 format has
     /// no internal checksum (finding from Phase 2.3 testing: a flipped byte
     /// mid-payload decodes "successfully" into corrupt state), so the
@@ -152,7 +160,7 @@ struct StateMachineInner {
     state: KernelState,
     last_applied: Option<LogId<NodeId>>,
     membership: StoredMembership<NodeId, ValoriNode>,
-    dedup_set: HashSet<[u8; 16]>,
+    dedup_map: HashMap<[u8; 16], u32>,
     dedup_order: VecDeque<[u8; 16]>,
     current_snapshot: Option<(SnapshotMeta<NodeId, ValoriNode>, Vec<u8>)>,
     audit: Box<dyn AuditSink>,
@@ -208,12 +216,15 @@ impl StateMachineInner {
         h
     }
 
-    fn remember_request(&mut self, id: [u8; 16]) {
-        if self.dedup_set.insert(id) {
+    /// Record that `id` was applied, together with the record id it
+    /// allocated (`None` for events that allocate no record). A replay of the
+    /// same token later answers with this id.
+    fn remember_request(&mut self, id: [u8; 16], record_id: Option<u32>) {
+        if self.dedup_map.insert(id, record_id.unwrap_or(0)).is_none() {
             self.dedup_order.push_back(id);
             while self.dedup_order.len() > MAX_DEDUP_ENTRIES {
                 if let Some(old) = self.dedup_order.pop_front() {
-                    self.dedup_set.remove(&old);
+                    self.dedup_map.remove(&old);
                 }
             }
         }
@@ -324,7 +335,7 @@ impl ValoriStateMachine {
                 state: KernelState::with_dim(dim),
                 last_applied: None,
                 membership: StoredMembership::default(),
-                dedup_set: HashSet::new(),
+                dedup_map: HashMap::new(),
                 dedup_order: VecDeque::new(),
                 current_snapshot: None,
                 audit,
@@ -415,7 +426,7 @@ impl ValoriStateMachine {
         //   `persisted_last_applied`, preventing duplicates.
         let (
             state,
-            dedup_set,
+            dedup_map,
             dedup_order,
             created_at,
             text_corpus,
@@ -438,8 +449,9 @@ impl ValoriStateMachine {
                         hex(&actual),
                     )));
                 }
-                let dedup_set: HashSet<[u8; 16]> = payload.dedup.iter().copied().collect();
-                let dedup_order: VecDeque<[u8; 16]> = payload.dedup.into();
+                let dedup_map: HashMap<[u8; 16], u32> = payload.dedup.iter().copied().collect();
+                let dedup_order: VecDeque<[u8; 16]> =
+                    payload.dedup.iter().map(|(k, _)| *k).collect();
                 // M-1: restore decay timestamps and BM25 corpus from snapshot.
                 let created_at: HashMap<u32, u64> = payload.created_at.into_iter().collect();
                 let text_corpus: std::collections::HashMap<u64, String> =
@@ -448,13 +460,24 @@ impl ValoriStateMachine {
                 let namespace_registry = CollectionRegistry {
                     map: payload.namespace_registry.0.into_iter().collect(),
                     next_id: payload.namespace_registry.1,
+                    // Not yet carried in the openraft snapshot payload (a
+                    // separate, lighter-weight format from the kernel's own
+                    // V8 snapshot bytes) — see the collection-scoped-config
+                    // phase report's "known limitations". The authoritative
+                    // config still restores correctly via `state.namespace_configs`
+                    // (part of `payload.state`, decoded by `decode_state`);
+                    // `Engine::sync_collection_indexes_from_state` reconciles
+                    // this mirror from that source once an Engine wraps this
+                    // state machine's KernelState.
+                    configs: std::collections::HashMap::new(),
+                    index_kind: std::collections::HashMap::new(),
                 };
                 // Use the snapshot's own last_log_id, NOT the separately persisted
                 // last_applied. Openraft will replay snapshot.last_log_id+1 onward.
                 let last_applied = meta.last_log_id;
                 (
                     state,
-                    dedup_set,
+                    dedup_map,
                     dedup_order,
                     created_at,
                     text_corpus,
@@ -473,7 +496,7 @@ impl ValoriStateMachine {
                 // being left empty with a stale last_applied pointer.
                 (
                     KernelState::with_dim(dim),
-                    HashSet::new(),
+                    HashMap::new(),
                     VecDeque::new(),
                     HashMap::new(),
                     std::collections::HashMap::new(),
@@ -490,7 +513,7 @@ impl ValoriStateMachine {
                 state,
                 last_applied,
                 membership,
-                dedup_set,
+                dedup_map,
                 dedup_order,
                 current_snapshot,
                 audit,
@@ -579,6 +602,33 @@ impl ValoriStateMachine {
     pub async fn list_namespaces(&self) -> Vec<(String, u16)> {
         self.inner.lock().await.namespace_registry.list()
     }
+
+    /// The explicit vector config for `namespace_id`, if it has one — the
+    /// cluster-mode counterpart of `valori_engine::Engine::namespaces.config`.
+    pub async fn namespace_config(
+        &self,
+        namespace_id: u16,
+    ) -> Option<valori_metadata::collection::CollectionVectorConfig> {
+        self.inner
+            .lock()
+            .await
+            .namespace_registry
+            .config(namespace_id)
+    }
+
+    /// The desired index algorithm for `namespace_id`, if it has one — a
+    /// separate concept from vector config, see
+    /// `valori_metadata::collection`'s module doc.
+    pub async fn namespace_desired_index(
+        &self,
+        namespace_id: u16,
+    ) -> Option<valori_domain::IndexKind> {
+        self.inner
+            .lock()
+            .await
+            .namespace_registry
+            .desired_index(namespace_id)
+    }
 }
 
 impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
@@ -662,13 +712,17 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
 
                     // 1. Dedup — replicated decision, identical on all nodes.
                     if let Some(id) = req.request_id {
-                        if inner.dedup_set.contains(&id) {
+                        if let Some(&prior_record_id) = inner.dedup_map.get(&id) {
                             replies.push(ClientResponse {
                                 log_index,
                                 state_hash: inner.state_hash(),
                                 deduplicated: true,
                                 rejected: None,
-                                allocated_record_id: None,
+                                // Phase API-2: answer with the record the
+                                // original request created, not `None` (which
+                                // the HTTP layer used to surface as `id: 0`).
+                                allocated_record_id: (prior_record_id != 0)
+                                    .then_some(prior_record_id),
                                 allocated_node_id: None,
                                 allocated_edge_id: None,
                                 allocated_namespace_id: None,
@@ -782,7 +836,7 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                         .is_none()
                     {
                         if let Some(id) = req.request_id {
-                            inner.remember_request(id);
+                            inner.remember_request(id, pre_alloc_id.map(|r| r.0));
                         }
                         if !in_replay {
                             inner
@@ -814,6 +868,57 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
                     } else {
                         (None, None, None)
                     };
+
+                    // Mirror a successful `ConfigureNamespace` into this
+                    // node's `namespace_registry.configs` — the same
+                    // replicated-state-machine reasoning as `AutoCreateNamespace`
+                    // above: every replica applies the same Raft-ordered log,
+                    // so every replica's mirror ends up identical. The
+                    // authoritative source is `inner.state.namespace_configs`
+                    // (already updated by `apply_event_ns` above via
+                    // `KernelState::configure_namespace`); this mirror only
+                    // exists so `resolve_namespace`/collection-listing don't
+                    // need to lock and scan `state` separately.
+                    //
+                    // KNOWN LIMITATION: cluster mode has no `valori-engine`
+                    // `Engine` wrapping this state machine, so there is no
+                    // per-collection `dyn VectorIndex` here — an Hnsw/Ivf/Bq
+                    // collection created in cluster mode is correctly
+                    // dimension-isolated (kernel-enforced, replicated) but
+                    // its search still goes through the same
+                    // `KernelState::search_l2_ns` brute-force path as a
+                    // `brute` collection, regardless of the requested
+                    // `index_kind`. See the phase report.
+                    if rejected.is_none() {
+                        if let KernelEvent::ConfigureNamespace {
+                            namespace_id: ns,
+                            dim,
+                            metric,
+                            index_kind,
+                        } = &req.event
+                        {
+                            if let Some(m) = valori_domain::Metric::from_u8(*metric) {
+                                let index = match index_kind {
+                                    1 => valori_domain::IndexKind::Hnsw,
+                                    2 => valori_domain::IndexKind::Ivf,
+                                    3 => valori_domain::IndexKind::Bq,
+                                    4 => valori_domain::IndexKind::Auto,
+                                    _ => valori_domain::IndexKind::Brute,
+                                };
+                                let _ = inner.namespace_registry.set_config(
+                                    *ns,
+                                    valori_metadata::collection::CollectionVectorConfig {
+                                        dim: *dim,
+                                        metric: m,
+                                    },
+                                );
+                                // Desired index is a separate concept from
+                                // vector config — see
+                                // `valori_metadata::collection`'s module doc.
+                                inner.namespace_registry.set_desired_index(*ns, index);
+                            }
+                        }
+                    }
 
                     // S2: finalize the namespace registry mutation now that
                     // we know whether the kernel apply succeeded.
@@ -914,8 +1019,8 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
         inner.cached_state_hash = Some(actual);
         inner.last_applied = meta.last_log_id;
         inner.membership = meta.last_membership.clone();
-        inner.dedup_set = payload.dedup.iter().copied().collect();
-        inner.dedup_order = payload.dedup.into();
+        inner.dedup_map = payload.dedup.iter().copied().collect();
+        inner.dedup_order = payload.dedup.iter().map(|(k, _)| *k).collect();
         // M-1: restore decay timestamps and BM25 corpus from snapshot.
         inner.created_at = payload.created_at.into_iter().collect();
         inner.text_corpus = payload.text_corpus.into_iter().collect();
@@ -923,6 +1028,8 @@ impl RaftStateMachine<TypeConfig> for ValoriStateMachine {
         inner.namespace_registry = CollectionRegistry {
             map: payload.namespace_registry.0.into_iter().collect(),
             next_id: payload.namespace_registry.1,
+            configs: std::collections::HashMap::new(), // see the other call site's comment
+            index_kind: std::collections::HashMap::new(),
         };
         inner.current_snapshot = Some((meta.clone(), bytes));
         inner.persist_snapshot()?;
@@ -951,7 +1058,11 @@ impl RaftSnapshotBuilder<TypeConfig> for ValoriStateMachine {
         // the same decay-ranking and BM25 data as the leader.
         let payload = SnapshotPayload {
             kernel: inner.encode_kernel()?,
-            dedup: inner.dedup_order.iter().copied().collect(),
+            dedup: inner
+                .dedup_order
+                .iter()
+                .map(|k| (*k, inner.dedup_map.get(k).copied().unwrap_or(0)))
+                .collect(),
             state_hash: inner.state_hash(),
             created_at: inner.created_at.iter().map(|(&k, &v)| (k, v)).collect(),
             text_corpus: inner

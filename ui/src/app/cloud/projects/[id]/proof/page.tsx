@@ -1,20 +1,17 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCloudProject } from '@/utils/supabase/dal'
 import { redirect, notFound } from 'next/navigation'
-import { ProofView } from './ProofView'
+import { ProofView } from '@valori/studio'
+import { CloudStudioProvider } from '@/lib/cloud-runtime/CloudStudioProvider'
 
 export default async function ProjectProofPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: project } = await supabase.from('projects').select('*').eq('id', id).single()
+    const project = await getCloudProject(id)
 
     if (!project) {
         notFound()
@@ -32,7 +29,9 @@ export default async function ProjectProofPage({ params }: { params: Promise<{ i
                         <p className="text-sm text-muted-foreground">Project is {project.status}.</p>
                     </div>
                 ) : (
-                    <ProofView projectId={project.id} nodeUrl={project.node_url} />
+                    <CloudStudioProvider>
+                        <ProofView projectId={project.id} nodeUrl={project.node_url} />
+                    </CloudStudioProvider>
                 )}
             </div>
         </div>

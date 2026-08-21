@@ -1,24 +1,29 @@
 "use client";
 
 import { useEffect } from "react";
+import { ProofView } from "@valori/studio";
 import { useProof } from "@/lib/hooks/useProof";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { markProofViewed } from "@/lib/onboarding";
-import { ProofHash } from "@/components/proof/ProofHash";
-import { MetricCard } from "@/components/ui/metric-card";
 import { ProofExport } from "@/components/proof/ProofExport";
 import { ReceiptCard } from "@/components/proof/ReceiptCard";
+import { LOCAL_CONNECTION_PROJECT_ID } from "@/lib/local-runtime/transport";
 
+// Migrated to Shared Studio's ProofView (Phase G2) — the hash hero, state
+// cards, and empty state are now the same implementation every host
+// consumes. ReceiptCard/ProofExport are genuine shared product features
+// per the Phase G investigation, wired in through ProofView's slots rather
+// than moved into the package itself (their host-side source is unchanged).
+// Onboarding "first proof viewed" tracking stays entirely host-side — it
+// was never part of ProofView to begin with.
 export default function DashboardPage() {
-  const { hash, isLoading, error } = useProof();
-  const { chainHeight, recordCount, dim, online } = useHealth();
+  const { hash } = useProof();
+  const { chainHeight } = useHealth();
 
-  // Onboarding: a real hash on screen counts as "verified your first proof".
   useEffect(() => { if (hash) markProofViewed(); }, [hash]);
 
   return (
     <div className="flex flex-col gap-8 w-full max-w-[1600px]">
-      {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground tracking-tight">Proof Dashboard</h1>
@@ -26,78 +31,18 @@ export default function DashboardPage() {
             For you — live BLAKE3 state hash, updates on every committed event
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <span className="h-2 w-2 rounded-full bg-[var(--v-accent)] animate-pulse shadow-[0_0_6px_var(--v-accent)]" />
-            live · 2s
-          </span>
-          <ProofExport hash={hash} chainHeight={chainHeight} />
-        </div>
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="h-2 w-2 rounded-full bg-[var(--v-accent)] animate-pulse shadow-[0_0_6px_var(--v-accent)]" />
+          live · 2s
+        </span>
       </div>
 
-      {/* State hash — the hero element */}
-      <div className="rounded-xl border border-[var(--v-accent)] bg-card p-6 [box-shadow:0_0_24px_var(--v-accent-muted)]">
-        {!online && !isLoading ? (
-          <div className="text-sm text-destructive">
-            Backend unreachable — start Valori on{" "}
-            <code className="font-mono">localhost:3000</code>
-          </div>
-        ) : error && online ? (
-          <div className="text-sm text-amber-500">
-            Proof endpoint error — check VALORI_EVENT_LOG_PATH is set
-          </div>
-        ) : (
-          <ProofHash hash={hash} isLoading={isLoading} />
-        )}
-      </div>
-
-      {/* Operation Receipt */}
-      <ReceiptCard />
-
-      {/* Metrics row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard
-          label="Chain height"
-          value={chainHeight?.toLocaleString() ?? "—"}
-          hint="committed events"
-        />
-        <MetricCard
-          label="Records"
-          value={recordCount?.toLocaleString() ?? "—"}
-          hint="live vectors"
-        />
-        <MetricCard
-          label="Dimension"
-          value={dim ?? "—"}
-          hint="Q16.16 fixed-point"
-        />
-        <MetricCard
-          label="Algorithm"
-          value="BLAKE3"
-          hint="chained · deterministic"
-        />
-      </div>
-
-      {/* Empty state */}
-      {!isLoading && online && (chainHeight === 0 || chainHeight === null) && (
-        <div className="rounded-xl border border-dashed border-border p-8 text-center">
-          <p className="text-sm text-muted-foreground">No events yet.</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Insert your first vector via the Python SDK or curl:
-          </p>
-          <pre className="mt-3 inline-block rounded bg-card px-4 py-2 text-left text-xs text-accent-foreground">
-{`# Python SDK
-from valoricore.remote import SyncRemoteClient
-db = SyncRemoteClient("http://localhost:3000")
-db.insert([0.1, 0.2, 0.3, 0.4])
-
-# or curl
-curl -X POST http://localhost:3000/records \\
-  -H "Content-Type: application/json" \\
-  -d '{"values": [0.1, 0.2, 0.3, 0.4]}'`}
-          </pre>
-        </div>
-      )}
+      <ProofView
+        projectId={LOCAL_CONNECTION_PROJECT_ID}
+        nodeUrl="http://localhost:3000"
+        receiptCard={<ReceiptCard />}
+        exportActions={<ProofExport hash={hash} chainHeight={chainHeight} />}
+      />
     </div>
   );
 }

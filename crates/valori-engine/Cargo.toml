@@ -6,23 +6,33 @@ license.workspace = true
 description = "Stateful engine orchestrator for the Valori platform — coordinates KernelState, persistence, indexing, and caching"
 
 [dependencies]
-valori-kernel  = { workspace = true, features = ["std"] }
-valori-index   = { workspace = true }
-valori-search  = { workspace = true }
-valori-ingest  = { workspace = true }
-valori-rag     = { workspace = true }
+valori-core   = { workspace = true }
+valori-kernel = { workspace = true, features = ["std"] }
+valori-index  = { workspace = true }
+valori-search = { workspace = true }
+valori-ingest = { workspace = true }
+valori-rag    = { workspace = true }
 valori-metadata = { workspace = true }
+valori-domain = { workspace = true }
 valori-storage = { workspace = true }
-valori-state   = { workspace = true }
+valori-state  = { workspace = true }
 
 serde        = { version = "1.0", features = ["derive"] }
 serde_json   = "1.0"
+utoipa       = { version = "5.5.0", optional = true }
 bincode      = { version = "2.0.1", features = ["serde"] }
 rustc-hash   = "2.1.1"
 thiserror    = "1.0"
 tracing      = "0.1"
 metrics      = "0.21"
 axum         = "0.7"
+
+[features]
+# Opt-in `ToSchema` derives on this crate's public wire types, so the
+# code-first OpenAPI contract in `valori-node` references one model rather
+# than a hand-copied mirror. Off by default: nothing in the runtime path
+# needs it.
+utoipa = ["dep:utoipa"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

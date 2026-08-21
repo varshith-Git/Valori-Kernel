@@ -274,7 +274,7 @@ async fn start_cluster(
             shard_count: 1,
         };
 
-        let handle = bootstrap_cluster(&cfg, None, None, 0)
+        let handle = bootstrap_cluster(&cfg, None, None)
             .await
             .with_context(|| format!("node {node_id} failed — is port {raft_port} free?"))?;
 
@@ -533,7 +533,7 @@ async fn add_local_node(
         shard_count: 1,
     };
 
-    let handle = bootstrap_cluster(&cfg, None, None, 0)
+    let handle = bootstrap_cluster(&cfg, None, None)
         .await
         .with_context(|| format!("node {next_id} failed — is port {raft_port} free?"))?;
 

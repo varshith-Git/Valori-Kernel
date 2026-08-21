@@ -1,20 +1,18 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCloudProject } from '@/utils/supabase/dal'
 import { redirect, notFound } from 'next/navigation'
-import { PlaygroundView } from '@/components/projects/PlaygroundView'
+import { PlaygroundView } from '@valori/studio'
+import { CloudStudioProvider } from '@/lib/cloud-runtime/CloudStudioProvider'
+import { resolveCloudCapabilities } from '@/lib/cloud-runtime/capabilities'
 
 export default async function ProjectPlaygroundPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: project } = await supabase.from('projects').select('*').eq('id', id).single()
+    const project = await getCloudProject(id)
 
     if (!project) {
         notFound()
@@ -28,7 +26,9 @@ export default async function ProjectPlaygroundPage({ params }: { params: Promis
                         <p className="text-sm text-muted-foreground">Project is {project.status}.</p>
                     </div>
                 ) : (
-                    <PlaygroundView projectId={project.id} />
+                    <CloudStudioProvider>
+                        <PlaygroundView projectId={project.id} capabilities={resolveCloudCapabilities()} />
+                    </CloudStudioProvider>
                 )}
             </div>
         </div>

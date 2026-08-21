@@ -141,6 +141,21 @@ fn state_multi() -> KernelState {
     s
 }
 
+/// V8 fixture: same as `state_multi`, plus two explicitly-configured
+/// collections (namespaces 2 and 3) — proves `namespace_configs` round-trips
+/// through encode/decode and that a V7 decoder path (no such section) still
+/// produces an equivalent state for namespaces that were never configured.
+fn state_multi_collections() -> KernelState {
+    use valori_kernel::index::Metric;
+
+    let mut s = state_multi();
+    s.configure_namespace(2, 384, Metric::SquaredL2, 0 /* BruteForce */)
+        .unwrap();
+    s.configure_namespace(3, 1536, Metric::SquaredL2, 2 /* Hnsw */)
+        .unwrap();
+    s
+}
+
 // ── Forever-decode tests ──────────────────────────────────────────────────────
 
 /// Empty state hash is also pinned in `format.rs::empty_state_hash_is_pinned` —
@@ -153,7 +168,9 @@ fn snapshot_v7_empty_decodes_forever() {
     let state = decode_state(&bytes).expect("fixture must decode forever");
     assert_eq!(
         hex(&hash_state_blake3(&state)),
-        "4eeaa41d0b2eb66651bdbb252f4b91a7fa191d3f1cee4d311b6056966fba4d4a",
+        // G0.2: bumped for STATE_HASH_DOMAIN_VERSION 2 -> 3; see
+        // format.rs::empty_state_hash_is_pinned's doc comment.
+        "feb47a4c03ee329d108f168945e204413ec8068f44d85503e4ec5bab6412d9a2",
         "empty-state hash changed — snapshot format or hash domain broke compatibility"
     );
     assert_eq!(state.record_count(), 0);
@@ -230,6 +247,50 @@ fn snapshot_v7_multi_can_continue_after_restore() {
     );
 }
 
+/// V8: a snapshot with explicit per-collection config round-trips both the
+/// vector data AND the namespace_configs map.
+#[test]
+fn snapshot_v8_multi_collections_decodes_forever() {
+    let bytes = std::fs::read(fixture_path("snapshot_v8_multi_collections.bin"))
+        .expect("committed snapshot_v8_multi_collections.bin must exist");
+    let expected = std::fs::read_to_string(fixture_path("snapshot_v8_multi_collections.hash"))
+        .expect("snapshot_v8_multi_collections.hash must exist");
+    let state = decode_state(&bytes).expect("fixture must decode forever");
+    assert_eq!(
+        hex(&hash_state_blake3(&state)),
+        expected.trim(),
+        "v8 multi-collection snapshot hash changed — snapshot format or hash domain broke compatibility"
+    );
+    assert_eq!(state.record_count(), 16);
+    assert_eq!(state.namespace_dim(2), Some(384));
+    assert_eq!(state.namespace_dim(3), Some(1536));
+    // Namespace 0 was never explicitly configured — falls back to the legacy
+    // process-wide dim, exactly like a pre-existing collection would.
+    assert_eq!(state.namespace_dim(0), state.dim);
+    assert!(!state.has_namespace_config(0));
+    assert!(state.has_namespace_config(2));
+}
+
+/// A V8 snapshot with zero explicit collections decodes to a state
+/// byte-behaviorally identical to a V7 snapshot of the same data — proves
+/// the "old projects behave exactly as before" migration requirement holds
+/// without any separate migration code.
+#[test]
+fn snapshot_v8_with_no_explicit_collections_matches_v7_behavior() {
+    let v7_bytes = std::fs::read(fixture_path("snapshot_v7_multi.bin")).unwrap();
+    let v7_state = decode_state(&v7_bytes).unwrap();
+
+    let v8_state = state_multi(); // no configure_namespace calls
+    let v8_bytes = encode(&v8_state);
+    let v8_restored = decode_state(&v8_bytes).unwrap();
+
+    assert_eq!(
+        hash_state_blake3(&v7_state),
+        hash_state_blake3(&v8_restored)
+    );
+    assert!(v8_restored.namespace_configs.is_empty());
+}
+
 // ── Fixture generator (run once per schema version bump, then commit) ─────────
 
 /// `cargo test -p valori-kernel --test snapshot_compat generate_snapshot_fixtures -- --ignored --nocapture`
@@ -252,4 +313,8 @@ fn generate_snapshot_fixtures() {
     write_fixture("snapshot_v7_empty.bin", &state_empty());
     write_fixture("snapshot_v7_single.bin", &state_single());
     write_fixture("snapshot_v7_multi.bin", &state_multi());
+    write_fixture(
+        "snapshot_v8_multi_collections.bin",
+        &state_multi_collections(),
+    );
 }

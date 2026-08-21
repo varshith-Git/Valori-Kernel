@@ -34,8 +34,8 @@
 use std::str::FromStr;
 
 use valori_domain::{
-    ApiProject, CredentialRef, IndexKind, ModelId, Project, ProjectId, ProjectName,
-    ProjectTopology, SessionId, SnapshotId, Timestamp,
+    ApiProject, CredentialRef, ModelId, Project, ProjectId, ProjectName, ProjectTopology,
+    SessionId, SnapshotId, Timestamp,
 };
 
 // ── Shared corpora ────────────────────────────────────────────────────────────
@@ -71,8 +71,6 @@ fn valid_project() -> Project {
     Project {
         id: ProjectId::from_str("7c9e6679-7425-40de-944b-e07fc1f90ae7").unwrap(),
         name: ProjectName::parse("research-notes").unwrap(),
-        dim: 384,
-        index: IndexKind::Hnsw,
         topology: ProjectTopology::STANDALONE,
         created_at: Timestamp::from_unix_secs(1_750_000_000),
         last_opened_at: None,
@@ -297,7 +295,6 @@ fn project_deserialize_rejects_a_hostile_name() {
     let hostile = r#"{
         "id":"7c9e6679-7425-40de-944b-e07fc1f90ae7",
         "name":"../../etc/passwd",
-        "dim":384,"index":"hnsw",
         "topology":{"replicas":1,"shards":1},
         "created_at":1,"last_opened_at":null,"record_count":null
     }"#;
@@ -314,22 +311,18 @@ fn project_round_trips_through_json() {
     assert_eq!(serde_json::from_str::<Project>(&json).unwrap(), project);
 }
 
-#[test]
-fn project_deserialize_rejects_an_unknown_index() {
-    let bad = r#"{
-        "id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","name":"ok","dim":384,
-        "index":"quantum","topology":{"replicas":1,"shards":1},
-        "created_at":1,"last_opened_at":null,"record_count":null
-    }"#;
-    assert!(serde_json::from_str::<Project>(bad).is_err());
-}
+// `project_deserialize_rejects_an_unknown_index` was removed here: `Project`
+// no longer has an `index` field to reject an unknown value for — vector
+// configuration is Collection-scoped now, see
+// docs/phases/phase-collection-index-lifecycle.md. `IndexKind`'s own
+// `from_str` rejection is still covered directly in `project_contract.rs`.
 
 // ── ApiProject — the untrusted-client boundary ───────────────────────────────
 
 #[test]
 fn api_project_deserialize_rejects_a_hostile_name() {
     let hostile = r#"{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7",
-        "name":"../../../etc/passwd","dim":384,"index":"hnsw",
+        "name":"../../../etc/passwd",
         "replicas":1,"shards":1,"is_cluster":false,"created_at":1}"#;
     assert!(
         serde_json::from_str::<ApiProject>(hostile).is_err(),

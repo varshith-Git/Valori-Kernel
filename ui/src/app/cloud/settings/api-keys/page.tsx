@@ -1,4 +1,5 @@
 import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCurrentMembership } from '@/utils/supabase/dal'
 import { redirect } from 'next/navigation'
 import { ApiKeysManager } from './ApiKeysManager'
 import { ServiceAccountsManager } from './ServiceAccountsManager'
@@ -6,25 +7,14 @@ import { SettingsNav } from '../SettingsNav'
 
 export default async function ApiKeysPage() {
     const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
     // Same "first org" simplification as /cloud — no org switcher yet.
-    const { data: memberships } = await supabase
-        .from('org_members')
-        .select('role, organizations(id, name)')
-        .eq('user_id', user.id)
-        .limit(1)
-
-    const membership = memberships?.[0] as
-        | { role: string; organizations: { id: string; name: string } }
-        | undefined
+    const membership = await getCurrentMembership()
 
     if (!membership) {
         return (

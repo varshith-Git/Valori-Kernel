@@ -21,11 +21,9 @@ use valori_node::EngineFromNodeConfig;
 
 fn bare_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 64;
     cfg.max_nodes = 32;
     cfg.max_edges = 64;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     cfg.snapshot_path = None;

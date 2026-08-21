@@ -1,0 +1,97 @@
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+#
+# Valori Python SDK (REST). Phase API-4A §15.
+#
+# NOTE: this is NOT python/pyproject.toml. That one builds `valoricore`, the
+# embedded PyO3 SDK. This one builds `valori`, the remote REST client. They are
+# separate distributions with separate release cadences.
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "valori"
+version = "0.1.0"
+description = "Official Python SDK for the Valori Data Plane REST API — deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+authors = [{ name = "Varshith Gudur", email = "varshith.gudur17@gmail.com" }]
+keywords = [
+    "valori", "vector-database", "knowledge-graph", "rag", "graphrag",
+    "audit-trail", "blake3", "determinism", "sdk", "rest-client",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.23.0,<0.29.0",
+    "attrs>=22.2.0",
+    "python-dateutil>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "pyyaml>=6.0",
+    "build>=1.0",
+    "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/varshith-Git/Valori"
+Repository = "https://github.com/varshith-Git/Valori"
+Documentation = "https://github.com/varshith-Git/Valori/tree/main/docs/sdk"
+Changelog = "https://github.com/varshith-Git/Valori/blob/main/CHANGELOG.md"
+Issues = "https://github.com/varshith-Git/Valori/issues"
+
+# Phase API-4A §14 — the API contract this distribution targets. Read by
+# tests/test_contract_version.py and by scripts/sdk-coverage-check.py, so it
+# cannot drift from api/openapi/valori-v1.yaml without a red build.
+[tool.valori]
+api_contract_version = "1.0"
+openapi_version = "3.1.0"
+contract_path = "api/openapi/valori-v1.yaml"
+
+[tool.hatch.build.targets.wheel]
+# The generated/handwritten split (§4) is a source-tree boundary. In the wheel
+# both land at the top level as two importable packages, and the import path
+# still tells you which side of the boundary a symbol came from:
+#   `valori.*`           handwritten
+#   `valori_generated.*` machine output
+packages = ["handwritten/valori", "generated/valori_generated"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "handwritten/",
+    "generated/",
+    "tests/",
+    "scripts/",
+    "api-coverage.yaml",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: talks to a real Valori node (VALORI_TEST_ENDPOINT must be set)",
+]

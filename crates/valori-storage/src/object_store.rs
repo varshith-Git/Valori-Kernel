@@ -65,6 +65,7 @@ impl From<opendal::Error> for ObjectStoreError {
 
 // ── Returned types ────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotEntry {
     /// Full object key (e.g. `"prefix/snapshots/00000001750000000_abc12345.snap"`).
@@ -77,6 +78,7 @@ pub struct SnapshotEntry {
     pub size_bytes: u64,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WalEntry {
     /// Full object key.
@@ -91,6 +93,7 @@ pub struct WalEntry {
 /// version constants elsewhere in this codebase already follow.
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// `manifest.json` — the entry point for disaster recovery. Written
 /// alongside every snapshot upload (see [`ObjectStoreBackend::
 /// upload_snapshot_and_update_manifest`]), it names the ONE snapshot that

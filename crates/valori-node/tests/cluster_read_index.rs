@@ -35,7 +35,7 @@ async fn boot(id: NodeId) -> Node {
         tls: None,
         shard_count: 1,
     };
-    let handle = bootstrap_cluster(&cfg, None, None, 0).await.unwrap();
+    let handle = bootstrap_cluster(&cfg, None, None).await.unwrap();
     let (api, task) = serve_cluster_api(&handle, "127.0.0.1:0", None)
         .await
         .unwrap();
@@ -98,7 +98,7 @@ fn leader_id(nodes: &[Node]) -> NodeId {
 async fn search(api_addr: &str, query: Vec<f32>, consistency: &str) -> serde_json::Value {
     reqwest::Client::new()
         .post(format!("http://{api_addr}/search"))
-        .json(&serde_json::json!({ "query": query, "k": 1, "consistency": consistency }))
+        .json(&serde_json::json!({ "query": query, "k": 1, "consistency": consistency, "collection": "default" }))
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -106,6 +106,20 @@ async fn search(api_addr: &str, query: Vec<f32>, consistency: &str) -> serde_jso
         .json()
         .await
         .unwrap()
+}
+
+async fn create_default_collection(api_addr: &str) -> u16 {
+    let resp: serde_json::Value = reqwest::Client::new()
+        .post(format!("http://{api_addr}/v1/namespaces"))
+        .json(&serde_json::json!({"name": "default", "dimension": 3, "metric": "squared_l2"}))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    resp["id"].as_u64().expect("missing collection id") as u16
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -123,6 +137,10 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
         .find(|n| n.handle.raft.metrics().borrow().id == leader)
         .unwrap();
 
+    // Create the collection the write below targets, over HTTP (Phase 3.3:
+    // no implicit namespace exists to write into).
+    let ns = create_default_collection(&leader_node.api_addr).await;
+
     // Write through the leader's Raft handle (AutoInsertRecord → id 0).
     let resp = leader_node
         .handle
@@ -137,7 +155,7 @@ async fn follower_linearizable_read_reflects_a_leader_write() {
             },
             schema_version: 0,
             request_id: None,
-            namespace_id: 0,
+            namespace_id: ns,
         })
         .await
         .unwrap();

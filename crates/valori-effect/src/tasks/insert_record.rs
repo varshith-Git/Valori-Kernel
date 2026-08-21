@@ -21,7 +21,7 @@ struct InsertInputs {
     #[serde(default)]
     metadata: Option<serde_json::Value>,
     #[serde(default)]
-    tag: u8,
+    tag: u64,
     #[serde(default)]
     request_id: Option<String>,
 }

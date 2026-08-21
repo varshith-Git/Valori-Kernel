@@ -10,6 +10,7 @@ State lifecycle orchestration for the Valori platform. Owns the transition of
 | Module | Contents |
 |---|---|
 | `bootstrap` | `recover_from_events`, `replay_wal`, `load_snapshot`, `validate_snapshot`, `has_event_log`, `has_wal`; `BootstrapMode` enum |
+| `collection_bootstrap` | `recover_project_from_storage`, `recover_project_from_snapshots`, `snapshot_collection`, `publish_project_manifest`, `publish_collection_manifest`, `discover_project`, `discover_collections` |
 | `manifest` | `StateManifest` — snapshot path, event log segment list, last applied height, state hash |
 | `lifecycle` | `StateLifecycle` enum — `Recovering`, `Ready`, `Snapshotting` |
 | `shutdown` | `shutdown_snapshot(state, path)` — synchronous snapshot-on-close for graceful shutdown |

@@ -1,6 +1,6 @@
-import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCloudProject } from '@/utils/supabase/dal'
 import { redirect, notFound } from 'next/navigation'
-import { ToolsWorkspace } from './ToolsWorkspace'
+import { CloudToolsWorkspace } from './CloudToolsWorkspace'
 
 export default async function ProjectToolsPage({
     params,
@@ -11,17 +11,13 @@ export default async function ProjectToolsPage({
 }) {
     const { id } = await params
     const { collection } = await searchParams
-    const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: project } = await supabase.from('projects').select('*').eq('id', id).single()
+    const project = await getCloudProject(id)
 
     if (!project) {
         notFound()
@@ -35,7 +31,7 @@ export default async function ProjectToolsPage({
                         <p className="text-sm text-muted-foreground">Project is {project.status}.</p>
                     </div>
                 ) : (
-                    <ToolsWorkspace projectId={project.id} projectName={project.name} initialCollection={collection} />
+                    <CloudToolsWorkspace projectId={project.id} projectName={project.name} initialCollection={collection} />
                 )}
             </div>
         </div>

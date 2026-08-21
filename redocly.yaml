@@ -1,0 +1,32 @@
+# Redocly CLI Configuration for Valori API v1
+
+apis:
+  main:
+    root: api/openapi/valori-v1.yaml
+    x-openapi-ts:
+      output: ui/api-types/src/valori-v1.ts
+
+rules:
+  info-contact: off
+  info-license-strict: off
+
+  # `GET /health` is the one operation that legitimately documents no 4xx: it
+  # declares `security: []`, so the auth middleware never runs and neither the
+  # 401 nor the 403 every other operation can return is reachable; and it takes
+  # no body, no path param, and no query param, so nothing is left to reject
+  # with a 400 either. It returns 200 or 503. A fake 400 was deliberately not
+  # invented to silence the linter (Phase API-3.2 §6).
+  #
+  # That one operation is pinned in `.redocly.lint-ignore.yaml`, which exempts
+  # exactly `#/paths/~1health/get/responses` and nothing else, so `redocly lint`
+  # is clean without the rule being turned off.
+  #
+  # Severity stays `warn` rather than `error` only because `openapi-typescript`
+  # reads this same config and aborts codegen on any `error`-severity problem
+  # while ignoring `.redocly.lint-ignore.yaml` — raising it here breaks
+  # `scripts/generate-api-types.sh`. So the rule is enforced at full strength
+  # where we own the semantics instead: `scripts/verify-api-route-contract.py`
+  # fails the contract gate if any operation other than `GET /health` is
+  # missing a 4xx.
+  # See docs/api/health-migration.md.
+  operation-4xx-response: warn

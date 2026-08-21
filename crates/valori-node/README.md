@@ -8,6 +8,187 @@ or as a member of a Raft cluster (`VALORI_CLUSTER_MEMBERS`).
 - **Local**: `http://localhost:3000`
 - **Production**: `https://<your-app>.koyeb.app`
 
+The published contract for every route below is
+[`api/openapi/valori-v1.yaml`](../../api/openapi/valori-v1.yaml). Where the
+contract and this crate disagree, the contract wins and the code is the bug —
+current status in [`docs/api/contract-conformance.md`](../../docs/api/contract-conformance.md).
+
+> **Contract status (Phase API-3.1).** `api/openapi/valori-v1.yaml` is the
+> generator's byte-exact output. All **74** public routes carry a real
+> `#[utoipa::path]` and are registered on `ValoriApi`; the document declares
+> **OpenAPI 3.1.0** (see
+> [`docs/api/openapi-version-decision.md`](../../docs/api/openapi-version-decision.md)).
+> `scripts/verify-api-route-contract.py` proves Rust == utoipa == OpenAPI on
+> every gate run and fails on drift in either direction, and
+> `tests/openapi_generated.rs` asserts the committed file is byte-identical to
+> what the generator emits. Never hand-edit the YAML — regenerate it.
+>
+> The other 26 registered routes (7 admin, 5 operator-internal, 14 deprecated
+> aliases) are **served but deliberately absent** from the public contract. A
+> server route is not the same thing as a public SDK route. See
+> [`docs/phases/phase-api-3.1-utoipa-coverage.md`](../../docs/phases/phase-api-3.1-utoipa-coverage.md).
+
+> **Operation completeness (Phase API-3.3).** Route coverage answers *"are the
+> right operations present?"*. `scripts/audit-public-api-operations.py` answers
+> the next question — *"are their HTTP contracts complete?"* — by cross-checking
+> each operation against the **Rust handler signature** it dispatches to.
+> Completeness is never inferred from path existence: a `requestBody` counts
+> only when the contract declares one **and** the handler has a body extractor,
+> and a `query?: never` only when the handler has no `Query<..>`. Both
+> directions fail the gate. Current state: **74 / 74 complete**, 0 untyped
+> parameters, 0 parameter mismatches, 0 untyped schema properties, and 0
+> unexpected `unknown`/`any` in the generated TypeScript. `sdk_ready` is
+> `true` — see
+> [`docs/api/sdk-readiness.md`](../../docs/api/sdk-readiness.md) and
+> [`docs/api/typescript-contract-quality.md`](../../docs/api/typescript-contract-quality.md).
+
+> **Open-ended JSON objects — use `serde_json::Value`, not `Object`.**
+> Phase API-4D. A field whose Rust type is `serde_json::Value` and which is
+> documented as "arbitrary caller-supplied JSON" must be annotated
+> `schema(value_type = std::collections::HashMap<String, serde_json::Value>)`.
+> Five fields used `HashMap<String, Object>`, which utoipa renders as
+> `additionalProperties: {type: object}` — that means *every value must itself
+> be an object*, so `{"page": 4}` is not a valid instance. The Python generator
+> honoured it faithfully and emitted a per-value wrapper model, making scalar
+> metadata values unrepresentable in the SDK. `serde_json::Value` renders
+> `additionalProperties: {}` ("any JSON value"), which is what the field
+> descriptions already claimed.
+>
+> **Known server bug:** `metadata_filter` on `/v1/search`, `/v1/search/multi`
+> and `/v1/memory/search*` resolves metadata from the sidecar store only
+> (`rec:{id}`), so it never matches metadata written by `POST /v1/records` or
+> `PATCH /v1/records/{id}/metadata` and returns zero hits for a predicate that
+> exactly matches. Reproduction, root cause and suggested fix in
+> [`docs/api/known-server-issues.md`](../../docs/api/known-server-issues.md) #1.
+> The SDKs deliberately do not work around it.
+
+## OpenAPI generation
+
+The **only** sanctioned pipeline. Reconstructing `paths` from a route manifest
+or from the previous YAML is forbidden — a prior phase did exactly that and
+produced a contract in which every operation shared two placeholder responses.
+
+```bash
+# Emit the code-first document (stdout, or atomically to a file)
+cargo run -p valori-node --features utoipa --bin valori-openapi -- \
+    --output api/openapi/valori-v1.yaml
+
+# What Rust actually registers (never reads OpenAPI; fails loudly if unsure)
+python3 scripts/generate-route-manifest.py
+
+# Rust public routes == utoipa operations == OpenAPI operations
+python3 scripts/verify-api-route-contract.py
+
+# Everything, plus computed docs/api/sdk-readiness.json
+./scripts/api-contract-gate.sh
+```
+
+Adding an endpoint means annotating its **registered** handler with
+`#[cfg_attr(feature = "utoipa", utoipa::path(...))]` and listing it in the
+`paths(...)` block of `src/openapi.rs`. Both links are required — an annotation
+that is not registered generates nothing, and the route manifest reports
+`utoipa_annotated` and `utoipa_registered_in_api` separately so a half-wired
+handler is visible rather than counted as covered.
+
+Public request/response types must be deliberate DTOs. Where the wire model
+already lives in another workspace crate (tree-RAG, community, ingest, index
+lifecycle, object store, model health), that crate carries an optional,
+default-off `utoipa` feature which `valori-node/utoipa` turns on — so the
+contract references the same Rust type the handler serialises instead of a
+hand-copied mirror that can drift. `valori-kernel` is deliberately excluded: it
+gains no dependency and stays `no_std`.
+
+Vendor extensions (`x-required-scope`, `x-sdk`) are stamped by the
+`VendorExtensionAddon` `Modify` pass in `src/openapi.rs`. `x-required-scope` is
+read from `api_keys::required_scope` — the same function the auth middleware
+calls — so the contract cannot document a scope the server does not enforce.
+The pass adds metadata only; it can never create a path, body, or response.
+
+Phase API-3.3: `x-required-scope` is emitted **only for authenticated
+operations**. `GET /health` declares `security: []`, so the auth middleware
+never runs on it and `required_scope` is never consulted — the pass used to
+stamp it with the function's default anyway, telling every SDK that the one
+deliberately open endpoint required a key.
+
+Two further `Modify` passes own responses the handlers do not produce:
+
+| Pass | Owns |
+|---|---|
+| `AuthResponsesAddon` | `401` / `403` on every authenticated operation, with `body = ApiError`. They come from `auth_guard_v2`, not from any handler. |
+| `ErrorBodyAddon` | Fills `ApiError` into any `>= 400` response left bodyless, never overriding one already declared. |
+
+`ErrorBodyAddon` is the **contract-side mirror of `error_codes::attach_error_code`**
+— the middleware described below. Because that middleware guarantees the
+`ApiError` shape structurally at runtime, describing it structurally here is the
+only way the two cannot drift: a new endpoint that forgets `body = ApiError`
+gets the correct body anyway, exactly as it gets the correct `code` without
+asking.
+
+---
+
+## Error responses (Phase API-2)
+
+**Every** error, on every route, on both the standalone and cluster routers:
+
+```json
+{ "error": "unknown collection 'ghost' — create it first with POST /v1/namespaces",
+  "code": "collection_not_found" }
+```
+
+`code` is the stable machine-readable field — **branch on it, never on
+`error`**. It is drawn from a closed set of 16 values: `validation_error`,
+`unauthorized`, `forbidden`, `not_found`, `collection_not_found`,
+`record_not_found`, `dimension_mismatch`, `invalid_metric`, `invalid_index`,
+`index_build_failed`, `conflict`, `capacity_exceeded`, `not_leader`,
+`unavailable`, `not_implemented`, `internal_error`
+(`valori_engine::ErrorCode`).
+
+`src/error_codes.rs` installs `attach_error_code` as a response-layer
+middleware on both routers, so even error bodies produced by axum itself
+(previously a bare bodiless `401`/`403`) come back as parseable JSON. Build
+errors with `errors::error_response(status, code, message)`; use
+`error_codes::collection_not_found(name)` for the one canonical
+"Collection does not exist" answer rather than hand-rolling a message.
+
+It is the **outermost** layer on both routers, which is what makes the
+guarantee total: a handler that builds a bare `json!({"error": ...})` still
+leaves with a `code`. The one thing it deliberately does **not** rewrite is a
+non-empty **non-JSON** body — Phase API-3.3 converged
+`GET /v1/crypto/status/{key_id}`, which returned `text/plain` and was the last
+error in the public surface escaping the canonical shape.
+
+### Status reports are not errors (Phase API-3.3)
+
+`STATUS_REPORT_PATHS` in `src/error_codes.rs` exempts `GET /health` and
+`GET /v1/cluster/health`. Both answer `503` with their **full typed health
+document** when a pool is at 100 %: the status code is a signal to the load
+balancer, not a failure to describe. Without the exemption the middleware saw
+"503, JSON object, no `code`" and spliced `error` and `code` into a documented
+DTO, so the bytes on the wire did not match the schema the contract advertises
+and a strictly-deserialising SDK would reject its own health probe. These are
+the only two `>= 400` responses in the surface with a typed non-`ApiError`
+body; `scripts/audit-public-api-operations.py` reports any third one rather
+than letting it pass.
+
+## Idempotency (Phase API-2)
+
+`POST /v1/records` and `POST /v1/vectors/batch-insert` accept `request_id` on
+**both** paths — standalone dedup is real, not a no-op. Two wire spellings are
+accepted and normalised by `api::RequestId`: a 16-byte array, or a 32-char hex
+string with optional UUID dashes. Replaying a token inside the dedup window
+returns the record the first request created and writes nothing. A malformed
+token is a 4xx, never a silently dropped field.
+
+## Key scopes
+
+`api_keys::required_scope()` derives the minimum scope from `(method, path)`.
+Two special cases exist because prefix derivation got them wrong:
+`/v1/cluster/add-node`, `/remove-node` and `/snapshot` require **`admin`**
+(they reconfigure the deployment), and `/v1/search/multi` and `/v1/graphrag`
+require **`read_only`** (they are pure reads that carry their query in a
+body). `tests/api_contract.rs` pins both against the contract's
+`x-required-scope`.
+
 ---
 
 ## Core & System
@@ -37,39 +218,96 @@ curl http://localhost:3000/version
 | `valori_index_size_bytes` | gauge | Serialized index size. Updated at snapshot time only (measuring it means serializing the index). **`0` is correct for `VALORI_INDEX=brute`** — brute force keeps no structure of its own. |
 | `valori_snapshot_size_bytes` / `valori_snapshot_duration_seconds` | gauge / histogram | Per `POST /v1/storage/snapshots/upload`. Duration covers encode + upload + prune. |
 | `valori_restore_size_bytes` / `valori_restore_duration_seconds` | gauge / histogram | Per `POST /v1/storage/snapshots/restore`. Duration covers download + apply + rehash — the real project-unavailable window, i.e. what an RTO claim should be based on. |
+| `valori_graph_node_create_total` | counter | Incremented on each successful `POST /v1/graph/node`. Fires on both standalone and cluster paths (via shared handler). |
+| `valori_graph_edge_create_total` | counter | Incremented on each successful `POST /v1/graph/edge`. Fires on both paths. |
+| `valori_graph_query_total` | counter | Incremented when `GET /v1/graph/query` resolves the start node and returns hits. |
+| `valori_graph_traversal_nodes` | histogram | Node count returned by `GET /v1/graph/query` and `GET /v1/graph/subgraph`. |
+| `valori_graph_traversal_edges` | histogram | Edge count returned by `GET /v1/graph/subgraph`. |
+| `valori_graphrag_total` | counter | Incremented after each successful `POST /v1/graphrag` (standalone and cluster independently). |
+| `valori_graph_rerank_total` | counter | Incremented at the start of each graph-aware reranking pass (`graph_rerank` field in `POST /search`). |
+| `valori_graphrag_seed_count` | histogram | Number of vector hits that resolved to a graph node (seed count) per `POST /v1/graphrag` call. A value of 0 while hits exist means no records in the top-k have a graph node. |
+| `valori_graphrag_expanded_nodes` | histogram | Number of nodes in the BFS-expanded subgraph per `POST /v1/graphrag` call. |
+| `valori_graphrag_expanded_edges` | histogram | Number of edges in the BFS-expanded subgraph per `POST /v1/graphrag` call. |
+| `valori_graphrag_no_graph_seed` | counter | Fires when a `POST /v1/graphrag` call returns vector hits but none of them map to a graph node — the collection has vectors but no linked graph. Useful for detecting unlinked collections. |
 
 ---
 
 ## Collections (Multi-tenancy)
 
-Valori supports up to **1 024 named collections** (namespaces). Every data
-endpoint accepts an optional `"collection"` field. Omitting it (or setting it
-to `"default"`) targets the always-present default collection.
+Valori supports up to **1 024 named collections** (namespaces). A brand-new
+project starts with **zero collections** — there is no automatically
+created "default" and no implicit vector namespace (Phase 3.3). Every data
+endpoint's `"collection"` field must name a collection that was already
+explicitly created; there is nothing to fall back to if it's omitted.
 
-Records in non-default collections are **fully isolated** — they never appear
-in default-collection searches and vice versa.
+Records in different collections are **fully isolated** — they never appear
+in each other's searches.
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/v1/namespaces` | `POST` | Create a collection (idempotent). |
 | `/v1/namespaces` | `GET` | List all collections and their numeric IDs. |
 | `/v1/namespaces/:name` | `DELETE` | Drop a collection and all its records. |
+| `/v1/namespaces/:name/index` | `POST` | Create, replace, or drop (`type: null`) the collection's ANN index. Returns `202 Accepted` — build runs in background. Both standalone and cluster (Phase 4.3). Cluster: desired spec + generation replicated via Raft; each node builds its local index independently. |
+| `/v1/namespaces/:name/index` | `GET` | Poll the collection's index lifecycle state (`status`: none/building/active/failed; `active_type`: hnsw/ivf/bq/none; `building_generation`; `base_lsn`; `error`). Both standalone and cluster. Cluster: reports node-local state on the responding node. |
 
 ### Create a collection
+
+`dimension` and `metric` are **required** for every collection, no
+exceptions — `"default"` included, if you choose to create one by that
+literal name. There is no zero-config name; a collection can no longer be
+created bare and silently lock onto whatever dimension its first insert
+happens to use. `index` remains optional.
 
 ```bash
 curl -X POST http://localhost:3000/v1/namespaces \
   -H "Content-Type: application/json" \
-  -d '{"name": "tenant-acme"}'
-# → {"name":"tenant-acme","id":1,"created":true}
-# Second call with the same name → {"created":false,"id":1} (idempotent)
+  -d '{"name": "images", "dimension": 768, "metric": "squared_l2", "index": "ivf"}'
+# → {"name":"images","id":0,"created":true}
+# Second call with the same name → {"created":false,"id":0} (idempotent)
+
+curl -X POST http://localhost:3000/v1/namespaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "images"}'
+# → 400: collection 'images' must be created with an explicit 'dimension'
+
+curl -X POST http://localhost:3000/v1/namespaces \
+  -H "Content-Type: application/json" \
+  -d '{"name": "default"}'
+# → 400: same as any other name — "default" carries no special meaning
 ```
+
+- `metric` currently only accepts `"squared_l2"` — Valori's determinism
+  guarantee depends on avoiding a square root, so this is not yet a
+  configurable choice, only a representable one.
+- `index` defaults to `brute` (no dedicated ANN index — exact
+  namespace-scoped search) when omitted.
+- Once set, a collection's dimension is immutable — a later request with a
+  different `dimension` for the same collection is rejected (`409 Conflict`),
+  not silently applied.
+- **`"default"`** has no architectural meaning any more. A collection
+  literally named `"default"` is created exactly like any other name, with
+  the same required `dimension`/`metric` — see the example above.
+- **Cluster mode**: dimension is enforced identically and replicated to
+  every node (kernel-level, via `KernelEvent::ConfigureNamespace`). As of
+  Phase 4.3, per-collection ANN indexes (HNSW, IVF, BQ) are fully supported
+  in cluster mode via `POST /v1/namespaces/{name}/index`. The desired spec and
+  generation are committed through Raft; each node builds its own local index
+  and activates it independently. Search uses the node-local active ANN index
+  and falls back to exact brute-force while a build is in progress or if it
+  fails on that node. Phase 4.4 added stale-build detection (re-reads desired
+  generation before activating a completed build), FAILED retry debounce (60 s
+  minimum between retries), watcher drop-path hardening, and 7 Prometheus metrics
+  for the full ANN build lifecycle.
 
 ### List collections
 
 ```bash
 curl http://localhost:3000/v1/namespaces
-# → {"collections":[{"name":"default","id":0},{"name":"tenant-acme","id":1}]}
+# A brand-new project → {"collections":[]}
+# After creating "tenant-acme" and "images":
+# → {"collections":[{"name":"tenant-acme","id":0,"dimension":384,"metric":"squared_l2"},
+#                    {"name":"images","id":1,"dimension":768,"metric":"squared_l2","index":"ivf"}]}
 ```
 
 ### Drop a collection
@@ -77,8 +315,8 @@ curl http://localhost:3000/v1/namespaces
 ```bash
 curl -X DELETE http://localhost:3000/v1/namespaces/tenant-acme
 # → 204 No Content
-# Dropping "default" → 400 Bad Request
 # Dropping an unknown collection → 404 Not Found
+# ("default" is not a special case — 404 if it was never created, 204 if it was)
 ```
 
 Collection names must be non-empty, at most 64 characters, and contain only
@@ -268,9 +506,10 @@ both paths); insert and search answer `400 Bad Request`.
 |---|---|---|
 | `/records` | `POST` | Insert a single vector. Optional `text` field indexes the record for hybrid retrieval (Phase C5). |
 | `/v1/vectors/batch_insert` | `POST` | Insert multiple vectors. Optional `texts` array indexes each record for hybrid retrieval (Phase C5). |
-| `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Supports `as_of` / `as_of_log_index` for point-in-time reads, `decay_half_life_secs` for recency-aware ranking (Phase C4.1), and `metadata_filter` for JSON predicate post-filtering (Phase I7). |
-| `/v1/delete` | `POST` | Permanently remove a record by ID (accepts an optional `"collection"` field, S7). |
-| `/v1/soft-delete` | `POST` | Mark a record inactive without removing it — searchable-off but still present for audit (accepts an optional `"collection"` field, S7). |
+| `/search` | `POST` | K-nearest-neighbour search. `rerank=true` (default) + `query_text` enables the Valori Reranker (Phase C5). Supports `as_of` / `as_of_log_index` for point-in-time reads, `decay_half_life_secs` for recency-aware ranking (Phase C4.1), `metadata_filter` for JSON predicate post-filtering (Phase I7), and `graph_rerank` for graph-aware reranking (Phase G1.4.1, not supported on `as_of` queries). Namespace-scoped on both paths — cluster mode was fixed in Phase G1.4.2 (previously leaked across namespaces sharing a shard, e.g. any `VALORI_SHARD_COUNT=1` deployment). |
+| `/v1/search/multi` | `POST` | **Phase 5 — Cross-collection search.** Body: `{query, k, collections: [name, ...], decay_half_life_secs?, metadata_filter?}`. All collections must share the same `dim` and `metric`; different index types are allowed. Fans-out to each collection in parallel, merges by Squared L2 (smaller = better). Each hit carries a `collection` field. Partial per-collection failures are reported in `partial_failures` without suppressing other results. BM25 reranking and graph reranking are excluded (scores from different Collection corpora are not comparable). Available on both standalone and cluster paths. |
+| `/v1/delete` | `POST` | Permanently remove a record by ID (accepts an optional `"collection"` field, S7). **Cascades**: also deletes every graph node still referencing the record (and each such node's incident edges), in ascending `NodeId` order (G1.3.1) — a record can have zero, one, or many nodes (`/v1/memory/contradict`/`consolidate` create one per call), and a surviving node whose `record` points at a hard-deleted record makes the state's own snapshot undecodable, so the cascade is mandatory, not optional. Rejects (404) a `collection` that doesn't own the record. |
+| `/v1/soft-delete` | `POST` | Mark a record inactive without removing it — searchable-off but still present for audit (accepts an optional `"collection"` field, S7). Does **not** touch the graph: the record row survives (flagged, not freed), so any referencing node stays valid. Rejects (404) a `collection` that doesn't own the record. |
 | `/v1/timeline` | `GET` | Structured event timeline. Accepts `from=<ISO8601>` and `to=<ISO8601>` filters. |
 
 ### Insert into a collection
@@ -320,10 +559,11 @@ curl -X POST http://localhost:3000/search \
   -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5, "collection": "tenant-acme"}'
 # → {"results":[{"id":0,"score":0.0}]}
 
-# Search the default collection (no "collection" field needed).
+# "collection" is required — there is no implicit collection to search
+# even when it's omitted (Phase 3.3).
 curl -X POST http://localhost:3000/search \
   -H "Content-Type: application/json" \
-  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5}'
+  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5, "collection": "tenant-acme"}'
 ```
 
 ### Point-in-time (as-of) search — Phase 3.4
@@ -402,32 +642,73 @@ curl -X POST http://localhost:3000/v1/memory/contradict \
   -d '{"record_a": 3, "record_b": 9, "threshold": 0.9}'
 ```
 
-### GraphRAG — `POST /v1/graphrag` (Phase 3.15)
+### GraphRAG — `POST /v1/graphrag` (Phase 3.15, hardened Phase 5.3/5.4)
 
 Retrieve the K nearest vectors **and** the connected knowledge subgraph around
 them in a single call, from one consistent kernel snapshot — no second store, no
 cross-system drift. Vectors and graph live in the same kernel, so the KNN, the
 record→node resolution, and the subgraph BFS all run under one read lock.
 
+**Request** (Phase 5.4 contract):
+
 ```bash
 curl -X POST http://localhost:3000/v1/graphrag \
   -H "Content-Type: application/json" \
-  -d '{"query_vector": [0.1, 0.2, 0.3, 0.4], "k": 5, "depth": 2}'
+  -d '{
+    "query_vector": [0.1, 0.2, 0.3, 0.4],
+    "retrieval_k": 20,
+    "final_k": 10,
+    "depth": 2,
+    "max_graph_candidates": 100,
+    "max_nodes": 500,
+    "max_edges": 2000,
+    "graph_weight": 0.3,
+    "collection": "knowledge"
+  }'
 ```
+
+`k` is accepted as a backward-compat alias for `retrieval_k`.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `retrieval_k` / `k` | 5 | Vector seed count (ANN candidates used as graph expansion seeds) |
+| `final_k` | `retrieval_k` | Maximum hits returned after reranking. Absent = same as retrieval_k. |
+| `depth` | 2 | BFS hop depth (clamped to MAX_DEPTH=4) |
+| `max_graph_candidates` | 100 | Budget on graph-only hits before `final_k` |
+| `max_nodes` | unlimited | Halt BFS once this many nodes are visited |
+| `max_edges` | unlimited | Halt edge emission once this many edges are emitted |
+| `graph_weight` | 0.3 | β in `final_score = (1-β)×vector_rel + β×graph_rel`; range [0,1] |
+
+**Response hit shape** (Phase 5.4):
 
 ```jsonc
-{
-  "hits":       [ { "memory_id", "record_id", "score", "node_id", "metadata" } ],
-  "seed_nodes": [ /* node ids the hits mapped to */ ],
-  "subgraph":   { "nodes": [...], "edges": [...] }
-}
+// Vector hit with graph node (seed):
+{ "record_id": 15, "source": "vector_and_graph",
+  "score": 0.05, "vector_score": 0.05,
+  "graph_score": 1.0, "final_score": 0.966,
+  "graph_distance": 0, "node_id": 3, "memory_id": "rec:15", "metadata": null }
+
+// Vector hit without graph node:
+{ "record_id": 42, "source": "vector",
+  "score": 0.12, "vector_score": 0.12,
+  "graph_score": 0.0, "final_score": 0.614,
+  "graph_distance": null, "node_id": null, "memory_id": "rec:42", "metadata": null }
+
+// Graph-only hit (not in top-k vector results, reached via expansion):
+{ "record_id": 57, "source": "graph",
+  "score": null, "vector_score": null,
+  "graph_score": 0.5, "final_score": 0.15,
+  "graph_distance": 1, "node_id": 7, "memory_id": "rec:57", "metadata": null }
 ```
 
-`depth` is clamped to 4. The subgraph is only as rich as the edges that exist
-(ingest creates a document→chunk edge per memory; entity/citation edges and
-manual `/graph/edge` calls add more). On a cluster the request also honours
-`consistency` (linearizable by default). For agents, prefer the
-`memory_graph_recall` MCP tool, which wraps this with a verifiable receipt.
+`score` is a backward-compat deprecated alias for `vector_score`. All hits are
+merged into one list sorted by `final_score` descending (higher = better),
+with `record_id` ascending as tie-breaker. `graph_score` = `1/(1+hop_distance)`,
+always in [0, 1]. `graph_distance` is the minimum hop count from any seed
+(guaranteed shortest path). At `graph_weight=1.0` the ranking is purely
+graph-based — graph-only candidates can outrank pure vector hits with no graph
+node. On a cluster the request also honours `consistency` (linearizable by
+default). For agents, prefer the `memory_graph_recall` MCP tool.
 
 ### Recency-aware search — `decay_half_life_secs` (Phase C4.1)
 
@@ -447,6 +728,38 @@ state and never changes the BLAKE3 state hash. Set `VALORI_DECAY_HALF_LIFE_SECS`
 for a server default (a per-request value, including `0` to disable, wins).
 Not applied to `as_of` queries. Standalone only in v1 (cluster accepts the field
 but treats it as neutral — see `docs/phases/phase-C4.1-decay.md`).
+
+### Graph-aware reranking — `graph_rerank` (Phase G1.4.1)
+
+Add `graph_rerank` to `/search` to nudge vector ranking by graph proximity to
+the query's own best hits — a candidate structurally close to your top match
+ranks higher than one that's equally distant in vector space but graph-isolated:
+
+```bash
+curl -X POST http://localhost:3000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": [0.1, 0.2, 0.3, 0.4], "k": 5,
+       "graph_rerank": {"weight": 0.15, "seed_count": 1, "direction": "outgoing", "max_depth": 2}}'
+```
+
+All fields are optional (defaults shown above). Seeds are the resolved graph
+nodes of the top `seed_count` hits in the *same* search's own candidate pool —
+no separate seed-node lookup needed. Each candidate's graph distance is the
+minimum hop count (bounded BFS, `direction`/`max_depth`-scoped) across all
+graph nodes referencing its record (a record may have several — see
+[docs/reviews/graph-g1.3.1-record-graph-cascade-semantics.md](../../docs/reviews/graph-g1.3.1-record-graph-cascade-semantics.md)).
+Reranking formula: `adjusted = score × (1 + weight × distance)` — a
+multiplicative penalty, same shape as decay's `distance / factor`. Each hit
+gains `graph_distance` (absent when `graph_rerank` isn't requested); missing
+or unreachable graph data is **neutral** (no penalty, never drops a
+candidate). Composes with either `rerank` (BM25) or `decay_half_life_secs` —
+it runs as an independent final pass over whichever score they already
+produced. Read-time only: never mutates canonical state, never affects the
+BLAKE3 state hash. Not applied to `as_of` queries. Standalone and cluster
+both supported — see
+[docs/reviews/graph-g1.4.1-graph-aware-reranking-design.md](../../docs/reviews/graph-g1.4.1-graph-aware-reranking-design.md)
+for the full design and the reachability-pre-filter / independent-signal-fusion
+modes deliberately deferred out of this version.
 
 ### Valori Reranker — hybrid retrieval (Phase C5)
 
@@ -754,7 +1067,7 @@ client.contradict(record_a=3, record_b=9, threshold=0.9)
 proof = client.event_log_proof()   # {"event_log_hash", "final_state_hash", "committed_height", ...}
 
 # List and drop
-collections = client.list_collections()   # [{"name": "default", "id": 0}, ...]
+collections = client.list_collections()   # [{"name": "tenant-acme", "id": 0}, ...] — [] on a brand-new project
 client.drop_collection("tenant-acme")
 ```
 

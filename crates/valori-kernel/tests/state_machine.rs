@@ -175,3 +175,95 @@ fn drop_namespace_zero_is_rejected() {
         "the default namespace must never be dropped"
     );
 }
+
+// ── Collection-scoped configuration (ConfigureNamespace) ───────────────────────
+
+#[test]
+fn configure_namespace_sets_explicit_dim_independent_of_legacy_dim() {
+    use valori_kernel::index::Metric;
+
+    let mut state = KernelState::new();
+    // Legacy default-namespace dim gets set the old way, by the first insert.
+    state.apply_event_ns(&insert(0), 0).unwrap();
+    assert_eq!(state.dim, Some(DIM));
+
+    // A brand-new namespace explicitly configured with a DIFFERENT dimension
+    // must not be constrained by the legacy dim at all.
+    state
+        .configure_namespace(7, 1536, Metric::SquaredL2, 0)
+        .unwrap();
+    assert_eq!(state.namespace_dim(7), Some(1536));
+    assert_eq!(
+        state.namespace_dim(0),
+        Some(DIM),
+        "namespace 0 must be unaffected by configuring namespace 7"
+    );
+    assert!(state.has_namespace_config(7));
+    assert!(!state.has_namespace_config(0));
+}
+
+#[test]
+fn configure_namespace_rejects_conflicting_redefinition() {
+    use valori_kernel::index::Metric;
+
+    let mut state = KernelState::new();
+    state
+        .configure_namespace(1, 384, Metric::SquaredL2, 0)
+        .unwrap();
+    let err = state
+        .configure_namespace(1, 768, Metric::SquaredL2, 0)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        valori_kernel::error::KernelError::NamespaceAlreadyConfigured {
+            namespace_id: 1,
+            ..
+        }
+    ));
+    // Idempotent re-apply with the SAME dim (e.g. WAL replay) must succeed.
+    state
+        .configure_namespace(1, 384, Metric::SquaredL2, 0)
+        .unwrap();
+}
+
+#[test]
+fn configure_namespace_via_event_roundtrips_through_apply_event_ns() {
+    let mut state = KernelState::new();
+    let evt = KernelEvent::ConfigureNamespace {
+        namespace_id: 3,
+        dim: 768,
+        metric: 0,
+        index_kind: 1,
+    };
+    state.apply_event_ns(&evt, 0).unwrap();
+    assert_eq!(state.namespace_dim(3), Some(768));
+}
+
+#[test]
+fn namespace_without_explicit_config_falls_back_to_legacy_dim_unchanged() {
+    // This IS the required "old collections inherit legacy behavior" migration
+    // semantic: absence of an explicit config is itself the inheritance —
+    // no separate migration path is needed.
+    let mut state = KernelState::new();
+    state.apply_event_ns(&insert(0), 0).unwrap();
+    state.apply_event_ns(&insert(1), 9).unwrap(); // pre-existing namespace, never configured
+    assert_eq!(state.namespace_dim(9), state.dim);
+    assert_eq!(
+        state.namespace_metric(9),
+        valori_kernel::index::Metric::SquaredL2
+    );
+}
+
+#[test]
+fn drop_namespace_clears_its_collection_config() {
+    use valori_kernel::index::Metric;
+    let mut state = KernelState::new();
+    state
+        .configure_namespace(4, 384, Metric::SquaredL2, 0)
+        .unwrap();
+    assert!(state.has_namespace_config(4));
+    state
+        .apply_event_ns(&KernelEvent::DropNamespace { name: "x".into() }, 4)
+        .unwrap();
+    assert!(!state.has_namespace_config(4));
+}

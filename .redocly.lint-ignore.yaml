@@ -1,0 +1,17 @@
+# Precisely-scoped lint exemptions for the Valori API contract.
+#
+# Phase API-3.2 (§6): `operation-4xx-response` is kept at `error` severity in
+# redocly.yaml so a missing 4xx anywhere is a hard failure. `GET /health` is the
+# one operation that legitimately has none — it is unauthenticated
+# (`security: []`, so no 401/403 is reachable) and takes no body, path param, or
+# query param, so no 400 is reachable either. It returns 200 or 503.
+#
+# A fake 400 was deliberately NOT invented to silence the linter. This pin, and
+# only this pin, records the exemption.
+#
+# Do not widen this file to suppress unrelated warnings.
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+api/openapi/valori-v1.yaml:
+  operation-4xx-response:
+    - '#/paths/~1health/get/responses'

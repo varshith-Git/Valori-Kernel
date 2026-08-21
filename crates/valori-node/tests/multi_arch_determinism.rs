@@ -20,11 +20,9 @@ mod determinism_tests {
     fn test_config() -> NodeConfig {
         NodeConfig {
             max_records: MAX_RECORDS,
-            dim: DIM,
             max_nodes: MAX_NODES,
             max_edges: MAX_EDGES,
             bind_addr: "127.0.0.1:0".parse().unwrap(),
-            index_kind: IndexKind::BruteForce,
             quantization_kind: QuantizationKind::None,
             snapshot_path: None,
             wal_path: None,

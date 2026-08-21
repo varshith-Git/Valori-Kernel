@@ -1,0 +1,6 @@
+# openapi-python-client configuration for the Valori Python SDK.
+#
+# The generated package is named `valori_generated` — deliberately distinct
+# from the handwritten `valori` package so an import line tells you which side
+# of the generated/handwritten boundary (Phase API-4A §4) it comes from.
+package_name_override: valori_generated

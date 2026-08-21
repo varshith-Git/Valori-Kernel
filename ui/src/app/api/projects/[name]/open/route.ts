@@ -69,24 +69,40 @@ export async function POST(
   // node(s) can't write their WAL/snapshot/raft log and fail to start.
   unprotectAll(entry);
 
+  let startStatus: daemon.DaemonNodeStatus;
   try {
-    await daemon.startProject(name);
+    startStatus = await daemon.startProject(name);
   } catch (e) {
     return errorResponse(e, 503);
   }
 
-  const primaryNode = entry.nodes[0];
+  // Single-node projects have no persisted port — the daemon allocates one
+  // dynamically each start (see project-adapter.ts's comment). `entry` was
+  // built from the PRE-start project (still "stopped"), so its port is
+  // legitimately undefined at that point; the just-finished start response
+  // carries the real, live port. Cluster nodes are unaffected — their ports
+  // are static, known ahead of time from the cluster config in `entry`.
+  // Without this, opening a single-node project from a stopped state always
+  // health-probed `http://127.0.0.1:undefined` and never became reachable
+  // (measured live during Phase L: 18s of failed probing, `reachable: false`).
+  const primaryNode =
+    entry.nodes.length === 1 && startStatus.port != null
+      ? { ...entry.nodes[0], httpPort: startStatus.port }
+      : entry.nodes[0];
   const url = `http://127.0.0.1:${primaryNode.httpPort}`;
 
   // Poll every node's own /health directly rather than round-tripping
   // through the daemon's aggregation endpoint — this route already needs
   // per-node health bodies (dim, live record count) for the response shape
   // clients expect, which the daemon's /cluster endpoint doesn't carry.
-  const results: (HealthBody | null)[] = new Array(entry.nodes.length).fill(null);
+  // Use `primaryNode` (the port-corrected entry) for node 0, not the stale
+  // pre-start `entry.nodes[0]` — see the comment above.
+  const nodesToProbe = [primaryNode, ...entry.nodes.slice(1)];
+  const results: (HealthBody | null)[] = new Array(nodesToProbe.length).fill(null);
   for (let i = 0; i < 120; i++) {
     if (results.every((h) => h)) break;
     if (i > 0) await new Promise((r) => setTimeout(r, 150));
-    await Promise.all(entry.nodes.map(async (n, idx) => {
+    await Promise.all(nodesToProbe.map(async (n, idx) => {
       if (results[idx]) return;
       results[idx] = await probeHealth(n.httpPort, 1500);
     }));

@@ -1,0 +1,59 @@
+{
+  "name": "@valori/studio",
+  "version": "0.2.0",
+  "private": false,
+  "description": "Shared Valori product UI \u2014 the normal customer-facing feature set (projects, collections, search, metrics, cluster, graph, operations, proof, snapshots, tools, playground), usable by Desktop Local, Desktop Cloud, and Cloud Web. Contains no Tauri, Supabase, Next.js server APIs, or Cloud control-plane code \u2014 hosts inject a Transport, optional CredentialStore, and StudioCapabilities.",
+  "keywords": [
+    "valori",
+    "vector-database",
+    "shared-ui"
+  ],
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/varshith-Git/Valori-Kernel.git",
+    "directory": "ui/studio"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/__example__",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json --resolve-full-paths",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.6.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.21.0",
+    "swr": "^2.4.1",
+    "tailwind-merge": "^3.6.0",
+    "@valori/api-types": "*"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tsc-alias": "^1.9.1",
+    "typescript": "^5"
+  }
+}

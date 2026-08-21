@@ -57,7 +57,6 @@ fn test_kmeans_rounding_does_not_overflow() {
 #[test]
 fn test_engine_insert_out_of_range() {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 1;
     cfg.max_records = 10;
     cfg.max_nodes = 10;
     cfg.max_edges = 10;

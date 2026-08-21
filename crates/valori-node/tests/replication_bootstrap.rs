@@ -20,7 +20,6 @@ async fn test_replication_bootstrap() {
     // ── 1. Leader setup ───────────────────────────────────────────────────────
     let mut leader_config = NodeConfig::default();
     leader_config.max_records = 100;
-    leader_config.dim = 4;
     leader_config.max_nodes = 100;
     leader_config.max_edges = 100;
     leader_config.wal_path = Some(std::env::temp_dir().join("leader_boot_wal.log"));
@@ -36,7 +35,7 @@ async fn test_replication_bootstrap() {
         use valori_node::events::{EventCommitter, EventJournal};
 
         let log_writer =
-            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open leader event log");
+            EventLogWriter::open(&log_path, None).expect("Failed to open leader event log");
         let journal = EventJournal::new();
         let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
@@ -57,10 +56,19 @@ async fn test_replication_bootstrap() {
 
     // ── 2. Populate leader with 10 records ────────────────────────────────────
     let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/v1/namespaces", leader_url))
+        .json(&serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "collection create failed");
     for _i in 0..10 {
         let resp = client
             .post(format!("{}/records", leader_url))
-            .json(&serde_json::json!({ "values": [0.1f32, 0.2, 0.3, 0.4] }))
+            .json(
+                &serde_json::json!({ "values": [0.1f32, 0.2, 0.3, 0.4], "collection": "default" }),
+            )
             .send()
             .await
             .unwrap();
@@ -79,7 +87,6 @@ async fn test_replication_bootstrap() {
     // ── 4. Fresh follower ─────────────────────────────────────────────────────
     let mut follower_config = NodeConfig::default();
     follower_config.max_records = 100;
-    follower_config.dim = 4;
     follower_config.max_nodes = 100;
     follower_config.max_edges = 100;
     follower_config.mode = NodeMode::Follower {
@@ -97,7 +104,7 @@ async fn test_replication_bootstrap() {
         use valori_node::events::{EventCommitter, EventJournal};
 
         let log_writer =
-            EventLogWriter::open(&log_path, Some(4)).expect("Failed to open follower event log");
+            EventLogWriter::open(&log_path, None).expect("Failed to open follower event log");
         let journal = EventJournal::new();
         let state_clone = engine.clone_kernel_state();
         engine.persistence = valori_node::commit::Persistence::EventLog(EventCommitter::new(
@@ -129,7 +136,7 @@ async fn test_replication_bootstrap() {
     // ── 6. Verify live replication continues ──────────────────────────────────
     client
         .post(format!("{}/records", leader_url))
-        .json(&serde_json::json!({ "values": [0.9f32, 0.8, 0.7, 0.6] }))
+        .json(&serde_json::json!({ "values": [0.9f32, 0.8, 0.7, 0.6], "collection": "default" }))
         .send()
         .await
         .unwrap();

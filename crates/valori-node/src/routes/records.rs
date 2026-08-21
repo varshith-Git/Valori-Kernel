@@ -36,18 +36,9 @@ pub trait RecordOps: Send + Sync {
 }
 
 async fn resolve<O: RecordOps>(ops: &O, collection: Option<&str>) -> Result<u16, Response> {
-    ops.resolve_collection(collection).await.ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": format!(
-                    "unknown collection '{}' — create it first with POST /v1/namespaces",
-                    collection.unwrap_or("default")
-                )
-            })),
-        )
-            .into_response()
-    })
+    ops.resolve_collection(collection)
+        .await
+        .ok_or_else(|| crate::error_codes::collection_not_found(collection))
 }
 
 pub async fn delete_record<O: RecordOps>(

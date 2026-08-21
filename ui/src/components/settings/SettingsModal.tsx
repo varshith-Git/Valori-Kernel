@@ -998,7 +998,7 @@ export function SettingsModal({ open, onClose }: { open: boolean; onClose: () =>
       onClick={onClose}
     >
       {/* Backdrop — blurs and dims the page behind without hiding it */}
-      <div className="absolute inset-0 bg-background/30 backdrop-blur-lg" />
+      <div className="absolute inset-0 bg-background/10 backdrop-blur-xs" />
 
       {/* Modal */}
       <div

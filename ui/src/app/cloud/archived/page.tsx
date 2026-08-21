@@ -1,28 +1,18 @@
 import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser, getCurrentMembership } from '@/utils/supabase/dal'
 import { redirect } from 'next/navigation'
 import { ArchivedProjects } from './ArchivedProjects'
 import { SettingsNav } from '../settings/SettingsNav'
 
 export default async function ArchivedPage() {
     const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')
     }
 
-    const { data: memberships } = await supabase
-        .from('org_members')
-        .select('role, organizations(id, name)')
-        .eq('user_id', user.id)
-        .limit(1)
-
-    const membership = memberships?.[0] as
-        | { role: string; organizations: { id: string; name: string } }
-        | undefined
+    const membership = await getCurrentMembership()
 
     if (!membership) {
         return (

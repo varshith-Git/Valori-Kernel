@@ -18,13 +18,31 @@ const DIM: usize = 4;
 
 fn make_shared() -> Arc<RwLock<Engine>> {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = 100;
     cfg.max_nodes = 64;
     cfg.max_edges = 64;
     cfg.event_log_path = None;
     cfg.wal_path = None;
     Arc::new(RwLock::new(Engine::new(&cfg)))
+}
+
+async fn create_default_collection(shared: Arc<RwLock<Engine>>) {
+    let app = build_router(shared, None, None);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/namespaces")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "name": "default",
+                "dimension": DIM,
+                "metric": "squared_l2"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "collection create failed");
 }
 
 async fn post_batch(
@@ -51,11 +69,13 @@ async fn post_batch(
 #[tokio::test]
 async fn idempotent_insert_returns_same_id() {
     let shared = make_shared();
+    create_default_collection(shared.clone()).await;
     let rid = "aabbccddeeff00112233445566778899";
 
     let body = serde_json::json!({
         "batch": [[0.1, 0.2, 0.3, 0.4]],
-        "request_ids": [rid]
+        "request_ids": [rid],
+        "collection": "default"
     });
 
     let (s1, r1) = post_batch(shared.clone(), body.clone()).await;
@@ -76,6 +96,7 @@ async fn idempotent_insert_returns_same_id() {
 #[tokio::test]
 async fn mixed_batch_dedup_and_new() {
     let shared = make_shared();
+    create_default_collection(shared.clone()).await;
     let rid_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let rid_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -84,7 +105,8 @@ async fn mixed_batch_dedup_and_new() {
         shared.clone(),
         serde_json::json!({
             "batch": [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]],
-            "request_ids": [rid_a, rid_b]
+            "request_ids": [rid_a, rid_b],
+            "collection": "default"
         }),
     )
     .await;
@@ -96,7 +118,8 @@ async fn mixed_batch_dedup_and_new() {
         shared.clone(),
         serde_json::json!({
             "batch": [[0.1, 0.2, 0.3, 0.4], [0.9, 0.9, 0.9, 0.9]],
-            "request_ids": [rid_a, null]
+            "request_ids": [rid_a, null],
+            "collection": "default"
         }),
     )
     .await;
@@ -112,8 +135,10 @@ async fn mixed_batch_dedup_and_new() {
 #[tokio::test]
 async fn batch_without_request_ids_still_works() {
     let shared = make_shared();
+    create_default_collection(shared.clone()).await;
     let body = serde_json::json!({
-        "batch": [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]]
+        "batch": [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8]],
+        "collection": "default"
     });
     let (s, r) = post_batch(shared, body).await;
     assert_eq!(s, StatusCode::OK);
@@ -125,11 +150,13 @@ async fn batch_without_request_ids_still_works() {
 #[tokio::test]
 async fn fully_deduped_batch_does_not_grow_record_count() {
     let shared = make_shared();
+    create_default_collection(shared.clone()).await;
     let rids: Vec<String> = (0..3u8).map(|i| format!("{:032x}", i)).collect();
 
     let batch_body = serde_json::json!({
         "batch": [[0.1, 0.2, 0.3, 0.4], [0.5, 0.6, 0.7, 0.8], [0.9, 0.1, 0.2, 0.3]],
-        "request_ids": [rids[0], rids[1], rids[2]]
+        "request_ids": [rids[0], rids[1], rids[2]],
+        "collection": "default"
     });
 
     let (_, r1) = post_batch(shared.clone(), batch_body.clone()).await;

@@ -260,6 +260,14 @@ pub struct ClusterHandle {
     /// ever cared about shard 0's audit surface (`main.rs`) don't need to
     /// reach into `shards[&ShardId(0)]`.
     pub event_log_writer: Option<Arc<Mutex<EventLogWriter>>>,
+    /// Shared per-collection ANN index state (Phase 4.3/4.4).
+    ///
+    /// Persisted on the handle so that multiple calls to `build_cluster_router`
+    /// (common in tests) share the same index lifecycle state. In production
+    /// the router is built once, so this field is accessed exactly once after
+    /// bootstrap; the Arc clone is free.
+    pub cluster_indexes:
+        Arc<tokio::sync::RwLock<HashMap<u16, crate::cluster_server::ClusterCollectionIndex>>>,
 }
 
 impl ClusterHandle {
@@ -317,7 +325,6 @@ pub async fn bootstrap_cluster(
     cfg: &ClusterConfig,
     event_log_path: Option<&std::path::Path>,
     event_log_rotation_bytes: Option<u64>,
-    dim: usize,
 ) -> Result<ClusterHandle, std::io::Error> {
     // Snapshot cadence is an explicit, operator-tunable policy — not openraft's
     // implicit default. A snapshot is built every `snapshot_every` applied
@@ -379,7 +386,7 @@ pub async fn bootstrap_cluster(
         ) = match event_log_path {
             Some(base) => {
                 let path = shard_path(base, shard_id, cfg.shard_count);
-                match EventLogWriter::open(&path, Some(dim as u32)) {
+                match EventLogWriter::open(&path, None) {
                     Ok(writer) => {
                         let mut sink = EventLogAuditSink::new(writer);
                         if let Some(limit) = event_log_rotation_bytes {
@@ -417,7 +424,7 @@ pub async fn bootstrap_cluster(
                     std::io::Error::other(format!("shard {i} raft log open failed: {e}"))
                 })?;
                 let db = store.db();
-                let sm = ValoriStateMachine::with_db(audit_i, db, dim).map_err(|e| {
+                let sm = ValoriStateMachine::with_db(audit_i, db, 0).map_err(|e| {
                     std::io::Error::other(format!("shard {i} state machine restore failed: {e}"))
                 })?;
                 // The committed index this node durably knew before (re)start. The
@@ -448,7 +455,7 @@ pub async fn bootstrap_cluster(
                      Raft log store. Votes are NOT persisted. A crash can cause split-brain \
                      (two leaders in the same term). Set VALORI_RAFT_LOG_PATH to a redb file path."
                 );
-                let sm = ValoriStateMachine::new(audit_i, dim);
+                let sm = ValoriStateMachine::new(audit_i, 0);
                 let raft = Raft::new(
                     cfg.node_id,
                     raft_config.clone(),
@@ -525,6 +532,7 @@ pub async fn bootstrap_cluster(
         startup_committed_index: shard0_index,
         shards,
         event_log_writer: shard0_event_log_writer,
+        cluster_indexes: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     })
 }
 

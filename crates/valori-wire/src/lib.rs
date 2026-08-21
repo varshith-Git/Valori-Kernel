@@ -128,7 +128,7 @@ pub enum WireError {
     Decode(String),
     #[error("entry encode failed: {0}")]
     Encode(String),
-    #[error("invalid dim {0} in segment header (must be 1..={MAX_DIM})")]
+    #[error("invalid dim {0} in segment header (must be 0..={MAX_DIM})")]
     InvalidDim(u32),
     #[error("entry exceeds the {DECODE_LIMIT}-byte allocation limit — file is likely crafted or corrupted")]
     DecodeLimitExceeded,
@@ -272,7 +272,7 @@ pub fn parse_header(bytes: &[u8]) -> Result<SegmentHeader> {
     let version = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let dim = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
 
-    if !(1..=MAX_DIM).contains(&dim) {
+    if dim > MAX_DIM {
         return Err(WireError::InvalidDim(dim));
     }
 

@@ -191,10 +191,19 @@ class _AsyncTransport:
         return await self._client.delete(url, **kw)
 
     async def post_rpc(
-        self, path: str, json_data: Dict[str, Any]
+        self, path: str, json_data: Dict[str, Any],
+        idempotency_key: Optional[bytes] = None,
     ) -> Dict[str, Any]:
+        """POST with leader discovery, idempotency, and retry on transient errors.
+
+        Phase API-2: `idempotency_key` reached parity with the sync transport.
+        The wire spelling is the canonical 16-byte array the server's
+        `request_id` accepts on both the standalone and the cluster router.
+        """
         import asyncio
         import httpx
+        if idempotency_key is not None:
+            json_data = {**json_data, "request_id": list(idempotency_key)}
         last_err: Optional[Exception] = None
         for attempt in range(self._max_retries + 1):
             base = self._leader_url or self.base_url
@@ -274,12 +283,12 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
         self,
         vector: Vector,
         tag: int = 0,
-        collection: str = "default",
+        collection: Optional[str] = None,
         idempotency_key: Optional[bytes] = None,
         text: Optional[str] = None,
     ) -> RecordId:
         data: Dict[str, Any] = {"values": vector, "tag": tag}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if text is not None:
             data["text"] = text
@@ -289,7 +298,7 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
         return resp["id"]
 
     def insert_with_proof(
-        self, vector: Vector, tag: int = 0, collection: str = "default"
+        self, vector: Vector, tag: int = 0, collection: Optional[str] = None
     ) -> Tuple[RecordId, Proof]:
         try:
             import valoricore as _vc
@@ -304,7 +313,7 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
         self,
         vector: Vector,
         tag: int = 0,
-        collection: str = "default",
+        collection: Optional[str] = None,
         text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert a vector and return the cryptographic InsertReceipt.
@@ -315,7 +324,7 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
         BLAKE3("valori-insert-receipt-v1" || fields).
         """
         data: Dict[str, Any] = {"values": vector, "tag": tag}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if text is not None:
             data["text"] = text
@@ -327,7 +336,7 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
     def insert_batch(
         self,
         batch: List[Vector],
-        collection: str = "default",
+        collection: Optional[str] = None,
         metadata: Optional[List[Optional[Dict[str, Any]]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
         texts: Optional[List[Optional[str]]] = None,
@@ -335,7 +344,7 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
     ) -> List[RecordId]:
         import json as _json
         data: Dict[str, Any] = {"batch": batch}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if metadata is not None:
             data["metadata"] = [
@@ -370,30 +379,30 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
     def delete(
         self,
         record_id: int,
-        collection: str = "default",
+        collection: Optional[str] = None,
         idempotency_key: Optional[bytes] = None,
     ) -> None:
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
         data: Dict[str, Any] = {"id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         self._t.post_rpc("/v1/delete", data, idempotency_key=key)
 
     def soft_delete(
         self,
         record_id: int,
-        collection: str = "default",
+        collection: Optional[str] = None,
         idempotency_key: Optional[bytes] = None,
     ) -> None:
         key = idempotency_key if idempotency_key is not None else uuid4().bytes
         data: Dict[str, Any] = {"id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         self._t.post_rpc("/v1/soft-delete", data, idempotency_key=key)
 
-    def get_record(self, record_id: int, collection: str = "default") -> Dict[str, Any]:
+    def get_record(self, record_id: int, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + f"/v1/records/{record_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -407,10 +416,10 @@ class _SyncRecordsMixin(_SyncAutoSnapshotMixin):
         self,
         record_id: int,
         metadata: Dict[str, Any],
-        collection: str = "default",
+        collection: Optional[str] = None,
     ) -> None:
         url = self._t.base_url + f"/v1/records/{record_id}/metadata"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.patch(url, json=metadata, params=params)
             if resp.status_code == 404:
@@ -429,20 +438,32 @@ class _SyncSearchMixin:
         k: int,
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
-        collection: str = "default",
+        collection: Optional[str] = None,
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
         decay_half_life_secs: Optional[int] = None,
         rerank: bool = True,
         query_text: Optional[str] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
+        graph_rerank: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
-            data["filter_tag"] = filter_tag
+            # Phase API-2: `filter_tag` has never existed on any server-side
+            # search request type — the field was serialised, sent, and
+            # silently discarded by both routers, so every "filtered" search
+            # actually returned unfiltered results. It is a real capability of
+            # the embedded/FFI client only (`valoricore.local.LocalClient`).
+            # Failing loudly is the only honest behaviour for the HTTP client.
+            raise ValidationError(
+                "filter_tag is not supported by the Valori HTTP API — the server has no "
+                "such field and silently ignored it. Use metadata_filter=... for "
+                "server-side filtering, or the embedded client (valoricore.local) "
+                "if you need tag filtering."
+            )
         if consistency is not None:
             data["consistency"] = consistency
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if as_of_log_index is not None:
             data["as_of_log_index"] = as_of_log_index
@@ -455,6 +476,8 @@ class _SyncSearchMixin:
             data["query_text"] = query_text
         if metadata_filter is not None:
             data["metadata_filter"] = metadata_filter
+        if graph_rerank is not None:
+            data["graph_rerank"] = graph_rerank
         resp = self._t.post_rpc("/v1/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp
@@ -465,36 +488,109 @@ class _SyncSearchMixin:
         query_vector: Vector,
         k: int = 5,
         depth: int = 2,
-        collection: str = "default",
+        collection: Optional[str] = None,
         consistency: Optional[str] = None,
+        retrieval_k: Optional[int] = None,
+        final_k: Optional[int] = None,
+        max_graph_candidates: Optional[int] = None,
+        max_nodes: Optional[int] = None,
+        max_edges: Optional[int] = None,
+        graph_weight: Optional[float] = None,
     ) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"query_vector": query_vector, "k": k, "depth": depth}
-        if collection != "default":
+        """GraphRAG: vector KNN + graph expansion in one call.
+
+        Phase 5.3 semantics:
+          retrieval_k          — vector seed count (overrides k when provided).
+          final_k              — maximum hits returned; None = server default (= retrieval_k).
+          max_graph_candidates — budget on graph-only candidates; None = server default (100).
+
+        Phase 5.4 additions:
+          max_nodes    — halt BFS before visiting more than this many nodes; None = unlimited.
+          max_edges    — halt edge emission after this many edges; None = unlimited.
+          graph_weight — β in combined ranking: final_score = (1-β)×vector_rel + β×graph_rel.
+                         Range [0.0, 1.0]; None = server default (0.3).
+
+        Each hit in ``response["hits"]`` carries:
+          source        : "vector" | "vector_and_graph" | "graph"
+          vector_score  : L2 distance for vector hits, null for graph-only.
+          graph_score   : normalised graph relevance ∈ [0, 1]; 0.0 = no graph node.
+          final_score   : combined ranking score ∈ [0, 1]; always present (Phase 5.4).
+          graph_distance: 0 for seeds, N hops for graph-only, null if no graph node.
+        Hits are sorted by ``final_score`` descending.
+        """
+        data: Dict[str, Any] = {
+            "query_vector": query_vector,
+            "k": retrieval_k if retrieval_k is not None else k,
+            "depth": depth,
+        }
+        if collection is not None:
             data["collection"] = collection
         if consistency is not None:
             data["consistency"] = consistency
+        if retrieval_k is not None:
+            data["retrieval_k"] = retrieval_k
+        if final_k is not None:
+            data["final_k"] = final_k
+        if max_graph_candidates is not None:
+            data["max_graph_candidates"] = max_graph_candidates
+        if max_nodes is not None:
+            data["max_nodes"] = max_nodes
+        if max_edges is not None:
+            data["max_edges"] = max_edges
+        if graph_weight is not None:
+            data["graph_weight"] = graph_weight
         return self._t.post_rpc("/v1/graphrag", data)
+
+    def search_multi(
+        self,
+        query: Vector,
+        k: int,
+        collections: List[str],
+        decay_half_life_secs: Optional[int] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Phase 5 — Cross-collection search.
+
+        Fans the query out to each listed collection independently and merges
+        results globally by Squared L2 (smaller = better). All collections must
+        share the same dimension and metric; different index types are allowed.
+
+        BM25 reranking and graph reranking are not applied (scores from
+        different collection corpora are not comparable).
+
+        Returns the full response dict with keys:
+          - ``results``: list of hits, each with ``collection``, ``id``, ``score``,
+            and optional ``decay_factor`` / ``age_secs``.
+          - ``collections_searched``: list of collection names queried.
+          - ``partial_failures``: list of per-collection errors, if any.
+        """
+        data: Dict[str, Any] = {"query": query, "k": k, "collections": collections}
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
+        if metadata_filter is not None:
+            data["metadata_filter"] = metadata_filter
+        return self._t.post_rpc("/v1/search/multi", data)
 
 
 class _SyncGraphMixin:
     _t: _SyncTransport
     _MAX_WALK_DEPTH = 10
 
-    def create_node(self, kind: int, record_id: Optional[int] = None, collection: str = "default") -> NodeId:
+    def create_node(self, kind: int, record_id: Optional[int] = None, collection: Optional[str] = None) -> NodeId:
         data: Dict[str, Any] = {"kind": kind, "record_id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return self._t.post_rpc("/v1/graph/node", data)["node_id"]
 
-    def create_edge(self, from_id: int, to_id: int, kind: int, collection: str = "default") -> int:
+    def create_edge(self, from_id: int, to_id: int, kind: int, collection: Optional[str] = None) -> int:
         data: Dict[str, Any] = {"from": from_id, "to": to_id, "kind": kind}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return self._t.post_rpc("/v1/graph/edge", data)["edge_id"]
 
-    def get_node(self, node_id: int, collection: str = "default") -> Optional[Dict[str, Any]]:
+    def get_node(self, node_id: int, collection: Optional[str] = None) -> Optional[Dict[str, Any]]:
         url = self._t.base_url + f"/v1/graph/node/{node_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -504,9 +600,9 @@ class _SyncGraphMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
-    def get_edges(self, node_id: int, collection: str = "default") -> List[Dict[str, Any]]:
+    def get_edges(self, node_id: int, collection: Optional[str] = None) -> List[Dict[str, Any]]:
         url = self._t.base_url + f"/v1/graph/edges/{node_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -516,15 +612,52 @@ class _SyncGraphMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
 
-    def delete_node(self, node_id: int, collection: str = "default") -> None:
-        params = {} if collection == "default" else {"collection": collection}
+    def graph_query(
+        self,
+        start: int,
+        direction: str = "outgoing",
+        edge_kind: Optional[int] = None,
+        node_kind: Optional[int] = None,
+        depth: Optional[int] = None,
+        limit: Optional[int] = None,
+        collection: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Phase G1.1 — deterministic, filterable, depth-bounded graph query.
+
+        Returns ``None`` if ``start`` does not exist (or exists in a
+        different collection). Otherwise ``{"hits": [...], "count": N}``,
+        each hit carrying ``node_id``, ``kind``, ``record_id``, ``depth``.
+        """
+        url = self._t.base_url + "/v1/graph/query"
+        params: Dict[str, Any] = {"start": start, "direction": direction}
+        if edge_kind is not None:
+            params["edge_kind"] = edge_kind
+        if node_kind is not None:
+            params["node_kind"] = node_kind
+        if depth is not None:
+            params["depth"] = depth
+        if limit is not None:
+            params["limit"] = limit
+        if collection is not None:
+            params["collection"] = collection
+        try:
+            resp = self._t.get(url, params=params)
+            if resp.status_code == 404:
+                return None
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to run graph query: {e}")
+
+    def delete_node(self, node_id: int, collection: Optional[str] = None) -> None:
+        params = {} if collection is None else {"collection": collection}
         url = self._t.base_url + f"/v1/graph/node/{node_id}"
         resp = self._t.delete(url, params=params)
         _raise_for_status(resp, f"/v1/graph/node/{node_id}")
 
-    def list_nodes(self, collection: str = "default") -> Dict[str, Any]:
+    def list_nodes(self, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + "/v1/graph/nodes"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.get(url, params=params)
             _raise_for_status(resp)
@@ -532,10 +665,10 @@ class _SyncGraphMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to list nodes: {e}")
 
-    def neighbors(self, node_id: int, collection: str = "default") -> List[int]:
+    def neighbors(self, node_id: int, collection: Optional[str] = None) -> List[int]:
         return [e["to_node"] for e in self.get_edges(node_id, collection=collection)]
 
-    def walk(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
+    def walk(self, start_node: int, max_depth: int = 2, collection: Optional[str] = None) -> List[int]:
         max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = {start_node}
         queue = deque([(start_node, 0)])
@@ -552,7 +685,7 @@ class _SyncGraphMixin:
                     queue.append((nxt, depth + 1))
         return result
 
-    def expand(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
+    def expand(self, start_node: int, max_depth: int = 2, collection: Optional[str] = None) -> List[int]:
         record_ids = set()
         for node_id in self.walk(start_node, max_depth, collection=collection):
             n = self.get_node(node_id, collection=collection)
@@ -560,9 +693,9 @@ class _SyncGraphMixin:
                 record_ids.add(n["record_id"])
         return list(record_ids)
 
-    def subgraph(self, root_node: int, depth: int = 2, collection: str = "default") -> Dict[str, Any]:
+    def subgraph(self, root_node: int, depth: int = 2, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = self._t.get(url, params=params)
             _raise_for_status(resp)
@@ -693,8 +826,21 @@ class _SyncSnapshotMixin:
 class _SyncCollectionsMixin:
     _t: _SyncTransport
 
-    def create_collection(self, name: str) -> Dict[str, Any]:
-        return self._t.post_rpc("/v1/namespaces", {"name": name})
+    def create_collection(
+        self,
+        name: str,
+        dimension: int,
+        metric: str = "squared_l2",
+        index: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": name,
+            "dimension": dimension,
+            "metric": metric,
+        }
+        if index is not None:
+            payload["index"] = index
+        return self._t.post_rpc("/v1/namespaces", payload)
 
     def list_collections(self) -> List[Dict[str, Any]]:
         try:
@@ -731,13 +877,13 @@ class _SyncMemoryMixin:
     def memory_upsert(
         self,
         vector: Vector,
-        collection: str = "default",
+        collection: Optional[str] = None,
         attach_to_document_node: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"vector": vector}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if attach_to_document_node is not None:
             data["attach_to_document_node"] = attach_to_document_node
@@ -751,11 +897,11 @@ class _SyncMemoryMixin:
         self,
         query_vector: Vector,
         k: int = 5,
-        collection: str = "default",
+        collection: Optional[str] = None,
         decay_half_life_secs: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         data: Dict[str, Any] = {"query_vector": query_vector, "k": k}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
@@ -765,11 +911,11 @@ class _SyncMemoryMixin:
         self,
         old_record_id: int,
         new_vector: Vector,
-        collection: str = "default",
+        collection: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"old_record_id": old_record_id, "new_vector": new_vector}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if metadata is not None:
             data["metadata"] = metadata
@@ -780,12 +926,12 @@ class _SyncMemoryMixin:
         record_a: int,
         record_b: int,
         threshold: Optional[float] = None,
-        collection: str = "default",
+        collection: Optional[str] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"record_a": record_a, "record_b": record_b}
         if threshold is not None:
             data["threshold"] = threshold
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return self._t.post_rpc("/v1/memory/contradict", data)
 
@@ -909,7 +1055,7 @@ class _SyncIngestMixin:
         self,
         text: str,
         strategy: str = "auto",
-        collection: str = "default",
+        collection: Optional[str] = None,
         source: Optional[str] = None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
@@ -925,7 +1071,7 @@ class _SyncIngestMixin:
         text: str,
         source: Optional[str] = None,
         strategy: str = "auto",
-        collection: str = "default",
+        collection: Optional[str] = None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ) -> dict:
@@ -941,7 +1087,7 @@ class _SyncIngestMixin:
         text: str,
         source: Optional[str] = None,
         strategy: str = "auto",
-        collection: str = "default",
+        collection: Optional[str] = None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ) -> dict:
@@ -956,7 +1102,7 @@ class _SyncIngestMixin:
         text: str,
         source: Optional[str] = None,
         strategy: str = "auto",
-        collection: str = "default",
+        collection: Optional[str] = None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ) -> str:
@@ -983,7 +1129,7 @@ class _SyncCryptoMixin:
         self,
         payload: bytes,
         tag: int = 0,
-        collection: str = "default",
+        collection: Optional[str] = None,
         key_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         import base64
@@ -1138,6 +1284,75 @@ class _SyncIndexMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to get models health: {e}")
 
+    # ── Phase 4: collection index lifecycle ────────────────────────────────────
+
+    def collection_index_status(self, collection: str) -> Dict[str, Any]:
+        """GET /v1/namespaces/{collection}/index — current index lifecycle state."""
+        try:
+            resp = self._t.get(
+                self._t.base_url + f"/v1/namespaces/{collection}/index", timeout=10
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get index status for '{collection}': {e}")
+
+    def create_collection_index(
+        self,
+        collection: str,
+        type: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """POST /v1/namespaces/{collection}/index — create or replace the ANN index.
+
+        Returns immediately (202 Accepted) — poll ``collection_index_status``
+        until ``status`` is ``"active"`` or ``"failed"``.
+
+        Args:
+            collection: Collection (namespace) name.
+            type: Index kind: ``"hnsw"``, ``"ivf"``, or ``"bq"``.
+            parameters: Optional build parameters (HNSW m/ef_construction/ef_search,
+                IVF n_list/n_probe). An empty dict or ``None`` uses node defaults.
+        """
+        payload: Dict[str, Any] = {"type": type}
+        if parameters is not None:
+            payload["parameters"] = parameters
+        try:
+            resp = self._t.post(
+                self._t.base_url + f"/v1/namespaces/{collection}/index",
+                json=payload,
+                timeout=10,
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to create index for '{collection}': {e}")
+
+    def change_collection_index(
+        self,
+        collection: str,
+        type: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Alias for :meth:`create_collection_index` — replace the active index.
+
+        The active index continues to serve while the new one builds.
+        """
+        return self.create_collection_index(collection, type, parameters)
+
+    def drop_collection_index(self, collection: str) -> Dict[str, Any]:
+        """POST /v1/namespaces/{collection}/index with type=null — revert to exact search."""
+        try:
+            resp = self._t.post(
+                self._t.base_url + f"/v1/namespaces/{collection}/index",
+                json={"type": None},
+                timeout=10,
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to drop index for '{collection}': {e}")
+
 
 class _SyncMetaMixin:
     _t: _SyncTransport
@@ -1215,7 +1430,7 @@ class _SyncMetaMixin:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
-    def list_contradictions(self, collection: str = "default", status: str = "pending") -> Dict[str, Any]:
+    def list_contradictions(self, collection: Optional[str] = None, status: str = "pending") -> Dict[str, Any]:
         warnings.warn(
             "list_contradictions() is deprecated; use contradict() instead.",
             DeprecationWarning, stacklevel=2,
@@ -1316,20 +1531,22 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
         self,
         vector: Vector,
         tag: int = 0,
-        collection: str = "default",
+        collection: Optional[str] = None,
+        idempotency_key: Optional[bytes] = None,
         text: Optional[str] = None,
     ) -> RecordId:
         data: Dict[str, Any] = {"values": vector, "tag": tag}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if text is not None:
             data["text"] = text
-        resp = await self._t.post_rpc("/v1/records", data)
+        key = idempotency_key if idempotency_key is not None else uuid4().bytes
+        resp = await self._t.post_rpc("/v1/records", data, idempotency_key=key)
         await self._check_auto_snapshot(1)
         return resp["id"]
 
     async def insert_with_proof(
-        self, vector: Vector, tag: int = 0, collection: str = "default"
+        self, vector: Vector, tag: int = 0, collection: Optional[str] = None
     ) -> Tuple[RecordId, Proof]:
         try:
             import valoricore as _vc
@@ -1344,7 +1561,7 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
         self,
         vector: Vector,
         tag: int = 0,
-        collection: str = "default",
+        collection: Optional[str] = None,
         text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Insert a vector and return the cryptographic InsertReceipt.
@@ -1353,7 +1570,7 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
         sequence, timestamp, state_hash — all as hex strings where applicable.
         """
         data: Dict[str, Any] = {"values": vector, "tag": tag}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if text is not None:
             data["text"] = text
@@ -1364,13 +1581,13 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
     async def insert_batch(
         self,
         batch: List[Vector],
-        collection: str = "default",
+        collection: Optional[str] = None,
         metadata: Optional[List[Optional[str]]] = None,
         request_ids: Optional[List[Optional[str]]] = None,
         texts: Optional[List[Optional[str]]] = None,
     ) -> List[RecordId]:
         data: Dict[str, Any] = {"batch": batch}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if metadata is not None:
             data["metadata"] = metadata
@@ -1394,21 +1611,21 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
         await self._check_auto_snapshot(len(vectors))
         return results
 
-    async def delete(self, record_id: int, collection: str = "default") -> None:
+    async def delete(self, record_id: int, collection: Optional[str] = None) -> None:
         data: Dict[str, Any] = {"id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         await self._t.post_rpc("/v1/delete", data)
 
-    async def soft_delete(self, record_id: int, collection: str = "default") -> None:
+    async def soft_delete(self, record_id: int, collection: Optional[str] = None) -> None:
         data: Dict[str, Any] = {"id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         await self._t.post_rpc("/v1/soft-delete", data)
 
-    async def get_record(self, record_id: int, collection: str = "default") -> Dict[str, Any]:
+    async def get_record(self, record_id: int, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + f"/v1/records/{record_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -1421,10 +1638,10 @@ class _AsyncRecordsMixin(_AsyncAutoSnapshotMixin):
             raise ConnectionError(f"Failed to fetch record {record_id}: {e}")
 
     async def update_record_metadata(
-        self, record_id: int, metadata: Dict[str, Any], collection: str = "default"
+        self, record_id: int, metadata: Dict[str, Any], collection: Optional[str] = None
     ) -> None:
         url = self._t.base_url + f"/v1/records/{record_id}/metadata"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.patch(url, json=metadata, params=params)
             if resp.status_code == 404:
@@ -1445,20 +1662,32 @@ class _AsyncSearchMixin:
         k: int,
         filter_tag: Optional[int] = None,
         consistency: Optional[str] = None,
-        collection: str = "default",
+        collection: Optional[str] = None,
         as_of: Optional[str] = None,
         as_of_log_index: Optional[int] = None,
         decay_half_life_secs: Optional[int] = None,
         rerank: bool = True,
         query_text: Optional[str] = None,
         metadata_filter: Optional[Dict[str, Any]] = None,
+        graph_rerank: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         data: Dict[str, Any] = {"query": query, "k": k}
         if filter_tag is not None:
-            data["filter_tag"] = filter_tag
+            # Phase API-2: `filter_tag` has never existed on any server-side
+            # search request type — the field was serialised, sent, and
+            # silently discarded by both routers, so every "filtered" search
+            # actually returned unfiltered results. It is a real capability of
+            # the embedded/FFI client only (`valoricore.local.LocalClient`).
+            # Failing loudly is the only honest behaviour for the HTTP client.
+            raise ValidationError(
+                "filter_tag is not supported by the Valori HTTP API — the server has no "
+                "such field and silently ignored it. Use metadata_filter=... for "
+                "server-side filtering, or the embedded client (valoricore.local) "
+                "if you need tag filtering."
+            )
         if consistency is not None:
             data["consistency"] = consistency
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if as_of_log_index is not None:
             data["as_of_log_index"] = as_of_log_index
@@ -1471,6 +1700,8 @@ class _AsyncSearchMixin:
             data["query_text"] = query_text
         if metadata_filter is not None:
             data["metadata_filter"] = metadata_filter
+        if graph_rerank is not None:
+            data["graph_rerank"] = graph_rerank
         resp = await self._t.post_rpc("/v1/search", data)
         if as_of is not None or as_of_log_index is not None:
             return resp
@@ -1481,36 +1712,98 @@ class _AsyncSearchMixin:
         query_vector: Vector,
         k: int = 5,
         depth: int = 2,
-        collection: str = "default",
+        collection: Optional[str] = None,
         consistency: Optional[str] = None,
+        retrieval_k: Optional[int] = None,
+        final_k: Optional[int] = None,
+        max_graph_candidates: Optional[int] = None,
+        max_nodes: Optional[int] = None,
+        max_edges: Optional[int] = None,
+        graph_weight: Optional[float] = None,
     ) -> Dict[str, Any]:
-        data: Dict[str, Any] = {"query_vector": query_vector, "k": k, "depth": depth}
-        if collection != "default":
+        """GraphRAG: vector KNN + graph expansion in one call.
+
+        Phase 5.3 semantics:
+          retrieval_k          — vector seed count (overrides k when provided).
+          final_k              — maximum hits returned; None = server default (= retrieval_k).
+          max_graph_candidates — budget on graph-only candidates; None = server default (100).
+
+        Phase 5.4 additions:
+          max_nodes    — halt BFS before visiting more than this many nodes; None = unlimited.
+          max_edges    — halt edge emission after this many edges; None = unlimited.
+          graph_weight — β in combined ranking: final_score = (1-β)×vector_rel + β×graph_rel.
+                         Range [0.0, 1.0]; None = server default (0.3).
+
+        Each hit in ``response["hits"]`` carries:
+          source        : "vector" | "vector_and_graph" | "graph"
+          vector_score  : L2 distance for vector hits, null for graph-only.
+          graph_score   : normalised graph relevance ∈ [0, 1]; 0.0 = no graph node.
+          final_score   : combined ranking score ∈ [0, 1]; always present (Phase 5.4).
+          graph_distance: 0 for seeds, N hops for graph-only, null if no graph node.
+        Hits are sorted by ``final_score`` descending.
+        """
+        data: Dict[str, Any] = {
+            "query_vector": query_vector,
+            "k": retrieval_k if retrieval_k is not None else k,
+            "depth": depth,
+        }
+        if collection is not None:
             data["collection"] = collection
         if consistency is not None:
             data["consistency"] = consistency
+        if retrieval_k is not None:
+            data["retrieval_k"] = retrieval_k
+        if final_k is not None:
+            data["final_k"] = final_k
+        if max_graph_candidates is not None:
+            data["max_graph_candidates"] = max_graph_candidates
+        if max_nodes is not None:
+            data["max_nodes"] = max_nodes
+        if max_edges is not None:
+            data["max_edges"] = max_edges
+        if graph_weight is not None:
+            data["graph_weight"] = graph_weight
         return await self._t.post_rpc("/v1/graphrag", data)
+
+    async def search_multi(
+        self,
+        query: Vector,
+        k: int,
+        collections: List[str],
+        decay_half_life_secs: Optional[int] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Phase 5 — Cross-collection search (async variant).
+
+        See ``SyncRemoteClient.search_multi`` for full documentation.
+        """
+        data: Dict[str, Any] = {"query": query, "k": k, "collections": collections}
+        if decay_half_life_secs is not None:
+            data["decay_half_life_secs"] = decay_half_life_secs
+        if metadata_filter is not None:
+            data["metadata_filter"] = metadata_filter
+        return await self._t.post_rpc("/v1/search/multi", data)
 
 
 class _AsyncGraphMixin:
     _t: _AsyncTransport
     _MAX_WALK_DEPTH = 10
 
-    async def create_node(self, kind: int, record_id: Optional[int] = None, collection: str = "default") -> NodeId:
+    async def create_node(self, kind: int, record_id: Optional[int] = None, collection: Optional[str] = None) -> NodeId:
         data: Dict[str, Any] = {"kind": kind, "record_id": record_id}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return (await self._t.post_rpc("/v1/graph/node", data))["node_id"]
 
-    async def create_edge(self, from_id: int, to_id: int, kind: int, collection: str = "default") -> int:
+    async def create_edge(self, from_id: int, to_id: int, kind: int, collection: Optional[str] = None) -> int:
         data: Dict[str, Any] = {"from": from_id, "to": to_id, "kind": kind}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return (await self._t.post_rpc("/v1/graph/edge", data))["edge_id"]
 
-    async def get_node(self, node_id: int, collection: str = "default") -> Optional[Dict[str, Any]]:
+    async def get_node(self, node_id: int, collection: Optional[str] = None) -> Optional[Dict[str, Any]]:
         url = self._t.base_url + f"/v1/graph/node/{node_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -1520,9 +1813,9 @@ class _AsyncGraphMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve node: {e}")
 
-    async def get_edges(self, node_id: int, collection: str = "default") -> List[Dict[str, Any]]:
+    async def get_edges(self, node_id: int, collection: Optional[str] = None) -> List[Dict[str, Any]]:
         url = self._t.base_url + f"/v1/graph/edges/{node_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.get(url, params=params)
             if resp.status_code == 404:
@@ -1532,15 +1825,52 @@ class _AsyncGraphMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to retrieve edges: {e}")
 
-    async def delete_node(self, node_id: int, collection: str = "default") -> None:
+    async def graph_query(
+        self,
+        start: int,
+        direction: str = "outgoing",
+        edge_kind: Optional[int] = None,
+        node_kind: Optional[int] = None,
+        depth: Optional[int] = None,
+        limit: Optional[int] = None,
+        collection: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Phase G1.1 — deterministic, filterable, depth-bounded graph query.
+
+        Returns ``None`` if ``start`` does not exist (or exists in a
+        different collection). Otherwise ``{"hits": [...], "count": N}``,
+        each hit carrying ``node_id``, ``kind``, ``record_id``, ``depth``.
+        """
+        url = self._t.base_url + "/v1/graph/query"
+        params: Dict[str, Any] = {"start": start, "direction": direction}
+        if edge_kind is not None:
+            params["edge_kind"] = edge_kind
+        if node_kind is not None:
+            params["node_kind"] = node_kind
+        if depth is not None:
+            params["depth"] = depth
+        if limit is not None:
+            params["limit"] = limit
+        if collection is not None:
+            params["collection"] = collection
+        try:
+            resp = await self._t.get(url, params=params)
+            if resp.status_code == 404:
+                return None
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to run graph query: {e}")
+
+    async def delete_node(self, node_id: int, collection: Optional[str] = None) -> None:
         url = self._t.base_url + f"/v1/graph/node/{node_id}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         resp = await self._t.delete(url, params=params)
         _raise_for_status(resp, f"/v1/graph/node/{node_id}")
 
-    async def list_nodes(self, collection: str = "default") -> Dict[str, Any]:
+    async def list_nodes(self, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + "/v1/graph/nodes"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.get(url, params=params)
             _raise_for_status(resp)
@@ -1548,10 +1878,10 @@ class _AsyncGraphMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to list nodes: {e}")
 
-    async def neighbors(self, node_id: int, collection: str = "default") -> List[int]:
+    async def neighbors(self, node_id: int, collection: Optional[str] = None) -> List[int]:
         return [e["to_node"] for e in await self.get_edges(node_id, collection=collection)]
 
-    async def walk(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
+    async def walk(self, start_node: int, max_depth: int = 2, collection: Optional[str] = None) -> List[int]:
         max_depth = min(max_depth, self._MAX_WALK_DEPTH)
         visited = {start_node}
         queue = deque([(start_node, 0)])
@@ -1568,7 +1898,7 @@ class _AsyncGraphMixin:
                     queue.append((nxt, depth + 1))
         return result
 
-    async def expand(self, start_node: int, max_depth: int = 2, collection: str = "default") -> List[int]:
+    async def expand(self, start_node: int, max_depth: int = 2, collection: Optional[str] = None) -> List[int]:
         record_ids = set()
         for node_id in await self.walk(start_node, max_depth, collection=collection):
             n = await self.get_node(node_id, collection=collection)
@@ -1576,9 +1906,9 @@ class _AsyncGraphMixin:
                 record_ids.add(n["record_id"])
         return list(record_ids)
 
-    async def subgraph(self, root_node: int, depth: int = 2, collection: str = "default") -> Dict[str, Any]:
+    async def subgraph(self, root_node: int, depth: int = 2, collection: Optional[str] = None) -> Dict[str, Any]:
         url = self._t.base_url + f"/v1/graph/subgraph?root={root_node}&depth={depth}"
-        params = {} if collection == "default" else {"collection": collection}
+        params = {} if collection is None else {"collection": collection}
         try:
             resp = await self._t.get(url, params=params)
             _raise_for_status(resp)
@@ -1709,8 +2039,21 @@ class _AsyncSnapshotMixin:
 class _AsyncCollectionsMixin:
     _t: _AsyncTransport
 
-    async def create_collection(self, name: str) -> Dict[str, Any]:
-        return await self._t.post_rpc("/v1/namespaces", {"name": name})
+    async def create_collection(
+        self,
+        name: str,
+        dimension: int,
+        metric: str = "squared_l2",
+        index: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "name": name,
+            "dimension": dimension,
+            "metric": metric,
+        }
+        if index is not None:
+            payload["index"] = index
+        return await self._t.post_rpc("/v1/namespaces", payload)
 
     async def list_collections(self) -> List[Dict[str, Any]]:
         try:
@@ -1747,13 +2090,13 @@ class _AsyncMemoryMixin:
     async def memory_upsert(
         self,
         vector: Vector,
-        collection: str = "default",
+        collection: Optional[str] = None,
         attach_to_document_node: Optional[int] = None,
         metadata: Optional[Dict[str, Any]] = None,
         tags: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"vector": vector}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if attach_to_document_node is not None:
             data["attach_to_document_node"] = attach_to_document_node
@@ -1767,11 +2110,11 @@ class _AsyncMemoryMixin:
         self,
         query_vector: Vector,
         k: int = 5,
-        collection: str = "default",
+        collection: Optional[str] = None,
         decay_half_life_secs: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         data: Dict[str, Any] = {"query_vector": query_vector, "k": k}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if decay_half_life_secs is not None:
             data["decay_half_life_secs"] = decay_half_life_secs
@@ -1781,11 +2124,11 @@ class _AsyncMemoryMixin:
         self,
         old_record_id: int,
         new_vector: Vector,
-        collection: str = "default",
+        collection: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"old_record_id": old_record_id, "new_vector": new_vector}
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         if metadata is not None:
             data["metadata"] = metadata
@@ -1796,12 +2139,12 @@ class _AsyncMemoryMixin:
         record_a: int,
         record_b: int,
         threshold: Optional[float] = None,
-        collection: str = "default",
+        collection: Optional[str] = None,
     ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"record_a": record_a, "record_b": record_b}
         if threshold is not None:
             data["threshold"] = threshold
-        if collection != "default":
+        if collection is not None:
             data["collection"] = collection
         return await self._t.post_rpc("/v1/memory/contradict", data)
 
@@ -1907,7 +2250,7 @@ class _AsyncIngestMixin:
     _t: _AsyncTransport
 
     async def chunk_document(
-        self, text: str, strategy: str = "auto", collection: str = "default",
+        self, text: str, strategy: str = "auto", collection: Optional[str] = None,
         source: Optional[str] = None, chunk_size: int = 1000, chunk_overlap: int = 200
     ) -> dict:
         data: dict = {"text": text, "strategy": strategy, "collection": collection,
@@ -1918,7 +2261,7 @@ class _AsyncIngestMixin:
 
     async def ingest(
         self, text: str, source: Optional[str] = None, strategy: str = "auto",
-        collection: str = "default", chunk_size: int = 1000, chunk_overlap: int = 200
+        collection: Optional[str] = None, chunk_size: int = 1000, chunk_overlap: int = 200
     ) -> dict:
         data: dict = {"text": text, "strategy": strategy, "collection": collection,
                       "chunk_size": chunk_size, "chunk_overlap": chunk_overlap}
@@ -1928,7 +2271,7 @@ class _AsyncIngestMixin:
 
     async def ingest_update(
         self, document_node_id: int, text: str, source: Optional[str] = None,
-        strategy: str = "auto", collection: str = "default",
+        strategy: str = "auto", collection: Optional[str] = None,
         chunk_size: int = 1000, chunk_overlap: int = 200
     ) -> dict:
         data: dict = {"document_node_id": document_node_id, "text": text, "strategy": strategy,
@@ -1939,7 +2282,7 @@ class _AsyncIngestMixin:
 
     async def ingest_async(
         self, text: str, source: Optional[str] = None, strategy: str = "auto",
-        collection: str = "default", chunk_size: int = 1000, chunk_overlap: int = 200
+        collection: Optional[str] = None, chunk_size: int = 1000, chunk_overlap: int = 200
     ) -> str:
         data: dict = {"text": text, "strategy": strategy, "collection": collection,
                       "chunk_size": chunk_size, "chunk_overlap": chunk_overlap, "async": True}
@@ -1958,7 +2301,7 @@ class _AsyncCryptoMixin:
     _t: _AsyncTransport
 
     async def insert_encrypted(
-        self, payload: bytes, tag: int = 0, collection: str = "default",
+        self, payload: bytes, tag: int = 0, collection: Optional[str] = None,
         key_id: Optional[str] = None
     ) -> Dict[str, Any]:
         import base64
@@ -2111,6 +2454,64 @@ class _AsyncIndexMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to get models health: {e}")
 
+    # ── Phase 4: collection index lifecycle ────────────────────────────────────
+
+    async def collection_index_status(self, collection: str) -> Dict[str, Any]:
+        """GET /v1/namespaces/{collection}/index — current index lifecycle state."""
+        try:
+            resp = await self._t.get(
+                self._t.base_url + f"/v1/namespaces/{collection}/index"
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to get index status for '{collection}': {e}")
+
+    async def create_collection_index(
+        self,
+        collection: str,
+        type: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """POST /v1/namespaces/{collection}/index — create or replace the ANN index.
+
+        Returns immediately (202 Accepted) — poll ``collection_index_status``
+        until ``status`` is ``"active"`` or ``"failed"``.
+        """
+        payload: Dict[str, Any] = {"type": type}
+        if parameters is not None:
+            payload["parameters"] = parameters
+        try:
+            resp = await self._t.post(
+                self._t.base_url + f"/v1/namespaces/{collection}/index",
+                json=payload,
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to create index for '{collection}': {e}")
+
+    async def change_collection_index(
+        self,
+        collection: str,
+        type: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Alias for :meth:`create_collection_index` — replace the active index."""
+        return await self.create_collection_index(collection, type, parameters)
+
+    async def drop_collection_index(self, collection: str) -> Dict[str, Any]:
+        """POST /v1/namespaces/{collection}/index with type=null — revert to exact search."""
+        try:
+            resp = await self._t.post(
+                self._t.base_url + f"/v1/namespaces/{collection}/index",
+                json={"type": None},
+            )
+            _raise_for_status(resp)
+            return resp.json()
+        except Exception as e:
+            raise ConnectionError(f"Failed to drop index for '{collection}': {e}")
+
 
 class _AsyncMetaMixin:
     _t: _AsyncTransport
@@ -2187,7 +2588,7 @@ class _AsyncMetaMixin:
         except Exception as e:
             raise ConnectionError(f"Failed to fetch timeline from {url}: {e}")
 
-    async def list_contradictions(self, collection: str = "default", status: str = "pending") -> Dict[str, Any]:
+    async def list_contradictions(self, collection: Optional[str] = None, status: str = "pending") -> Dict[str, Any]:
         warnings.warn(
             "list_contradictions() is deprecated; use contradict() instead.",
             DeprecationWarning, stacklevel=2,
@@ -2394,19 +2795,24 @@ class _CollectionsResource:
     def __init__(self, client: "Valori"):
         self._client = client
 
-    def create(self, name: str) -> Collection:
+    def create(
+        self,
+        name: str,
+        dimension: Optional[int] = None,
+        metric: Optional[str] = None,
+        index: Optional[str] = None,
+    ) -> Collection:
         """Creates the collection (namespace) if it doesn't already exist
-        and returns a handle to it either way — `POST .../namespaces` is
-        already idempotent-by-name on the server side.
-
-        Note: Valori's collections do NOT have their own
-        dimension/index — those are fixed at the PROJECT level (set once
-        when the project itself was created) and shared by every
-        collection inside it. A `dimension=`/`index=` kwarg here would be
-        silently ignored by the server, so this method deliberately
-        doesn't accept them rather than pretend they do something.
+        and returns a handle to it either way.
         """
-        self._client._cloud_post("/namespaces", {"name": name})
+        payload: Dict[str, Any] = {"name": name}
+        if dimension is not None:
+            payload["dimension"] = dimension
+        if metric is not None:
+            payload["metric"] = metric
+        if index is not None:
+            payload["index"] = index
+        self._client._cloud_post("/namespaces", payload)
         return Collection(self._client, name)
 
     def get(self, name: str) -> Collection:
@@ -2678,12 +3084,12 @@ class ClusterClient:
         self._rr_idx += 1
         return c
 
-    def insert(self, vector: Vector, tag: int = 0, collection: str = "default",
+    def insert(self, vector: Vector, tag: int = 0, collection: Optional[str] = None,
                idempotency_key: Optional[bytes] = None) -> RecordId:
         return self._write_client().insert(vector, tag=tag, collection=collection,
                                            idempotency_key=idempotency_key)
 
-    def insert_batch(self, batch: List[Vector], collection: str = "default",
+    def insert_batch(self, batch: List[Vector], collection: Optional[str] = None,
                      metadata: Optional[List[Optional[Dict[str, Any]]]] = None,
                      request_ids: Optional[List[Optional[str]]] = None,
                      texts: Optional[List[Optional[str]]] = None) -> List[RecordId]:
@@ -2691,16 +3097,24 @@ class ClusterClient:
                                                   metadata=metadata, request_ids=request_ids,
                                                   texts=texts)
 
-    def delete(self, record_id: int, collection: str = "default",
+    def delete(self, record_id: int, collection: Optional[str] = None,
                idempotency_key: Optional[bytes] = None) -> None:
         self._write_client().delete(record_id, collection=collection, idempotency_key=idempotency_key)
 
-    def soft_delete(self, record_id: int, collection: str = "default",
+    def soft_delete(self, record_id: int, collection: Optional[str] = None,
                     idempotency_key: Optional[bytes] = None) -> None:
         self._write_client().soft_delete(record_id, collection=collection, idempotency_key=idempotency_key)
 
-    def create_collection(self, name: str) -> Dict[str, Any]:
-        return self._write_client().create_collection(name)
+    def create_collection(
+        self,
+        name: str,
+        dimension: int,
+        metric: str = "squared_l2",
+        index: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self._write_client().create_collection(
+            name, dimension=dimension, metric=metric, index=index
+        )
 
     def drop_collection(self, name: str) -> None:
         self._write_client().drop_collection(name)
@@ -2709,26 +3123,33 @@ class ClusterClient:
         self._write_client().restore(data)
 
     def search(self, query: Vector, k: int, filter_tag: Optional[int] = None,
-               consistency: str = "local", collection: str = "default",
+               consistency: str = "local", collection: Optional[str] = None,
                **kwargs: Any) -> Any:
         return self._read_client(consistency).search(
             query, k, filter_tag=filter_tag, consistency=consistency,
             collection=collection, **kwargs)
 
     def graphrag(self, query_vector: Vector, k: int = 5, depth: int = 2,
-                 collection: str = "default", consistency: str = "local") -> Dict[str, Any]:
+                 collection: Optional[str] = None, consistency: str = "local",
+                 retrieval_k: Optional[int] = None, final_k: Optional[int] = None,
+                 max_graph_candidates: Optional[int] = None,
+                 max_nodes: Optional[int] = None, max_edges: Optional[int] = None,
+                 graph_weight: Optional[float] = None) -> Dict[str, Any]:
         return self._read_client(consistency).graphrag(
-            query_vector, k=k, depth=depth, collection=collection, consistency=consistency)
+            query_vector, k=k, depth=depth, collection=collection,
+            consistency=consistency, retrieval_k=retrieval_k,
+            final_k=final_k, max_graph_candidates=max_graph_candidates,
+            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight)
 
     def consolidate(self, old_record_id: int, new_vector: Vector,
-                    collection: str = "default",
+                    collection: Optional[str] = None,
                     metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._write_client().consolidate(old_record_id, new_vector,
                                                  collection=collection, metadata=metadata)
 
     def contradict(self, record_a: int, record_b: int,
                    threshold: Optional[float] = None,
-                   collection: str = "default") -> Dict[str, Any]:
+                   collection: Optional[str] = None) -> Dict[str, Any]:
         return self._write_client().contradict(record_a, record_b,
                                                 threshold=threshold, collection=collection)
 
@@ -2827,11 +3248,11 @@ class AsyncClusterClient:
         self._rr_idx += 1
         return c
 
-    async def insert(self, vector: Vector, tag: int = 0, collection: str = "default",
+    async def insert(self, vector: Vector, tag: int = 0, collection: Optional[str] = None,
                      text: Optional[str] = None) -> RecordId:
         return await self._write_client().insert(vector, tag=tag, collection=collection, text=text)
 
-    async def insert_batch(self, batch: List[Vector], collection: str = "default",
+    async def insert_batch(self, batch: List[Vector], collection: Optional[str] = None,
                            metadata: Optional[List[Optional[str]]] = None,
                            request_ids: Optional[List[Optional[str]]] = None,
                            texts: Optional[List[Optional[str]]] = None) -> List[RecordId]:
@@ -2839,39 +3260,54 @@ class AsyncClusterClient:
             batch, collection=collection, metadata=metadata,
             request_ids=request_ids, texts=texts)
 
-    async def delete(self, record_id: int, collection: str = "default") -> None:
+    async def delete(self, record_id: int, collection: Optional[str] = None) -> None:
         await self._write_client().delete(record_id, collection=collection)
 
-    async def soft_delete(self, record_id: int, collection: str = "default") -> None:
+    async def soft_delete(self, record_id: int, collection: Optional[str] = None) -> None:
         await self._write_client().soft_delete(record_id, collection=collection)
 
-    async def create_collection(self, name: str) -> Dict[str, Any]:
-        return await self._write_client().create_collection(name)
+    async def create_collection(
+        self,
+        name: str,
+        dimension: int,
+        metric: str = "squared_l2",
+        index: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._write_client().create_collection(
+            name, dimension=dimension, metric=metric, index=index
+        )
 
     async def drop_collection(self, name: str) -> None:
         await self._write_client().drop_collection(name)
 
     async def search(self, query: Vector, k: int, filter_tag: Optional[int] = None,
-                     consistency: str = "local", collection: str = "default",
+                     consistency: str = "local", collection: Optional[str] = None,
                      **kwargs: Any) -> Any:
         return await self._read_client(consistency).search(
             query, k, filter_tag=filter_tag, consistency=consistency,
             collection=collection, **kwargs)
 
     async def graphrag(self, query_vector: Vector, k: int = 5, depth: int = 2,
-                       collection: str = "default", consistency: str = "local") -> Dict[str, Any]:
+                       collection: Optional[str] = None, consistency: str = "local",
+                       retrieval_k: Optional[int] = None, final_k: Optional[int] = None,
+                       max_graph_candidates: Optional[int] = None,
+                       max_nodes: Optional[int] = None, max_edges: Optional[int] = None,
+                       graph_weight: Optional[float] = None) -> Dict[str, Any]:
         return await self._read_client(consistency).graphrag(
-            query_vector, k=k, depth=depth, collection=collection, consistency=consistency)
+            query_vector, k=k, depth=depth, collection=collection,
+            consistency=consistency, retrieval_k=retrieval_k,
+            final_k=final_k, max_graph_candidates=max_graph_candidates,
+            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight)
 
     async def consolidate(self, old_record_id: int, new_vector: Vector,
-                          collection: str = "default",
+                          collection: Optional[str] = None,
                           metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return await self._write_client().consolidate(old_record_id, new_vector,
                                                        collection=collection, metadata=metadata)
 
     async def contradict(self, record_a: int, record_b: int,
                          threshold: Optional[float] = None,
-                         collection: str = "default") -> Dict[str, Any]:
+                         collection: Optional[str] = None) -> Dict[str, Any]:
         return await self._write_client().contradict(record_a, record_b,
                                                       threshold=threshold, collection=collection)
 

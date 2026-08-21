@@ -13,6 +13,7 @@ import { ProjectModePicker } from "@/components/projects/ProjectModePicker";
 import { Skeleton } from "@/components/ui/skeleton";
 import { getPreference, nativeAvailable } from "@/lib/native";
 import { SettingsPopover, type PopoverPos } from "@/components/layout/SettingsPopover";
+import { PROJECT_FEATURE_NAV } from "@valori/studio";
 import {
   ShieldCheck,
   Network,
@@ -40,6 +41,19 @@ type NavItem = {
   label: string;
   Icon: React.ComponentType<{ size?: number; className?: string }>;
 };
+
+// Labels for the 5 sidebar entries that correspond 1:1 with a shared
+// project feature come from @valori/studio's PROJECT_FEATURE_NAV — one
+// source of truth for the label text, shared with every other host.
+// hrefs/icons/order/visibility stay entirely Sidebar's own (see the
+// runtime-abstraction design doc: PROJECT_FEATURE_NAV describes features,
+// never routes). "Workspace"/"Audit Trail"/"Launch" have no shared-feature
+// equivalent and keep their own literal labels; "graph"/"tools"/
+// "snapshots"/"overview" have no standalone Local route today and are
+// intentionally not added here.
+function featureLabel(key: string, fallback: string): string {
+  return PROJECT_FEATURE_NAV.find((f) => f.key === key)?.label ?? fallback;
+}
 
 function NavLink({
   item,
@@ -333,14 +347,14 @@ export function Sidebar() {
           <nav className="flex flex-col gap-0.5 pt-2">
             <NavLink item={{ href: "/", label: "Workspace", Icon: Home }} active={path === "/"} collapsed={collapsed} />
             {!isStandalone && (
-              <NavLink item={{ href: "/cluster", label: "Cluster", Icon: Network }} active={isActive("/cluster")} collapsed={collapsed} />
+              <NavLink item={{ href: "/cluster", label: featureLabel("cluster", "Cluster"), Icon: Network }} active={isActive("/cluster")} collapsed={collapsed} />
             )}
-            <NavLink item={{ href: "/operations", label: "Operations", Icon: Activity }} active={isActive("/operations")} collapsed={collapsed} />
-            <NavLink item={{ href: "/metrics",    label: "Metrics",    Icon: BarChart2 }} active={isActive("/metrics")} collapsed={collapsed} />
-            <NavLink item={{ href: "/proof",      label: "Proof",      Icon: ShieldCheck }} active={isActive("/proof")} collapsed={collapsed} />
+            <NavLink item={{ href: "/operations", label: featureLabel("operations", "Operations"), Icon: Activity }} active={isActive("/operations")} collapsed={collapsed} />
+            <NavLink item={{ href: "/metrics",    label: featureLabel("metrics", "Metrics"),    Icon: BarChart2 }} active={isActive("/metrics")} collapsed={collapsed} />
+            <NavLink item={{ href: "/proof",      label: featureLabel("proof", "Proof"),      Icon: ShieldCheck }} active={isActive("/proof")} collapsed={collapsed} />
             <NavLink item={{ href: "/audit",      label: "Audit Trail", Icon: ScrollText }} active={isActive("/audit")} collapsed={collapsed} />
             <NavLink item={{ href: "/launch",     label: "Launch",     Icon: Rocket }} active={isActive("/launch")} collapsed={collapsed} />
-            <NavLink item={{ href: "/playground", label: "Playground", Icon: SquareTerminal }} active={isActive("/playground")} collapsed={collapsed} />
+            <NavLink item={{ href: "/playground", label: featureLabel("playground", "Playground"), Icon: SquareTerminal }} active={isActive("/playground")} collapsed={collapsed} />
           </nav>
 
           {/* Search hint — hidden when collapsed */}
@@ -361,9 +375,12 @@ export function Sidebar() {
           {/* Projects */}
           {!collapsed && (
             <div className="flex items-center justify-between px-2.5 mb-1.5">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.10em] text-muted-foreground select-none">
+              <Link
+                href="/projects"
+                className="text-[11px] font-semibold uppercase tracking-[0.10em] text-muted-foreground hover:text-foreground transition-colors select-none"
+              >
                 Projects
-              </p>
+              </Link>
               <button
                 onClick={() => setPickerOpen(true)}
                 title="New project"
@@ -408,7 +425,7 @@ export function Sidebar() {
                 const href = `/projects/${encodeURIComponent(p.name)}`;
                 const active = path === href || path.startsWith(href + "/");
                 const running = p.status === "running" || p.status === "starting";
-                const cols = p.collections || [];
+                const cols = Array.from(new Set(p.collections || []));
 
                 if (collapsed) {
                   return (
@@ -545,8 +562,8 @@ export function Sidebar() {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         workspaceDir={workspaceDir}
-        onCreate={async (name, dim, index, replication, shardCount, embed) => {
-          const entry = await create({ name, dim, index, replication, shardCount, embed });
+        onCreate={async (name, replication, shardCount) => {
+          const entry = await create({ name, replication, shardCount });
           if (!entry) return;
           await open(name);
           router.push(`/projects/${encodeURIComponent(name)}`);

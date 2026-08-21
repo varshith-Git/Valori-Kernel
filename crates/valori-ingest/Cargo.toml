@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+utoipa       = { version = "5.5.0", optional = true }
 blake3 = "1.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 axum = "0.7"
@@ -24,6 +25,13 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 quick-xml = "0.37"
 infer = { version = "0.16", default-features = false }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+
+[features]
+# Opt-in `ToSchema` derives on this crate's public wire types, so the
+# code-first OpenAPI contract in `valori-node` references one model rather
+# than a hand-copied mirror. Off by default: nothing in the runtime path
+# needs it.
+utoipa = ["dep:utoipa"]
 
 [dev-dependencies]
 

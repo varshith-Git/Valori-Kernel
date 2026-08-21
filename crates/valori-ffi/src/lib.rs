@@ -51,16 +51,24 @@ impl ValoricoreEngine {
         config.event_log_path = Some(event_log_path);
         config.snapshot_path = Some(snapshot_path);
 
-        use valori_node::config::IndexKind;
-        config.index_kind = match index_kind {
-            "hnsw" => IndexKind::Hnsw,
-            "ivf" => IndexKind::Ivf,
-            _ => IndexKind::BruteForce,
-        };
-
         std::fs::create_dir_all(&path)?;
 
         let mut engine = Engine::new(&config);
+
+        use valori_node::config::{IndexKind, Metric};
+        let desired_index = match index_kind {
+            "hnsw" => IndexKind::Hnsw,
+            "ivf" => IndexKind::Ivf,
+            _ => IndexKind::Brute,
+        };
+        if desired_index != IndexKind::Brute {
+            let _ = engine.create_collection_with_config(
+                "default",
+                0,
+                Metric::SquaredL2,
+                desired_index,
+            );
+        }
 
         // L-3: Recover any prior state from existing WAL/snapshots at this path.
         // Without this call, reopening an existing database path yields an empty state.
@@ -120,11 +128,12 @@ impl ValoricoreEngine {
             }
         }
 
-        // I-1: use engine.index (HNSW/IVF/brute) when no tag filter — gives the
-        // correct index for the configured kind.  Fall back to tag-filtered brute-force
-        // only when a tag is provided (the ANN index has no tag awareness).
+        // I-1: use engine.search_l2 when no tag filter — searches the collection's
+        // configured index. Fall back to tag-filtered brute-force only when a tag is provided.
         let py_results: Vec<(u32, i64)> = if filter_tag.is_none() {
-            let hits = engine.index.search(&vector, k);
+            let hits = engine
+                .search_l2(&vector, k)
+                .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
             hits.into_iter()
                 .map(|(id, dist)| (id, (dist * 65536.0) as i64))
                 .collect()
@@ -710,6 +719,11 @@ impl ValoricoreEngine {
                 KernelEvent::UpdateRecordMetadata { id, .. } => format!(
                     "Event ID {event_id}: UpdateRecordMetadata (Record {})",
                     id.0
+                ),
+                KernelEvent::ConfigureNamespace {
+                    namespace_id, dim, ..
+                } => format!(
+                    "Event ID {event_id}: ConfigureNamespace (ns={namespace_id}, dim={dim})"
                 ),
             };
             events.push(event_str);

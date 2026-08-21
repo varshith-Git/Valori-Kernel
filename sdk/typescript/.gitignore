@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.npm-cache/
+# `npm pack` output — produced by CI and by `npm run build` verification.
+*.tgz

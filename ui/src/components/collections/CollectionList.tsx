@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CreateCollectionDialog } from "./CreateCollectionDialog";
 import { DeleteCollectionDialog } from "./DeleteCollectionDialog";
 import { useHealth } from "@/lib/hooks/useHealth";
+import { CollectionMeta } from "@/lib/hooks/useCollections";
 import {
   Users, Wrench, Terminal, Database, Layers, BookOpen,
   LayoutGrid, List, Plus, MoreHorizontal, ArrowRight, Trash2,
@@ -30,16 +31,19 @@ function getVariant(name: string) {
 interface Props {
   project: string;
   collections: string[];
+  collectionDetails?: Map<string, CollectionMeta>;
   isLoading: boolean;
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (name: string, dim: number, index?: "brute" | "hnsw" | "ivf" | "bq" | "auto") => Promise<void>;
   onDrop: (name: string) => Promise<void>;
 }
 
-export function CollectionList({ project, collections, isLoading, onCreate, onDrop }: Props) {
+export function CollectionList({ project, collections, collectionDetails, isLoading, onCreate, onDrop }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const { dim, online } = useHealth();
+
+  const uniqueCollections = Array.from(new Set(collections));
 
   return (
     <div className="flex flex-col gap-5">
@@ -50,7 +54,7 @@ export function CollectionList({ project, collections, isLoading, onCreate, onDr
             <h2 className="text-base font-semibold text-foreground">Collections</h2>
             {!isLoading && (
               <span className="text-xs font-medium bg-muted text-muted-foreground rounded-full px-2 py-0.5 border border-border">
-                {collections.length}
+                {uniqueCollections.length}
               </span>
             )}
           </div>
@@ -95,7 +99,7 @@ export function CollectionList({ project, collections, isLoading, onCreate, onDr
             <div key={i} className={cn("animate-pulse rounded-xl bg-accent", viewMode === "grid" ? "h-48" : "h-16")} />
           ))}
         </div>
-      ) : collections.length === 0 ? (
+      ) : uniqueCollections.length === 0 ? (
         <EmptyState onCreateClick={() => setCreateOpen(true)} />
       ) : (
         <>
@@ -103,11 +107,12 @@ export function CollectionList({ project, collections, isLoading, onCreate, onDr
             ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
             : "flex flex-col gap-2"
           }>
-            {collections.map((col) => (
+            {uniqueCollections.map((col) => (
               <CollectionCard
                 key={col}
                 project={project}
                 collection={col}
+                meta={collectionDetails?.get(col)}
                 dim={dim}
                 online={online}
                 viewMode={viewMode}
@@ -115,12 +120,16 @@ export function CollectionList({ project, collections, isLoading, onCreate, onDr
               />
             ))}
           </div>
-          {/* Subtle "add more" empty state at bottom */}
-          <EmptyState onCreateClick={() => setCreateOpen(true)} dimmed />
         </>
       )}
 
-      <CreateCollectionDialog project={project} open={createOpen} onOpenChange={setCreateOpen} onCreate={onCreate} />
+      <CreateCollectionDialog
+        project={project}
+        existingCollections={uniqueCollections}
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreate={onCreate}
+      />
       {deleteTarget && (
         <DeleteCollectionDialog
           project={project}
@@ -201,6 +210,7 @@ function CardMenu({ onDelete, href }: { onDelete: () => void; href: string }) {
 function CollectionCard({
   project,
   collection,
+  meta,
   dim,
   online,
   viewMode,
@@ -208,6 +218,7 @@ function CollectionCard({
 }: {
   project: string;
   collection: string;
+  meta?: CollectionMeta;
   dim: number | null;
   online: boolean;
   viewMode: "grid" | "list";
@@ -216,82 +227,134 @@ function CollectionCard({
   const href = `/projects/${encodeURIComponent(project)}/${encodeURIComponent(collection)}`;
   const { Icon, bg, color } = getVariant(collection);
 
+  const dimension = meta?.dimension ?? dim ?? 128;
+  // "index" from the collection list reflects desired_index (creation-time config),
+  // not the live ANN lifecycle state (see IndexLifecycleTab for that). Treat absent or
+  // "brute" as "no dedicated ANN index" — show "No Index" rather than the internal name.
+  const rawIndex = meta?.index;
+  const hasAnn = rawIndex && rawIndex !== "brute";
+  const indexLabel = hasAnn ? rawIndex.toUpperCase() : null;
+  const recordCount = meta?.recordCount ?? 0;
+  const maxRecords = meta?.maxRecords ?? 1000000;
+  const pct = Math.min(100, Math.max((recordCount / maxRecords) * 100, recordCount > 0 ? 3 : 0));
+  const formattedCount = recordCount.toLocaleString();
+  const formattedMax = maxRecords >= 1000000 ? `${(maxRecords / 1000000).toFixed(0)}M` : maxRecords.toLocaleString();
+
   if (viewMode === "list") {
     return (
       <Link
         href={href}
-        className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 hover:border-input hover:bg-accent/30 transition-colors group"
+        className="flex items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 hover:border-input hover:bg-accent/30 transition-colors group shadow-xs"
       >
-        <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0", bg)}>
-          <Icon size={15} className={color} />
+        <div className={cn("w-8.5 h-8.5 rounded-lg flex items-center justify-center shrink-0", bg)}>
+          <Icon size={16} className={color} />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground truncate">{collection}</p>
-          <p className="text-xs text-muted-foreground font-mono">{project}--{collection}</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-semibold text-foreground truncate">{collection}</p>
+            {indexLabel ? (
+              <span className="text-[10px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                {indexLabel}
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-muted text-muted-foreground border border-border">
+                No Index
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground font-mono truncate">{project}--{collection}</p>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Horizontal capacity bar in list view */}
+        <div className="hidden sm:flex flex-col gap-1 w-44 shrink-0">
+          <div className="flex justify-between items-center text-[10px]">
+            <span className="text-muted-foreground">Vectors</span>
+            <span className="font-mono font-medium text-foreground">{formattedCount} / {formattedMax}</span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-accent overflow-hidden border border-border/40">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_8px_rgba(16,185,129,0.4)] transition-all duration-500"
+              style={{ width: `${Math.max(pct, recordCount > 0 ? 5 : 0)}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded-md bg-accent text-foreground/80 border border-border/60">
+            {dimension}D
+          </span>
           <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0 animate-pulse" />
             Healthy
           </span>
-          <span className="text-xs text-muted-foreground font-mono">{dim ?? "—"}</span>
         </div>
-        <ArrowRight size={14} className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
+        <ArrowRight size={15} className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0" />
       </Link>
     );
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card hover:border-input transition-colors group">
-      {/* Card header */}
+    <div className="rounded-xl border border-border bg-card hover:border-input transition-all duration-200 group shadow-xs flex flex-col overflow-hidden">
+      {/* Header */}
       <div className="flex items-start justify-between p-4 pb-3">
         <div className="flex items-start gap-3">
           <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center shrink-0", bg)}>
-            <Icon size={16} className={color} />
+            <Icon size={17} className={color} />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground truncate">{collection}</p>
+            <p className="text-sm font-semibold text-foreground truncate group-hover:text-[var(--v-accent)] transition-colors">
+              {collection}
+            </p>
             <p className="text-[11px] text-muted-foreground font-mono truncate">{project}--{collection}</p>
           </div>
         </div>
         <CardMenu onDelete={onDelete} href={href} />
       </div>
 
-      {/* Status */}
-      <div className="px-4 pb-3">
+      {/* Tech Tags Row (Dimension & Index) */}
+      <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
+        {indexLabel ? (
+          <span className="text-[10px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+            {indexLabel} INDEX
+          </span>
+        ) : (
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-muted text-muted-foreground border border-border">
+            No Index
+          </span>
+        )}
+        <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-accent text-foreground/80 border border-border/60">
+          {dimension} DIM
+        </span>
+      </div>
+
+      {/* Vectors Progress Bar Section */}
+      <div className="px-4 py-3 bg-accent/30 border-y border-border/50 flex flex-col gap-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-[11px] font-medium text-muted-foreground">Vectors</span>
+          <span className="font-mono text-xs text-foreground font-semibold">
+            {formattedCount} <span className="text-muted-foreground font-normal">/ {formattedMax} max</span>
+          </span>
+        </div>
+        
+        {/* Small Horizontal Green Progress Bar */}
+        <div className="w-full h-2 rounded-full bg-accent border border-border/60 overflow-hidden relative">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_10px_rgba(16,185,129,0.5)] transition-all duration-500"
+            style={{ width: `${Math.max(pct, recordCount > 0 ? 3 : 0)}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-4 py-2.5 mt-auto">
         <span className={cn(
           "inline-flex items-center gap-1.5 text-xs font-medium",
           online ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"
         )}>
-          <span className={cn("w-1.5 h-1.5 rounded-full", online ? "bg-emerald-500" : "bg-amber-500")} />
+          <span className={cn("w-1.5 h-1.5 rounded-full", online ? "bg-emerald-500 animate-pulse" : "bg-amber-500")} />
           {online ? "Healthy" : "Unreachable"}
         </span>
-      </div>
 
-      {/* Divider */}
-      <div className="mx-4 border-t border-border/60" />
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 divide-x divide-border/60 px-0 py-3">
-        {[
-          { label: "Vectors",   value: "—" },
-          { label: "Records",   value: "—" },
-          { label: "Dimension", value: dim != null ? String(dim) : "—" },
-          { label: "Shards",    value: "1" },
-        ].map(({ label, value }) => (
-          <div key={label} className="px-3 text-center">
-            <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</p>
-            <p className="mt-0.5 text-sm font-semibold text-foreground font-mono">{value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Divider */}
-      <div className="mx-4 border-t border-border/60" />
-
-      {/* Footer */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <span className="text-[11px] text-muted-foreground">Updated —</span>
         <Link
           href={href}
           className="flex items-center gap-1 text-xs font-medium text-[var(--v-accent)] hover:opacity-80 transition-opacity border border-[var(--v-accent)]/30 rounded-lg px-2.5 py-1"

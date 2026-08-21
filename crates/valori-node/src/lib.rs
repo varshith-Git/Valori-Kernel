@@ -2,7 +2,11 @@
 pub mod api;
 pub mod config;
 pub mod engine;
+pub mod error_codes;
 pub mod errors;
+/// Code-first OpenAPI generation (Phase API-2). Opt-in: `--features utoipa`.
+#[cfg(feature = "utoipa")]
+pub mod openapi;
 pub use engine::EngineFromNodeConfig;
 pub mod execution_registry;
 /// Server-side document ingestion: full pipeline (chunk+embed+insert) handlers.

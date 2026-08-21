@@ -108,8 +108,6 @@ impl LocalRuntime {
     fn launch_spec(&self, project: &Project, port: u16) -> LaunchSpec {
         let mut env = HashMap::new();
         env.insert("VALORI_BIND".into(), format!("127.0.0.1:{port}"));
-        env.insert("VALORI_DIM".into(), project.config.dim.to_string());
-        env.insert("VALORI_INDEX".into(), project.config.index.clone());
         env.insert(
             "VALORI_EVENT_LOG_PATH".into(),
             project.event_log_path().display().to_string(),
@@ -118,6 +116,24 @@ impl LocalRuntime {
             "VALORI_SNAPSHOT_PATH".into(),
             project.snapshot_path().display().to_string(),
         );
+        // Phase 2.3: every daemon-spawned standalone node now also gets a
+        // StorageProvider root + its durable project identity — this is
+        // what makes the manifest-driven snapshot+WAL-tail recovery path
+        // (`valori-engine::Engine::try_recover`) the one actually used by
+        // a normally-created local project, with no separate opt-in step.
+        // `project.dir` is already this project's own isolated directory
+        // (`~/.valori/projects/<name>/`); `LocalStorageProvider` creates
+        // its own `projects/<project_id>/...` layout underneath it, so a
+        // legacy project's existing `events.log`/`snapshot.val`/
+        // `namespaces.json` (set above/below) are untouched siblings, not
+        // overwritten or migrated by this alone — see the phase report's
+        // migration section for what happens to those.
+        env.insert(
+            "VALORI_STORAGE_ROOT".into(),
+            project.dir.join("storage").display().to_string(),
+        );
+        env.insert("VALORI_PROJECT_ID".into(), project.config.id.clone());
+        env.insert("VALORI_PROJECT_NAME".into(), project.config.name.clone());
         env.insert(
             "RUST_LOG".into(),
             std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
@@ -159,8 +175,6 @@ impl LocalRuntime {
             "VALORI_BIND".into(),
             format!("127.0.0.1:{}", node.http_port),
         );
-        env.insert("VALORI_DIM".into(), project.config.dim.to_string());
-        env.insert("VALORI_INDEX".into(), project.config.index.clone());
         env.insert(
             "VALORI_EVENT_LOG_PATH".into(),
             project.node_event_log_path(node.id).display().to_string(),

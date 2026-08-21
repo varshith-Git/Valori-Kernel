@@ -79,6 +79,7 @@ export default function ProjectLayout({
       setNodeStatus(ok ? "running" : "error");
       if (ok) {
         // Immediately invalidate and fetch fresh data from the newly opened project node
+        mutate(`/api/namespaces?project=${encodeURIComponent(project)}`);
         mutate("/api/namespaces");
         mutate("/api/health");
         mutate("/api/meta");

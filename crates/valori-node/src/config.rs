@@ -3,10 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-// IndexKind and QuantizationKind now live in valori-engine; re-export so all
-// existing `crate::config::IndexKind` / `crate::config::QuantizationKind`
-// call sites keep compiling without changes.
-pub use valori_engine::{IndexKind, QuantizationKind};
+// IndexKind and Metric come from canonical valori-domain; QuantizationKind from valori-engine.
+pub use valori_domain::{IndexKind, Metric};
+pub use valori_engine::QuantizationKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeMode {
@@ -23,8 +22,6 @@ impl Default for NodeMode {
 #[derive(Clone)]
 pub struct NodeConfig {
     pub max_records: usize,
-    pub dim: usize,
-    pub index_kind: IndexKind,
     pub quantization_kind: QuantizationKind,
     pub max_nodes: usize,
     pub max_edges: usize,
@@ -34,6 +31,30 @@ pub struct NodeConfig {
     pub snapshot_path: Option<PathBuf>,
     pub wal_path: Option<PathBuf>,
     pub event_log_path: Option<PathBuf>, // Added explicit config
+
+    // ── Phase 2.3: StorageProvider-backed recovery ──────────────────────────
+    // Env: VALORI_STORAGE_ROOT — a directory `LocalStorageProvider` owns
+    // (see crates/valori-storage/src/provider/local.rs). When both this AND
+    // `project_id` are set, `main.rs` constructs the provider and configures
+    // `Engine` with it BEFORE `try_recover()`, making the manifest-driven
+    // snapshot+WAL-tail path the one actually used — not an opt-in call a
+    // caller has to remember. Absent (the case for every node that predates
+    // this env var, or that was never given one) means the pre-existing
+    // whole-process event-log/WAL/snapshot path remains in effect,
+    // unchanged — the explicit, disclosed compatibility boundary; see
+    // `docs/phases/phase-collection-storage-runtime-integration.md`.
+    pub storage_root: Option<PathBuf>,
+    // Env: VALORI_PROJECT_ID — the project's durable identity (a UUID,
+    // matching `valori_domain::ProjectId`; the daemon already mints one per
+    // project in `project.json`'s `id` field and now also exports it here).
+    // Required alongside `storage_root` — a `StorageProvider` with no
+    // `ProjectId` has nothing to scope its `StorageKey`s to.
+    pub project_id: Option<valori_domain::ProjectId>,
+    // Env: VALORI_PROJECT_NAME — display name published into `ProjectManifest`
+    // the first time a `StorageProvider` is configured. Purely cosmetic
+    // (never part of storage identity — `project_id` is); falls back to a
+    // safe synthesized name if unset or invalid.
+    pub project_name: Option<String>,
 
     // Env: VALORI_EVENT_LOG_ROTATION_BYTES (default: 256 MiB in standalone, config-dependent in cluster)
     // Trigger an audit log rotation after this many bytes.
@@ -176,8 +197,6 @@ impl std::fmt::Debug for NodeConfig {
         }
         f.debug_struct("NodeConfig")
             .field("max_records", &self.max_records)
-            .field("dim", &self.dim)
-            .field("index_kind", &self.index_kind)
             .field("quantization_kind", &self.quantization_kind)
             .field("max_nodes", &self.max_nodes)
             .field("max_edges", &self.max_edges)
@@ -234,11 +253,6 @@ impl Default for NodeConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1_000_000);
 
-        let dim = std::env::var("VALORI_DIM")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(128);
-
         let max_nodes = std::env::var("VALORI_MAX_NODES")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -253,14 +267,6 @@ impl Default for NodeConfig {
             .unwrap_or_else(|_| "0.0.0.0:3000".to_string())
             .parse()
             .expect("Invalid Bind Address");
-
-        let index_kind = match std::env::var("VALORI_INDEX").as_deref() {
-            Ok("hnsw") => IndexKind::Hnsw,
-            Ok("ivf") => IndexKind::Ivf,
-            Ok("bq") => IndexKind::Bq,
-            Ok("auto") | Ok("mstg") => IndexKind::Auto,
-            _ => IndexKind::BruteForce,
-        };
 
         let quantization_kind = match std::env::var("VALORI_QUANT").as_deref() {
             Ok("scalar") => QuantizationKind::Scalar,
@@ -383,18 +389,25 @@ impl Default for NodeConfig {
             .ok()
             .and_then(|v| v.parse::<u64>().ok());
 
+        let storage_root = std::env::var("VALORI_STORAGE_ROOT").ok().map(PathBuf::from);
+        let project_id = std::env::var("VALORI_PROJECT_ID")
+            .ok()
+            .and_then(|v| v.parse::<valori_domain::ProjectId>().ok());
+        let project_name = std::env::var("VALORI_PROJECT_NAME").ok();
+
         Self {
             max_records,
-            dim,
             max_nodes,
             max_edges,
             bind_addr,
-            index_kind,
             quantization_kind,
             snapshot_path,
             wal_path,
             event_log_path,
             event_log_rotation_bytes,
+            storage_root,
+            project_id,
+            project_name,
             auto_snapshot_interval_secs,
             snapshot_every_events,
             snapshot_every_bytes,

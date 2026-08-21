@@ -12,7 +12,7 @@
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
 
-use crate::collection::{Collection, CollectionRegistry};
+use crate::collection::{Collection, CollectionRegistry, CollectionVectorConfig};
 use crate::error::MetadataResult;
 use crate::planner_cache::{PlannerCacheEntry, PlannerCacheKey};
 use crate::project::Project;
@@ -206,7 +206,7 @@ impl MetadataDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{IndexKind, ProjectMode};
+    use crate::project::ProjectMode;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -221,8 +221,6 @@ mod tests {
             name: name.to_string(),
             dir: PathBuf::from(format!("/tmp/{}", name)),
             port: 3010,
-            dim: 128,
-            index: IndexKind::Brute,
             shard_count: 1,
             node_count: 1,
             mode: ProjectMode::Standalone,
@@ -260,6 +258,10 @@ mod tests {
             project: "alpha".to_string(),
             namespace_id: 1,
             created_at: 0,
+            vector_config: CollectionVectorConfig {
+                dim: 384,
+                metric: valori_domain::Metric::SquaredL2,
+            },
         };
         db.upsert_collection(&col).unwrap();
 
@@ -283,6 +285,10 @@ mod tests {
                 project: "proj".to_string(),
                 namespace_id: ns_id,
                 created_at: 0,
+                vector_config: CollectionVectorConfig {
+                    dim: 384,
+                    metric: valori_domain::Metric::SquaredL2,
+                },
             })
             .unwrap();
         }

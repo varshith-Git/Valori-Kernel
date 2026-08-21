@@ -1,0 +1,112 @@
+---
+# Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
+#
+# Valori API contract gate — Phase API-4A §1.
+#
+# This workflow is the ONLY place the contract gate runs in CI. `scripts/api-
+# contract-gate.sh` is the single entry point; the gate logic is not duplicated
+# here or in any other workflow (§1: "Do not duplicate gate logic in multiple
+# workflows"). Other workflows that need the verdict read
+# docs/api/sdk-readiness.json from this job's artifact.
+#
+# What the gate covers, in one invocation:
+#   route discovery · OpenAPI generation · three-way route parity ·
+#   public-operation completeness · schema validation · Redocly lint ·
+#   generated TypeScript validation and compile · Python remote compatibility ·
+#   generator reproducibility
+#
+# A failing gate blocks merge: this job is a required check on `main`.
+
+name: API Contract
+
+on:
+  push:
+    branches: [main]
+    paths: &api_paths
+      - "api/openapi/**"
+      - "crates/valori-node/**"
+      - "crates/valori-engine/**"
+      - "crates/valori-domain/**"
+      - "crates/valori-wire/**"
+      - "scripts/api-contract-gate.sh"
+      - "scripts/verify-api-route-contract.py"
+      - "scripts/audit-public-api-operations.py"
+      - "scripts/generate-route-manifest.py"
+      - "scripts/generate-api-types.sh"
+      - "ui/api-types/**"
+      - "python/valoricore/**"
+      - "python/tests/**"
+      - "redocly.yaml"
+      - ".github/workflows/api-contract.yml"
+  pull_request:
+    paths: *api_paths
+  workflow_dispatch:
+
+concurrency:
+  group: api-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract-gate:
+    name: Contract gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: api-contract
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml pytest httpx requests
+          # The gate's step 8 exercises the embedded SDK's remote client.
+          python -m pip install -e python/ || python -m pip install ./python || true
+
+      # One entry point. Every check, every discovered number, one verdict.
+      - name: Run the contract gate
+        run: ./scripts/api-contract-gate.sh
+
+      # The gate computes SDK readiness rather than reading it back from a file
+      # a human could have edited. Publishing it makes the verdict available to
+      # the SDK workflows without them re-deriving it.
+      - name: Upload SDK readiness verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-readiness
+          path: |
+            docs/api/sdk-readiness.json
+            docs/api/public-operation-audit.json
+            docs/api/phase-api-3-route-manifest.json
+          if-no-files-found: warn
+
+      # A contract change must show up as a diff, not as a surprise at release
+      # time. If the gate regenerated the committed contract or the generated
+      # wire types, say so loudly.
+      - name: Fail if the committed contract or generated types drifted
+        run: |
+          if ! git diff --quiet -- api/openapi/valori-v1.yaml ui/api-types/src/valori-v1.ts; then
+            echo "::error::The committed contract or generated wire types are out of date."
+            echo "Run ./scripts/api-contract-gate.sh locally and commit the result."
+            git --no-pager diff --stat -- api/openapi/valori-v1.yaml ui/api-types/src/valori-v1.ts
+            exit 1
+          fi
+          echo "committed contract matches the generator's output"

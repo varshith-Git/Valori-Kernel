@@ -21,6 +21,7 @@ pub const MAX_INGEST_TEXT_BYTES: usize = 10 * 1024 * 1024;
 
 // ── Output type ───────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// One chunk produced by a chunking strategy.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct IngestChunk {

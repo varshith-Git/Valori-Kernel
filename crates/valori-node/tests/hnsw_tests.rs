@@ -8,10 +8,8 @@ const DIM: usize = 4;
 fn hnsw_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
     cfg.max_records = 100;
-    cfg.dim = DIM;
     cfg.max_nodes = 100;
     cfg.max_edges = 500;
-    cfg.index_kind = IndexKind::Hnsw;
     cfg.quantization_kind = QuantizationKind::None;
     cfg
 }
@@ -21,6 +19,14 @@ fn test_hnsw_determinism() {
     let cfg = hnsw_cfg();
 
     let mut engine1 = Engine::new(&cfg);
+    engine1
+        .create_collection_with_config(
+            "default",
+            DIM as u32,
+            valori_domain::Metric::SquaredL2,
+            valori_domain::IndexKind::Hnsw,
+        )
+        .unwrap();
     engine1.insert_record_from_f32(&vec![0.1; DIM]).unwrap();
     engine1.insert_record_from_f32(&vec![0.2; DIM]).unwrap();
     engine1.insert_record_from_f32(&vec![0.3; DIM]).unwrap();

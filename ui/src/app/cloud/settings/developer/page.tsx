@@ -1,4 +1,5 @@
 import { createClient } from '@/utils/supabase/server'
+import { getAuthedUser } from '@/utils/supabase/dal'
 import { redirect } from 'next/navigation'
 import { SettingsNav } from '../SettingsNav'
 import { DeveloperManager } from './DeveloperManager'
@@ -6,10 +7,7 @@ import { SdkDownloads } from './SdkDownloads'
 
 export default async function DeveloperSettingsPage() {
     const supabase = await createClient()
-
-    const {
-        data: { user },
-    } = await supabase.auth.getUser()
+    const user = await getAuthedUser()
 
     if (!user) {
         redirect('/login')

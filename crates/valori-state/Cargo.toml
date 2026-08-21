@@ -9,6 +9,7 @@ description = "State lifecycle for Valori: bootstrap, manifest, crash recovery, 
 valori-core    = { workspace = true, features = ["std"] }
 valori-kernel  = { workspace = true, features = ["std"] }
 valori-storage = { workspace = true }
+valori-domain  = { workspace = true }
 
 blake3    = "1.5"
 bincode   = { version = "2.0.1", features = ["serde"] }

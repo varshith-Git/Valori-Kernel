@@ -63,12 +63,18 @@ fn parse_and_name_roundtrip() {
 /// changed — that must be a DELIBERATE, versioned event (bump
 /// STATE_HASH_DOMAIN_VERSION, update this constant in the same commit,
 /// and document the break in the phase report). Never an accident.
+///
+/// G0.2: pinned value bumped for STATE_HASH_DOMAIN_VERSION 2 -> 3 (widened
+/// coverage — namespace_id, first_in_edge/next_in, meta sidecar; see
+/// docs/reviews/graph-g0.2-canonical-state-hash-commitment.md). The empty
+/// state has no records/nodes/edges/meta, so only the domain-version byte
+/// in the prefix actually changes this particular value.
 #[test]
 fn empty_state_hash_is_pinned() {
     let h = hash_state_blake3(&KernelState::new());
     assert_eq!(
         h.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-        "4eeaa41d0b2eb66651bdbb252f4b91a7fa191d3f1cee4d311b6056966fba4d4a",
+        "feb47a4c03ee329d108f168945e204413ec8068f44d85503e4ec5bab6412d9a2",
         "state-hash domain changed — see test doc comment before touching this"
     );
 }

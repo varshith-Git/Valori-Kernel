@@ -25,7 +25,7 @@ function instanceTone(status: string): 'success' | 'warning' | 'error' | 'neutra
 // /api/activity ported the same way as health/search below); not done yet,
 // tracked as follow-up rather than faked here.
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
-    const { status, online, recordCount, dim, index, version } = useHealth(projectId)
+    const { status, online, recordCount, dim, version } = useHealth(projectId)
     const { instances } = useProvisionerStatus(projectId)
     const { results, stateHash, isLoading, error, search, latencyMs } = useSearch(projectId)
     const [input, setInput] = useState('')
@@ -43,7 +43,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 <MetricCard label="Status" value={online ? (status ?? 'ok') : 'unreachable'} hint={version ?? undefined} />
                 <MetricCard label="Records" value={recordCount?.toLocaleString() ?? '—'} hint="live vectors" />
                 <MetricCard label="Dimension" value={dim ? String(dim) : '—'} hint="Q16.16 fixed-point" />
-                <MetricCard label="Index" value={index ?? '—'} />
             </div>
 
             {instances.length > 0 && (

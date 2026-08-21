@@ -7,7 +7,7 @@ import { useSearch } from "@/lib/hooks/useSearch";
 import { useProjects } from "@/lib/hooks/useProjects";
 import { useHealth } from "@/lib/hooks/useHealth";
 import { useProof } from "@/lib/hooks/useProof";
-import type { SearchResult } from "@/types/valori";
+import type { EnrichedSearchHit } from "@valori/api-types";
 import type { ActivityEvent } from "@/app/api/activity/route";
 import { EVENT_COLORS } from "@/lib/event-types";
 import { PageHeader } from "@/components/ui/page-header";
@@ -65,7 +65,7 @@ function TabBar({ active, onSelect, resultCount }: {
 // -- Results tab ---------------------------------------------------------------
 
 function ResultsTab({ results, stateHash, queriedAt }: {
-  results: SearchResult[];
+  results: EnrichedSearchHit[];
   stateHash: string | null;
   queriedAt: string | null;
 }) {
@@ -95,9 +95,6 @@ function ResultsTab({ results, stateHash, queriedAt }: {
               <span className="text-[10px] font-mono text-muted-foreground/60 w-5">{i + 1}</span>
               <span className="font-mono text-xs font-semibold text-foreground">#{r.id}</span>
               <StatusBadge tone="neutral">{`Score: ${r.score.toFixed(5)}`}</StatusBadge>
-              {r.collection && (
-                <StatusBadge tone="info" className="ml-auto text-[10px]">{r.collection}</StatusBadge>
-              )}
               {r.source && (
                 <span className="text-[10px] text-muted-foreground truncate max-w-[200px] font-mono" title={r.source}>
                   {r.source.split("/").pop()}
@@ -280,7 +277,7 @@ export default function SearchPage() {
   const { dim } = useHealth();
   const { projects } = useProjects();
   const { results, stateHash, queriedAt, isLoading, error, search, latencyMs } = useSearch();
-  const [enrichedResults, setEnrichedResults] = useState<SearchResult[]>([]);
+  const [enrichedResults, setEnrichedResults] = useState<EnrichedSearchHit[]>([]);
 
   const hasRun = results.length > 0 || (!!error && !isLoading);
 
@@ -300,7 +297,7 @@ export default function SearchPage() {
             ...r,
             text:   (m.text as string | undefined)?.slice(0, 160) ?? undefined,
             source: (m.source as string | undefined) ?? undefined,
-          } satisfies SearchResult;
+          } satisfies EnrichedSearchHit;
         } catch { return r; }
       })
     ).then((enriched) => { if (!ignore) setEnrichedResults(enriched); });

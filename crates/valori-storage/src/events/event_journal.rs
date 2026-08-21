@@ -27,12 +27,18 @@ pub struct EventJournal {
     /// Committed events (canonical truth)
     committed: Vec<KernelEvent>,
 
+    /// Namespace ID for each committed event (parallel to `committed`).
+    namespaces: Vec<u16>,
+
     /// Unix-second wall-clock timestamp for each committed event (parallel to `committed`).
     /// Stamped at `commit_buffer()` time; used by as-of / point-in-time search.
     timestamps: Vec<u64>,
 
     /// Buffered events (shadow execution, not yet truth)
     buffer: Vec<KernelEvent>,
+
+    /// Namespace ID for each buffered event (parallel to `buffer`).
+    buffer_namespaces: Vec<u16>,
 
     /// Committed event count (for proof generation)
     committed_height: u64,
@@ -48,8 +54,10 @@ impl EventJournal {
         let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
             committed: Vec::new(),
+            namespaces: Vec::new(),
             timestamps: Vec::new(),
             buffer: Vec::new(),
+            buffer_namespaces: Vec::new(),
             committed_height: 0,
             tx,
         }
@@ -60,23 +68,53 @@ impl EventJournal {
         let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
             committed: Vec::new(),
+            namespaces: Vec::new(),
             timestamps: Vec::new(),
             buffer: Vec::new(),
+            buffer_namespaces: Vec::new(),
             committed_height: height,
             tx,
         }
     }
 
-    /// Create a journal from committed events (recovery scenario).
-    /// Timestamps are set to 0 for recovered events (no original wall-clock available).
+    /// Create a journal from committed events with NO known wall-clock time
+    /// for any of them (timestamps read back as 0 / 1970-01-01).
     pub fn from_committed(events: Vec<KernelEvent>) -> Self {
-        let committed_height = events.len() as u64;
         let timestamps = vec![0u64; events.len()];
+        Self::from_committed_with_timestamps(events, timestamps)
+    }
+
+    /// Create a journal from committed events recovered from the event log with timestamps.
+    pub fn from_committed_with_timestamps(events: Vec<KernelEvent>, timestamps: Vec<u64>) -> Self {
+        let namespaces = vec![0u16; events.len()];
+        Self::from_committed_with_namespaces_and_timestamps(events, namespaces, timestamps)
+    }
+
+    /// Create a journal from committed events recovered from the event log,
+    /// each paired with its recorded namespace ID and real persisted wall-clock commit timestamp.
+    pub fn from_committed_with_namespaces_and_timestamps(
+        events: Vec<KernelEvent>,
+        namespaces: Vec<u16>,
+        timestamps: Vec<u64>,
+    ) -> Self {
+        assert_eq!(
+            events.len(),
+            timestamps.len(),
+            "from_committed_with_namespaces_and_timestamps: events/timestamps length mismatch"
+        );
+        assert_eq!(
+            events.len(),
+            namespaces.len(),
+            "from_committed_with_namespaces_and_timestamps: events/namespaces length mismatch"
+        );
+        let committed_height = events.len() as u64;
         let (tx, _) = tokio::sync::broadcast::channel(10000);
         Self {
             committed: events,
+            namespaces,
             timestamps,
             buffer: Vec::new(),
+            buffer_namespaces: Vec::new(),
             committed_height,
             tx,
         }
@@ -86,33 +124,55 @@ impl EventJournal {
         self.committed_height = height;
     }
 
-    /// Append an event to the buffer (not yet committed)
+    /// Append an event to the buffer (not yet committed) in DEFAULT_NS (0)
     pub fn append_buffered(&mut self, event: KernelEvent) {
+        self.append_buffered_ns(event, 0);
+    }
+
+    /// Append an event to the buffer for a specific namespace ID
+    pub fn append_buffered_ns(&mut self, event: KernelEvent, namespace_id: u16) {
         self.buffer.push(event);
+        self.buffer_namespaces.push(namespace_id);
     }
 
     /// Commit all buffered events. Each event is stamped with the current wall-clock time.
     pub fn commit_buffer(&mut self) {
-        use crate::events::event_log::LogEntry;
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        self.commit_buffer_at(now);
+    }
 
-        for event in &self.buffer {
-            let _ = self.tx.send(LogEntry::Event(event.clone()));
-            self.timestamps.push(now);
+    /// Commit all buffered events, stamping each with the given wall-clock
+    /// time instead of reading the clock again here.
+    pub fn commit_buffer_at(&mut self, ts: u64) {
+        use crate::events::event_log::LogEntry;
+
+        for (event, &ns) in self.buffer.iter().zip(self.buffer_namespaces.iter()) {
+            let entry = if ns == 0 {
+                LogEntry::Event(event.clone())
+            } else {
+                LogEntry::EventNs {
+                    namespace_id: ns,
+                    event: event.clone(),
+                }
+            };
+            let _ = self.tx.send(entry);
+            self.timestamps.push(ts);
         }
 
         self.committed.append(&mut self.buffer);
+        self.namespaces.append(&mut self.buffer_namespaces);
         self.committed_height = self.committed.len() as u64;
         self.buffer.clear();
+        self.buffer_namespaces.clear();
     }
 
     /// Rollback buffered events
     pub fn rollback_buffer(&mut self) {
         self.buffer.clear();
+        self.buffer_namespaces.clear();
     }
 
     /// Get committed events (canonical truth)
@@ -143,6 +203,11 @@ impl EventJournal {
     /// Iterate committed events paired with their unix-second wall-clock timestamps.
     pub fn committed_with_timestamps(&self) -> impl Iterator<Item = (&KernelEvent, u64)> {
         self.committed.iter().zip(self.timestamps.iter().copied())
+    }
+
+    /// Iterate committed events paired with their namespace IDs.
+    pub fn committed_with_namespaces(&self) -> impl Iterator<Item = (&KernelEvent, u16)> {
+        self.committed.iter().zip(self.namespaces.iter().copied())
     }
 
     /// Wall-clock timestamp (unix seconds) for the event at `log_index`.

@@ -12,6 +12,7 @@ use crate::document::WriteResult;
 
 // ── Stage identity ────────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageName {
@@ -50,6 +51,7 @@ impl StageName {
 
 // ── Per-stage metrics ─────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// Format-specific counters emitted by each stage. E4.1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "snake_case")]

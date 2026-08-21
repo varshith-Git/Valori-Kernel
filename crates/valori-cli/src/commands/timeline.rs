@@ -251,5 +251,15 @@ fn describe_event(event: &KernelEvent) -> (Cell, String) {
             Cell::new("UpdateRecordMetadata").fg(Color::White),
             format!("record_id={}", id.0),
         ),
+
+        KernelEvent::ConfigureNamespace {
+            namespace_id,
+            dim,
+            metric,
+            index_kind,
+        } => (
+            Cell::new("ConfigureNamespace").fg(Color::Cyan),
+            format!("ns={namespace_id}  dim={dim}  metric={metric}  index_kind={index_kind}"),
+        ),
     }
 }

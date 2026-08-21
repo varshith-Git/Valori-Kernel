@@ -62,11 +62,48 @@ async fn main() {
 
     let mut engine = Engine::new(&cfg);
 
+    // ── Phase 2.3: StorageProvider-backed recovery, made the default path ──
+    // When the node was started with both VALORI_STORAGE_ROOT and
+    // VALORI_PROJECT_ID (the daemon sets both for every project it spawns —
+    // see `valori-daemon`'s runtime launcher), configure Engine with a real
+    // `LocalStorageProvider` BEFORE recovery runs. `Engine::try_recover()`
+    // itself checks for this and, when present, uses the manifest-driven
+    // snapshot+WAL-tail path FIRST — this is what makes it the actual live
+    // default rather than a path only tests exercise. A node started
+    // without either env var (any deployment that predates them) silently
+    // keeps today's pre-existing whole-process recovery, unchanged — the
+    // explicit, disclosed compatibility boundary.
+    if let (Some(root), Some(project_id)) = (cfg.storage_root.clone(), cfg.project_id) {
+        match valori_storage::provider::local::LocalStorageProvider::open(&root) {
+            Ok(provider) => {
+                engine.configure_storage_provider(
+                    std::sync::Arc::new(provider),
+                    project_id,
+                    cfg.project_name.as_deref(),
+                );
+                tracing::info!(
+                    "StorageProvider configured: root={:?} project_id={}",
+                    root,
+                    project_id
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Failed to open LocalStorageProvider at {:?}: {e} — falling back to the \
+                     legacy event-log/WAL/snapshot recovery path",
+                    root
+                );
+            }
+        }
+    }
+
     // ── Crash Recovery ────────────────────────────────────────────────────────
-    // Priority order: event log (canonical truth) → snapshot → legacy WAL
-    // (replayed on top of the snapshot, if any) → fresh start.
-    // try_recover() never panics; on failure it logs and continues with the
-    // next source. A corrupt snapshot no longer kills the process.
+    // Priority order (Phase 2.3): StorageProvider-backed manifest+snapshot+
+    // WAL-tail recovery (when configured above) → event log (canonical
+    // truth) → snapshot → legacy WAL (replayed on top of the snapshot, if
+    // any) → fresh start. try_recover() never panics; on failure it logs
+    // and continues with the next source. A corrupt snapshot no longer
+    // kills the process.
     let mode = engine.try_recover();
     match mode {
         valori_node::engine::RecoveryMode::EventLog(n) => {
@@ -78,6 +115,12 @@ async fn main() {
         }
         valori_node::engine::RecoveryMode::Fresh => {
             tracing::info!("Starting fresh (no prior state found)")
+        }
+        valori_node::engine::RecoveryMode::StorageProvider(lsn) => {
+            tracing::info!(
+                "Recovered via StorageProvider (manifest-driven), highest LSN {}",
+                lsn
+            )
         }
     }
 
@@ -290,7 +333,6 @@ async fn run_cluster(cluster_cfg: valori_node::cluster::ClusterConfig) {
         &cluster_cfg,
         node_cfg.event_log_path.as_deref(),
         rotation_bytes,
-        node_cfg.dim,
     )
     .await
     .unwrap_or_else(|e| {

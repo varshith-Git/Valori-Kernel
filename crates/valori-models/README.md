@@ -59,3 +59,23 @@ $VALORI_MODELS_DIR/                  # default: ~/.valori/models
 | `VALORI_EMBED_URL` | Ollama / OpenAI base URL override |
 | `VALORI_EMBED_API_KEY` | OpenAI / Voyage API key |
 | `VALORI_MODELS_DIR` | Override package store root (default: `~/.valori/models`) |
+
+## The `utoipa` feature (Phase API-3.1)
+
+Optional and **off by default** — nothing in the runtime path needs it, and
+enabling it adds a dependency the shipped binary does not carry.
+
+```toml
+utoipa = ["dep:utoipa"]
+```
+
+`valori-node`'s own `utoipa` feature turns it on transitively. It adds
+`#[derive(ToSchema)]` to `health::{SystemHealth, PackageHealth, PackageHealthStatus}`, which `valori-node` serialises verbatim from
+`GET /v1/models/health`.
+
+The point is that there is **one** type. The public OpenAPI contract references
+the same struct the handler returns, so a field added or renamed here shows up
+in the contract automatically instead of drifting away from a hand-copied mirror
+in `valori-node/src/api.rs`. `scripts/verify-api-route-contract.py` and the
+byte-equality test in `crates/valori-node/tests/openapi_generated.rs` enforce it.
+

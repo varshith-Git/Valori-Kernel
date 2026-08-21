@@ -1,14 +1,7 @@
 "use client";
 
-import useSWR from "swr";
 import { useHealth } from "./useHealth";
-import { useProjectGroups, makeNs } from "./useCollections";
-
-const fetcher = (url: string) =>
-  fetch(url).then((r) => {
-    if (!r.ok) throw new Error(`${r.status}`);
-    return r.json();
-  });
+import type { CollectionRef } from "./useCollections";
 
 export interface CollectionMetric {
   collection: string;
@@ -16,15 +9,20 @@ export interface CollectionMetric {
   approximateRecords: number | null;
 }
 
-export function useProjectMetrics(project: string, collections: string[]) {
+// `collections` carries each collection's canonical display name alongside
+// its actual raw node namespace (see useCollections.ts's module doc) — this
+// hook only ever needs the raw namespace to probe the node directly, and
+// never re-derives or assumes a naming convention of its own.
+export function useProjectMetrics(collections: CollectionRef[]) {
   const { dim, recordCount, chainHeight } = useHealth();
 
   // Approximate record counts by running zero-vec search in each collection.
   // This is best-effort — null means we couldn't determine the count.
-  const probes = collections.map((col) => {
-    const ns = makeNs(project, col);
-    return { collection: col, namespace: ns };
-  });
+  const probes: CollectionMetric[] = collections.map((c) => ({
+    collection: c.name,
+    namespace: c.rawNamespace,
+    approximateRecords: null,
+  }));
 
   // We do a single aggregated approximate check via health for total,
   // then per-collection via zero-vec search (triggered lazily).

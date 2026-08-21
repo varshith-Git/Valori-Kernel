@@ -17,13 +17,35 @@ const DIM: usize = 16;
 
 fn make_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = DIM;
     cfg.max_records = 100;
     cfg.max_nodes = 100;
     cfg.max_edges = 200;
     cfg.wal_path = Some(dir.join("valori.wal"));
     cfg.event_log_path = Some(dir.join("events.log"));
     cfg
+}
+
+async fn create_default_collection(shared_state: Arc<RwLock<Engine>>, dim: usize) {
+    let app = build_router(shared_state, None, None);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/namespaces")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "name": "default",
+                "dimension": dim,
+                "metric": "squared_l2"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "failed to create default collection"
+    );
 }
 
 #[tokio::test]
@@ -33,6 +55,7 @@ async fn test_batch_ingest_success() {
 
     let engine = Engine::new(&config);
     let shared_state = Arc::new(RwLock::new(engine));
+    create_default_collection(shared_state.clone(), DIM).await;
     let app = build_router(shared_state, None, None);
 
     let batch = vec![vec![0.1; DIM], vec![0.2; DIM], vec![0.3; DIM]];
@@ -43,7 +66,7 @@ async fn test_batch_ingest_success() {
         .body(Body::from(
             serde_json::to_vec(&BatchInsertRequest {
                 batch,
-                collection: None,
+                collection: Some("default".to_string()),
                 metadata: None,
                 request_ids: None,
                 texts: None,
@@ -69,6 +92,7 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
 
     let engine = Engine::new(&config);
     let shared_state = Arc::new(RwLock::new(engine));
+    create_default_collection(shared_state.clone(), DIM).await;
     let app = build_router(shared_state.clone(), None, None);
 
     // One vector has the wrong dimension — the whole batch must be rejected.
@@ -84,7 +108,7 @@ async fn test_batch_ingest_wrong_dimension_is_rejected() {
         .body(Body::from(
             serde_json::to_vec(&BatchInsertRequest {
                 batch,
-                collection: None,
+                collection: Some("default".to_string()),
                 metadata: None,
                 request_ids: None,
                 texts: None,

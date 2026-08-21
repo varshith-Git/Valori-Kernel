@@ -66,7 +66,7 @@ impl Writer for KernelWriter {
             .create_node_for_record(Some(rid), 1, self.ns)
             .unwrap_or(0);
         if chunk_node_id > 0 {
-            let _ = engine.create_edge(self.doc_node_id, chunk_node_id, 6);
+            let _ = engine.create_edge_ns(self.doc_node_id, chunk_node_id, 6, self.ns);
         }
 
         let now = now_unix();

@@ -251,9 +251,26 @@ pub fn required_scope(method: &axum::http::Method, path: &str) -> ApiScope {
     {
         return ApiScope::Admin;
     }
+    // Phase API-2 (§17, audit row 34): changing cluster membership or forcing
+    // a Raft snapshot reconfigures the deployment. Prefix-derivation used to
+    // land these on `read_write`, so any writer key could add or evict a node.
+    // The read-only `/v1/cluster/*` endpoints are handled by the GET rule below.
+    if path == "/v1/cluster/add-node"
+        || path == "/v1/cluster/remove-node"
+        || path == "/v1/cluster/snapshot"
+    {
+        return ApiScope::Admin;
+    }
     // Read-only POSTs (search endpoints use POST for the query body).
+    //
+    // Phase API-2 (§17, audit row 35): `/v1/search/multi` and `/v1/graphrag`
+    // are pure reads that happen to carry their query in a body. They did not
+    // literally end in `/search`, so prefix-derivation demanded `read_write`
+    // and a read-only key could not run a cross-collection or GraphRAG query.
     if path == "/search"
         || path.ends_with("/search")
+        || path == "/v1/search/multi"
+        || path == "/v1/graphrag"
         || path.starts_with("/v1/memory/search")
         || path.starts_with("/v1/proof")
         || path == "/timeline"

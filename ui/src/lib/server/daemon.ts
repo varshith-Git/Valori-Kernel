@@ -34,7 +34,31 @@ export class DaemonError extends Error {
 const DAEMON_STARTUP_RETRY_MS = 3_000;
 const DAEMON_STARTUP_RETRY_INTERVAL_MS = 300;
 
+// Phase L (performance): once a call has burned the full retry budget above
+// and genuinely failed to reach the daemon, remember that for a short window
+// instead of making the NEXT call pay the same 3 s retry again.
+//
+// Without this, a route that makes two sequential daemon calls while the
+// daemon is down (e.g. `POST /api/projects/:name/open` → getProject() then
+// startProject(); `POST /api/projects` → listProjects() then
+// createProject()) pays the 3 s retry TWICE — a measured 6.1 s failure
+// instead of ~3.1 s (reproduced live during Phase L: both routes matched
+// this exactly). A poller hitting a down daemon every few seconds hits the
+// same compounding problem across requests, not just within one.
+//
+// The first call after the daemon goes quiet still gets the full 3 s grace
+// period (real cold-start, per the comment above, must not be short-circuited
+// into a false "down" verdict) — only calls that land inside this cooldown
+// after an already-confirmed failure skip straight to failing. A success at
+// any point clears it immediately, so recovery is never delayed by it.
+const DAEMON_DOWN_COOLDOWN_MS = 2_000;
+let lastKnownDownAt: number | null = null;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (lastKnownDownAt !== null && Date.now() - lastKnownDownAt < DAEMON_DOWN_COOLDOWN_MS) {
+    throw new DaemonError("daemon unreachable", 503);
+  }
+
   let res: Response;
   const deadline = Date.now() + DAEMON_STARTUP_RETRY_MS;
   for (;;) {
@@ -46,9 +70,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         // always be fresh.
         cache: "no-store",
       });
+      lastKnownDownAt = null;
       break;
     } catch (e) {
       if (Date.now() >= deadline) {
+        lastKnownDownAt = Date.now();
         throw new DaemonError(e instanceof Error ? e.message : "daemon unreachable", 503);
       }
       await new Promise((r) => setTimeout(r, DAEMON_STARTUP_RETRY_INTERVAL_MS));
@@ -125,8 +151,6 @@ export interface DaemonProject {
 
 export interface CreateDaemonProjectInput {
   name: string;
-  dim: number;
-  index?: string;
   workspace?: string;
   cluster?: DaemonClusterConfig;
   embedding?: DaemonEmbeddingConfig;

@@ -9,6 +9,7 @@ have to agree on.
 | Module | Contents |
 |---|---|
 | `id` | `ProjectId`, `SessionId`, `InstallationId`, `ModelId`, `SnapshotId`; re-exports of `CollectionId`, `NamespaceId`, `ExecutionId` from `valori-core` |
+| `project` | `Project`, `ApiProject`, `ProjectName`, `ProjectTopology`, `Timestamp`; `IndexKind` and `Metric` — the canonical index-algorithm and distance-metric enums, the target for the several near-duplicate `IndexKind`s found elsewhere in the codebase (`valori_metadata::IndexKind`, `valori_engine::config::IndexKind`) to eventually converge on. As of the collection-scoped-vector-config phase, `valori_engine::config::IndexKind::from_domain` is the one explicit adapter between this type and the engine's own (not yet deleted — see that phase's Follow-ups) |
 | `error` | `DomainError`, `Result<T>` |
 
 ## The admission rule

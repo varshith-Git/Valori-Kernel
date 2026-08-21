@@ -12,13 +12,11 @@ use valori_node::config::{IndexKind, NodeConfig, QuantizationKind};
 use valori_node::engine::{Engine, RecoveryMode};
 use valori_node::EngineFromNodeConfig;
 
-fn make_cfg_no_log(dim: usize) -> NodeConfig {
+fn make_cfg_no_log() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = dim;
     cfg.max_records = 256;
     cfg.max_nodes = 256;
     cfg.max_edges = 512;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.quantization_kind = QuantizationKind::None;
     cfg.event_log_path = None;
     cfg.wal_path = None;
@@ -26,8 +24,8 @@ fn make_cfg_no_log(dim: usize) -> NodeConfig {
     cfg
 }
 
-fn make_cfg_with_event_log(dir: &std::path::Path, dim: usize) -> NodeConfig {
-    let mut cfg = make_cfg_no_log(dim);
+fn make_cfg_with_event_log(dir: &std::path::Path) -> NodeConfig {
+    let mut cfg = make_cfg_no_log();
     cfg.event_log_path = Some(dir.join("events.log"));
     cfg.snapshot_path = Some(dir.join("snapshot.bin"));
     cfg
@@ -41,7 +39,7 @@ fn make_cfg_with_event_log(dir: &std::path::Path, dim: usize) -> NodeConfig {
 #[test]
 fn test_state_hash_round_trips_through_snapshot() {
     let dir = tempdir().unwrap();
-    let mut cfg = make_cfg_no_log(4);
+    let mut cfg = make_cfg_no_log();
     cfg.snapshot_path = Some(dir.path().join("snap.bin"));
 
     let mut engine = Engine::new(&cfg);
@@ -74,7 +72,7 @@ fn test_state_hash_round_trips_through_snapshot() {
 
 #[test]
 fn test_verify_embedding_round_trip() {
-    let mut engine = Engine::new(&make_cfg_no_log(4));
+    let mut engine = Engine::new(&make_cfg_no_log());
 
     let target = vec![0.1f32, 0.2, 0.3, 0.4];
     let rid = engine.insert_record_from_f32(&target).expect("insert");
@@ -120,7 +118,7 @@ fn test_determinism_across_two_independent_engines() {
     let mut hash_b = [0u8; 32];
 
     for (dir, hash_out) in [(&dir_a, &mut hash_a), (&dir_b, &mut hash_b)] {
-        let cfg = make_cfg_with_event_log(dir.path(), 4);
+        let cfg = make_cfg_with_event_log(dir.path());
         let mut engine = Engine::new(&cfg);
         engine.try_recover();
 
@@ -148,7 +146,7 @@ fn test_determinism_across_two_independent_engines() {
 
 #[test]
 fn test_hash_changes_on_every_insert() {
-    let mut engine = Engine::new(&make_cfg_no_log(4));
+    let mut engine = Engine::new(&make_cfg_no_log());
     let mut seen = std::collections::HashSet::new();
 
     for i in 0..20u32 {
@@ -172,7 +170,7 @@ fn test_hash_changes_on_every_insert() {
 #[test]
 fn test_proof_hash_stable_through_event_log_recovery() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg_with_event_log(dir.path(), 4);
+    let cfg = make_cfg_with_event_log(dir.path());
 
     let pre_crash_hash;
 

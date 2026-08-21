@@ -43,8 +43,8 @@ async fn create_start_health_stop_delete() {
         .create_project(ProjectManifest {
             id: valori_daemon::new_id(),
             name: "healthcare".into(),
-            dim: 8,
-            index: "brute".into(),
+            dim: None,
+            index: None,
             workspace: "default".into(),
             restart_policy: valori_daemon::RestartPolicy::Never,
             created_at: 0,
@@ -98,8 +98,8 @@ async fn supervisor_restarts_crashed_node() {
         .create_project(ProjectManifest {
             id: valori_daemon::new_id(),
             name: "hc".into(),
-            dim: 8,
-            index: "brute".into(),
+            dim: None,
+            index: None,
             workspace: "default".into(),
             restart_policy: valori_daemon::RestartPolicy::Always,
             created_at: 0,
@@ -200,8 +200,8 @@ async fn cluster_project_forms_and_recovers_from_one_node_crash() {
         .create_project(ProjectManifest {
             id: valori_daemon::new_id(),
             name: "trio".into(),
-            dim: 8,
-            index: "brute".into(),
+            dim: None,
+            index: None,
             workspace: "default".into(),
             restart_policy: valori_daemon::RestartPolicy::Always,
             created_at: 0,

@@ -53,6 +53,7 @@
 //! | `maxRecords`, `collections` | TS manifest / node | One consumer each; collections are node state |
 //! | `embedding` | *deferred* | The TS shape carries an `apiKey`. A shared model that can hold a secret needs a secrets decision first — see the M2 report |
 //! | `organization_id`, `region`, `deployment_id` | **private Cloud** | A local project has no organization |
+//! | `dim`, `index`, `metric` | [`valori_metadata::collection::Collection`] | **Removed, not deprecated** — a project used to carry a single project-wide vector dimension/index (M2-era). The collection-scoped-index-lifecycle phase moved these to `Collection` with no backward-compat shim: Valori has no production users, so preserving a second, competing source of truth had no justification. `Project` must never own vector configuration again — see that phase's report for why. |
 
 use std::fmt;
 use std::num::NonZeroU8;
@@ -283,6 +284,77 @@ impl FromStr for IndexKind {
     }
 }
 
+// ── Metric ───────────────────────────────────────────────────────────────────
+
+/// The mathematical distance definition a collection scores vectors with.
+///
+/// # What this is, and is not
+///
+/// This is the **metric** — the distance *definition* — not the arithmetic
+/// that evaluates it (Q16.16 fixed-point in `valori-kernel`, `f32` in the
+/// node-level `valori-index` crate) and not an index-specific implementation
+/// detail. See `valori_kernel::index::Metric`, this type's `no_std` mirror
+/// used on the kernel/snapshot/event-log wire path — kept as a separate,
+/// minimal type rather than a shared one because `valori-kernel` may not
+/// depend on `valori-domain` (`docs/architecture/ownership.md`). Both encode
+/// the same `as_u8()` tag so the two stay interchangeable at every boundary.
+///
+/// # Not guaranteed
+///
+/// - **Only `SquaredL2` exists.** Valori's determinism guarantee depends on
+///   avoiding a square root; this type makes the metric *representable* per
+///   collection, it does not add a second metric. Unsupported values must be
+///   rejected, not silently substituted.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Metric {
+    #[default]
+    SquaredL2,
+}
+
+impl Metric {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Metric::SquaredL2 => "squared_l2",
+        }
+    }
+
+    /// Wire tag shared with `valori_kernel::index::Metric::as_u8`.
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Metric::SquaredL2 => 0,
+        }
+    }
+
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Metric::SquaredL2),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Metric {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Metric {
+    type Err = DomainError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "squared_l2" | "l2" | "l2sq" => Ok(Metric::SquaredL2),
+            other => Err(DomainError::UnknownMetric {
+                value: other.to_string(),
+            }),
+        }
+    }
+}
+
 // ── ProjectTopology ───────────────────────────────────────────────────────────
 
 /// How a project is spread across processes and Raft groups.
@@ -395,16 +467,28 @@ impl fmt::Display for Timestamp {
 ///
 /// # What it represents
 ///
-/// A project is a user's isolated data store: one kernel state, one event log,
-/// one set of collections, one immutable vector dimension. This struct carries
-/// exactly the properties that every surface — daemon, control plane, HTTP API,
-/// Studio, Cloud — must agree on.
+/// A project is the **deployment/infrastructure boundary**: name, region,
+/// topology, node resources, Valori runtime version. This struct carries
+/// exactly the properties that every surface — daemon, control plane, HTTP
+/// API, Studio, Cloud — must agree on.
+///
+/// # What a Project deliberately does NOT own
+///
+/// Dimension, metric, and index are **Collection-scoped**, not
+/// Project-scoped — see `valori_metadata::collection::{Collection,
+/// CollectionVectorConfig}` and `docs/phases/phase-collection-index-lifecycle.md`.
+/// A project used to carry a single project-wide `dim`/`index` (removed in
+/// that phase, with zero backward-compatibility shim — Valori has no
+/// production users, so there was no reason to keep a second, competing
+/// source of truth alive). Do not re-add them here; a fresh project-wide
+/// scalar dimension/index is exactly the architecture this removal exists
+/// to prevent from reappearing.
 ///
 /// # Guarantees
 ///
 /// - [`Project::id`] is the identity and never changes.
 /// - Every field is validated at construction: no empty names, no zero
-///   replicas, no unknown index kinds.
+///   replicas.
 /// - Contains no secrets, no filesystem paths, and no runtime state, so it is
 ///   safe to serialize into an API response as-is.
 ///
@@ -422,13 +506,11 @@ impl fmt::Display for Timestamp {
 /// # Example
 ///
 /// ```
-/// use valori_domain::{IndexKind, Project, ProjectId, ProjectName, ProjectTopology, Timestamp};
+/// use valori_domain::{Project, ProjectId, ProjectName, ProjectTopology, Timestamp};
 ///
 /// let project = Project {
 ///     id: ProjectId::new(),
 ///     name: ProjectName::parse("research-notes")?,
-///     dim: 384,
-///     index: IndexKind::Auto,
 ///     topology: ProjectTopology::STANDALONE,
 ///     created_at: Timestamp::from_unix_secs(1_750_000_000),
 ///     last_opened_at: None,
@@ -444,10 +526,6 @@ pub struct Project {
     pub id: ProjectId,
     /// Mutable, filesystem-safe display label.
     pub name: ProjectName,
-    /// Vector dimension. Immutable after the first insert (enforced by the node).
-    pub dim: u32,
-    /// Index algorithm.
-    pub index: IndexKind,
     /// Replica and shard counts.
     pub topology: ProjectTopology,
     /// When the project was created.
@@ -551,8 +629,6 @@ impl LocalProject {
 pub struct ApiProject {
     pub id: ProjectId,
     pub name: ProjectName,
-    pub dim: u32,
-    pub index: IndexKind,
     /// `1` for standalone.
     pub replicas: u8,
     pub shards: u8,
@@ -572,8 +648,6 @@ impl From<&Project> for ApiProject {
         Self {
             id: p.id,
             name: p.name.clone(),
-            dim: p.dim,
-            index: p.index,
             replicas: p.topology.replicas.get(),
             shards: p.topology.shards.get(),
             is_cluster: p.topology.is_cluster(),
@@ -604,8 +678,6 @@ impl TryFrom<ApiProject> for Project {
         Ok(Project {
             id: a.id,
             name: a.name,
-            dim: a.dim,
-            index: a.index,
             topology,
             created_at: Timestamp::from_unix_secs(a.created_at),
             last_opened_at: a.last_opened_at.map(Timestamp::from_unix_secs),

@@ -1,0 +1,414 @@
+{
+  "_comment": [
+    "Phase API-4D §7 — cross-SDK metadata wire fixtures.",
+    "Every Valori SDK maps an ergonomic metadata mapping to the canonical wire",
+    "form the OpenAPI contract requires. `POST /v1/records` commits those bytes",
+    "INSIDE the InsertRecord event, so they are covered by the BLAKE3 audit",
+    "chain: two SDKs writing the same metadata must produce the same bytes, or",
+    "the same logical write yields two different state hashes.",
+    "",
+    "`json` is the canonical serialisation (JSON.stringify semantics: no",
+    "whitespace, real UTF-8, insertion order). `bytes` is its UTF-8 encoding —",
+    "the `list[int]` that POST /v1/records takes. Batch-insert takes `json`.",
+    "",
+    "Read by sdk/python/tests/test_metadata_wire.py and",
+    "sdk/typescript/tests/wire-parity.test.ts. A new SDK adds a reader here,",
+    "not a second hand-written table of expectations."
+  ],
+  "cases": [
+    {
+      "name": "string",
+      "metadata": {
+        "author": "alice"
+      },
+      "json": "{\"author\":\"alice\"}",
+      "bytes": [
+        123,
+        34,
+        97,
+        117,
+        116,
+        104,
+        111,
+        114,
+        34,
+        58,
+        34,
+        97,
+        108,
+        105,
+        99,
+        101,
+        34,
+        125
+      ]
+    },
+    {
+      "name": "number-int",
+      "metadata": {
+        "page": 4
+      },
+      "json": "{\"page\":4}",
+      "bytes": [
+        123,
+        34,
+        112,
+        97,
+        103,
+        101,
+        34,
+        58,
+        52,
+        125
+      ]
+    },
+    {
+      "name": "number-float",
+      "metadata": {
+        "score": 0.5
+      },
+      "json": "{\"score\":0.5}",
+      "bytes": [
+        123,
+        34,
+        115,
+        99,
+        111,
+        114,
+        101,
+        34,
+        58,
+        48,
+        46,
+        53,
+        125
+      ]
+    },
+    {
+      "name": "boolean",
+      "metadata": {
+        "draft": false
+      },
+      "json": "{\"draft\":false}",
+      "bytes": [
+        123,
+        34,
+        100,
+        114,
+        97,
+        102,
+        116,
+        34,
+        58,
+        102,
+        97,
+        108,
+        115,
+        101,
+        125
+      ]
+    },
+    {
+      "name": "null-value",
+      "metadata": {
+        "parent": null
+      },
+      "json": "{\"parent\":null}",
+      "bytes": [
+        123,
+        34,
+        112,
+        97,
+        114,
+        101,
+        110,
+        116,
+        34,
+        58,
+        110,
+        117,
+        108,
+        108,
+        125
+      ]
+    },
+    {
+      "name": "nested-object",
+      "metadata": {
+        "src": {
+          "file": "a.md",
+          "line": 12
+        }
+      },
+      "json": "{\"src\":{\"file\":\"a.md\",\"line\":12}}",
+      "bytes": [
+        123,
+        34,
+        115,
+        114,
+        99,
+        34,
+        58,
+        123,
+        34,
+        102,
+        105,
+        108,
+        101,
+        34,
+        58,
+        34,
+        97,
+        46,
+        109,
+        100,
+        34,
+        44,
+        34,
+        108,
+        105,
+        110,
+        101,
+        34,
+        58,
+        49,
+        50,
+        125,
+        125
+      ]
+    },
+    {
+      "name": "array",
+      "metadata": {
+        "tags": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "json": "{\"tags\":[\"a\",\"b\",\"c\"]}",
+      "bytes": [
+        123,
+        34,
+        116,
+        97,
+        103,
+        115,
+        34,
+        58,
+        91,
+        34,
+        97,
+        34,
+        44,
+        34,
+        98,
+        34,
+        44,
+        34,
+        99,
+        34,
+        93,
+        125
+      ]
+    },
+    {
+      "name": "array-of-objects",
+      "metadata": {
+        "spans": [
+          {
+            "s": 0,
+            "e": 4
+          },
+          {
+            "s": 5,
+            "e": 9
+          }
+        ]
+      },
+      "json": "{\"spans\":[{\"s\":0,\"e\":4},{\"s\":5,\"e\":9}]}",
+      "bytes": [
+        123,
+        34,
+        115,
+        112,
+        97,
+        110,
+        115,
+        34,
+        58,
+        91,
+        123,
+        34,
+        115,
+        34,
+        58,
+        48,
+        44,
+        34,
+        101,
+        34,
+        58,
+        52,
+        125,
+        44,
+        123,
+        34,
+        115,
+        34,
+        58,
+        53,
+        44,
+        34,
+        101,
+        34,
+        58,
+        57,
+        125,
+        93,
+        125
+      ]
+    },
+    {
+      "name": "unicode",
+      "metadata": {
+        "title": "Übersicht — 東京 🗼"
+      },
+      "json": "{\"title\":\"Übersicht — 東京 🗼\"}",
+      "bytes": [
+        123,
+        34,
+        116,
+        105,
+        116,
+        108,
+        101,
+        34,
+        58,
+        34,
+        195,
+        156,
+        98,
+        101,
+        114,
+        115,
+        105,
+        99,
+        104,
+        116,
+        32,
+        226,
+        128,
+        148,
+        32,
+        230,
+        157,
+        177,
+        228,
+        186,
+        172,
+        32,
+        240,
+        159,
+        151,
+        188,
+        34,
+        125
+      ]
+    },
+    {
+      "name": "empty",
+      "metadata": {},
+      "json": "{}",
+      "bytes": [
+        123,
+        125
+      ]
+    },
+    {
+      "name": "key-order",
+      "metadata": {
+        "b": 1,
+        "a": 2
+      },
+      "json": "{\"b\":1,\"a\":2}",
+      "bytes": [
+        123,
+        34,
+        98,
+        34,
+        58,
+        49,
+        44,
+        34,
+        97,
+        34,
+        58,
+        50,
+        125
+      ]
+    },
+    {
+      "name": "mixed",
+      "metadata": {
+        "a": 1,
+        "b": "two",
+        "c": [
+          3,
+          {
+            "d": true
+          }
+        ],
+        "e": null
+      },
+      "json": "{\"a\":1,\"b\":\"two\",\"c\":[3,{\"d\":true}],\"e\":null}",
+      "bytes": [
+        123,
+        34,
+        97,
+        34,
+        58,
+        49,
+        44,
+        34,
+        98,
+        34,
+        58,
+        34,
+        116,
+        119,
+        111,
+        34,
+        44,
+        34,
+        99,
+        34,
+        58,
+        91,
+        51,
+        44,
+        123,
+        34,
+        100,
+        34,
+        58,
+        116,
+        114,
+        117,
+        101,
+        125,
+        93,
+        44,
+        34,
+        101,
+        34,
+        58,
+        110,
+        117,
+        108,
+        108,
+        125
+      ]
+    }
+  ]
+}

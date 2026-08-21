@@ -13,13 +13,11 @@ use valori_node::config::{IndexKind, NodeConfig};
 use valori_node::engine::{Engine, RecoveryMode};
 use valori_node::EngineFromNodeConfig;
 
-fn make_cfg(dir: &std::path::Path, dim: usize) -> NodeConfig {
+fn make_cfg(dir: &std::path::Path) -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = dim;
     cfg.max_records = 128;
     cfg.max_nodes = 128;
     cfg.max_edges = 256;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = Some(dir.join("events.log"));
     cfg.snapshot_path = Some(dir.join("snapshot.bin"));
     // No WAL — event log is canonical when configured
@@ -32,7 +30,7 @@ fn make_cfg(dir: &std::path::Path, dim: usize) -> NodeConfig {
 #[test]
 fn test_event_log_recovery_basic() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let cfg = make_cfg(dir.path());
 
     let pre_crash_hash;
     let n_inserted = 50usize;
@@ -91,7 +89,6 @@ fn test_snapshot_fallback_recovery() {
 
     // Config with snapshot but NO event log (WAL-only path)
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 64;
     cfg.max_nodes = 64;
     cfg.max_edges = 128;
@@ -136,9 +133,9 @@ fn test_snapshot_fallback_recovery() {
 // ── Test 3: event log beats snapshot when both exist ─────────────────────────
 
 #[test]
-fn test_event_log_wins_over_snapshot() {
+fn test_recovery_idempotence_and_append() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let cfg = make_cfg(dir.path());
 
     let hash_after_30;
 
@@ -191,7 +188,7 @@ fn test_event_log_wins_over_snapshot() {
 #[test]
 fn test_fresh_start_when_nothing_exists() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let cfg = make_cfg(dir.path());
 
     let mut engine = Engine::new(&cfg);
     let mode = engine.try_recover();
@@ -208,9 +205,9 @@ fn test_fresh_start_when_nothing_exists() {
 // This test verifies the full round-trip.
 
 #[test]
-fn test_metadata_persists_through_event_log_recovery() {
+fn test_rotation_recovers_across_multiple_segments() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let mut cfg = make_cfg(dir.path());
 
     // Phase 1: insert a record, set metadata, then "crash" (drop).
     {
@@ -271,16 +268,28 @@ fn test_metadata_persists_through_event_log_recovery() {
 #[test]
 fn test_collections_persist_through_event_log_recovery() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let cfg = make_cfg(dir.path());
 
     // Phase 1: create collections, insert a record into one, then "crash".
     {
         let mut engine = Engine::new(&cfg);
         engine.try_recover();
 
-        let id_a = engine.create_collection("proj--docs").expect("create docs");
+        let id_a = engine
+            .create_collection_with_config(
+                "proj--docs",
+                4,
+                valori_domain::Metric::SquaredL2,
+                valori_domain::IndexKind::Brute,
+            )
+            .expect("create docs");
         let _id_b = engine
-            .create_collection("proj--notes")
+            .create_collection_with_config(
+                "proj--notes",
+                4,
+                valori_domain::Metric::SquaredL2,
+                valori_domain::IndexKind::Brute,
+            )
             .expect("create notes");
 
         // Put a record in one collection so the event log is non-empty and the
@@ -333,11 +342,9 @@ fn test_collections_persist_through_event_log_recovery() {
 fn test_wal_recovery_basic() {
     let dir = tempdir().unwrap();
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 64;
     cfg.max_nodes = 64;
     cfg.max_edges = 128;
-    cfg.index_kind = IndexKind::BruteForce;
     // WAL-only: no event log, no snapshot — the legacy persistence backend.
     cfg.event_log_path = None;
     cfg.snapshot_path = None;
@@ -404,11 +411,9 @@ fn test_snapshot_wins_over_wal_when_both_present() {
     // attempted once the snapshot has already recovered a state.
     let dir = tempdir().unwrap();
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 64;
     cfg.max_nodes = 64;
     cfg.max_edges = 128;
-    cfg.index_kind = IndexKind::BruteForce;
     cfg.event_log_path = None;
     cfg.snapshot_path = Some(dir.path().join("snapshot.bin"));
     cfg.wal_path = Some(dir.path().join("legacy.wal"));
@@ -453,7 +458,7 @@ fn test_snapshot_wins_over_wal_when_both_present() {
 #[test]
 fn test_search_index_rebuilt_after_recovery() {
     let dir = tempdir().unwrap();
-    let cfg = make_cfg(dir.path(), 4);
+    let cfg = make_cfg(dir.path());
 
     // Phase 1: insert known vectors
     {

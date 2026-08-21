@@ -189,7 +189,7 @@ impl EventLogWriter {
 
             let header = parse_header(&buf).map_err(|_| EventLogError::InvalidHeader)?;
             if let Some(expected) = expected_dim {
-                if header.dim != expected {
+                if expected != 0 && header.dim != 0 && header.dim != expected {
                     return Err(EventLogError::DimensionMismatch {
                         expected,
                         found: header.dim,
@@ -224,7 +224,7 @@ impl EventLogWriter {
                 }
             }
         } else {
-            let d = expected_dim.ok_or(EventLogError::InvalidHeader)?;
+            let d = expected_dim.unwrap_or(0);
             dim = d;
             version = VERSION_V4;
             let header = encode_header_v4(dim, FORMAT_Q16_16, 0, &[0u8; 32]);
@@ -316,20 +316,35 @@ impl EventLogWriter {
         Ok(())
     }
 
-    /// Append multiple entries with a SINGLE fsync.
+    /// Append multiple entries with a SINGLE fsync, each stamped with the
+    /// SAME current wall-clock time.
     ///
-    /// All entries share one flush+fsync. Advances the chain head for
-    /// each entry in order so chain integrity is maintained.
+    /// This is only correct when every entry in `entries` was genuinely
+    /// committed at (approximately) this instant — i.e. the batch was built
+    /// and flushed immediately (see `EventCommitter::commit_batch_ns`).
+    /// A caller that buffers entries across time before flushing (see
+    /// `EventCommitter::commit_event_ns` + `flush_pending`) must use
+    /// [`append_batch_with_timestamps`] instead, or every buffered entry
+    /// gets silently re-stamped with the flush moment instead of its real
+    /// commit moment.
     pub fn append_batch(&mut self, entries: &[LogEntry]) -> Result<()> {
+        let now = Self::now_secs();
+        let timestamped: Vec<(LogEntry, u64)> = entries.iter().map(|e| (e.clone(), now)).collect();
+        self.append_batch_with_timestamps(&timestamped)
+    }
+
+    /// Append multiple entries with a SINGLE fsync, each stamped with its
+    /// own already-known commit timestamp (not a timestamp synthesized at
+    /// flush time). This is what preserves the true commit instant for
+    /// entries that sat in an in-memory write buffer before being flushed.
+    pub fn append_batch_with_timestamps(&mut self, entries: &[(LogEntry, u64)]) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
 
-        let now = Self::now_secs();
-
         let mut total_bytes = 0u64;
-        for entry in entries {
-            let bytes = encode_entry(self.version, &self.chain_head, now, None, entry)?;
+        for (entry, ts) in entries {
+            let bytes = encode_entry(self.version, &self.chain_head, *ts, None, entry)?;
             total_bytes += bytes.len() as u64;
             self.file.write_all(&bytes)?;
             self.chain_head = chain_advance(
@@ -337,7 +352,7 @@ impl EventLogWriter {
                 &self.chain_head,
                 &DecodedEntry {
                     prev_hash: self.chain_head,
-                    wall_time_secs: now,
+                    wall_time_secs: *ts,
                     request_id: None,
                     entry: entry.clone(),
                 },
@@ -348,7 +363,7 @@ impl EventLogWriter {
         self.file.get_ref().sync_all()?;
         self.bytes_written += total_bytes;
 
-        for entry in entries {
+        for (entry, _) in entries {
             if let LogEntry::Event(_) = entry {
                 self.event_count += 1;
             }

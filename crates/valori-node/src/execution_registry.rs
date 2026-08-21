@@ -18,6 +18,7 @@ use valori_ingest::execution::{PipelineResult, StageMetrics, StageName};
 /// Default bounded capacity — oldest entries evicted first once exceeded.
 pub const DEFAULT_CAPACITY: usize = 1024;
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// One stage, with its human-facing label alongside the full metrics —
 /// enough to render either a DAG step or a timeline row from the same data.
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +35,7 @@ pub struct StageView {
     pub error: Option<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 /// A completed ingest execution, keyed by `operation_id` — the real payload
 /// for `GET /v1/operations/:id/execution`.
 #[derive(Debug, Clone, Serialize)]

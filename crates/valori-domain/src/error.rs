@@ -55,6 +55,13 @@ pub enum DomainError {
         value: String,
     },
 
+    /// A metric string matched no supported distance definition.
+    #[error("unknown metric `{value}`: expected squared_l2")]
+    UnknownMetric {
+        /// The rejected value.
+        value: String,
+    },
+
     /// A `ProjectTopology` had a zero replica or shard count.
     #[error("invalid topology: replicas={replicas}, shards={shards} (both must be >= 1)")]
     InvalidTopology { replicas: u8, shards: u8 },

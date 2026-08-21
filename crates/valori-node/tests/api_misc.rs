@@ -39,7 +39,6 @@ fn engine_router(cfg: NodeConfig) -> (SharedEngine, axum::Router) {
 
 fn tiny_cfg() -> NodeConfig {
     let mut cfg = NodeConfig::default();
-    cfg.dim = 4;
     cfg.max_records = 100;
     cfg.max_nodes = 50;
     cfg.max_edges = 50;
@@ -105,9 +104,25 @@ async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode
     (status, json)
 }
 
+/// Create the "default" collection these tests target.
+async fn create_default_collection(router: axum::Router) {
+    let (status, body) = post_json(
+        router,
+        "/v1/namespaces",
+        serde_json::json!({"name": "default", "dimension": 4, "metric": "squared_l2"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "collection create failed: {body}");
+}
+
 /// Insert one record and return its id.
 async fn insert_one(router: axum::Router, vec: [f32; 4]) -> u32 {
-    let (status, body) = post_json(router, "/records", serde_json::json!({"values": vec})).await;
+    let (status, body) = post_json(
+        router,
+        "/records",
+        serde_json::json!({"values": vec, "collection": "default"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "insert failed: {body}");
     body["id"].as_u64().expect("missing id") as u32
 }
@@ -152,7 +167,8 @@ async fn shard_routing_returns_mode_and_shards() {
 #[tokio::test]
 async fn graph_nodes_empty_graph() {
     let (_, router) = engine_router(tiny_cfg());
-    let (status, body) = get(router, "/v1/graph/nodes").await;
+    create_default_collection(router.clone()).await;
+    let (status, body) = get(router, "/v1/graph/nodes?collection=default").await;
     assert_eq!(status, StatusCode::OK, "{body}");
     // Should return an empty nodes list
     let nodes = body["nodes"].as_array().or_else(|| body.as_array());
@@ -191,9 +207,15 @@ async fn index_rebuild_accepts_hnsw() {
 #[tokio::test]
 async fn delete_record_by_id() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let id = insert_one(router.clone(), [1.0, 0.0, 0.0, 0.0]).await;
 
-    let (status, body) = post_json(router, "/v1/delete", serde_json::json!({"id": id})).await;
+    let (status, body) = post_json(
+        router,
+        "/v1/delete",
+        serde_json::json!({"id": id, "collection": "default"}),
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["success"].as_bool().unwrap(), true);
@@ -215,9 +237,10 @@ async fn delete_nonexistent_record_fails() {
 #[tokio::test]
 async fn get_record_by_id_roundtrip() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let id = insert_one(router.clone(), [0.5, 0.5, 0.0, 0.0]).await;
 
-    let (status, body) = get(router, &format!("/v1/records/{id}")).await;
+    let (status, body) = get(router, &format!("/v1/records/{id}?collection=default")).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["id"].as_u64().unwrap() as u32, id);
     assert!(body["vector"].is_array());
@@ -226,7 +249,8 @@ async fn get_record_by_id_roundtrip() {
 #[tokio::test]
 async fn get_record_by_id_not_found() {
     let (_, router) = engine_router(tiny_cfg());
-    let (status, _) = get(router, "/v1/records/9999").await;
+    create_default_collection(router.clone()).await;
+    let (status, _) = get(router, "/v1/records/9999?collection=default").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -235,11 +259,12 @@ async fn get_record_by_id_not_found() {
 #[tokio::test]
 async fn patch_record_metadata_roundtrip() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let id = insert_one(router.clone(), [0.1, 0.2, 0.3, 0.4]).await;
 
     let (status, body) = patch_json(
         router.clone(),
-        &format!("/v1/records/{id}/metadata"),
+        &format!("/v1/records/{id}/metadata?collection=default"),
         serde_json::json!({"author": "Alice", "year": 2025}),
     )
     .await;
@@ -247,7 +272,7 @@ async fn patch_record_metadata_roundtrip() {
     assert_eq!(body["ok"].as_bool().unwrap(), true);
 
     // Verify the metadata was actually stored
-    let (status2, rec) = get(router, &format!("/v1/records/{id}")).await;
+    let (status2, rec) = get(router, &format!("/v1/records/{id}?collection=default")).await;
     assert_eq!(status2, StatusCode::OK);
     assert_eq!(rec["metadata"]["author"].as_str().unwrap(), "Alice");
 }
@@ -255,9 +280,10 @@ async fn patch_record_metadata_roundtrip() {
 #[tokio::test]
 async fn patch_metadata_not_found_returns_404() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let (status, _) = patch_json(
         router,
-        "/v1/records/9999/metadata",
+        "/v1/records/9999/metadata?collection=default",
         serde_json::json!({"x": 1}),
     )
     .await;
@@ -269,13 +295,15 @@ async fn patch_metadata_not_found_returns_404() {
 #[tokio::test]
 async fn contradict_identical_vectors_above_threshold() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let id_a = insert_one(router.clone(), [1.0, 0.0, 0.0, 0.0]).await;
+    create_default_collection(router.clone()).await;
     let id_b = insert_one(router.clone(), [1.0, 0.0, 0.0, 0.0]).await;
 
     let (status, body) = post_json(
         router,
         "/v1/memory/contradict",
-        serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.5}),
+        serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.5, "collection": "default"}),
     )
     .await;
 
@@ -291,13 +319,15 @@ async fn contradict_identical_vectors_above_threshold() {
 #[tokio::test]
 async fn contradict_orthogonal_vectors_below_threshold() {
     let (_, router) = engine_router(tiny_cfg());
+    create_default_collection(router.clone()).await;
     let id_a = insert_one(router.clone(), [1.0, 0.0, 0.0, 0.0]).await;
+    create_default_collection(router.clone()).await;
     let id_b = insert_one(router.clone(), [0.0, 1.0, 0.0, 0.0]).await;
 
     let (status, body) = post_json(
         router,
         "/v1/memory/contradict",
-        serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.9}),
+        serde_json::json!({"record_a": id_a, "record_b": id_b, "threshold": 0.9, "collection": "default"}),
     )
     .await;
 
@@ -341,6 +371,7 @@ async fn meta_get_missing_key_returns_null_metadata() {
 async fn snapshot_download_returns_bytes() {
     let (_, router) = engine_router(tiny_cfg());
     // Insert one record so there's some state
+    create_default_collection(router.clone()).await;
     insert_one(router.clone(), [0.1, 0.2, 0.3, 0.4]).await;
 
     let resp = router

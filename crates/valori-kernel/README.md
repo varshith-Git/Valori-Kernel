@@ -103,6 +103,34 @@ Non-default namespace records are **never inserted** into the global
 BruteForce/HNSW index. Isolation is enforced at three sites: the event-commit
 path, the WAL replay path, and `build_index()` (post-snapshot restore).
 
+### Collection-scoped vector configuration
+
+`KernelState.namespace_configs: BTreeMap<u16, NamespaceConfig>` records an
+explicit `{ dim, metric, index_kind }` per namespace, set via
+`KernelEvent::ConfigureNamespace` and `KernelState::configure_namespace`. A
+namespace absent from this map has no explicit config and falls back to the
+legacy, process-wide `KernelState.dim` scalar — this is deliberate: it is
+what makes an existing project's collections behave exactly as before, with
+no migration step. As of Phase 3.2, the live REST API can only reach this
+fallback for the built-in `"default"` namespace — `POST /v1/namespaces`
+requires explicit `dimension`/`metric` for every other name, so no *new*
+collection can land in `namespace_configs`-absent state through the product
+surface; the kernel itself still allows it (unchanged, since other callers —
+legacy snapshot decode, direct `Engine`/`KernelState` use — legitimately
+need it). `namespace_dim(ns)`/`namespace_metric(ns)` resolve the
+effective value; `validate_dim_for_ns` is the single dimension gate shared by
+`InsertRecord` and `AutoInsertRecord`, and is enforced here (not only in
+`valori-engine`) because `valori-consensus::ValoriStateMachine` applies
+events directly against `KernelState` in cluster mode, bypassing `Engine`
+entirely — the kernel is the one thing both the standalone and cluster
+insert paths share.
+
+`Metric` (`crate::index::Metric`) makes the distance definition
+representable — `SquaredL2` only today, no new arithmetic. The kernel does
+not interpret `index_kind`; it is an opaque wire tag carried so every Raft
+replica and every snapshot restore reconstructs the same value —
+`valori-engine::Engine` is what actually builds the per-collection index.
+
 `KernelEvent` → `KernelState::apply_event_ns` is the **single authoritative
 mutation path**. There is no intermediate type between the event and the state
 machine. WAL recovery translates legacy `Command` entries to `KernelEvent`
@@ -133,15 +161,24 @@ type between `KernelEvent` and `KernelState`. Legacy v1 WAL files (pre-K2) are
 still _readable_ via `valori-storage::wal_reader::WalReader` (backward compat
 handled by `LegacyWalCommand` in `valori-storage::wal_compat`, private to that crate).
 
-### Snapshot format (V6)
+### Snapshot format (V8)
 
 V6 snapshots include per-record namespace metadata and the 2 × 1 024 × 4 = 8 KB
 namespace head arrays. The NSRG (namespace registry) section is appended after
 the index payload and is backward-compatible: older readers that lack NSRG
-support simply ignore the trailing bytes.
+support simply ignore the trailing bytes. V7 appends `KernelState.meta`. V8
+appends `namespace_configs` (collection-scoped dim/metric/index_kind) after
+the V7 meta section. V1–V7 snapshots decode unchanged into a state with an
+empty `namespace_configs` map — no separate migration path exists or is
+needed. **Known limitation**: the record section still stores exactly one
+vector byte-width for the whole snapshot (the header `dim`), so a collection
+whose dimension differs from every other namespace in the same file does not
+yet survive a restore, even though it works correctly in-memory — see
+`docs/phases/phase-collection-scoped-vector-config.md`.
 
 ```
 [VAL1 header][records+flags][nodes][edges][index][namespace heads: 8 KB][NSRG: 4-byte len + JSON]
+[kernel-level, inside VAL1's "index" bytes, V7+]: [meta: count + k/v pairs][V8: namespace_configs: count + (ns,dim,metric,index_kind) tuples]
 ```
 
 **Encoder (Phase P1):** `snapshot::encode::encode_state(state, &mut Vec<u8>)`

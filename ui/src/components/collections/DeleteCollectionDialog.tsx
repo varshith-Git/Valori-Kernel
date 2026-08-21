@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -30,7 +30,12 @@ export function DeleteCollectionDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const ns = `${project}--${collection}`;
+  useEffect(() => {
+    if (open) {
+      setConfirm("");
+      setError("");
+    }
+  }, [open, collection]);
 
   const submit = async () => {
     setBusy(true);
@@ -39,12 +44,15 @@ export function DeleteCollectionDialog({
       await onDelete();
       setConfirm("");
       onOpenChange(false);
-    } catch {
-      setError("Failed to delete collection");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to delete collection";
+      setError(msg);
     } finally {
       setBusy(false);
     }
   };
+
+  const isValidConfirm = confirm.trim().toLowerCase() === collection.trim().toLowerCase();
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -55,7 +63,7 @@ export function DeleteCollectionDialog({
         <div className="py-2 flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
             This permanently deletes{" "}
-            <code className="font-mono text-accent-foreground">{ns}</code> and all its
+            <code className="font-mono font-bold text-foreground bg-accent px-1.5 py-0.5 rounded">{collection}</code> and all its
             vectors. Type the collection name to confirm.
           </p>
           <Input
@@ -64,7 +72,7 @@ export function DeleteCollectionDialog({
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
             onKeyDown={(e) =>
-              e.key === "Enter" && confirm === collection && submit()
+              e.key === "Enter" && isValidConfirm && submit()
             }
             className="bg-accent border-input text-foreground placeholder:text-muted-foreground"
           />
@@ -81,7 +89,7 @@ export function DeleteCollectionDialog({
           </Button>
           <Button
             size="sm"
-            disabled={confirm !== collection || busy}
+            disabled={!isValidConfirm || busy}
             onClick={submit}
             className="bg-red-600 text-foreground hover:bg-red-700 disabled:opacity-40"
           >

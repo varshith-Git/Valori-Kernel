@@ -1,3 +1,6 @@
+#[cfg(feature = "utoipa")]
+#[allow(unused_imports)]
+use crate::openapi::ApiError;
 use crate::server::SharedEngine;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -15,6 +18,7 @@ use serde::{Deserialize, Serialize};
 // embed_batch and chunk_document are still used by ingest_update.
 use crate::execution_registry::{ExecutionRecord, ExecutionRegistry};
 use crate::kernel_writer::KernelWriter;
+use valori_engine::ErrorCode;
 use valori_ingest::{chunk_content_hash, chunk_document, embed_batch};
 use valori_ingest::{DefaultChunker, IngestPipeline, ModelProviderEmbedder, TextReader};
 use valori_models::provider_from_config;
@@ -23,6 +27,7 @@ const MAX_INGEST_TEXT_BYTES: usize = valori_ingest::chunker::MAX_INGEST_TEXT_BYT
 
 // ── Request / response types ──────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Deserialize)]
 pub struct IngestRequest {
     pub text: String,
@@ -34,11 +39,32 @@ pub struct IngestRequest {
     pub r#async: Option<bool>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "utoipa", into_params(parameter_in = Query))]
 #[derive(Deserialize, Default)]
 pub struct IngestQuery {
     pub r#async: Option<bool>,
 }
 
+/// The `202` body of `POST /v1/ingest` when `async: true`.
+///
+/// The async branch has always returned this object; the contract used to
+/// declare the `202` with no content at all, so a generated client saw
+/// `never` and had no typed way to reach `job_id` — the one field the whole
+/// async flow depends on, since it is what `GET /v1/ingest/status/{job_id}`
+/// takes.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Serialize)]
+pub struct IngestAcceptedResponse {
+    pub ok: bool,
+    /// Poll `GET /v1/ingest/status/{job_id}` with this id.
+    pub job_id: String,
+    /// Always `processing` on this response.
+    pub status: String,
+    pub collection: String,
+}
+
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct IngestResponse {
     pub ok: bool,
@@ -52,13 +78,87 @@ pub struct IngestResponse {
     pub operation_id: String,
 }
 
-#[derive(Serialize)]
-struct IngestErrorBody {
-    error: String,
-}
-
 // ── GET /v1/ingest/status/:job_id ─────────────────────────────────────────────
 
+/// The lifecycle states an asynchronous ingest job actually reports.
+///
+/// Phase API-3.3: these are the three literals both routers write — see the
+/// `jobs.insert(..)` calls in [`ingest`] (standalone) and `cluster_ingest`
+/// (cluster). There is no separate `pending`: a job is `processing` from the
+/// moment `POST /v1/ingest?async=true` answers `202`.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IngestJobState {
+    /// Chunking, embedding, or committing is still in flight. Keep polling.
+    Processing,
+    /// Terminal success. `document_node_id` and `record_ids` are populated.
+    Completed,
+    /// Terminal failure. `error` carries the reason.
+    Failed,
+}
+
+/// The body of `GET /v1/ingest/status/{job_id}`.
+///
+/// # Why this type exists
+///
+/// Phase API-3.3: this response was annotated `body = Object`, rendering as a
+/// bare `type: object` with no properties — `object` in TypeScript,
+/// `Dict[str, Any]` in Python. An SDK user polling an async ingest had no
+/// typed way to learn whether the job finished, and no discoverable name for
+/// the field carrying the answer. That defeats the purpose of the `202`
+/// contract that points here.
+///
+/// Every field is optional except `status` and `job_id`, because which ones
+/// are present genuinely depends on the stage the job has reached — the
+/// terminal-success fields do not exist while it is `processing`, and `error`
+/// exists only on `failed`. `status` is the discriminant to branch on.
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestJobStatusResponse {
+    /// Which stage the job has reached. Branch on this.
+    pub status: IngestJobState,
+    /// Echo of the polled job id.
+    pub job_id: String,
+    /// Target collection. Absent on `failed` jobs that failed before resolving one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    /// Chunks the document was split into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunk_count: Option<usize>,
+    /// Chunking strategy the server selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy_used: Option<String>,
+    /// `completed` only — the graph node representing the ingested document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_node_id: Option<u32>,
+    /// `completed` only — the records written, one per chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_ids: Option<Vec<u32>>,
+    /// `completed` only — correlates with `GET /v1/operations/{id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    /// `failed` only — the human-readable reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/ingest/status/{job_id}",
+    operation_id = "get_ingest_status",
+    tag = "ingest",
+    summary = "Poll an asynchronous ingest job",
+    description = "Job state is held in-process and does not survive a restart. The payload shape depends on which stage the job has reached.",
+    params(
+        ("job_id" = String, Path, description = "Job id returned by an async ingest"),
+    ),
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Current job state", body = IngestJobStatusResponse),
+        (status = 404, description = "No such job"),
+    ),
+))]
 pub async fn get_ingest_status(
     axum::extract::Path(job_id): axum::extract::Path<String>,
     axum::Extension(tasks): axum::Extension<std::sync::Arc<crate::runner::TaskRegistry>>,
@@ -78,6 +178,28 @@ pub async fn get_ingest_status(
 
 // ── POST /v1/ingest ───────────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/ingest",
+    operation_id = "ingest_document",
+    tag = "ingest",
+    summary = "Chunk, embed, and insert a document",
+    description = "The full pipeline in one call. Requires `VALORI_EMBED_PROVIDER`. With `async: true` the call returns immediately and progress is polled through `GET /v1/ingest/status/{job_id}`.",
+    params(
+        IngestQuery,
+    ),
+    request_body = IngestRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Document ingested", body = IngestResponse),
+        (status = 202, description = "Accepted for background processing; poll `GET /v1/ingest/status/{job_id}`", body = IngestAcceptedResponse),
+        (status = 400, description = "Empty text, or the chunker produced no chunks", body = ApiError),
+        (status = 413, description = "Text exceeds the maximum ingest size", body = ApiError),
+        (status = 422, description = "VALORI_EMBED_PROVIDER is not configured", body = ApiError),
+        (status = 500, description = "The ingest pipeline failed", body = ApiError),
+        (status = 502, description = "The embedding provider failed", body = ApiError),
+    ),
+))]
 pub async fn ingest(
     State(state): State<SharedEngine>,
     axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
@@ -87,8 +209,11 @@ pub async fn ingest(
     Json(payload): Json<IngestRequest>,
 ) -> Response {
     if payload.text.len() > MAX_INGEST_TEXT_BYTES {
-        let body = serde_json::json!({"error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")});
-        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+        return valori_engine::error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::ValidationError,
+            format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)"),
+        );
     }
     let collection = payload
         .collection
@@ -153,9 +278,12 @@ pub async fn ingest(
         // For async runs: snapshot counts for the immediate response, then
         // let the pipeline run in the background.
         let job_id = format!("job_{}", valori_core::id::ExecutionId::new_random());
-        let resp = serde_json::json!({
-            "ok": true, "job_id": job_id, "status": "processing", "collection": collection,
-        });
+        let resp = IngestAcceptedResponse {
+            ok: true,
+            job_id: job_id.clone(),
+            status: "processing".into(),
+            collection: collection.clone(),
+        };
         {
             let mut jobs = tasks.jobs.write().await;
             jobs.insert(
@@ -272,15 +400,13 @@ pub async fn ingest(
         Ok(r) if r.writes.is_empty() => return err_400("no chunks produced"),
         Ok(r) => r,
         Err(e) => {
-            let code = match &e {
-                valori_ingest::IngestError::Embed(_) => StatusCode::BAD_GATEWAY,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            let (status, code) = match &e {
+                valori_ingest::IngestError::Embed(_) => {
+                    (StatusCode::BAD_GATEWAY, ErrorCode::Unavailable)
+                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError),
             };
-            return (
-                code,
-                axum::Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return valori_engine::error_response(status, code, e.to_string());
         }
     };
 
@@ -381,24 +507,26 @@ fn emit_ingest_receipt(
     )
 }
 
+// The ingest handlers used to emit a bare `{"error": "..."}` object, which is
+// not the `ApiError` the contract declares for these statuses — it is missing
+// the `code` discriminant an SDK is supposed to branch on. Routing them through
+// `valori_engine::error_response` makes the runtime match the document. The
+// change is additive: `error` keeps its meaning and `code` appears alongside it.
 fn err_400(msg: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        axum::Json(serde_json::json!({"error": msg})),
-    )
-        .into_response()
+    valori_engine::error_response(StatusCode::BAD_REQUEST, ErrorCode::ValidationError, msg)
 }
 
 fn err_422(msg: &str) -> Response {
-    (
+    valori_engine::error_response(
         StatusCode::UNPROCESSABLE_ENTITY,
-        axum::Json(serde_json::json!({"error": msg})),
+        ErrorCode::NotImplemented,
+        msg,
     )
-        .into_response()
 }
 
 // ── POST /v1/ingest/update ────────────────────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Deserialize)]
 pub struct IngestUpdateRequest {
     pub document_node_id: u32,
@@ -410,6 +538,7 @@ pub struct IngestUpdateRequest {
     pub chunk_overlap: Option<usize>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Serialize)]
 pub struct IngestUpdateResponse {
     pub ok: bool,
@@ -423,14 +552,36 @@ pub struct IngestUpdateResponse {
     pub collection: String,
 }
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/ingest/update",
+    operation_id = "update_ingested_document",
+    tag = "ingest",
+    summary = "Re-ingest a document, re-embedding only what changed",
+    description = "Diffs the new chunk set against the stored one by BLAKE3 content hash. Unchanged chunks keep their existing records and are never re-embedded; the counts in the response say exactly what happened.",
+    request_body = IngestUpdateRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Document updated", body = IngestUpdateResponse),
+        (status = 400, description = "Malformed or invalid request", body = ApiError),
+        (status = 404, description = "No such document node", body = ApiError),
+        (status = 413, description = "Text exceeds the maximum ingest size", body = ApiError),
+        (status = 422, description = "VALORI_EMBED_PROVIDER is not configured", body = ApiError),
+        (status = 500, description = "Record insertion failed", body = ApiError),
+        (status = 502, description = "The embedding provider failed", body = ApiError),
+    ),
+))]
 pub async fn ingest_update(
     State(state): State<SharedEngine>,
     axum::Extension(receipts): axum::Extension<std::sync::Arc<valori_effect::ReceiptStore>>,
     Json(payload): Json<IngestUpdateRequest>,
 ) -> Response {
     if payload.text.len() > MAX_INGEST_TEXT_BYTES {
-        let body = serde_json::json!({"error": format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)")});
-        return (StatusCode::PAYLOAD_TOO_LARGE, axum::Json(body)).into_response();
+        return valori_engine::error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorCode::ValidationError,
+            format!("text exceeds maximum ingest size ({MAX_INGEST_TEXT_BYTES} bytes)"),
+        );
     }
     let collection = payload
         .collection
@@ -449,31 +600,21 @@ pub async fn ingest_update(
     let embed_cfg = match embed_cfg {
         Some(c) => c,
         None => {
-            let body = serde_json::to_vec(&IngestErrorBody {
-                error: "on-node embedding not configured — set VALORI_EMBED_PROVIDER".into(),
-            })
-            .unwrap();
-            return (
+            return valori_engine::error_response(
                 StatusCode::UNPROCESSABLE_ENTITY,
-                axum::http::header::HeaderMap::new(),
-                body,
-            )
-                .into_response();
+                ErrorCode::NotImplemented,
+                "on-node embedding not configured — set VALORI_EMBED_PROVIDER",
+            );
         }
     };
 
     let (new_chunks, strategy_used) = chunk_document(&payload.text, strategy, chunk_size, overlap);
     if new_chunks.is_empty() {
-        let body = serde_json::to_vec(&IngestErrorBody {
-            error: "no chunks produced".into(),
-        })
-        .unwrap();
-        return (
+        return valori_engine::error_response(
             StatusCode::BAD_REQUEST,
-            axum::http::header::HeaderMap::new(),
-            body,
-        )
-            .into_response();
+            ErrorCode::ValidationError,
+            "no chunks produced",
+        );
     }
 
     let new_hashes: Vec<[u8; 32]> = new_chunks
@@ -544,16 +685,11 @@ pub async fn ingest_update(
         let vectors = match embed_batch(&texts_to_embed, &embed_cfg, http).await {
             Ok(v) => v,
             Err(e) => {
-                let body = serde_json::to_vec(&IngestErrorBody {
-                    error: e.to_string(),
-                })
-                .unwrap();
-                return (
+                return valori_engine::error_response(
                     StatusCode::BAD_GATEWAY,
-                    axum::http::header::HeaderMap::new(),
-                    body,
-                )
-                    .into_response();
+                    ErrorCode::Unavailable,
+                    e.to_string(),
+                );
             }
         };
 
@@ -561,16 +697,11 @@ pub async fn ingest_update(
         let ns = match engine.resolve_collection(Some(&collection)) {
             Ok(n) => n,
             Err(e) => {
-                let body = serde_json::to_vec(&IngestErrorBody {
-                    error: e.to_string(),
-                })
-                .unwrap();
-                return (
+                return valori_engine::error_response(
                     StatusCode::BAD_REQUEST,
-                    axum::http::header::HeaderMap::new(),
-                    body,
-                )
-                    .into_response();
+                    ErrorCode::ValidationError,
+                    e.to_string(),
+                );
             }
         };
 
@@ -578,16 +709,11 @@ pub async fn ingest_update(
             let rid = match engine.insert_record_from_f32_ns(&vectors[vec_idx], ns) {
                 Ok(id) => id,
                 Err(e) => {
-                    let body = serde_json::to_vec(&IngestErrorBody {
-                        error: e.to_string(),
-                    })
-                    .unwrap();
-                    return (
+                    return valori_engine::error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        axum::http::header::HeaderMap::new(),
-                        body,
-                    )
-                        .into_response();
+                        ErrorCode::InternalError,
+                        e.to_string(),
+                    );
                 }
             };
             engine.reranker_insert(rid, &new_chunks[chunk_idx].text);
@@ -604,10 +730,11 @@ pub async fn ingest_update(
                 }
             };
             if chunk_node_id > 0 {
-                let _ = engine.create_edge(
+                let _ = engine.create_edge_ns(
                     doc_node_id,
                     chunk_node_id,
                     valori_kernel::types::enums::EdgeKind::ParentOf as u8,
+                    ns,
                 );
             }
 

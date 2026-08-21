@@ -74,6 +74,8 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+      - name: Shared Studio boundary check
+        run: node ../scripts/check-studio-boundary.mjs src --studio studio/src
       - run: npx tsc --noEmit
 
   # ── Coverage (llvm-cov) ───────────────────────────────────────────────────────

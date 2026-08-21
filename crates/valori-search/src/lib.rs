@@ -24,10 +24,14 @@
 
 pub mod decay;
 pub mod filter;
+pub mod graph_rerank;
 pub mod reranker;
 
 // ── Convenient re-exports ─────────────────────────────────────────────────────
 
 pub use decay::{decay_factor, rerank as decay_rerank, DecayHit, DecayedHit};
 pub use filter::{matches_metadata_filter, MetadataFilter};
+pub use graph_rerank::{
+    graph_penalty, rerank as graph_rerank_apply, GraphRerankHit, GraphRerankedHit,
+};
 pub use reranker::{tokenise, ValoriReranker, POOL_FACTOR};

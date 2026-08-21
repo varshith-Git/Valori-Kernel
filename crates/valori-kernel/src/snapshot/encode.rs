@@ -19,7 +19,7 @@ use crate::error::Result;
 use crate::state::kernel::KernelState;
 
 pub const MAGIC: &[u8; 4] = b"VALK";
-pub const SCHEMA_VERSION: u32 = 7; // V7: adds the KernelState.meta sidecar (SetMeta-committed key/value pairs)
+pub const SCHEMA_VERSION: u32 = 8; // V8: adds KernelState.namespace_configs (per-collection dim/metric/index_kind)
 
 // ── infallible push helpers ────────────────────────────────────────────────────
 // Writing to a Vec<u8> can only fail on OOM, which panics (same as any alloc).
@@ -66,7 +66,25 @@ fn push_bytes(out: &mut alloc::vec::Vec<u8>, data: &[u8]) {
 ///
 /// Absent slot: 1 byte.  We pessimistically assume all slots are present.
 pub fn encode_capacity_hint(state: &KernelState) -> usize {
-    let dim = state.dim.unwrap_or(0);
+    let dim = state
+        .dim
+        .or_else(|| {
+            state
+                .namespace_configs
+                .values()
+                .next()
+                .map(|c| c.dim as usize)
+        })
+        .or_else(|| {
+            state
+                .records
+                .raw_records()
+                .iter()
+                .flatten()
+                .next()
+                .map(|r| r.vector.data.len())
+        })
+        .unwrap_or(0);
     let total_slots = state.records.raw_records().len();
     let node_count = state.node_count();
     let edge_count = state.edge_count();
@@ -87,6 +105,26 @@ pub fn encode_capacity_hint(state: &KernelState) -> usize {
 /// The caller should either pass an empty `Vec` or one pre-reserved with
 /// [`encode_capacity_hint`].  The function never fails due to buffer size.
 pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Result<()> {
+    let header_dim = state
+        .dim
+        .or_else(|| {
+            state
+                .namespace_configs
+                .values()
+                .next()
+                .map(|c| c.dim as usize)
+        })
+        .or_else(|| {
+            state
+                .records
+                .raw_records()
+                .iter()
+                .flatten()
+                .next()
+                .map(|r| r.vector.data.len())
+        })
+        .unwrap_or(0);
+
     // Header
     push_bytes(out, MAGIC);
     push_u32(out, SCHEMA_VERSION);
@@ -94,7 +132,7 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
 
     // V3: lengths (was capacities in V1/V2)
     push_u32(out, state.records.raw_records().len() as u32);
-    push_u32(out, state.dim.unwrap_or(0) as u32);
+    push_u32(out, header_dim as u32);
     push_u32(out, state.nodes.raw_nodes().len() as u32);
     push_u32(out, state.edges.raw_edges().len() as u32);
 
@@ -226,6 +264,17 @@ pub fn encode_state(state: &KernelState, out: &mut alloc::vec::Vec<u8>) -> Resul
         push_bytes(out, value.as_bytes());
     }
 
+    // V8: KernelState.namespace_configs — per-collection dim/metric/index_kind.
+    // BTreeMap iteration is key-ordered (namespace_id ascending), matching
+    // the V7 meta section's determinism rationale.
+    push_u32(out, state.namespace_configs.len() as u32);
+    for (&ns, cfg) in state.namespace_configs.iter() {
+        push_u16(out, ns);
+        push_u32(out, cfg.dim);
+        push_u8(out, cfg.metric.as_u8());
+        push_u8(out, cfg.index_kind);
+    }
+
     Ok(())
 }
 
@@ -274,12 +323,32 @@ pub fn encode_state_to_writer<W: std::io::Write>(
         }};
     }
 
+    let header_dim = state
+        .dim
+        .or_else(|| {
+            state
+                .namespace_configs
+                .values()
+                .next()
+                .map(|c| c.dim as usize)
+        })
+        .or_else(|| {
+            state
+                .records
+                .raw_records()
+                .iter()
+                .flatten()
+                .next()
+                .map(|r| r.vector.data.len())
+        })
+        .unwrap_or(0);
+
     // Header
     wb!(MAGIC);
     wu32!(SCHEMA_VERSION);
     wu64!(state.version.0);
     wu32!(state.records.raw_records().len() as u32);
-    wu32!(state.dim.unwrap_or(0) as u32);
+    wu32!(header_dim as u32);
     wu32!(state.nodes.raw_nodes().len() as u32);
     wu32!(state.edges.raw_edges().len() as u32);
     wu8!(crate::fxp::format::ACTIVE_FORMAT_ID);
@@ -397,6 +466,15 @@ pub fn encode_state_to_writer<W: std::io::Write>(
         wb!(key.as_bytes());
         wu32!(value.len() as u32);
         wb!(value.as_bytes());
+    }
+
+    // V8: KernelState.namespace_configs
+    wu32!(state.namespace_configs.len() as u32);
+    for (&ns, cfg) in state.namespace_configs.iter() {
+        wu16!(ns);
+        wu32!(cfg.dim);
+        wu8!(cfg.metric.as_u8());
+        wu8!(cfg.index_kind);
     }
 
     Ok(())

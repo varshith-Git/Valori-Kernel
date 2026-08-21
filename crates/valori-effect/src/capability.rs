@@ -60,14 +60,40 @@ pub trait KernelCapability: Capability {
     }
 
     /// Vector search + subgraph expansion (GraphRAG).
+    ///
+    /// `retrieval_k`          — how many vector candidates to use as seeds for graph expansion.
+    /// `depth`                — BFS hop depth (clamped to MAX_DEPTH=4 in the traversal layer).
+    /// `final_k`              — maximum hits returned; `None` = return all candidates.
+    /// `max_graph_candidates` — budget on graph-only candidates before `final_k`;
+    ///                          0 = unlimited (use 100 as a reasonable default at callsites).
+    /// `max_nodes`            — Phase 5.4: halt BFS before visiting a node that would exceed
+    ///                          this count; `None` = unlimited (depth is still the primary bound).
+    /// `max_edges`            — Phase 5.4: halt edge emission for a node once this count is
+    ///                          reached; `None` = unlimited.
+    /// `graph_weight`         — Phase 5.4: β in the combined ranking formula
+    ///                          `final_score = (1-β)×vector_relevance + β×graph_relevance`
+    ///                          where both signals are normalised to [0,1]. α = 1-β.
+    ///                          Range [0,1]; default 0.3 (vector-dominant).
+    ///
     /// Returns `{"hits":[…],"seed_nodes":[…],"subgraph":{"nodes":[…],"edges":[…]}}`.
+    /// Each hit carries `source` ("vector"|"vector_and_graph"|"graph"),
+    /// `graph_distance` (0 for seeds, N for graph-expanded, null for vector-only w/o node),
+    /// `score`/`vector_score` (L2 distance for vector hits, null for graph-only — deprecated alias),
+    /// `graph_score` (normalised graph relevance ∈ [0,1]; 0.0 when no graph node),
+    /// and `final_score` (combined score ∈ [0,1]; higher = better; present on ALL hits).
+    /// Hits are sorted by `final_score` descending, `record_id` ascending as tie-breaker.
     async fn graph_rag(
         &self,
         _shard_id: u8,
         _namespace_id: u16,
         _vector: Vec<f32>,
-        _k: u32,
+        _retrieval_k: u32,
         _depth: u32,
+        _final_k: Option<u32>,
+        _max_graph_candidates: u32,
+        _max_nodes: Option<u32>,
+        _max_edges: Option<u32>,
+        _graph_weight: f32,
     ) -> Result<serde_json::Value, EffectError> {
         Err(EffectError::CapabilityUnavailable("graph_rag"))
     }

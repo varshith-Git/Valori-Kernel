@@ -13,7 +13,7 @@ key-value store used by the Raft log in `valori-consensus`.
 | Module | Contents |
 |---|---|
 | `project` | `Project`, `IndexKind`, `ProjectMode`, `ClusterNodeConfig` |
-| `collection` | `Collection`, `CollectionRegistry` — name→NamespaceId; elevated form of the node's `NamespaceRegistry` |
+| `collection` | `Collection`, `CollectionVectorConfig` (dim/metric/index), `CollectionRegistry` — name→NamespaceId + optional per-collection vector config; elevated form of the node's `NamespaceRegistry`, already wired into `valori_engine::Engine.namespaces` |
 | `shard` | `ShardTopology`, `ShardConfig`, `ShardMember` — cluster shard topology |
 | `snapshot` | `SnapshotRecord`, `SnapshotCatalog` — snapshot catalog per (project, shard) |
 | `history` | `ExecutionRecord`, `ExecutionRetentionPolicy`, `ExecutionStatus` — execution history stub |
@@ -47,6 +47,15 @@ valori-wire  ──┴──► valori-metadata   ← this crate
 ## Key invariants
 
 - One `MetadataDb` file (`metadata.redb`) per valori installation — shared across all projects.
-- `CollectionRegistry` is the canonical name→NamespaceId mapping. The node's inline `NamespaceRegistry` will be replaced by this type in a future phase.
+- `CollectionRegistry` is the canonical name→NamespaceId mapping, and is what
+  `valori_engine::Engine.namespaces` actually is (not a separate inline type).
+- `CollectionRegistry.configs: HashMap<u16, CollectionVectorConfig>` holds
+  each collection's explicit dimension/metric/index, if it has one.
+  `#[serde(default)]`: a `namespaces.json` sidecar or redb `Collection`
+  record written before this field existed deserializes with an empty map —
+  "no explicit config," which the runtime treats as "inherit the project's
+  legacy dim/index." No migration step exists or is needed for old data.
+  Dimension is immutable once set — `CollectionRegistry::set_config`
+  rejects a conflicting redefinition rather than overwriting it.
 - `PlannerCache` lookup key is always the full triple `(OperationHash, PlannerFingerprintHash, PlanningContextHash)` — a partial match is a miss.
 - `SnapshotCatalog::prunable(keep)` returns the records to delete, ordered oldest-first.

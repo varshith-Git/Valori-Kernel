@@ -441,10 +441,12 @@ async fn auto_create_namespace_is_idempotent_by_name() {
 }
 
 #[tokio::test]
-async fn default_namespace_resolves_without_being_created() {
+async fn nothing_resolves_on_a_fresh_state_machine() {
+    // Phase 3.3: no implicit collection, "default" included — a fresh
+    // cluster starts with Collections = [] exactly like standalone.
     let sm = ValoriStateMachine::default();
-    assert_eq!(sm.resolve_namespace(None).await, Some(0));
-    assert_eq!(sm.resolve_namespace(Some("default")).await, Some(0));
+    assert_eq!(sm.resolve_namespace(None).await, None);
+    assert_eq!(sm.resolve_namespace(Some("default")).await, None);
     assert_eq!(sm.resolve_namespace(Some("unregistered")).await, None);
 }
 
