@@ -52,7 +52,11 @@ jobs:
           echo "Passing tests: ${PASSING}"
 
       - name: Update Gist badge
-        if: env.GIST_ID != 'replace-with-your-gist-id'
+        # Skipped if GIST_SECRET is not configured — add it under
+        # Settings → Secrets → Actions with a PAT that has the "gist" scope.
+        if: env.GIST_ID != 'replace-with-your-gist-id' && env.HAS_GIST_SECRET == 'true'
+        env:
+          HAS_GIST_SECRET: ${{ secrets.GIST_SECRET != '' }}
         uses: schneegans/dynamic-badges-action@v1.7.0
         with:
           auth: ${{ secrets.GIST_SECRET }}
