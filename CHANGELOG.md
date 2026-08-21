@@ -4,7 +4,17 @@ All notable changes to Valori are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] — 2026-08-21
+
+### Phase API-2 through API-4D — Code-First OpenAPI, TS + Python SDKs, Real-Node Validation
+
+### CI / dependency fixes
+- Upgrade h2 0.4.14 → 0.4.18 (RUSTSEC-2026-0258 — unbounded empty DATA frames)
+- Upgrade opendal 0.58.0 → 0.58.2, spin 0.10.0 → 0.10.1 (yanked versions)
+- Remove RUSTSEC-2026-0190 (anyhow advisory — fixed upstream)
+- Clean up `deny.toml`: remove unused license allowances, add skip entries for known-legitimate duplicate crates
+- Fix Test Count Badge workflow to skip gist update when `GIST_SECRET` is not configured
+- Fix PyPI publish workflow to use `skip-existing: true` (re-runs on same tag no longer fail)
 
 ### Phase API-4D — Python SDK Parity, Type-Safety Hardening & Real-Node Validation (2026-08-21)
 

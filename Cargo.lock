@@ -557,9 +557,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -5021,7 +5021,7 @@ dependencies = [
 
 [[package]]
 name = "valori-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -5051,7 +5051,7 @@ dependencies = [
 
 [[package]]
 name = "valori-consensus"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "valori-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "getrandom 0.2.17",
  "serde",
@@ -5086,7 +5086,7 @@ dependencies = [
 
 [[package]]
 name = "valori-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -5106,7 +5106,7 @@ dependencies = [
 
 [[package]]
 name = "valori-domain"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5117,7 +5117,7 @@ dependencies = [
 
 [[package]]
 name = "valori-effect"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "blake3",
@@ -5133,7 +5133,7 @@ dependencies = [
 
 [[package]]
 name = "valori-engine"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "bincode",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "valori-index"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "rustc-hash 1.1.0",
@@ -5194,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "valori-kernel"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -5209,7 +5209,7 @@ dependencies = [
 
 [[package]]
 name = "valori-mcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5226,7 +5226,7 @@ dependencies = [
 
 [[package]]
 name = "valori-metadata"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "redb",
  "serde",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "valori-node"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -5317,7 +5317,7 @@ dependencies = [
 
 [[package]]
 name = "valori-planner"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -5348,7 +5348,7 @@ dependencies = [
 
 [[package]]
 name = "valori-search"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -5356,7 +5356,7 @@ dependencies = [
 
 [[package]]
 name = "valori-state"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -5376,7 +5376,7 @@ dependencies = [
 
 [[package]]
 name = "valori-storage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -5399,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "valori-studio-storage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "redb",
@@ -5414,7 +5414,7 @@ dependencies = [
 
 [[package]]
 name = "valori-verify"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5432,7 +5432,7 @@ dependencies = [
 
 [[package]]
 name = "valori-wire"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bincode",
  "blake3",
@@ -5444,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "valoricore-ffi"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "hex",
  "pyo3",
