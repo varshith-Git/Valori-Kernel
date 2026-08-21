@@ -122,3 +122,6 @@ jobs:
         with:
           packages-dir: dist/
           verbose: true
+          # Silently skip files that already exist on PyPI (e.g. re-runs on the
+          # same tag). Without this, a re-run fails with HTTP 400 "File exists".
+          skip-existing: true
