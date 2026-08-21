@@ -30,16 +30,17 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
     "CC0-1.0",
     "MPL-2.0",
     "Zlib",
-    "OpenSSL",
     # webpki-roots ships Mozilla's CA certificate set under this permissive
     # data license (pulled in via ureq for the `valori cluster` HTTP client).
     "CDLA-Permissive-2.0",
 ]
+# Note: "OpenSSL" and "Unicode-DFS-2016" are NOT in the global allow list
+# because they only appear in the exceptions below (ring and unicode-ident).
+# Listing them here causes a license-not-encountered warning.
 confidence-threshold = 0.8
 # Crates with unusual or dual license expressions — reviewed and accepted.
 exceptions = [
@@ -69,13 +70,6 @@ ignore = [
     # replacement exists that lopdf can switch to today.
     "RUSTSEC-2026-0192",  # ttf-parser: upstream declared unmaintained
 
-    # ── anyhow unsound advisory ────────────────────────────────────────────────
-    # RUSTSEC-2026-0190: UB in Error::context + Error::downcast_mut borrow chain.
-    # anyhow 1.x is a transitive dep; no 1.x patch is released yet.
-    # We never call downcast_mut on contexted errors — not in our hot path.
-    # TODO: remove once anyhow ships a patched 1.x release.
-    "RUSTSEC-2026-0190",  # anyhow: unsound borrow in Error::context + downcast_mut
-
     # ── Locked transitive vulnerabilities — upgrade blocked by upstream ────────
     # RUSTSEC-2026-0194 + RUSTSEC-2026-0195: quick-xml 0.37.5 — quadratic CPU in
     # duplicate-attribute check and unbounded namespace-declaration heap in NsReader.
@@ -103,8 +97,84 @@ deny = [
     { name = "openssl" },
     { name = "openssl-sys" },
 ]
-# Permitted duplicates (some crates have multiple major versions in the tree).
-skip = []
+# Permitted duplicates — multiple major versions required by different parts of
+# the dependency tree (axum/tonic/opendal ecosystem version skew). Each entry
+# is the older version to skip; the newest is implicitly required.
+skip = [
+  # base64: metrics-exporter-prometheus pins 0.21; headers/hyper need 0.22; opendal needs 0.23
+  { name = "base64", version = "=0.21.7" },
+  { name = "base64", version = "=0.22.1" },
+  # bitflags: nix/rustix/redb pull 1.x; everything else is on 2.x
+  { name = "bitflags", version = "=1.3.2" },
+  # block-buffer / crypto-common / digest / sha1 / sha2 / md-5 / cpufeatures:
+  # older RustCrypto 0.10.x chain pulled in by aes-gcm / ed25519-dalek;
+  # newer via blake3 / reqsign
+  { name = "block-buffer", version = "=0.10.4" },
+  { name = "cpufeatures", version = "=0.2.17" },
+  { name = "crypto-common", version = "=0.1.7" },
+  { name = "digest", version = "=0.10.7" },
+  { name = "md-5", version = "=0.10.6" },
+  { name = "sha1", version = "=0.10.7" },
+  { name = "sha2", version = "=0.10.9" },
+  # derive_more: openraft pins 1.0.0; valori-node is on a newer 2.x
+  { name = "derive_more", version = "=1.0.0" },
+  { name = "derive_more-impl", version = "=1.0.0" },
+  # getrandom: ring pins 0.2; blake3 / rand 0.9 need 0.3
+  { name = "getrandom", version = "=0.2.17" },
+  { name = "getrandom", version = "=0.3.4" },
+  # hashbrown: multiple major versions across indexmap, ahash, hashbrown direct
+  { name = "hashbrown", version = "=0.12.3" },
+  { name = "hashbrown", version = "=0.13.1" },
+  { name = "hashbrown", version = "=0.14.5" },
+  # http / http-body / hyper: tonic / older axum layers still on 0.x
+  { name = "http", version = "=0.2.12" },
+  { name = "http-body", version = "=0.4.6" },
+  { name = "hyper", version = "=0.14.32" },
+  # indexmap: openraft / older serde_json pin 1.x; newer deps need 2.x
+  { name = "indexmap", version = "=1.9.3" },
+  # quick-xml: reqsign pins 0.37.5; blocked by upstream (RUSTSEC-2026-0194/95 ignored)
+  { name = "quick-xml", version = "=0.37.5" },
+  # r-efi: two minor versions coexist via opendal's win32 deps
+  { name = "r-efi", version = "=5.3.0" },
+  # rand / rand_chacha / rand_core: ring pins 0.6/0.8; newer blake3/getrandom need 0.9+
+  { name = "rand", version = "=0.8.7" },
+  { name = "rand", version = "=0.10.2" },
+  { name = "rand_chacha", version = "=0.3.1" },
+  { name = "rand_core", version = "=0.6.4" },
+  { name = "rand_core", version = "=0.10.1" },
+  # reqwest: valori-node uses 0.12; opendal http transport needs 0.13
+  { name = "reqwest", version = "=0.12.28" },
+  # rustc-hash: older ahash chain
+  { name = "rustc-hash", version = "=1.1.0" },
+  # socket2: tokio pins 0.5.x; newer OS-level socket deps need 0.6+
+  { name = "socket2", version = "=0.5.10" },
+  # spin: ring 0.17 uses 0.9.x; opendal/crc-fast needs 0.10.x
+  { name = "spin", version = "=0.10.1" },
+  # syn: proc-macros across the tree compiled against 2.x and 3.x
+  { name = "syn", version = "=2.0.119" },
+  # thiserror: crates compiled against 1.x and 2.x simultaneously
+  { name = "thiserror", version = "=1.0.69" },
+  { name = "thiserror-impl", version = "=1.0.69" },
+  # tower / tower-http: hyper 0.14 layer needs 0.4; axum 0.7 needs 0.5
+  { name = "tower", version = "=0.4.13" },
+  { name = "tower-http", version = "=0.5.2" },
+  # wasm-streams / webpki-roots: reqwest 0.12 vs 0.13 pull different versions
+  { name = "wasm-streams", version = "=0.4.2" },
+  { name = "webpki-roots", version = "=0.26.11" },
+  # windows-sys / windows-targets / windows_*: multiple major versions required
+  # across tokio, mio, socket2, and windows-rs ecosystem
+  { name = "windows-sys", version = "=0.48.0" },
+  { name = "windows-sys", version = "=0.52.0" },
+  { name = "windows-sys", version = "=0.59.0" },
+  { name = "windows-targets", version = "=0.48.5" },
+  { name = "windows_aarch64_gnullvm", version = "=0.48.5" },
+  { name = "windows_aarch64_msvc", version = "=0.48.5" },
+  { name = "windows_i686_gnu", version = "=0.48.5" },
+  { name = "windows_i686_msvc", version = "=0.48.5" },
+  { name = "windows_x86_64_gnu", version = "=0.48.5" },
+  { name = "windows_x86_64_gnullvm", version = "=0.48.5" },
+  { name = "windows_x86_64_msvc", version = "=0.48.5" },
+]
 # Allow build-only duplicates (e.g. proc-macro crates at different versions).
 skip-tree = []
 
