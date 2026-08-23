@@ -74,6 +74,14 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
       - run: npm ci
+      - name: Build @valori/studio
+        # @valori/studio is an npm workspace member ("*" in package.json), so
+        # `npm ci` above always resolves it to the local ./studio symlink,
+        # never the npm registry — but that symlink only has types/JS once
+        # studio's own build has run. Its dist/ is gitignored, so nothing
+        # produces it without this step; without it, tsc fails to resolve
+        # `@valori/studio` for every importer with a module-not-found error.
+        run: npm run build --workspace=studio
       - name: Shared Studio boundary check
         run: node ../scripts/check-studio-boundary.mjs src --studio studio/src
       - run: npx tsc --noEmit

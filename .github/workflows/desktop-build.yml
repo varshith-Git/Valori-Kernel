@@ -85,6 +85,17 @@ jobs:
         run: npm install
         working-directory: ui
 
+      - name: Build @valori/studio
+        # @valori/studio is an npm workspace member ("*" in ui/package.json),
+        # so the install above always resolves it to the local ./studio
+        # symlink, never the npm registry — but that symlink only has
+        # types/JS once studio's own build has run. Its dist/ is gitignored,
+        # so nothing produces it without this step; without it, `next build`
+        # (invoked by prepare-ui-server.mjs below) fails to resolve
+        # `@valori/studio` for every importer with a module-not-found error.
+        run: npm run build --workspace=studio
+        working-directory: ui
+
       - name: Verify single React resolution (@valori/studio workspace)
         # Guards against the nested-node_modules/react duplication hazard fixed
         # in Phase D.1: @valori/studio is an npm workspace member so its React
