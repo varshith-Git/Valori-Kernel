@@ -322,7 +322,7 @@ export function ToolsWorkspace({
     }>
 }) {
     const transport = useTransport();
-    const { dim, online } = useHealth(projectId)
+    const { dim: healthDim, online } = useHealth(projectId)
     // `collections` (canonical display names) drives the picker and header;
     // `namespace` state below is that same canonical name. Every tab that
     // actually queries the node needs the RAW namespace instead — a host
@@ -333,7 +333,12 @@ export function ToolsWorkspace({
     // prefix/separator logic of its own — see useCollections's own docs.
     const { collections, raw: rawCollections } = useCollections(projectId)
     const [namespace, setNamespace] = useState(initialCollection || DEFAULT_NAMESPACE)
-    const rawNamespace = rawCollections.find((r) => r.name === namespace)?.rawNamespace ?? namespace
+    const currentCollectionRef = rawCollections.find((r) => r.name === namespace)
+    const rawNamespace = currentCollectionRef?.rawNamespace ?? namespace
+    // Prefer the collection-specific dimension from GET /v1/namespaces (available
+    // even when no records exist). Fall back to health dim for legacy hosts that
+    // don't include `dimension` in the namespace list.
+    const dim = currentCollectionRef?.dimension ?? healthDim
     // Live collection-specific index status — drives the header badge and the
     // Index tab. This is a per-collection GET, not the project-wide /health index field.
     const { data: collectionIndexData } = useCollectionIndex(projectId, rawNamespace)

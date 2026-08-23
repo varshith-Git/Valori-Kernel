@@ -1,6 +1,6 @@
 {
   "name": "@valori/studio",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "Shared Valori product UI \u2014 the normal customer-facing feature set (projects, collections, search, metrics, cluster, graph, operations, proof, snapshots, tools, playground), usable by Desktop Local, Desktop Cloud, and Cloud Web. Contains no Tauri, Supabase, Next.js server APIs, or Cloud control-plane code \u2014 hosts inject a Transport, optional CredentialStore, and StudioCapabilities.",
   "keywords": [
