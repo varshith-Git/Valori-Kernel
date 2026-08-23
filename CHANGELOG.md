@@ -4,6 +4,149 @@ All notable changes to Valori are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Phase G2.3.2-D — Project Detail 404 Fix (valori-ui, frontend)
+
+Fixed the confirmed root cause from
+`docs/reviews/project-detail-404-after-g2.4.md`: every per-project detail
+page did `select('*').eq('id', id).single()` and discarded the query's
+`error`. The `20260811000000_worker_auth_token.sql` migration narrowed
+`authenticated`'s SELECT grant on `public.projects` to an explicit
+16-column list excluding `worker_auth_token`; PostgREST resolves `select=*`
+to an explicit column list (including that excluded column) rather than a
+role-narrowed native `SELECT *`, so the query failed with a permission
+error that these pages silently treated as "project doesn't exist."
+
+#### Fixed
+- New `SAFE_PROJECT_COLUMNS` + `fetchSafeProjectById()` in
+  `ui/src/lib/server/project.ts` — the one column list and one fetch
+  helper every per-project page now uses, replacing 9 duplicated
+  `select('*')` call sites. Logs the query's `error.code` server-side
+  (never `error.message`, never shown to the client) instead of silently
+  discarding it.
+- `dashboard/page.tsx`'s project-list query switched from `select('*')` to
+  the same safe column list, with its own error now logged instead of
+  silently producing an empty list.
+- No database privilege, RLS policy, or migration was changed —
+  `worker_auth_token` remains exactly as inaccessible to `authenticated`
+  as intended; the fix is entirely on the query side.
+
+#### Files
+`ui/src/lib/server/project.ts` and all 9 `dashboard/projects/[id]/**/page.tsx`
+detail pages, plus `ui/src/app/dashboard/page.tsx`. `tsc`/`eslint`/`npm run
+build` all clean. Live authenticated browser verification NOT PERFORMED —
+no real Supabase session available in this session.
+
+### Phase G2.3.2 — Real Worker Caddy + Provisioning Cleanup (valori-ui, backend)
+
+Follow-up to the G2.3.1-B Caddy-routing-failure audit. See
+`docs/phases/phase-g2.3.2-real-worker-caddy.md`.
+
+#### Fixed
+- **Root cause of the real Caddy routing failure**: `Caddyfile.example`
+  bound Caddy's admin API to `127.0.0.1:2019` (loopback-only), unreachable
+  from the control plane, which is what `caddy_router.rs` actually dials.
+  New `backend/deploy/host-caddy/Caddyfile` binds to the worker's own
+  private IP instead (env-substituted, set by the new
+  `bootstrap-worker-caddy.sh`).
+- **Orphan-container bug**: `DockerProvisioner::deploy()`'s post-creation
+  failure paths (container start, port-inspect, Caddy route registration)
+  all returned `Err` via bare `?` before the container was ever recorded
+  in `infra.instances` — a failure at any of the three left a live,
+  completely untracked container. This is exactly what happened to a real
+  provisioning attempt. New `cleanup_orphaned_container()` removes the
+  container (and its self-managed volume, if this deploy created one) on
+  any of those three failures, logs the outcome separately, and never
+  masks the original provisioning error.
+- **Container port exposure**: `PortBinding.host_ip` changed from
+  `"0.0.0.0"` (all interfaces, including any public IP the worker has) to
+  `"127.0.0.1"` — Caddy's own reverse-proxy target is `localhost:{port}`,
+  so nothing wider was ever actually needed.
+
+#### Added
+- `backend/deploy/host-caddy/Caddyfile` — the real, admin-bind-corrected
+  Caddy config (`Caddyfile.example` kept, marked superseded/historical).
+- `backend/scripts/bootstrap-worker-caddy.sh` — downloads a custom Caddy
+  build (DNS-01 plugin, no local Go toolchain needed), installs it as a
+  systemd service, restricts the admin port to the control plane's IP via
+  UFW, leaves public 80/443 closed by default (opt-in only).
+- 3 tests in `docker.rs` against an in-process mock Docker Engine API
+  (axum — already this crate's own framework, no new test dependency)
+  proving the cleanup behavior and that successful deploys are unaffected.
+
+#### Not done (infrastructure access unavailable this session)
+- Installing Caddy on the real worker, verifying the Azure NSG rule,
+  re-provisioning the real project end-to-end, and external port-blocked
+  verification — all NOT PERFORMED; an exact operator runbook is in the
+  phase doc instead of a fabricated result.
+
+### Phase G2.4 — Project/Collection Configuration Boundary (valori-ui, UI-only)
+
+Moved dimension/metric/index off Project creation and onto Collection
+creation in the Cloud dashboard, matching the kernel's already-completed
+Collection evolution. See
+`docs/phases/phase-g2.4-project-collection-config-boundary.md`.
+
+#### Fixed
+- **Collection creation was silently broken.** The old UI (`CollectionsPanel.tsx`
+  → `useCollections.ts`) sent only `{name}` to `POST /v1/namespaces`, which
+  the node rejects with 400 (`dimension`/`metric` required since Phase
+  3.3) — every collection-creation attempt through the dashboard would
+  have failed. Now sends the full `{name, dimension, metric, index?}`.
+
+#### Changed
+- `CreateProjectDialog.tsx` no longer collects Dimension or Index — Project
+  creation is now name/region/cluster-topology only.
+- `CollectionsPanel.tsx` gained a real creation dialog (dimension/metric/
+  index) and now displays each collection's real config.
+- `ProjectWorkspace.tsx` and the dashboard project list no longer display
+  project-level Dimension/Index — both were already dead in the real
+  standalone deployment path.
+- Both dialogs now use the shared `Dialog`/`Input`/`Button`/`Badge`/
+  `Skeleton` components (`src/components/ui/*`) instead of hand-rolled
+  primitives — `CreateProjectDialog.tsx` had a duplicate hand-rolled modal
+  reimplementing `Dialog`.
+
+#### Found, not fixed (flagged in the phase doc)
+- `ProvisionBody`/`DeployRequest`/`DockerProvisioner.build_env()` still
+  send now-inert `VALORI_DIM`/`VALORI_INDEX` container env vars — confirmed
+  removed from `crates/valori-node/src/config.rs` already, so harmless but
+  dead. Not removed this phase (Rust backend change, out of scope for a
+  UI-only phase).
+- `public.projects.dim`/`.index_type`/`.max_records` columns remain,
+  unmigrated, per explicit instruction not to touch production data.
+
+### Phase G2.3.1 — Real Azure Consumer Worker (implementation, partial — infra-blocked)
+
+Follow-up to the G2.3 readiness audit (`docs/reviews/worker-g2.3-consumer-
+readiness.md`). Delivered the operator-facing artifacts needed to make
+`DockerProvisioner` usable against a real Azure worker, and corrected the
+security design after finding TLS is unsupported by the existing HTTP
+client code. Live Azure verification (registering the host, deploying a
+real container, insert/search, persistence) was **not performed** — no
+SSH/admin-key access in this session — see
+`docs/phases/phase-g2.3.1-real-azure-consumer-worker.md` for exactly what
+was and wasn't verified.
+
+#### Added
+- `valori-ui/backend/scripts/bootstrap-valori-worker.sh` — idempotent
+  Docker-ready worker-host bootstrap (Ubuntu 24.04/x86_64), plain-HTTP
+  Docker listener bound to the worker's private IP, firewalled to the
+  control plane's private IP only.
+- Two `DockerProvisioner` tests (`deploy_returns_err_not_panic_when_worker_
+  is_unreachable`, `status_returns_err_not_panic_when_worker_is_unreachable`)
+  proving a failed connection returns `Err`, never a panic or a fabricated
+  success.
+
+#### Found, not fixed (both flagged in the phase doc)
+- `DockerProvisioner`/`CaddyRouter`/`DokployProvisioner` construct a bare
+  `reqwest::Client::new()` — no custom root CA, no client identity — so
+  TLS/mTLS against a private CA is not currently supported.
+- Nothing in `provision_project_inner` calls the deployed node's `/health`
+  before marking a project `active`; readiness is inferred from the Docker
+  `create`/`start` calls succeeding only.
+
 ## [0.3.1] — 2026-08-21
 
 ### Phase API-2 through API-4D — Code-First OpenAPI, TS + Python SDKs, Real-Node Validation
