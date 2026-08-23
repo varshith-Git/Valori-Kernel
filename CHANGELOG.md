@@ -6,6 +6,69 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Phase G2.3.2-F — Caddy Route Order Bug (valori-ui, backend)
+
+Real live evidence confirmed the terminal wildcard 404 fallback route
+always evaluated before every project's own route in Caddy, making every
+provisioned project unreachable through Caddy regardless of the route
+itself being correctly registered.
+
+#### Fixed
+- `CaddyRouter::add_route()` (`backend/apps/api/src/provision/
+  caddy_router.rs`) now inserts new routes at index 0
+  (`POST .../routes/0`, Caddy's own documented insertion semantics)
+  instead of appending to the end (`POST .../routes`). The fallback —
+  loaded first from the static Caddyfile — was always ahead of any
+  appended project route in Caddy's strictly-array-order evaluation;
+  inserting at the front instead keeps every project route ahead of the
+  fallback and the fallback genuinely last, without deleting it or making
+  it non-terminal.
+
+#### Added
+- 4 tests in `caddy_router.rs` against a stateful in-process mock of
+  Caddy's admin API (axum, no new dependency) proving the fallback exists,
+  stays terminal, and never ends up anywhere but last across repeated
+  route additions.
+- Shared `CADDY_PORT_TEST_LOCK` (`tokio::sync::Mutex`, moved to
+  `provision/mod.rs`) so the new tests and `docker.rs`'s existing tests
+  — both bound to the real fixed `127.0.0.1:2019` port — don't race each
+  other under Rust's parallel test execution.
+
+#### Fixed along the way
+- A pre-existing `docker.rs` test's own mock Caddy server still expected
+  the old non-indexed path — updated to match, caught immediately by the
+  test suite.
+- `cargo clippy`'s `await_holding_lock` on the port-test lock — fixed by
+  switching it from `std::sync::Mutex` to `tokio::sync::Mutex`.
+
+`cargo fmt --check`/`cargo test` (114/114)/`cargo clippy` all clean for the
+3 changed files. Docker host-port exposure hardening explicitly deferred,
+not mixed into this fix. Real-worker verification (repairing the existing
+stale project route, confirming order live, DNS/health checks) NOT
+PERFORMED — no infrastructure access; see
+`docs/phases/phase-g2.3.2-f-caddy-route-order.md` for exact commands.
+
+### Phase G2.3.2-E — Project Error / Retry Provisioning (valori-ui, frontend)
+
+A `status='error'` project had no way to retry from the UI — only Rename/
+Duplicate/Delete. Audited the backend first: `provision_project_inner`
+(`backend/apps/api/src/main.rs`) has no status gate at all and already
+safely supports calling `POST /v1/projects/:id/provision` again on an
+existing project id, so no backend change was needed.
+
+#### Added
+- `retryProvisioning()` server action (`ui/src/app/dashboard/actions.ts`)
+  — reuses the existing provision endpoint verbatim with the project's own
+  stored region/replication.
+- "Retry provisioning" button in `ProjectActions.tsx`, visible only when
+  `status === 'error'`.
+
+#### Changed
+- The `error`-status message on the project detail page now points at the
+  new Retry action instead of telling users to create a new project.
+
+See `docs/phases/phase-g2.3.2-e-retry-provisioning.md`.
+
 ### Phase G2.3.2-D — Project Detail 404 Fix (valori-ui, frontend)
 
 Fixed the confirmed root cause from
