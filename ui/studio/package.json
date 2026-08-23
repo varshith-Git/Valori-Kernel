@@ -1,6 +1,6 @@
 {
   "name": "@valori/studio",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": false,
   "description": "Shared Valori product UI \u2014 the normal customer-facing feature set (projects, collections, search, metrics, cluster, graph, operations, proof, snapshots, tools, playground), usable by Desktop Local, Desktop Cloud, and Cloud Web. Contains no Tauri, Supabase, Next.js server APIs, or Cloud control-plane code \u2014 hosts inject a Transport, optional CredentialStore, and StudioCapabilities.",
   "keywords": [
@@ -47,13 +47,13 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.21.0",
     "swr": "^2.4.1",
-    "tailwind-merge": "^3.6.0",
-    "@valori/api-types": "*"
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "tsc-alias": "^1.9.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "@valori/api-types": "*"
   }
 }
