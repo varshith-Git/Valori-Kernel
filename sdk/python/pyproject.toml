@@ -11,7 +11,7 @@ requires = ["hatchling>=1.21"]
 build-backend = "hatchling.build"
 
 [project]
-name = "valori"
+name = "valori-client"
 version = "0.1.0"
 description = "Official Python SDK for the Valori Data Plane REST API — deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts."
 readme = "README.md"

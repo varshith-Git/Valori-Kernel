@@ -25,12 +25,11 @@ are imported at runtime.
 ```ts
 import { ValoriClient } from "@valori/sdk";
 
-// Valori is self-hosted — there is no default host.
-// `endpoint` falls back to VALORI_ENDPOINT, `apiKey` to VALORI_API_KEY.
-const client = new ValoriClient({
-  endpoint: "http://localhost:3000",
-  apiKey: process.env.VALORI_API_KEY,
-});
+// Local Node (self-hosted):
+const local = new ValoriClient({ endpoint: "http://localhost:3000" });
+
+// Cloud SaaS (https://app.valori.systems) — apiKey with no endpoint routes there:
+const client = new ValoriClient({ apiKey: "vlk_your_project_api_key" });
 
 await client.health(); // → { status: "ok", mode: "standalone", ... }
 
