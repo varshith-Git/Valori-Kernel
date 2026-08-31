@@ -123,8 +123,10 @@ impl<'a> SiftBatchLoader<'a> {
     pub fn parse_vector(data: &[u8]) -> Vec<f32> {
         let content = if data.len() >= 4 { &data[4..] } else { &[] };
         content
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect()
     }
 }
