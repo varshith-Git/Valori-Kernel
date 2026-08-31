@@ -15,6 +15,7 @@ BLAKE3-chained and replayable.
 | Operations covered | **74 / 74** — see [`api-coverage.yaml`](api-coverage.yaml) |
 | Python | 3.9 – 3.13 |
 | Transport | `httpx` |
+| API Reference | [app.valori.systems/api-reference](https://app.valori.systems/api-reference/overview) |
 
 ## Install
 

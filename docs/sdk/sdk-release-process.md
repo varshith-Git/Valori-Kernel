@@ -54,8 +54,8 @@ and scope, not to work around with a long-lived token committed to secrets.
    required reviewers. The reviewer gate *is* the "release approval" step in
    the flow above.
 2. Configure PyPI trusted publishing for `valori`, and npm trusted publishing /
-   provenance for `@valori/sdk`.
-3. Reserve both names. `valori` on PyPI and `@valori/sdk` on npm have **not**
+   provenance for `@valori/client-sdk`.
+3. Reserve both names. `valori` on PyPI and `@valori/client-sdk` on npm have **not**
    been checked for availability as part of API-4A.
 4. Do a dry run against TestPyPI and `npm publish --dry-run` before the first
    real release.

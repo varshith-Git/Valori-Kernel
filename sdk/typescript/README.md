@@ -6,6 +6,8 @@ a deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts.
 Every one of the contract's **74 operations** is reachable through a
 handwritten, ergonomic wrapper (see [`api-coverage.yaml`](./api-coverage.yaml)).
 
+API Reference: [app.valori.systems/api-reference](https://app.valori.systems/api-reference/overview)
+
 ---
 
 ## Installation

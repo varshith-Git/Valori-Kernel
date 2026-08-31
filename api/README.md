@@ -351,7 +351,7 @@ Intended package names (**not yet reserved or published**):
 
 | Language | Package |
 |---|---|
-| TypeScript | `@valori/sdk` |
+| TypeScript | `@valori/client-sdk` |
 | Python | `valori` |
 | Go | `valori-go` |
 | Java | `valori-java` |

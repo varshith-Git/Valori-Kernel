@@ -23,7 +23,7 @@ sdk/
     src/                          human code
     tests/
     api-coverage.yaml             74/74 operations
-    package.json                  dist `@valori/sdk`
+    package.json                  dist `@valori/client-sdk`
 ```
 
 Both are generated from one source of truth:

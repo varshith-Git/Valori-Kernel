@@ -22,7 +22,7 @@ ValoriClient("http://localhost:3000").api_contract_version   # "1.0"
 ```
 
 ```ts
-import { API_CONTRACT_VERSION, ValoriClient } from "@valori/sdk";
+import { API_CONTRACT_VERSION, ValoriClient } from "@valori/client-sdk";
 new ValoriClient({ endpoint: "…" }).apiContractVersion;      // "1.0"
 ```
 
@@ -114,6 +114,6 @@ part of the API.
 | Tag | Publishes |
 |---|---|
 | `sdk-python-v<version>` | `valori` to PyPI |
-| `sdk-ts-v<version>` | `@valori/sdk` to npm |
+| `sdk-ts-v<version>` | `@valori/client-sdk` to npm |
 
 Neither is enabled in API-4A — see [`sdk-release-process.md`](sdk-release-process.md).

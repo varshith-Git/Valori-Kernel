@@ -11,12 +11,12 @@ conflate them.
 
 | Distribution | Registry | Source | Status |
 |---|---|---|---|
-| `@valori/sdk` | npm | `sdk/typescript` | validated, **not published** |
+| `@valori/client-sdk` | npm | `sdk/typescript` | validated, **not published** |
 | `valori` | PyPI | `sdk/python` | validated, **not published** |
 
 ---
 
-## npm — `@valori/sdk`
+## npm — `@valori/client-sdk`
 
 ### Verified locally
 
@@ -48,7 +48,7 @@ Package contents are exactly `dist/`, the two licenses, the README and
 }
 ```
 
-* `access: "public"` is **required**. `@valori/sdk` is a scoped package, and
+* `access: "public"` is **required**. `@valori/client-sdk` is a scoped package, and
   npm defaults scoped packages to `restricted`; a first publish without this
   fails (or silently publishes a private package on a paid org).
 * `provenance: true` makes npm attach a signed provenance attestation built
@@ -98,7 +98,7 @@ leak.
 
 ### Open items before a first publish
 
-* The npm name `@valori/sdk` requires the `valori` **org or scope** to exist
+* The npm name `@valori/client-sdk` requires the `valori` **org or scope** to exist
   and to be owned by the publisher. This was not verified — it needs a logged-in
   `npm org ls valori` / `npm access` check.
 * `version` is `0.1.0` on both SDKs. Decide whether the first public release is
