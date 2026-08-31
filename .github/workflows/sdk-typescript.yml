@@ -163,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: npm
-      url: https://www.npmjs.com/package/@valori/sdk
+      url: https://www.npmjs.com/package/@valori/client-sdk
     permissions:
       id-token: write  # OIDC provenance; no npm token in secrets
     steps:

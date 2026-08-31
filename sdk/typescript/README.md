@@ -1,4 +1,4 @@
-# `@valori/sdk` — Official TypeScript SDK
+# `@valori/client-sdk` — Official TypeScript SDK
 
 The official, fully-typed TypeScript client for the **Valori Data Plane API** —
 a deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts.
@@ -11,7 +11,7 @@ handwritten, ergonomic wrapper (see [`api-coverage.yaml`](./api-coverage.yaml)).
 ## Installation
 
 ```bash
-npm install @valori/sdk
+npm install @valori/client-sdk
 ```
 
 Requires **Node.js ≥ 18** (for global `fetch` and `AbortSignal.timeout`).
@@ -23,7 +23,7 @@ are imported at runtime.
 ## Quickstart
 
 ```ts
-import { ValoriClient } from "@valori/sdk";
+import { ValoriClient } from "@valori/client-sdk";
 
 // Local Node (self-hosted):
 const local = new ValoriClient({ endpoint: "http://localhost:3000" });
@@ -139,7 +139,7 @@ carrying `code`, `status`, `requestId` and the raw body; an unrecognised code
 maps to `ValoriAPIError` without losing anything.
 
 ```ts
-import { CollectionNotFoundError, DimensionMismatchError, ValoriError } from "@valori/sdk";
+import { CollectionNotFoundError, DimensionMismatchError, ValoriError } from "@valori/client-sdk";
 
 try {
   await docs.search(vector, 5);

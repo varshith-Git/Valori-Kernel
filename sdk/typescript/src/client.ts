@@ -61,7 +61,7 @@ function fromEnv(name: string): string | undefined {
  * A client for a Valori node or Cloud SaaS instance.
  *
  * ```ts
- * import { ValoriClient } from "@valori/sdk";
+ * import { ValoriClient } from "@valori/client-sdk";
  *
  * // Local Node (self-hosted):
  * const client = new ValoriClient({ endpoint: "http://localhost:3000" });

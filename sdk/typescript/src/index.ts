@@ -1,6 +1,6 @@
 // Copyright (c) 2025 Varshith Gudur. Licensed under MIT OR Apache-2.0.
 //
-// Public surface of `@valori/sdk`.
+// Public surface of `@valori/client-sdk`.
 //
 // Layering (Phase API-4A §4):
 //
