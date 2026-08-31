@@ -30,27 +30,42 @@ from .version import API_CONTRACT_VERSION, __version__
 
 __all__ = ["ValoriClient"]
 
-#: Environment variables the client falls back to, so an API key never has to be
-#: hardcoded in application source (§6).
+#: Environment variables the client falls back to (§6). One name per concept,
+#: deliberately — an earlier local draft of this feature added VALORI_APP_URL
+#: and VALORI_BASE_URL as extra synonyms for the same thing VALORI_ENDPOINT
+#: already meant, undocumented outside this file. Three ways to say the same
+#: config is worse UX than one, so this SDK release keeps only the name that
+#: predates Cloud SaaS and was already public (phase-api-4a-sdk-platform-
+#: foundation.md §6). This is also what the TypeScript SDK implements — the
+#: two are required to match exactly (G2.14 parity).
 ENDPOINT_ENV = "VALORI_ENDPOINT"
 API_KEY_ENV = "VALORI_API_KEY"
+DEFAULT_CLOUD_URL = "https://app.valori.systems"
 
 
 class ValoriClient:
-    """A client for one Valori node.
+    """A client for a Valori node or Cloud SaaS instance.
 
     ::
 
         from valori import ValoriClient
 
-        client = ValoriClient(endpoint="http://localhost:3000", api_key=...)
+        # Local Node (self-hosted):
+        client = ValoriClient(endpoint="http://localhost:3000")
+
+        # Cloud SaaS (https://app.valori.systems):
+        client = ValoriClient(api_key="vlk_your_project_api_key")
+
         docs = client.collections.create("docs", dimension=384, metric="squared_l2")
         docs.records.insert([0.1] * 384, request_id="ins-1")
         docs.search([0.1] * 384, k=5)
 
-    Valori is self-hosted, so there is no default endpoint: pass ``endpoint``
-    or set ``VALORI_ENDPOINT``. The API key is read from ``VALORI_API_KEY``
-    when not passed, and is never included in ``repr`` or ``str`` (§6).
+    Endpoint resolution, in order: the ``endpoint`` argument, then
+    ``VALORI_ENDPOINT``, then — only if an ``api_key`` was given and neither of
+    those named an endpoint — Cloud SaaS (``https://app.valori.systems``).
+    Passing neither an endpoint nor an api_key is a configuration error: there
+    is nothing to default to. The API key is read from ``VALORI_API_KEY`` when
+    not passed, and is never included in ``repr`` or ``str`` (§6).
     """
 
     #: The Valori REST API contract this SDK targets (§14).
@@ -70,14 +85,26 @@ class ValoriClient:
         async_transport: Optional[httpx.AsyncBaseTransport] = None,
         _sleep=None,
     ) -> None:
-        endpoint = endpoint or os.environ.get(ENDPOINT_ENV)
-        if not endpoint:
-            raise ValoriConfigError(
-                "no endpoint given — pass endpoint=... or set "
-                f"{ENDPOINT_ENV} (Valori is self-hosted; there is no default host)"
-            )
         if api_key is None:
             api_key = os.environ.get(API_KEY_ENV)
+
+        # Precedence, highest first — identical in the TypeScript SDK:
+        #   1. the endpoint argument
+        #   2. VALORI_ENDPOINT
+        #   3. Cloud SaaS default, but ONLY when an api_key was actually given —
+        #      an api_key with no endpoint is unambiguously "use the Cloud",
+        #      but no endpoint and no key at all is just unconfigured.
+        endpoint = endpoint or os.environ.get(ENDPOINT_ENV)
+
+        if not endpoint:
+            if api_key:
+                endpoint = DEFAULT_CLOUD_URL
+            else:
+                raise ValoriConfigError(
+                    "no endpoint given — pass endpoint=... or set "
+                    f"{ENDPOINT_ENV} (e.g. 'http://localhost:3000' for a self-hosted "
+                    f"node), or pass api_key=... to use Cloud SaaS at '{DEFAULT_CLOUD_URL}'"
+                )
 
         self._transport = Transport(
             endpoint,

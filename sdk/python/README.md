@@ -19,28 +19,41 @@ BLAKE3-chained and replayable.
 ## Install
 
 ```bash
-pip install valori
+pip install valori-client
 ```
 
 ## Quickstart
 
+### 1. Cloud SaaS (`https://app.valori.systems`)
+
 ```python
 from valori import ValoriClient
 
-# Valori is self-hosted — there is no default endpoint.
-client = ValoriClient(endpoint="http://localhost:3000", api_key="…")
+# Zero-config Cloud SaaS — passing api_key with no endpoint routes to https://app.valori.systems
+client = ValoriClient(api_key="vlk_your_project_api_key")
+```
 
+### 2. Self-Hosted / Local Node
+
+```python
+from valori import ValoriClient
+
+# Point to your local or self-hosted Valori node
+client = ValoriClient(endpoint="http://localhost:3000")
+```
+
+### Basic Usage Example
+
+```python
 docs = client.collections.create("docs", dimension=384, metric="squared_l2")
 
-docs.records.insert([0.1] * 384, metadata={"source": "paper.pdf"},
-                    request_id="ins-1")
+docs.records.insert([0.1] * 384, metadata={"source": "paper.pdf"}, request_id="ins-1")
 
 for hit in docs.search([0.1] * 384, k=5).hits:
     print(hit.id, hit.score)
 ```
 
-`endpoint` falls back to `VALORI_ENDPOINT` and `api_key` to `VALORI_API_KEY`,
-so a key never has to be hardcoded. The key is redacted from `repr()`.
+Endpoint resolution, in order: the `endpoint` argument, then `VALORI_ENDPOINT`, then — only when an `api_key` was given and neither of those named an endpoint — Cloud SaaS. `api_key` falls back to `VALORI_API_KEY`. The key is automatically redacted from `repr()` and logs.
 
 ## Shape of the API
 

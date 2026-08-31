@@ -21,12 +21,18 @@ import type { RetryPolicy } from "./retry.js";
 import { Transport } from "./transport.js";
 import { API_CONTRACT_VERSION, VERSION } from "./version.js";
 
+/** Cloud SaaS endpoint used when `apiKey` is given with no explicit endpoint. */
+const DEFAULT_CLOUD_URL = "https://app.valori.systems";
+
 export interface ValoriClientOptions {
   /**
    * Base URL of the Valori node, e.g. `http://localhost:3000`.
    *
-   * Valori is self-hosted, so there is no default. In Node this falls back to
-   * `VALORI_ENDPOINT`.
+   * Resolution order, identical to the Python SDK (G2.14 parity): this
+   * option, then `VALORI_ENDPOINT` (Node only), then — only when `apiKey`
+   * was given and neither of those named an endpoint — Cloud SaaS
+   * (`https://app.valori.systems`). Passing neither an endpoint nor an
+   * apiKey is a configuration error.
    */
   endpoint?: string;
   /** Project API key. Falls back to `VALORI_API_KEY` in Node. Never logged. */
@@ -52,12 +58,17 @@ function fromEnv(name: string): string | undefined {
 }
 
 /**
- * A client for one Valori node.
+ * A client for a Valori node or Cloud SaaS instance.
  *
  * ```ts
  * import { ValoriClient } from "@valori/sdk";
  *
- * const client = new ValoriClient({ endpoint: "http://localhost:3000", apiKey: "…" });
+ * // Local Node (self-hosted):
+ * const client = new ValoriClient({ endpoint: "http://localhost:3000" });
+ *
+ * // Cloud SaaS (https://app.valori.systems):
+ * const client = new ValoriClient({ apiKey: "vlk_your_project_api_key" });
+ *
  * const docs = await client.collections.create("docs", { dimension: 384, metric: "squared_l2" });
  * await docs.records.insert(new Array(384).fill(0.1), { requestId: "ins-1" });
  * const hits = await docs.search(new Array(384).fill(0.1), 5);
@@ -85,14 +96,26 @@ export class ValoriClient {
   readonly #transport: Transport;
 
   constructor(options: ValoriClientOptions = {}) {
-    const endpoint = options.endpoint ?? fromEnv("VALORI_ENDPOINT");
-    if (!endpoint) {
-      throw new ValoriConfigError(
-        "no endpoint given — pass endpoint or set VALORI_ENDPOINT " +
-          "(Valori is self-hosted; there is no default host)",
-      );
-    }
     const apiKey = options.apiKey ?? fromEnv("VALORI_API_KEY");
+
+    // Precedence, highest first — identical in the Python SDK:
+    //   1. the endpoint option
+    //   2. VALORI_ENDPOINT
+    //   3. Cloud SaaS default, but ONLY when an apiKey was actually given —
+    //      an apiKey with no endpoint is unambiguously "use the Cloud", but
+    //      no endpoint and no key at all is just unconfigured.
+    let endpoint = options.endpoint ?? fromEnv("VALORI_ENDPOINT");
+    if (!endpoint) {
+      if (apiKey) {
+        endpoint = DEFAULT_CLOUD_URL;
+      } else {
+        throw new ValoriConfigError(
+          "no endpoint given — pass endpoint or set VALORI_ENDPOINT " +
+            "(e.g. 'http://localhost:3000' for a self-hosted node), or pass " +
+            `apiKey to use Cloud SaaS at '${DEFAULT_CLOUD_URL}'`,
+        );
+      }
+    }
 
     this.#transport = new Transport({
       endpoint,

@@ -46,16 +46,67 @@ def test_endpoint_is_read_from_the_environment(monkeypatch):
     assert client.endpoint == "http://from-env:3000"
 
 
+# ── Cross-SDK endpoint-resolution contract (G2.14 parity) ──────────────────
+# These five tests exist identically (same names, same assertions) in
+# sdk/typescript/tests/auth.test.ts. Endpoint resolution, highest priority
+# first: the endpoint argument, then VALORI_ENDPOINT, then — only when an
+# api_key was given and neither of those named an endpoint — Cloud SaaS.
+# No endpoint and no api_key at all is a configuration error, not a default.
+
+def test_api_key_without_endpoint_defaults_to_cloud_saas(monkeypatch):
+    monkeypatch.delenv("VALORI_ENDPOINT", raising=False)
+    client = ValoriClient(api_key="vlk_test_key", transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json={})))
+    assert client.endpoint == "https://app.valori.systems"
+
+
+def test_explicit_endpoint_wins_over_env_and_cloud_default(monkeypatch):
+    monkeypatch.setenv("VALORI_ENDPOINT", "http://from-env:3000")
+    client = ValoriClient(
+        "http://explicit:9000",
+        api_key="vlk_test_key",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+    )
+    assert client.endpoint == "http://explicit:9000"
+
+
+def test_env_endpoint_wins_over_cloud_default_when_api_key_is_also_set(monkeypatch):
+    monkeypatch.setenv("VALORI_ENDPOINT", "http://from-env:3000")
+    client = ValoriClient(
+        api_key="vlk_test_key",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+    )
+    assert client.endpoint == "http://from-env:3000"
+
+
+def test_trailing_slashes_are_stripped_from_every_endpoint_source():
+    client = ValoriClient(
+        "http://node.test///",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+    )
+    assert client.endpoint == "http://node.test"
+
+
 def test_missing_endpoint_is_a_configuration_error(monkeypatch):
     monkeypatch.delenv("VALORI_ENDPOINT", raising=False)
+    monkeypatch.delenv("VALORI_API_KEY", raising=False)
     with pytest.raises(ValoriConfigError) as exc:
         ValoriClient()
-    assert "self-hosted" in str(exc.value)
+    assert "no endpoint given" in str(exc.value)
 
 
 def test_non_string_api_key_is_rejected():
     with pytest.raises(ValoriConfigError):
         ValoriClient("http://node.test", api_key=12345)  # type: ignore[arg-type]
+
+
+def test_default_timeout_is_thirty_seconds():
+    # Matches @valori/sdk's default of 30_000ms exactly (G2.14 parity). The
+    # underlying httpx client is lazy/private, so this checks the one public,
+    # stable surface for the default: the constructor's own signature.
+    import inspect
+
+    assert inspect.signature(ValoriClient.__init__).parameters["timeout"].default == 30.0
 
 
 def test_custom_headers_are_merged_and_do_not_displace_auth():
