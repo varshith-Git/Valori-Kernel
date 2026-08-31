@@ -178,8 +178,8 @@ jobs:
     needs: [build, integration]
     runs-on: ubuntu-latest
     environment:
-      name: pypi
-      url: https://pypi.org/p/valori
+      name: pypi-client-sdk
+      url: https://pypi.org/p/valori-client
     permissions:
       id-token: write  # OIDC trusted publishing; no API token in secrets
     steps:
