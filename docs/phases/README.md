@@ -243,3 +243,17 @@ See [phase-RG7-canonical-entity-resolution.md](phase-RG7-canonical-entity-resolu
 # RG8 — Claim / contradiction verification
 
 See [phase-RG8-claim-verification.md](phase-RG8-claim-verification.md).
+
+# SH-H1 — Shared Free-tier hosting: live end-to-end verification
+
+`main` (uncommitted) — ✅ done. Live-verified `crates/valori-node/src/shared.rs`
+against a real Docker build of the production image: two disposable Free
+projects on one shared worker, full isolation matrix, restart recovery,
+suspend/reactivate all PASS. Found the node-level implementation correct
+but confirmed the Cloud control plane has **no integration with it at
+all** — every project (Free or paid) still gets a dedicated container;
+`docs/shared-hosting.md`'s "Cloud chooses shared hosting for new Free
+projects" does not match the checked-out code. Added 4 regression tests
+(9/9 shared_hosting, 641/641 full suite, clippy clean). See
+[phase-SH-H1-shared-hosting-live-verification.md](phase-SH-H1-shared-hosting-live-verification.md)
+and [docs/reviews/shared-free-hosting-live-verification.md](../reviews/shared-free-hosting-live-verification.md).

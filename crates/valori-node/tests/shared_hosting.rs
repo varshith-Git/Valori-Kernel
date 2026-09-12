@@ -398,3 +398,243 @@ async fn shared_data_credentials_cannot_access_worker_administration() {
         StatusCode::UNAUTHORIZED
     );
 }
+
+/// SH-H1 live-verification gap: suspend/reactivate was only tested up to
+/// suspension (`shared_restart_stop_and_delete_preserve_other_projects`
+/// above never reactivates). Confirms reactivation actually restores
+/// serving and that no data or proof was lost across the suspend window.
+#[tokio::test]
+async fn shared_reactivation_restores_serving_and_preserves_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = SharedHost::open(dir.path(), ADMIN, 10).unwrap();
+    let app = host.router();
+    create(&app, ID_A, A).await;
+    seed(&app, ID_A, A, 5.0).await;
+    let before = call(&app, "GET", &data(ID_A, "/v1/proof/state"), A, Value::Null)
+        .await
+        .1;
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/shared/projects/{ID_A}/active"),
+            ADMIN,
+            json!({"active": false})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, "GET", &data(ID_A, "/health"), A, Value::Null)
+            .await
+            .0,
+        StatusCode::CONFLICT,
+        "suspended project must refuse data-plane traffic"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/shared/projects/{ID_A}/active"),
+            ADMIN,
+            json!({"active": true})
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, "GET", &data(ID_A, "/health"), A, Value::Null)
+            .await
+            .0,
+        StatusCode::OK,
+        "reactivated project must resume serving"
+    );
+    assert_eq!(
+        call(&app, "GET", &data(ID_A, "/v1/proof/state"), A, Value::Null)
+            .await
+            .1,
+        before,
+        "reactivation must not alter the project's own state root"
+    );
+}
+
+/// SH-H1 live-verification gap: prior tests only confirmed state-root
+/// isolation across a restart/stop boundary, never that a write to one
+/// LIVE project leaves a second, simultaneously-active project's state
+/// root untouched — the actual cryptographic-isolation claim in
+/// docs/shared-hosting.md.
+#[tokio::test]
+async fn shared_live_writes_do_not_cross_project_state_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = SharedHost::open(dir.path(), ADMIN, 10).unwrap();
+    let app = host.router();
+    create(&app, ID_A, A).await;
+    create(&app, ID_B, B).await;
+    seed(&app, ID_A, A, 1.0).await;
+    seed(&app, ID_B, B, 2.0).await;
+    let a1 = call(&app, "GET", &data(ID_A, "/v1/proof/state"), A, Value::Null)
+        .await
+        .1;
+    let b1 = call(&app, "GET", &data(ID_B, "/v1/proof/state"), B, Value::Null)
+        .await
+        .1;
+    // Write only to A.
+    let rec = call(
+        &app,
+        "POST",
+        &data(ID_A, "/v1/records"),
+        A,
+        json!({"collection":"documents","values":[7.0,0.0]}),
+    )
+    .await;
+    assert!(rec.0.is_success(), "{rec:?}");
+    let a2 = call(&app, "GET", &data(ID_A, "/v1/proof/state"), A, Value::Null)
+        .await
+        .1;
+    let b2 = call(&app, "GET", &data(ID_B, "/v1/proof/state"), B, Value::Null)
+        .await
+        .1;
+    assert_ne!(a1, a2, "A's state root must change after A's own write");
+    assert_eq!(
+        b1, b2,
+        "B's state root must be untouched by a write to A while both are live"
+    );
+    // Write only to B, symmetric check.
+    let rec = call(
+        &app,
+        "POST",
+        &data(ID_B, "/v1/records"),
+        B,
+        json!({"collection":"documents","values":[8.0,0.0]}),
+    )
+    .await;
+    assert!(rec.0.is_success(), "{rec:?}");
+    let b3 = call(&app, "GET", &data(ID_B, "/v1/proof/state"), B, Value::Null)
+        .await
+        .1;
+    let a3 = call(&app, "GET", &data(ID_A, "/v1/proof/state"), A, Value::Null)
+        .await
+        .1;
+    assert_ne!(b2, b3, "B's state root must change after B's own write");
+    assert_eq!(
+        a2, a3,
+        "A's state root must be untouched by a write to B while both are live"
+    );
+}
+
+/// SH-H1 live-verification gap: every existing test uses one "documents"
+/// collection at a fixed 2-dim config per project. Confirms two projects
+/// can each hold a second, differently-dimensioned/indexed collection
+/// under an identical name ("products") without collision.
+#[tokio::test]
+async fn shared_projects_isolate_second_collection_with_different_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = SharedHost::open(dir.path(), ADMIN, 10).unwrap();
+    let app = host.router();
+    create(&app, ID_A, A).await;
+    create(&app, ID_B, B).await;
+    seed(&app, ID_A, A, 1.0).await;
+    seed(&app, ID_B, B, 2.0).await;
+    // A's "products": 3-dim, brute. B's "products": 4-dim, hnsw. Same name,
+    // different projects, different shapes — must not collide or leak.
+    let a_products = call(
+        &app,
+        "POST",
+        &data(ID_A, "/v1/namespaces"),
+        A,
+        json!({"name":"products","dimension":3,"metric":"squared_l2","index":"brute"}),
+    )
+    .await;
+    assert!(a_products.0.is_success(), "{a_products:?}");
+    let b_products = call(
+        &app,
+        "POST",
+        &data(ID_B, "/v1/namespaces"),
+        B,
+        json!({"name":"products","dimension":4,"metric":"squared_l2","index":"hnsw"}),
+    )
+    .await;
+    assert!(b_products.0.is_success(), "{b_products:?}");
+    let a_rec = call(
+        &app,
+        "POST",
+        &data(ID_A, "/v1/records"),
+        A,
+        json!({"collection":"products","values":[1.0,2.0,3.0]}),
+    )
+    .await;
+    assert!(a_rec.0.is_success(), "{a_rec:?}");
+    let b_rec = call(
+        &app,
+        "POST",
+        &data(ID_B, "/v1/records"),
+        B,
+        json!({"collection":"products","values":[1.0,2.0,3.0,4.0]}),
+    )
+    .await;
+    assert!(b_rec.0.is_success(), "{b_rec:?}");
+    // A's "documents" collection list must not contain B's "products".
+    let a_list = call(&app, "GET", &data(ID_A, "/v1/namespaces"), A, Value::Null)
+        .await
+        .1;
+    let a_names: Vec<&str> = a_list["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+        .collect();
+    assert!(a_names.contains(&"documents") && a_names.contains(&"products"));
+    assert_eq!(a_names.len(), 2, "A must not see B's collections: {a_list}");
+}
+
+/// SH-H1 live-verification gap: `/v1/proof/event-log` is not in shared.rs's
+/// forbidden-path list (only snapshot/keys/storage/replication/crypto/
+/// internal routes are), so it should be reachable per project — but no
+/// existing test exercised it in shared mode.
+#[tokio::test]
+async fn shared_event_log_proof_is_reachable_and_project_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = SharedHost::open(dir.path(), ADMIN, 10).unwrap();
+    let app = host.router();
+    create(&app, ID_A, A).await;
+    create(&app, ID_B, B).await;
+    seed(&app, ID_A, A, 1.0).await;
+    seed(&app, ID_B, B, 9.0).await;
+    let proof_a = call(
+        &app,
+        "GET",
+        &data(ID_A, "/v1/proof/event-log"),
+        A,
+        Value::Null,
+    )
+    .await;
+    let proof_b = call(
+        &app,
+        "GET",
+        &data(ID_B, "/v1/proof/event-log"),
+        B,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(proof_a.0, StatusCode::OK, "{proof_a:?}");
+    assert_eq!(proof_b.0, StatusCode::OK, "{proof_b:?}");
+    assert_ne!(
+        proof_a.1, proof_b.1,
+        "distinct projects must not share an event-log proof"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &data(ID_B, "/v1/proof/event-log"),
+            A,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED,
+        "A's token must not read B's event-log proof"
+    );
+}

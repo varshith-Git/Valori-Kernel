@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### SH-H1 — Shared Free-tier hosting: live end-to-end verification
+
+- Live-verified `crates/valori-node/src/shared.rs` against a real Docker
+  build of the production image: two disposable Free projects on one
+  shared worker, full credential/collection/record/graph/metadata/WAL/
+  state-root isolation, restart recovery, and suspend/reactivate — all
+  confirmed correct.
+- Added 4 regression tests to `crates/valori-node/tests/shared_hosting.rs`:
+  reactivation-after-suspend, live (non-restart-boundary) cross-project
+  state-root isolation, a second differently-configured collection under
+  an identical name across projects, and shared-mode `/v1/proof/event-log`
+  reachability/isolation. 9/9 shared_hosting tests, 641/641 full
+  `valori-kernel`+`valori-node` suite, clippy clean.
+- Found (not fixed) that the Cloud control plane has no integration with
+  shared hosting at all — no `SHARED_WORKER_*` config, no dedicate
+  endpoint, no shared-projects migration; every project is still
+  provisioned with a dedicated container regardless of plan. See
+  `docs/reviews/shared-free-hosting-live-verification.md`.
+
 ### RG6 — Evidence-backed assertions
 
 - Extracted relationships now carry an optional predicate and exact source evidence.
