@@ -229,18 +229,25 @@ oversubscription ratios, how many projects per worker at each tier.
 ## Phase 3 — Limits and concurrency protection
 
 **Goal:** extend the existing project manifest (`shared.rs:53-58`,
-currently `{token_hash, max_records, active}`) with two distinct kinds of
+currently `{token_hash, max_records, active}`) with three distinct kinds of
 limit, not one undifferentiated bag — a Rust process cannot strictly
 enforce per-project CPU or RAM the way cgroups can, so hard quotas and
-resource-estimate signals need separate models:
+resource-estimate signals need separate models; and **request-rate
+protection is itself a different control from usage entitlement**, so
+those two are also kept separate rather than conflated into one
+"reads/writes per minute" bucket:
 
 ```text
-ProjectLimits (hard, worker-enforced quotas)
-├── max_records
-├── max_storage_bytes
-├── reads_per_minute
-├── writes_per_minute
+RequestProtection (worker-enforced, per-request rate limiting)
+├── read_requests_per_minute
+├── write_requests_per_minute
 └── max_concurrent_requests
+
+UsageEntitlement (worker-enforced, per-unit quotas)
+├── max_records
+├── vector_operations_per_minute (or per-billing-period)
+├── max_storage_bytes
+└── compute_units (optional; deferred until a real cost model exists)
 
 ProjectPlacementBudget (admission/scheduling signals, estimates)
 ├── estimated_resident_bytes
@@ -248,6 +255,17 @@ ProjectPlacementBudget (admission/scheduling signals, estimates)
 ├── residency_priority
 └── cold_start_budget
 ```
+
+**Why these are separate:** a 10,000-record bulk insert must consume
+**one** request token against `RequestProtection` (it's one HTTP request,
+and request-rate protection exists to bound connection/CPU churn per
+request) but **10,000 units** against `UsageEntitlement`'s vector-operation
+quota (that's what bounds actual usage/cost). Charging bulk writes
+per-record against the *request* limiter would let a client bypass request
+protection by batching; charging single-record writes per-request against
+the *usage* limiter would undercount real consumption relative to a
+client that bulk-inserts the same data in one call. Every enforcement
+point in this phase applies both limiters to a write, independently.
 
 `max_resident_memory_bytes`-style fields belong in the placement budget as
 an *estimate* used for admission decisions, not a hard boundary — the
@@ -260,13 +278,16 @@ ingestion (`docs/shared-hosting.md:59-65`), so Free/Pro vector serving has
 no meaningful per-project VRAM allocation to budget. Reintroduce it only if
 a future phase enables on-node GPU models in shared mode.
 
-**Rate-limiting semantics** (reads/min, writes/min) must be defined, not
-left implicit:
+**Request-protection semantics** (`read_requests_per_minute`,
+`write_requests_per_minute`, `max_concurrent_requests`) must be defined,
+not left implicit:
 - Explicit route classification: which routes count as a read, which as a
   write (e.g. `/v1/search`, `/v1/graphrag` = read; `/v1/records`,
   `/v1/namespaces` mutations = write).
-- Bulk insert counts per-record, not per-request, against the write quota.
-- Rejected (429'd) requests do not themselves consume quota.
+- **Counted per request, regardless of payload size** — a bulk insert of
+  10,000 records consumes exactly one write-request token here; payload
+  size is the usage limiter's concern, not this one's (see below).
+- Rejected (429'd) requests do not themselves consume a token.
 - Algorithm: project-level token buckets at the shared worker (not fixed
   window) — burst allowance and refill rate are Phase 1-informed constants,
   not guessed here.
@@ -280,6 +301,21 @@ left implicit:
 - `health` and other management/internal routes (already excluded from
   tenant dispatch per `shared.rs:311-330`) are never rate-limited as tenant
   traffic.
+
+**Usage-entitlement semantics** (`vector_operations_per_minute` or
+per-billing-period, `max_records`, `max_storage_bytes`) are a separate
+worker-enforced check, evaluated independently of the request-protection
+check above:
+- **Counted per unit of work** — a bulk insert of 10,000 records consumes
+  10,000 units against `vector_operations`, not 1. A single-record insert
+  consumes 1. This is what actually bounds cost/usage, and it cannot be
+  bypassed by batching many records into fewer requests, since request
+  count and operation count are tracked and enforced separately.
+- `max_records` and `max_storage_bytes` remain running totals (not
+  per-minute), enforced at write time as already described.
+- `compute_units` is named as a placeholder dimension only — not defined
+  or enforced in this phase, deferred until a real per-operation cost
+  model exists.
 
 **Storage-quota accounting** (`max_storage_bytes`) must define what counts:
 event log, snapshot, metadata, namespace sidecars, graph data, shred log —
@@ -298,11 +334,13 @@ can be bypassed or go stale relative to the worker's actual state.
 decides whether limits differ by pool class or just by `plan_class` within
 one pool.
 
-**Acceptance gate:** a project that exceeds any `ProjectLimits` quota is
-rejected at the worker with `429`/`Retry-After` (or the applicable status),
-without affecting other projects' availability or latency on the same
-worker; storage accounting never allows a confirmed write past the
-pre-write conservative estimate.
+**Acceptance gate:** a project that exceeds a `RequestProtection` limit or a
+`UsageEntitlement` quota is rejected at the worker with `429`/`Retry-After`
+(or the applicable status), without affecting other projects' availability
+or latency on the same worker; a single bulk-insert request is verified to
+consume exactly one request-protection token and N usage-entitlement
+operation units for its N records; storage accounting never allows a
+confirmed write past the pre-write conservative estimate.
 
 ## Phase 4A — Failure quarantine (production blocker, independent of 4B)
 
