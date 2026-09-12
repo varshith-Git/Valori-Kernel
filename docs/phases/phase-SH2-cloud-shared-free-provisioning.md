@@ -9,13 +9,28 @@ A fourth review round audited the `SECURITY DEFINER` RPC added in the
 third correction and the `last_active_at` activity-tracking column; a
 fifth found its `search_path` was more permissive than a `SECURITY
 DEFINER` function should use. All fixed and live-verified — see "Fourth
-correction" and "Fifth correction" below. Nothing has been committed
-yet: next is reviewing the full diff, branching, committing, opening a
-PR, and deploying that exact reviewed commit to staging — see
-Follow-ups. Before production: the real HTTP flow (now
+correction" and "Fifth correction" below. A full diff review across both
+repositories followed (no issues beyond one stale test-count claim in
+`backend/README.md`, corrected), then all three commits below. Not yet
+pushed or opened as a PR. Before production: the real HTTP flow (now
 achievable in staging, where a trusted cert exists), one paid dedicated
 deployment, and corrupt-project quarantine (Phase 4A) must all land
 first.
+
+**Commit SHAs (staging must deploy all three together — they are one
+logical change split across two repositories, not independently
+deployable):**
+
+| Repository | Commit | Message |
+|---|---|---|
+| `Valori-Kernel` | `570259d` | `test(shared-hosting): expand isolation and recovery verification` (SH-H1) |
+| `Valori-Kernel` | `08cd497` | `docs(shared-hosting): document cloud integration and staging gates` (SH2 docs) |
+| `valori-ui` | `c5ce2e9` | `feat(cloud): provision free projects on shared workers` (SH2 implementation) |
+
+Not pushed to any remote and no PR opened as of these SHAs — both are
+local commits on each repo's default branch (`main` for `Valori-Kernel`,
+`master` for `valori-ui`). Push and PR creation are separate, explicit
+next steps, not implied by committing.
 
 ## Goal
 
