@@ -112,6 +112,8 @@ pub struct ExtractEntitiesRequest {
     #[serde(default)]
     pub namespace: Option<String>,
     #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
     pub entity_types: Vec<String>,
     #[serde(default)]
     pub model: Option<String>,
@@ -132,8 +134,290 @@ pub struct ExtractedRelationship {
     pub source: String,
     pub target: String,
     pub description: String,
+    /// Optional semantic predicate. Older extractors only provide description.
+    #[serde(default)]
+    pub predicate: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<AssertionEvidence>,
     #[serde(default)]
     pub strength: f32,
+}
+
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AssertionEvidence {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub source_text_hash: Option<String>,
+    #[serde(default)]
+    pub chunk_id: Option<String>,
+    #[serde(default)]
+    pub passage_id: Option<String>,
+    #[serde(default)]
+    pub span_start: Option<u64>,
+    #[serde(default)]
+    pub span_end: Option<u64>,
+}
+
+// ── RG7 canonical entities ────────────────────────────────────────────────
+
+/// A source mention is deliberately separate from the entity it resolves to.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EntityMention {
+    pub mention_id: String,
+    pub entity_id: String,
+    pub source: Option<String>,
+    pub document_id: Option<String>,
+    pub chunk_id: Option<String>,
+    pub passage_id: Option<String>,
+    pub span_start: Option<u64>,
+    pub span_end: Option<u64>,
+    pub surface_form: String,
+    pub source_text_hash: Option<String>,
+    pub assertion_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanonicalEntity {
+    pub entity_id: String,
+    pub canonical_name: String,
+    pub entity_type: String,
+    pub aliases: Vec<String>,
+    pub mention_ids: Vec<String>,
+}
+
+fn normalized_entity_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Resolve a mention without fuzzy or model-based merging. Context identity is
+/// part of the key, so two unrelated people with the same name remain distinct.
+pub fn resolve_canonical_entity(
+    canonical_name: &str,
+    entity_type: &str,
+    aliases: &[String],
+    mention: &EntityMention,
+) -> CanonicalEntity {
+    let normalized_type = normalized_entity_text(entity_type);
+    let mut names = vec![canonical_name.to_owned()];
+    names.extend(aliases.iter().cloned());
+    let surface = normalized_entity_text(&mention.surface_form);
+    let matched = names.iter().any(|n| normalized_entity_text(n) == surface);
+    let identity_context = if matched {
+        format!(
+            "{}|{}|{}|{}",
+            mention.source.as_deref().unwrap_or(""),
+            mention.document_id.as_deref().unwrap_or(""),
+            mention.chunk_id.as_deref().unwrap_or(""),
+            mention.source_text_hash.as_deref().unwrap_or("")
+        )
+    } else {
+        format!(
+            "surface:{}|{}",
+            surface,
+            mention.source_text_hash.as_deref().unwrap_or("")
+        )
+    };
+    let key = format!(
+        "{}\u{1f}{}\u{1f}{}",
+        normalized_entity_text(canonical_name),
+        normalized_type,
+        identity_context
+    );
+    let entity_id = format!("ent_{}", blake3::hash(key.as_bytes()).to_hex());
+    let mut normalized_aliases: Vec<String> = names
+        .into_iter()
+        .map(|n| normalized_entity_text(&n))
+        .filter(|n| !n.is_empty())
+        .collect();
+    normalized_aliases.sort();
+    normalized_aliases.dedup();
+    CanonicalEntity {
+        entity_id,
+        canonical_name: canonical_name.to_owned(),
+        entity_type: entity_type.to_owned(),
+        aliases: normalized_aliases,
+        mention_ids: vec![mention.mention_id.clone()],
+    }
+}
+
+// ── RG8 structural claim verification ─────────────────────────────────────
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum VerificationOutcome {
+    Supports,
+    Contradicts,
+    Neutral,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerificationReceipt {
+    pub verification_id: String,
+    pub outcome: VerificationOutcome,
+    pub verifier_type: String,
+    pub verifier_version: String,
+    pub config_hash: String,
+    pub input_assertion_ids: Vec<String>,
+    pub evidence_refs: Vec<AssertionEvidence>,
+    pub confidence: Option<String>,
+    pub confidence_source: String,
+    pub receipt_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StructuredClaim {
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    #[serde(default)]
+    pub negated: bool,
+    #[serde(default)]
+    pub time_scope: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VerifyClaimRequest {
+    pub left: StructuredClaim,
+    pub right: StructuredClaim,
+    pub left_assertion_id: String,
+    pub right_assertion_id: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<AssertionEvidence>,
+}
+
+/// Verify only facts that can be decided from normalized structure. Similarity
+/// and citation are intentionally absent from this function's inputs.
+pub fn verify_structured_claims(
+    left: (&str, &str, &str, bool, Option<&str>),
+    right: (&str, &str, &str, bool, Option<&str>),
+    left_id: &str,
+    right_id: &str,
+    evidence_refs: Vec<AssertionEvidence>,
+) -> VerificationReceipt {
+    let same_subject = normalized_entity_text(left.0) == normalized_entity_text(right.0);
+    let same_predicate = normalized_entity_text(left.1) == normalized_entity_text(right.1);
+    let same_scope = left.4 == right.4;
+    let outcome = if !same_subject || !same_predicate || !same_scope {
+        VerificationOutcome::Unknown
+    } else if normalized_entity_text(left.2) == normalized_entity_text(right.2) && left.3 == right.3
+    {
+        VerificationOutcome::Supports
+    } else if left.3 != right.3 && normalized_entity_text(left.2) == normalized_entity_text(right.2)
+    {
+        VerificationOutcome::Contradicts
+    } else if left.2 != right.2 {
+        VerificationOutcome::Contradicts
+    } else {
+        VerificationOutcome::Unknown
+    };
+    let inputs = vec![left_id.to_owned(), right_id.to_owned()];
+    let raw = serde_json::json!({"outcome": outcome, "inputs": inputs, "evidence": evidence_refs});
+    let hash = blake3::hash(raw.to_string().as_bytes())
+        .to_hex()
+        .to_string();
+    VerificationReceipt {
+        verification_id: format!("ver_{}", hash),
+        outcome,
+        verifier_type: "structural".into(),
+        verifier_version: "rg8-v1".into(),
+        config_hash: blake3::hash(b"rg8-structural-v1").to_hex().to_string(),
+        input_assertion_ids: vec![left_id.into(), right_id.into()],
+        evidence_refs: serde_json::from_value(raw["evidence"].clone()).unwrap_or_default(),
+        confidence: Some("1.0".into()),
+        confidence_source: "deterministic-structure".into(),
+        receipt_hash: hash,
+    }
+}
+
+/// Builds the canonical, content-addressed identity for an extracted assertion.
+/// Deliberately excludes allocated graph IDs so standalone and Raft agree.
+pub fn assertion_identity(
+    source_text_hash: &str,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    evidence: &AssertionEvidence,
+) -> String {
+    let canonical = serde_json::json!({
+        "source_text_hash": source_text_hash,
+        "subject": subject,
+        "predicate": predicate,
+        "object": object,
+        "evidence": evidence,
+    });
+    format!(
+        "ast_{}",
+        blake3::hash(canonical.to_string().as_bytes()).to_hex()
+    )
+}
+
+#[cfg(test)]
+mod assertion_tests {
+    use super::*;
+
+    #[test]
+    fn assertion_ids_are_stable_and_conflicts_coexist() {
+        let e = AssertionEvidence {
+            chunk_id: Some("c1".into()),
+            ..Default::default()
+        };
+        let a = assertion_identity("h", "s", "supports", "o", &e);
+        assert_eq!(a, assertion_identity("h", "s", "supports", "o", &e));
+        assert_ne!(a, assertion_identity("h", "s", "contradicts", "o", &e));
+    }
+
+    #[test]
+    fn rg7_aliases_are_deterministic_and_context_scoped() {
+        let m = EntityMention {
+            mention_id: "m1".into(),
+            surface_form: "  ACME, Inc. ".into(),
+            source_text_hash: Some("h".into()),
+            ..Default::default()
+        };
+        let a = resolve_canonical_entity("Acme Inc", "ORG", &["ACME, Inc.".into()], &m);
+        let b = resolve_canonical_entity("Acme Inc", "ORG", &["ACME, Inc.".into()], &m);
+        assert_eq!(a, b);
+        let incompatible =
+            resolve_canonical_entity("Acme Inc", "PERSON", &["ACME, Inc.".into()], &m);
+        assert_ne!(a.entity_id, incompatible.entity_id);
+    }
+
+    #[test]
+    fn rg8_structural_verifier_does_not_use_citation_or_similarity() {
+        let support = verify_structured_claims(
+            ("alice", "owns", "Acme", false, Some("2025")),
+            ("Alice", "owns", "acme", false, Some("2025")),
+            "a",
+            "b",
+            vec![],
+        );
+        assert_eq!(support.outcome, VerificationOutcome::Supports);
+        let contradiction = verify_structured_claims(
+            ("alice", "owns", "Acme", false, Some("2025")),
+            ("alice", "owns", "Acme", true, Some("2025")),
+            "a",
+            "c",
+            vec![],
+        );
+        assert_eq!(contradiction.outcome, VerificationOutcome::Contradicts);
+        let different_scope = verify_structured_claims(
+            ("alice", "owns", "Acme", false, Some("2024")),
+            ("alice", "owns", "Other", false, Some("2025")),
+            "a",
+            "d",
+            vec![],
+        );
+        assert_eq!(different_scope.outcome, VerificationOutcome::Unknown);
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -151,6 +435,11 @@ pub struct InsertedEntity {
     pub description: String,
     pub node_id: u32,
     pub record_id: Option<u32>,
+    /// RG7 deterministic identity for this source-resolved entity.
+    pub entity_id: String,
+    pub canonical_name: String,
+    pub aliases: Vec<String>,
+    pub mention_id: String,
 }
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -159,7 +448,10 @@ pub struct InsertedRelationship {
     pub source_name: String,
     pub target_name: String,
     pub description: String,
+    pub strength: f32,
     pub edge_id: u32,
+    pub assertion_id: String,
+    pub evidence: AssertionEvidence,
 }
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]

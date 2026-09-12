@@ -15,6 +15,130 @@ use valori_effect::error::EffectError;
 use crate::server::SharedEngine;
 use valori_ingest::{embed_batch, EmbedConfig};
 
+fn record_metadata_keys(record_id: u32) -> [String; 2] {
+    [format!("record:{record_id}"), format!("rec:{record_id}")]
+}
+
+fn record_provenance(
+    record_id: u32,
+    metadata_key: Option<&str>,
+    metadata: Option<&serde_json::Value>,
+    node_id: Option<u32>,
+    graph_distance: Option<u32>,
+    seed_nodes: &[u32],
+    edges: &[serde_json::Value],
+) -> serde_json::Value {
+    let graph_path = node_id
+        .and_then(|target| shortest_evidence_path(seed_nodes, target, edges))
+        .unwrap_or_default();
+    serde_json::json!({
+        "record_id": record_id,
+        "metadata_key": metadata_key,
+        "source": metadata.and_then(|m| m.get("source")).cloned(),
+        "chunk_index": metadata.and_then(|m| m.get("chunk_index")).cloned(),
+        "section_title": metadata.and_then(|m| m.get("section_title")).cloned(),
+        "document_node_id": metadata.and_then(|m| m.get("document_node_id")).cloned(),
+        "chunk_node_id": metadata.and_then(|m| m.get("chunk_node_id")).cloned(),
+        "graph_distance": graph_distance,
+        "graph_path": graph_path,
+    })
+}
+
+fn shortest_evidence_path(
+    seed_nodes: &[u32],
+    target: u32,
+    edges: &[serde_json::Value],
+) -> Option<Vec<serde_json::Value>> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    let seed_set: HashSet<u32> = seed_nodes.iter().copied().collect();
+    if seed_set.contains(&target) {
+        return Some(Vec::new());
+    }
+
+    let mut adjacency: HashMap<u32, Vec<(u32, u32, u32)>> = HashMap::new();
+    for edge in edges {
+        let id = edge.get("id")?.as_u64()? as u32;
+        let from = edge.get("from")?.as_u64()? as u32;
+        let to = edge.get("to")?.as_u64()? as u32;
+        let kind = edge.get("kind")?.as_u64()? as u32;
+        adjacency.entry(from).or_default().push((to, id, kind));
+        if kind == valori_kernel::types::enums::EdgeKind::ParentOf as u32 {
+            adjacency.entry(to).or_default().push((from, id, kind));
+        }
+    }
+    for next in adjacency.values_mut() {
+        next.sort_unstable_by_key(|(node, edge, kind)| (*node, *edge, *kind));
+    }
+
+    let mut seeds = seed_nodes.to_vec();
+    seeds.sort_unstable();
+    seeds.dedup();
+    let mut seen = HashSet::new();
+    let mut prev: HashMap<u32, (u32, u32, u32)> = HashMap::new();
+    let mut queue = VecDeque::new();
+    for seed in seeds {
+        if seen.insert(seed) {
+            queue.push_back(seed);
+        }
+    }
+
+    while let Some(node) = queue.pop_front() {
+        for (next, edge_id, kind) in adjacency.get(&node).cloned().unwrap_or_default() {
+            if !seen.insert(next) {
+                continue;
+            }
+            prev.insert(next, (node, edge_id, kind));
+            if next == target {
+                let mut current = target;
+                let mut path = Vec::new();
+                while let Some((from, edge_id, kind)) = prev.get(&current).copied() {
+                    path.push(serde_json::json!({
+                        "from": from,
+                        "to": current,
+                        "edge_id": edge_id,
+                        "kind": kind,
+                    }));
+                    if seed_set.contains(&from) {
+                        break;
+                    }
+                    current = from;
+                }
+                path.reverse();
+                return Some(path);
+            }
+            queue.push_back(next);
+        }
+    }
+    None
+}
+
+fn l2_distance_f32(
+    query: &[f32],
+    candidate: &[valori_kernel::types::scalar::FxpScalar],
+) -> Option<f32> {
+    if query.len() != candidate.len() {
+        return None;
+    }
+    let scale = valori_kernel::fxp::qformat::SCALE as f64;
+    let sum = query
+        .iter()
+        .zip(candidate.iter())
+        .map(|(q, c)| {
+            let delta = *q as f64 - c.0 as f64 / scale;
+            delta * delta
+        })
+        .sum::<f64>();
+    Some(sum as f32)
+}
+
+fn graph_relevance(graph_distance: Option<u32>, source: &str) -> f64 {
+    match (graph_distance, source) {
+        (Some(distance), "graph") => 1.0 / (2.0 + distance as f64),
+        _ => 0.0,
+    }
+}
+
 // ── EngineKernelCapability ────────────────────────────────────────────────────
 
 /// `KernelCapability` backed by the standalone `SharedEngine`.
@@ -194,6 +318,8 @@ impl KernelCapability for EngineKernelCapability {
         max_nodes: Option<u32>,
         max_edges: Option<u32>,
         graph_weight: f32,
+        edge_kinds: Option<Vec<u8>>,
+        reverse_parent_of: bool,
     ) -> Result<serde_json::Value, EffectError> {
         let graph_weight = graph_weight.clamp(0.0, 1.0);
         let eng = self.engine.read().await;
@@ -205,7 +331,8 @@ impl KernelCapability for EngineKernelCapability {
         let record_ids: Vec<u32> = hits.iter().map(|(id, _)| *id).collect();
         let seed_map = valori_rag::graph::resolve_seed_nodes(&eng.state, &record_ids);
 
-        let mut seeds: Vec<u32> = Vec::new();
+        let seeds =
+            valori_rag::reachability::resolve_all_seed_nodes(&eng.state, namespace_id, &record_ids);
         // Track vector candidates to prevent graph-only loop from duplicating them.
         let mut vector_record_set: std::collections::HashSet<u32> =
             std::collections::HashSet::with_capacity(hits.len());
@@ -215,9 +342,6 @@ impl KernelCapability for EngineKernelCapability {
         for (record_id, score) in &hits {
             vector_record_set.insert(*record_id);
             let node_id = seed_map.get(record_id).copied();
-            if let Some(nid) = node_id {
-                seeds.push(nid);
-            }
             // Seeds are at graph distance 0 from themselves.
             let graph_dist = if node_id.is_some() { Some(0u32) } else { None };
             vector_candidates.push((*record_id, *score, node_id, graph_dist));
@@ -229,9 +353,21 @@ impl KernelCapability for EngineKernelCapability {
         }
         metrics::histogram!("valori_graphrag_seed_count", seeds.len() as f64);
 
-        // Phase 5.4: expand_subgraph_budgeted enforces max_nodes/max_edges during BFS.
-        let (nodes, edges) = valori_rag::graph::expand_subgraph_budgeted(
-            &eng.state, &seeds, depth, max_nodes, max_edges,
+        let valori_rag::reachability::ReachableSubgraph {
+            nodes,
+            edges,
+            distances,
+        } = valori_rag::reachability::expand_retrieval_subgraph_with_policy(
+            &eng.state,
+            namespace_id,
+            &seeds,
+            depth,
+            max_nodes,
+            max_edges,
+            &valori_rag::reachability::TraversalPolicy::from_edge_kinds(
+                edge_kinds,
+                reverse_parent_of,
+            ),
         );
         metrics::histogram!("valori_graphrag_expanded_nodes", nodes.len() as f64);
         metrics::histogram!("valori_graphrag_expanded_edges", edges.len() as f64);
@@ -240,12 +376,6 @@ impl KernelCapability for EngineKernelCapability {
         let mut graph_by_record: std::collections::HashMap<u32, (Option<u32>, Option<u32>)> =
             std::collections::HashMap::new();
         if !seeds.is_empty() {
-            let distances = valori_rag::graph::graph_distances_from_seeds(
-                &eng.state,
-                &seeds,
-                valori_rag::graph::Direction::Outgoing,
-                depth,
-            );
             for node_val in &nodes {
                 if let Some(record_id) = node_val["record"].as_u64().map(|v| v as u32) {
                     if !vector_record_set.contains(&record_id) {
@@ -275,21 +405,36 @@ impl KernelCapability for EngineKernelCapability {
         if max_graph_candidates > 0 {
             graph_candidates.truncate(max_graph_candidates as usize);
         }
+        let graph_candidates: Vec<(u32, Option<f32>, Option<u32>, Option<u32>)> = graph_candidates
+            .into_iter()
+            .filter_map(|(record_id, node_id, graph_dist)| {
+                let record = eng
+                    .state
+                    .get_record(valori_kernel::types::id::RecordId(record_id))?;
+                if !record.is_searchable() || record.namespace_id != namespace_id {
+                    return None;
+                }
+                Some((
+                    record_id,
+                    l2_distance_f32(&vector, record.vector.as_slice()),
+                    node_id,
+                    graph_dist,
+                ))
+            })
+            .collect();
 
-        // Phase 5.4 — combined reranking.
+        // RG3 — unified candidate scoring.
         //
         // Normalise both signals to [0, 1] (higher = more relevant), then blend:
-        //   vector_relevance = 1 / (1 + L2_dist)          ∈ (0, 1]; 0.0 for graph-only
-        //   graph_relevance  = 1 / (1 + hop_count)        ∈ (0, 1]; 0.0 for no-graph vector
-        //   final_score      = (1-β)×vector_rel + β×graph_rel   where β = graph_weight
+        //   vector_relevance = 1 / (1 + L2_dist)          ∈ (0, 1]; 0.0 when unavailable
+        //   graph_relevance  = 1 / (2 + hop_count)        ∈ (0, 0.5]; graph-only path bonus
+        //   final_score      = vector_rel + β×graph_rel×(1-vector_rel)
         //
-        // Seeds (dist=0) earn graph_relevance=1.0, giving them a strong bonus.
-        // With β>0, graph-only candidates can outrank pure vector hits (no graph node)
-        // that sit far in L2 space.  All hits share one sorted list — no separate buckets.
+        // Having a graph node is no longer a bonus by itself. Graph-expanded
+        // records compete on their own vector distance to the original query.
         //
         // Intermediate: (record_id, vector_score: Option<f32>, node_id, graph_distance,
         //                source, graph_score: f64, final_score: f64)
-        let alpha = 1.0f64 - graph_weight as f64;
         let beta = graph_weight as f64;
 
         let mut all_candidates: Vec<(
@@ -309,8 +454,8 @@ impl KernelCapability for EngineKernelCapability {
                 "vector"
             };
             let v_rel = 1.0 / (1.0 + *v_score as f64);
-            let g_rel = graph_dist.map_or(0.0f64, |d| 1.0 / (1.0 + d as f64));
-            let final_sc = alpha * v_rel + beta * g_rel;
+            let g_rel = graph_relevance(*graph_dist, source);
+            let final_sc = v_rel + beta * g_rel * (1.0 - v_rel);
             all_candidates.push((
                 *record_id,
                 Some(*v_score),
@@ -321,12 +466,13 @@ impl KernelCapability for EngineKernelCapability {
                 final_sc,
             ));
         }
-        for (record_id, node_id, graph_dist) in &graph_candidates {
-            let g_rel = graph_dist.map_or(0.0f64, |d| 1.0 / (1.0 + d as f64));
-            let final_sc = beta * g_rel;
+        for (record_id, v_score, node_id, graph_dist) in &graph_candidates {
+            let v_rel = v_score.map_or(0.0f64, |s| 1.0 / (1.0 + s as f64));
+            let g_rel = graph_relevance(*graph_dist, "graph");
+            let final_sc = v_rel + beta * g_rel * (1.0 - v_rel);
             all_candidates.push((
                 *record_id,
-                None,
+                *v_score,
                 *node_id,
                 *graph_dist,
                 "graph",
@@ -335,10 +481,19 @@ impl KernelCapability for EngineKernelCapability {
             ));
         }
 
-        // Sort by final_score DESC, record_id ASC as tie-breaker.
+        // Sort by final_score DESC, vector relevance DESC, graph distance ASC,
+        // record_id ASC as deterministic tie-breakers.
         all_candidates.sort_unstable_by(|a, b| {
             b.6.partial_cmp(&a.6)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let a_sem = a.1.map_or(0.0f32, |s| 1.0 / (1.0 + s));
+                    let b_sem = b.1.map_or(0.0f32, |s| 1.0 / (1.0 + s));
+                    b_sem
+                        .partial_cmp(&a_sem)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.3.unwrap_or(u32::MAX).cmp(&b.3.unwrap_or(u32::MAX)))
                 .then_with(|| a.0.cmp(&b.0))
         });
 
@@ -351,18 +506,36 @@ impl KernelCapability for EngineKernelCapability {
         let mut hits_out: Vec<serde_json::Value> = Vec::with_capacity(all_candidates.len());
         for (record_id, v_score, node_id, graph_dist, source, g_score, f_score) in &all_candidates {
             let memory_id = format!("rec:{record_id}");
-            let metadata = eng.metadata.get(&memory_id);
+            let mut metadata_key = None;
+            let mut metadata = None;
+            for key in record_metadata_keys(*record_id) {
+                if let Some(value) = eng.metadata.get(&key) {
+                    metadata_key = Some(key);
+                    metadata = Some(value);
+                    break;
+                }
+            }
+            let provenance = record_provenance(
+                *record_id,
+                metadata_key.as_deref(),
+                metadata.as_ref(),
+                *node_id,
+                *graph_dist,
+                &seeds,
+                &edges,
+            );
             hits_out.push(serde_json::json!({
                 "memory_id": memory_id,
                 "record_id": record_id,
-                "score": v_score,        // backward compat (null for graph-only)
-                "vector_score": v_score, // explicit (null for graph-only)
-                "graph_score": g_score,  // Phase 5.4: normalised graph relevance ∈ [0,1]
-                "final_score": f_score,  // Phase 5.4: combined score ∈ [0,1]; always present
+                "score": v_score,        // backward compat alias for vector_score
+                "vector_score": v_score, // null only when no usable vector exists
+                "graph_score": g_score,  // RG3: bounded path relevance, no seed bonus
+                "final_score": f_score,  // RG3: semantic score plus capped path boost
                 "node_id": node_id,
                 "graph_distance": graph_dist,
                 "source": source,
                 "metadata": metadata,
+                "provenance": provenance,
             }));
         }
 
@@ -1022,6 +1195,8 @@ impl KernelCapability for RaftKernelCapability {
         max_nodes: Option<u32>,
         max_edges: Option<u32>,
         graph_weight: f32,
+        edge_kinds: Option<Vec<u8>>,
+        reverse_parent_of: bool,
     ) -> Result<serde_json::Value, EffectError> {
         use valori_consensus::types::ShardId;
         use valori_kernel::fxp::qformat::SCALE;
@@ -1050,6 +1225,11 @@ impl KernelCapability for RaftKernelCapability {
             .collect();
         let fxp_q = FxpVector { data: fxp_data? };
         let k_usize = retrieval_k as usize;
+        let query_for_scoring = vector.clone();
+        let traversal_policy = valori_rag::reachability::TraversalPolicy::from_edge_kinds(
+            edge_kinds,
+            reverse_parent_of,
+        );
 
         // Pass 1 (sync, inside with_state): vector search → seed resolution →
         // subgraph expansion (Phase 5.4: with max_nodes/max_edges budget) →
@@ -1063,8 +1243,8 @@ impl KernelCapability for RaftKernelCapability {
             Vec<u32>,                                  // seed node ids
             Vec<serde_json::Value>,                    // expanded nodes JSON
             Vec<serde_json::Value>,                    // expanded edges JSON
-            std::collections::HashMap<u32, (Option<u32>, Option<u32>)>, // record_id → (node_id, min_dist)
-            bool,                                                       // no_graph_seed flag
+            std::collections::HashMap<u32, (Option<f32>, Option<u32>, Option<u32>)>, // record_id → (vector_score, node_id, min_dist)
+            bool, // no_graph_seed flag
         ) = shard
             .state_machine
             .with_state(move |s| {
@@ -1079,7 +1259,8 @@ impl KernelCapability for RaftKernelCapability {
                     .collect();
                 let record_ids: Vec<u32> = hits.iter().map(|(id, _)| *id).collect();
                 let seed_map = valori_rag::graph::resolve_seed_nodes(s, &record_ids);
-                let mut seeds: Vec<u32> = Vec::new();
+                let seeds =
+                    valori_rag::reachability::resolve_all_seed_nodes(s, namespace_id, &record_ids);
                 let mut vector_record_set: std::collections::HashSet<u32> =
                     std::collections::HashSet::with_capacity(hits.len());
                 let raw: Vec<(u32, f32, Option<u32>, Option<u32>)> = hits
@@ -1087,18 +1268,24 @@ impl KernelCapability for RaftKernelCapability {
                     .map(|(record_id, score)| {
                         vector_record_set.insert(*record_id);
                         let node_id = seed_map.get(record_id).copied();
-                        if let Some(nid) = node_id {
-                            seeds.push(nid);
-                        }
                         let graph_dist = if node_id.is_some() { Some(0u32) } else { None };
                         (*record_id, *score, node_id, graph_dist)
                     })
                     .collect();
                 let no_graph_seed = !hits.is_empty() && seeds.is_empty();
 
-                // Phase 5.4: BFS with max_nodes/max_edges traversal budgets.
-                let (nodes, edges) = valori_rag::graph::expand_subgraph_budgeted(
-                    s, &seeds, depth, max_nodes, max_edges,
+                let valori_rag::reachability::ReachableSubgraph {
+                    nodes,
+                    edges,
+                    distances,
+                } = valori_rag::reachability::expand_retrieval_subgraph_with_policy(
+                    s,
+                    namespace_id,
+                    &seeds,
+                    depth,
+                    max_nodes,
+                    max_edges,
+                    &traversal_policy,
                 );
 
                 // Minimum-distance tracking for graph-only candidates (Phase 5.3).
@@ -1107,12 +1294,6 @@ impl KernelCapability for RaftKernelCapability {
                     (Option<u32>, Option<u32>),
                 > = std::collections::HashMap::new();
                 if !seeds.is_empty() {
-                    let distances = valori_rag::graph::graph_distances_from_seeds(
-                        s,
-                        &seeds,
-                        valori_rag::graph::Direction::Outgoing,
-                        depth,
-                    );
                     for node_val in &nodes {
                         if let Some(record_id) = node_val["record"].as_u64().map(|v| v as u32) {
                             if !vector_record_set.contains(&record_id) {
@@ -1130,6 +1311,27 @@ impl KernelCapability for RaftKernelCapability {
                     }
                 }
 
+                let graph_by_record: std::collections::HashMap<
+                    u32,
+                    (Option<f32>, Option<u32>, Option<u32>),
+                > = graph_by_record
+                    .into_iter()
+                    .filter_map(|(record_id, (node_id, graph_dist))| {
+                        let record = s.get_record(valori_kernel::types::id::RecordId(record_id))?;
+                        if !record.is_searchable() || record.namespace_id != namespace_id {
+                            return None;
+                        }
+                        Some((
+                            record_id,
+                            (
+                                l2_distance_f32(&query_for_scoring, record.vector.as_slice()),
+                                node_id,
+                                graph_dist,
+                            ),
+                        ))
+                    })
+                    .collect();
+
                 (raw, seeds, nodes, edges, graph_by_record, no_graph_seed)
             })
             .await;
@@ -1144,21 +1346,21 @@ impl KernelCapability for RaftKernelCapability {
 
         // Sort graph-only candidates deterministically by (dist asc, record_id asc)
         // then apply the max_graph_candidates budget before metadata fetch.
-        let mut graph_candidates: Vec<(u32, Option<u32>, Option<u32>)> = graph_by_record
-            .into_iter()
-            .map(|(rid, (nid, dist))| (rid, nid, dist))
-            .collect();
+        let mut graph_candidates: Vec<(u32, Option<f32>, Option<u32>, Option<u32>)> =
+            graph_by_record
+                .into_iter()
+                .map(|(rid, (score, nid, dist))| (rid, score, nid, dist))
+                .collect();
         graph_candidates.sort_unstable_by(|a, b| {
-            a.2.unwrap_or(u32::MAX)
-                .cmp(&b.2.unwrap_or(u32::MAX))
+            a.3.unwrap_or(u32::MAX)
+                .cmp(&b.3.unwrap_or(u32::MAX))
                 .then_with(|| a.0.cmp(&b.0))
         });
         if max_graph_candidates > 0 {
             graph_candidates.truncate(max_graph_candidates as usize);
         }
 
-        // Phase 5.4 — combined reranking (same formula as standalone path).
-        let alpha = 1.0f64 - graph_weight as f64;
+        // RG3 — unified candidate scoring (same formula as standalone path).
         let beta = graph_weight as f64;
 
         // Intermediate: (record_id, v_score, node_id, graph_dist, source, g_score, final_score)
@@ -1179,8 +1381,8 @@ impl KernelCapability for RaftKernelCapability {
                 "vector"
             };
             let v_rel = 1.0 / (1.0 + *v_score as f64);
-            let g_rel = graph_dist.map_or(0.0f64, |d| 1.0 / (1.0 + d as f64));
-            let final_sc = alpha * v_rel + beta * g_rel;
+            let g_rel = graph_relevance(*graph_dist, source);
+            let final_sc = v_rel + beta * g_rel * (1.0 - v_rel);
             all_candidates.push((
                 *record_id,
                 Some(*v_score),
@@ -1191,12 +1393,13 @@ impl KernelCapability for RaftKernelCapability {
                 final_sc,
             ));
         }
-        for (record_id, node_id, graph_dist) in &graph_candidates {
-            let g_rel = graph_dist.map_or(0.0f64, |d| 1.0 / (1.0 + d as f64));
-            let final_sc = beta * g_rel;
+        for (record_id, v_score, node_id, graph_dist) in &graph_candidates {
+            let v_rel = v_score.map_or(0.0f64, |s| 1.0 / (1.0 + s as f64));
+            let g_rel = graph_relevance(*graph_dist, "graph");
+            let final_sc = v_rel + beta * g_rel * (1.0 - v_rel);
             all_candidates.push((
                 *record_id,
-                None,
+                *v_score,
                 *node_id,
                 *graph_dist,
                 "graph",
@@ -1205,10 +1408,19 @@ impl KernelCapability for RaftKernelCapability {
             ));
         }
 
-        // Sort by final_score DESC, record_id ASC.
+        // Sort by final_score DESC, vector relevance DESC, graph distance ASC,
+        // record_id ASC as deterministic tie-breakers.
         all_candidates.sort_unstable_by(|a, b| {
             b.6.partial_cmp(&a.6)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let a_sem = a.1.map_or(0.0f32, |s| 1.0 / (1.0 + s));
+                    let b_sem = b.1.map_or(0.0f32, |s| 1.0 / (1.0 + s));
+                    b_sem
+                        .partial_cmp(&a_sem)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.3.unwrap_or(u32::MAX).cmp(&b.3.unwrap_or(u32::MAX)))
                 .then_with(|| a.0.cmp(&b.0))
         });
 
@@ -1221,18 +1433,36 @@ impl KernelCapability for RaftKernelCapability {
         let mut hits_out: Vec<serde_json::Value> = Vec::with_capacity(all_candidates.len());
         for (record_id, v_score, node_id, graph_dist, source, g_score, f_score) in &all_candidates {
             let memory_id = format!("rec:{record_id}");
-            let metadata = shard.state_machine.get_meta_json(&memory_id).await;
+            let mut metadata_key = None;
+            let mut metadata = None;
+            for key in record_metadata_keys(*record_id) {
+                if let Some(value) = shard.state_machine.get_meta_json(&key).await {
+                    metadata_key = Some(key);
+                    metadata = Some(value);
+                    break;
+                }
+            }
+            let provenance = record_provenance(
+                *record_id,
+                metadata_key.as_deref(),
+                metadata.as_ref(),
+                *node_id,
+                *graph_dist,
+                &seeds,
+                &edges,
+            );
             hits_out.push(serde_json::json!({
                 "memory_id": memory_id,
                 "record_id": record_id,
-                "score": v_score,        // backward compat (null for graph-only)
-                "vector_score": v_score, // explicit (null for graph-only)
-                "graph_score": g_score,  // Phase 5.4: normalised graph relevance ∈ [0,1]
-                "final_score": f_score,  // Phase 5.4: combined score ∈ [0,1]; always present
+                "score": v_score,        // backward compat alias for vector_score
+                "vector_score": v_score, // null only when no usable vector exists
+                "graph_score": g_score,  // RG3: bounded path relevance, no seed bonus
+                "final_score": f_score,  // RG3: semantic score plus capped path boost
                 "node_id": node_id,
                 "graph_distance": graph_dist,
                 "source": source,
                 "metadata": metadata,
+                "provenance": provenance,
             }));
         }
 

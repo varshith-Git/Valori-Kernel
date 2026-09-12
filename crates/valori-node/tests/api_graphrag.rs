@@ -30,6 +30,19 @@ fn make_shared() -> Arc<RwLock<Engine>> {
     Arc::new(RwLock::new(Engine::new(&cfg)))
 }
 
+fn make_shared_with_embed(url: String) -> Arc<RwLock<Engine>> {
+    let mut cfg = NodeConfig::default();
+    cfg.max_records = 100;
+    cfg.max_nodes = 64;
+    cfg.max_edges = 64;
+    cfg.event_log_path = None;
+    cfg.wal_path = None;
+    cfg.embed_provider = Some("custom".into());
+    cfg.embed_model = Some("test-embed".into());
+    cfg.embed_url = Some(url);
+    Arc::new(RwLock::new(Engine::new(&cfg)))
+}
+
 async fn post(
     shared: &Arc<RwLock<Engine>>,
     path: &str,
@@ -51,8 +64,74 @@ async fn post(
     (status, json)
 }
 
+async fn get(shared: &Arc<RwLock<Engine>>, path: &str) -> (StatusCode, serde_json::Value) {
+    let app = build_router(shared.clone(), None, None);
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
 fn vec_n(seed: f32) -> Vec<f32> {
     (0..DIM).map(|i| seed + i as f32 * 0.01).collect()
+}
+
+async fn spawn_mock_llm_and_embedder() -> String {
+    async fn handler(req: axum::extract::Request) -> axum::response::Json<serde_json::Value> {
+        let path = req.uri().path().to_string();
+        if path.ends_with("/chat/completions") {
+            return axum::Json(serde_json::json!({
+                "choices": [{
+                    "message": {
+                        "content": serde_json::json!({
+                            "entities": [
+                                {
+                                    "name": "Valori",
+                                    "type": "ORGANIZATION",
+                                    "description": "Auditable graph and vector retrieval system"
+                                },
+                                {
+                                    "name": "GraphRAG",
+                                    "type": "CONCEPT",
+                                    "description": "Retrieval method combining graph relations and vectors"
+                                }
+                            ],
+                            "relationships": [
+                                {
+                                    "source": "Valori",
+                                    "target": "GraphRAG",
+                                    "description": "Valori uses GraphRAG for relationship-aware retrieval",
+                                    "strength": 0.91
+                                }
+                            ]
+                        }).to_string()
+                    }
+                }]
+            }));
+        }
+        axum::Json(serde_json::json!({
+            "data": [
+                {"embedding": vec_n(0.11)},
+                {"embedding": vec_n(0.22)}
+            ]
+        }))
+    }
+
+    let app = axum::Router::new().fallback(handler);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
 }
 
 async fn create_default_collection(shared: &Arc<RwLock<Engine>>) {
@@ -200,10 +279,10 @@ async fn graphrag_depth_zero_returns_seeds_without_edges() {
 /// an engine-local last-write-wins `record_to_node` cache while the cluster
 /// path used `resolve_seed_nodes` (first-in-pool-order wins) — so identical
 /// canonical state produced different `node_id`/seeds on the two paths.
-/// Both now share `resolve_seed_nodes`; this pins the standalone side at the
-/// HTTP boundary. See docs/reviews/graph-g1.3-vector-graph-retrieval.md.
+/// The representative node remains the lowest ID; RG1 expands from ALL nodes
+/// so relationships attached to another node are not silently omitted.
 #[tokio::test]
-async fn graphrag_seed_for_a_multi_node_record_is_the_lowest_node_id() {
+async fn graphrag_multi_node_record_keeps_representative_and_seeds_all_nodes() {
     let shared = make_shared();
     create_default_collection(&shared).await;
 
@@ -253,9 +332,75 @@ async fn graphrag_seed_for_a_multi_node_record_is_the_lowest_node_id() {
     );
     assert_eq!(
         out["seed_nodes"].as_array().unwrap(),
-        &vec![serde_json::json!(first_node)],
-        "and must seed expansion from that same node"
+        &vec![
+            serde_json::json!(first_node),
+            serde_json::json!(second_node)
+        ],
+        "must seed expansion from every referencing node in stable order"
     );
+}
+
+#[tokio::test]
+async fn graphrag_resolves_record_metadata_and_returns_provenance() {
+    let shared = make_shared();
+    create_default_collection(&shared).await;
+
+    let (st, w) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.10), "collection": "default" }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let record_id = w["id"].as_u64().unwrap();
+
+    let (st, node) = post(
+        &shared,
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 1, "record_id": record_id, "collection": "default" }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let chunk_node = node["node_id"].as_u64().unwrap();
+
+    let (st, body) = post(
+        &shared,
+        "/v1/memory/meta/set",
+        serde_json::json!({
+            "target_id": format!("record:{record_id}"),
+            "metadata": {
+                "text": "chunk text",
+                "source": "public/scifact",
+                "chunk_index": 7,
+                "section_title": "Evidence",
+                "document_node_id": 99,
+                "chunk_node_id": chunk_node,
+                "collection": "default"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+
+    let (st, out) = post(
+        &shared,
+        "/v1/graphrag",
+        serde_json::json!({ "query_vector": vec_n(0.10), "k": 1, "depth": 1, "collection": "default" }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let hit = &out["hits"][0];
+    assert_eq!(hit["metadata"]["source"], "public/scifact");
+    assert_eq!(
+        hit["provenance"]["metadata_key"],
+        format!("record:{record_id}")
+    );
+    assert_eq!(hit["provenance"]["source"], "public/scifact");
+    assert_eq!(hit["provenance"]["chunk_index"], 7);
+    assert_eq!(hit["provenance"]["chunk_node_id"], chunk_node);
+    assert_eq!(hit["provenance"]["graph_distance"], 0);
+    assert_eq!(hit["provenance"]["graph_path"].as_array().unwrap().len(), 0);
 }
 
 /// Deleting one of several nodes on a record must leave the survivor
@@ -372,7 +517,8 @@ async fn graphrag_record_without_graph_node_remains_in_hits() {
 ///   edge  N_A → N_B  (creates the graph path)
 ///
 /// GraphRAG must return both A (vector hit, source=vector_and_graph) and
-/// B (graph-only candidate, source=graph, score=null, graph_distance=1).
+/// B (graph-only candidate, source=graph, score=its own vector distance,
+/// graph_distance=1).
 #[tokio::test]
 async fn graphrag_graph_only_candidate_appears_in_hits() {
     let shared = make_shared();
@@ -471,14 +617,17 @@ async fn graphrag_graph_only_candidate_appears_in_hits() {
         Some(1),
         "B is one hop from seed A"
     );
-    assert!(hit_b["score"].is_null(), "B has no vector score");
+    assert!(
+        hit_b["score"].as_f64().is_some(),
+        "B is scored against the query even though it was discovered by graph"
+    );
     assert_eq!(hit_b["node_id"].as_u64(), Some(node_b));
 }
 
 // ── Phase 5.3: retrieval_k/final_k, min-distance, scores, ordering ───────────
 
-/// `vector_score` and `final_score` must be present on vector hits;
-/// graph-only hits must have null for both.
+/// `vector_score` and `final_score` must be present on every hit with a stored
+/// vector, including graph-expanded candidates that were not vector seeds.
 #[tokio::test]
 async fn graphrag_vector_score_and_final_score_fields() {
     let shared = make_shared();
@@ -554,36 +703,38 @@ async fn graphrag_vector_score_and_final_score_fields() {
         hit_a["vector_score"], hit_a["score"],
         "vector_score must equal backward-compat score"
     );
-    // Phase 5.4: graph_score is always present (0.0 for vector-only, 1.0 for seeds).
+    // RG3: graph_score is present, but a seed gets no bonus merely for owning a node.
     assert!(
         hit_a["graph_score"].as_f64().is_some(),
         "graph_score must be a number on vector hits"
     );
 
-    // Graph-only hit (B): vector_score and score must be null; final_score and
-    // graph_score are numeric (Phase 5.4 — graph-only hits now have a combined score).
+    // Graph-only hit (B): RG3 scores it against the original query too.
     assert!(
-        hit_b["vector_score"].is_null(),
-        "graph-only must have null vector_score"
+        hit_b["vector_score"].as_f64().is_some(),
+        "graph-only records with vectors must have numeric vector_score"
     );
     assert!(
-        hit_b["score"].is_null(),
-        "graph-only must have null score (backward compat)"
+        hit_b["score"].as_f64().is_some(),
+        "backward-compat score mirrors vector_score"
     );
-    // Phase 5.4: final_score is computed from graph_relevance and is always a number.
+    assert_eq!(
+        hit_b["vector_score"], hit_b["score"],
+        "vector_score must equal backward-compat score"
+    );
     assert!(
         hit_b["final_score"].as_f64().is_some(),
-        "graph-only must have numeric final_score in Phase 5.4"
+        "graph-only must have numeric final_score"
     );
     assert!(
         hit_b["graph_score"].as_f64().is_some(),
         "graph-only must have numeric graph_score"
     );
-    // graph_score for a hop-1 candidate = 1/(1+1) = 0.5
+    // graph_score for a hop-1 candidate = 1/(2+1).
     let g_score = hit_b["graph_score"].as_f64().unwrap();
     assert!(
-        (g_score - 0.5).abs() < 1e-6,
-        "hop-1 graph_score should be 0.5, got {g_score}"
+        (g_score - (1.0 / 3.0)).abs() < 1e-6,
+        "hop-1 graph_score should be 1/3, got {g_score}"
     );
 }
 
@@ -774,7 +925,7 @@ async fn graphrag_minimum_graph_distance_diamond() {
         "D is at distance 2 via both paths; minimum must be reported"
     );
     assert_eq!(hit_d["source"].as_str(), Some("graph"));
-    assert!(hit_d["vector_score"].is_null());
+    assert!(hit_d["vector_score"].as_f64().is_some());
 
     // Also verify B and C appear at distance 1.
     let hit_b = hits
@@ -1096,8 +1247,8 @@ async fn graphrag_final_k_defaults_to_retrieval_k() {
 }
 
 /// `graph_score` must be present on all hits as a number in [0, 1].
-/// - Seeds (dist=0):       graph_score = 1.0
-/// - Graph-only (dist=1):  graph_score = 0.5
+/// - Seeds/vector hits:    graph_score = 0.0 unless they were graph-discovered
+/// - Graph-only (dist=1):  graph_score = 1/(2+1)
 /// - Vector-only (no node): graph_score = 0.0
 #[tokio::test]
 async fn graphrag_graph_score_field_on_all_hit_types() {
@@ -1184,15 +1335,15 @@ async fn graphrag_graph_score_field_on_all_hit_types() {
         );
     }
 
-    // Seed A (dist=0): graph_score must be 1.0
+    // Seed A (dist=0): RG3 gives no graph bonus merely for having a node.
     let hit_a = hits
         .iter()
         .find(|h| h["record_id"].as_u64() == Some(record_a))
         .unwrap();
     let gs_a = hit_a["graph_score"].as_f64().unwrap();
     assert!(
-        (gs_a - 1.0).abs() < 1e-6,
-        "seed graph_score should be 1.0, got {gs_a}"
+        (gs_a - 0.0).abs() < 1e-6,
+        "seed graph_score should be 0.0 without a discovery path, got {gs_a}"
     );
 
     // Vector-only C (no graph node): graph_score must be 0.0
@@ -1206,24 +1357,182 @@ async fn graphrag_graph_score_field_on_all_hit_types() {
         "no-graph vector hit graph_score should be 0.0, got {gs_c}"
     );
 
-    // Graph-only B (dist=1): graph_score must be 0.5
+    // Graph-only B (dist=1): graph_score must be 1/(2+1).
     let hit_b = hits
         .iter()
         .find(|h| h["record_id"].as_u64() == Some(record_b));
     if let Some(h) = hit_b {
         let gs_b = h["graph_score"].as_f64().unwrap();
         assert!(
-            (gs_b - 0.5).abs() < 1e-6,
-            "hop-1 graph_score should be 0.5, got {gs_b}"
+            (gs_b - (1.0 / 3.0)).abs() < 1e-6,
+            "hop-1 graph_score should be 1/3, got {gs_b}"
         );
     }
 
     let _ = (record_b, node_a); // suppress unused
 }
 
-/// With `graph_weight=1.0` (pure graph signal), a graph-only candidate at hop 1
-/// must outrank a pure vector hit that has no graph node, because the graph-only
-/// hit has graph_relevance=0.5 while the no-graph vector hit has graph_relevance=0.0.
+#[tokio::test]
+async fn graphrag_scores_graph_candidate_against_query_before_final_k() {
+    let shared = make_shared();
+    create_default_collection(&shared).await;
+
+    let (_, wa) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.10), "collection": "default" }),
+    )
+    .await;
+    let record_a = wa["id"].as_u64().unwrap();
+
+    let (_, wc) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.20), "collection": "default" }),
+    )
+    .await;
+    let record_c = wc["id"].as_u64().unwrap();
+
+    let (_, wb) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.201), "collection": "default" }),
+    )
+    .await;
+    let record_b = wb["id"].as_u64().unwrap();
+
+    let (_, na) = post(
+        &shared,
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 1, "record_id": record_a, "collection": "default" }),
+    )
+    .await;
+    let node_a = na["node_id"].as_u64().unwrap();
+    let (_, nb) = post(
+        &shared,
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 1, "record_id": record_b, "collection": "default" }),
+    )
+    .await;
+    post(
+        &shared,
+        "/v1/graph/edge",
+        serde_json::json!({ "from": node_a, "to": nb["node_id"].as_u64().unwrap(), "kind": 0, "collection": "default" }),
+    )
+    .await;
+
+    let (st, out) = post(
+        &shared,
+        "/v1/graphrag",
+        serde_json::json!({
+            "query_vector": vec_n(0.10),
+            "retrieval_k": 2,
+            "final_k": 2,
+            "depth": 1,
+            "graph_weight": 0.3,
+            "collection": "default"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let hits = out["hits"].as_array().unwrap();
+    let ids: Vec<u64> = hits
+        .iter()
+        .map(|h| h["record_id"].as_u64().unwrap())
+        .collect();
+
+    assert_eq!(
+        ids,
+        vec![record_a, record_b],
+        "graph-discovered B should be scored against the query, get a bounded path bonus, and enter final_k ahead of vector-only C"
+    );
+    assert!(hits[1]["vector_score"].as_f64().is_some());
+    assert_eq!(hits[1]["source"], "graph");
+    assert_eq!(hits[1]["graph_distance"], 1);
+    assert_eq!(hits[1]["graph_score"].as_f64().unwrap(), 1.0 / 3.0);
+    assert_ne!(record_c, record_b);
+}
+
+#[tokio::test]
+async fn graphrag_weak_graph_neighbor_does_not_beat_strong_vector_hit() {
+    let shared = make_shared();
+    create_default_collection(&shared).await;
+
+    let (_, wa) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.10), "collection": "default" }),
+    )
+    .await;
+    let record_a = wa["id"].as_u64().unwrap();
+
+    let (_, wc) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(0.20), "collection": "default" }),
+    )
+    .await;
+    let record_c = wc["id"].as_u64().unwrap();
+
+    let (_, wb) = post(
+        &shared,
+        "/v1/records",
+        serde_json::json!({ "values": vec_n(100.0), "collection": "default" }),
+    )
+    .await;
+    let record_b = wb["id"].as_u64().unwrap();
+
+    let (_, na) = post(
+        &shared,
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 1, "record_id": record_a, "collection": "default" }),
+    )
+    .await;
+    let node_a = na["node_id"].as_u64().unwrap();
+    let (_, nb) = post(
+        &shared,
+        "/v1/graph/node",
+        serde_json::json!({ "kind": 1, "record_id": record_b, "collection": "default" }),
+    )
+    .await;
+    post(
+        &shared,
+        "/v1/graph/edge",
+        serde_json::json!({ "from": node_a, "to": nb["node_id"].as_u64().unwrap(), "kind": 0, "collection": "default" }),
+    )
+    .await;
+
+    let (st, out) = post(
+        &shared,
+        "/v1/graphrag",
+        serde_json::json!({
+            "query_vector": vec_n(0.10),
+            "retrieval_k": 2,
+            "final_k": 10,
+            "depth": 1,
+            "graph_weight": 0.3,
+            "collection": "default"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let hits = out["hits"].as_array().unwrap();
+    let pos_c = hits
+        .iter()
+        .position(|h| h["record_id"].as_u64() == Some(record_c))
+        .unwrap();
+    let pos_b = hits
+        .iter()
+        .position(|h| h["record_id"].as_u64() == Some(record_b))
+        .unwrap();
+    assert!(
+        pos_c < pos_b,
+        "graph reachability should admit weak B, not rank it above strong vector C"
+    );
+}
+
+/// With `graph_weight=1.0`, a close graph-only candidate at hop 1 can outrank a
+/// slightly closer pure vector hit. The exact seed still wins on semantic score.
 #[tokio::test]
 async fn graphrag_graph_only_outranks_no_graph_vector_with_high_graph_weight() {
     let shared = make_shared();
@@ -1238,11 +1547,11 @@ async fn graphrag_graph_only_outranks_no_graph_vector_with_high_graph_weight() {
     .await;
     let record_a = wa["id"].as_u64().unwrap();
 
-    // Record B: far + graph node (graph-only at dist=1 via A→B).
+    // Record B: just outside the vector top-2 + graph node (graph-only at dist=1 via A→B).
     let (_, wb) = post(
         &shared,
         "/v1/records",
-        serde_json::json!({ "values": vec_n(100.0), "collection": "default" }),
+        serde_json::json!({ "values": vec_n(0.201), "collection": "default" }),
     )
     .await;
     let record_b = wb["id"].as_u64().unwrap();
@@ -1276,10 +1585,10 @@ async fn graphrag_graph_only_outranks_no_graph_vector_with_high_graph_weight() {
     )
     .await;
 
-    // graph_weight=1.0 → β=1, α=0 → only graph signal matters.
-    //   A (seed, dist=0):       final_score = 1.0 × 1.0 = 1.0  → first
-    //   B (graph-only, dist=1): final_score = 1.0 × 0.5 = 0.5  → second
-    //   C (no graph node):      final_score = 1.0 × 0.0 = 0.0  → last
+    // graph_weight=1.0 maximizes the capped path boost:
+    //   A (exact seed):         final_score = semantic = 1.0
+    //   B (graph-only, dist=1): semantic plus bounded path boost
+    //   C (no graph node):      semantic only
     let (st, out) = post(
         &shared,
         "/v1/graphrag",
@@ -1306,12 +1615,150 @@ async fn graphrag_graph_only_outranks_no_graph_vector_with_high_graph_weight() {
     if let (Some(pb), Some(pc)) = (pos_b, pos_c) {
         assert!(
             pb < pc,
-            "with graph_weight=1.0, graph-only B (dist=1, final_score=0.5) \
-             must outrank no-graph vector C (final_score=0.0); \
-             B at pos {pb}, C at pos {pc}"
+            "with graph_weight=1.0, close graph-only B should outrank \
+             slightly closer no-graph vector C; B at pos {pb}, C at pos {pc}"
         );
     }
+    assert_eq!(hits[0]["record_id"].as_u64(), Some(record_a));
     let _ = (record_a, record_c, node_a); // suppress unused
+}
+
+#[tokio::test]
+async fn graphrag_traversal_policy_controls_relation_expansion() {
+    let shared = make_shared();
+    create_default_collection(&shared).await;
+
+    let mut records = Vec::new();
+    for seed in [0.10, 10.0, 20.0] {
+        let (_, w) = post(
+            &shared,
+            "/v1/records",
+            serde_json::json!({ "values": vec_n(seed), "collection": "default" }),
+        )
+        .await;
+        records.push(w["id"].as_u64().unwrap());
+    }
+
+    let mut nodes = Vec::new();
+    for record_id in &records {
+        let (_, n) = post(
+            &shared,
+            "/v1/graph/node",
+            serde_json::json!({ "kind": 1, "record_id": record_id, "collection": "default" }),
+        )
+        .await;
+        nodes.push(n["node_id"].as_u64().unwrap());
+    }
+
+    // A -> B is a generic relation. A -> C is RefersTo.
+    post(
+        &shared,
+        "/v1/graph/edge",
+        serde_json::json!({ "from": nodes[0], "to": nodes[1], "kind": 0, "collection": "default" }),
+    )
+    .await;
+    post(
+        &shared,
+        "/v1/graph/edge",
+        serde_json::json!({ "from": nodes[0], "to": nodes[2], "kind": 5, "collection": "default" }),
+    )
+    .await;
+
+    let (_, all_edges) = post(
+        &shared,
+        "/v1/graphrag",
+        serde_json::json!({
+            "query_vector": vec_n(0.10),
+            "retrieval_k": 1,
+            "final_k": 10,
+            "depth": 1,
+            "collection": "default"
+        }),
+    )
+    .await;
+    let all_ids: Vec<u64> = all_edges["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["record_id"].as_u64().unwrap())
+        .collect();
+    assert!(all_ids.contains(&records[1]));
+    assert!(all_ids.contains(&records[2]));
+
+    let (st, filtered) = post(
+        &shared,
+        "/v1/graphrag",
+        serde_json::json!({
+            "query_vector": vec_n(0.10),
+            "retrieval_k": 1,
+            "final_k": 10,
+            "depth": 1,
+            "edge_kinds": [5],
+            "collection": "default"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let filtered_ids: Vec<u64> = filtered["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["record_id"].as_u64().unwrap())
+        .collect();
+    assert!(!filtered_ids.contains(&records[1]));
+    assert!(filtered_ids.contains(&records[2]));
+}
+
+#[tokio::test]
+async fn extract_entities_persists_auditable_source_metadata() {
+    let provider_url = spawn_mock_llm_and_embedder().await;
+    let shared = make_shared_with_embed(provider_url);
+    create_default_collection(&shared).await;
+
+    let source = "public/scifact/demo";
+    let text = "Valori uses GraphRAG to combine vectors with relationships.";
+    let (st, out) = post(
+        &shared,
+        "/v1/ingest/extract-entities",
+        serde_json::json!({
+            "text": text,
+            "source": source,
+            "namespace": "default"
+        }),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{out}");
+    assert_eq!(out["entity_count"], 2);
+    assert_eq!(out["relationship_count"], 1);
+    assert!((out["relationships"][0]["strength"].as_f64().unwrap() - 0.91).abs() < 1e-6);
+
+    let record_id = out["entities"][0]["record_id"].as_u64().unwrap();
+    let node_id = out["entities"][0]["node_id"].as_u64().unwrap();
+    let edge_id = out["relationships"][0]["edge_id"].as_u64().unwrap();
+    let expected_hash = blake3::hash(text.as_bytes()).to_hex().to_string();
+
+    let (st, record_meta) = get(
+        &shared,
+        &format!("/v1/memory/meta/get?target_id=record:{record_id}"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{record_meta}");
+    assert_eq!(record_meta["metadata"]["kind"], "extracted_entity");
+    assert_eq!(record_meta["metadata"]["source"], source);
+    assert_eq!(record_meta["metadata"]["source_text_hash"], expected_hash);
+    assert_eq!(record_meta["metadata"]["node_id"], node_id);
+
+    let (st, edge_meta) = get(
+        &shared,
+        &format!("/v1/memory/meta/get?target_id=edge:{edge_id}"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{edge_meta}");
+    assert_eq!(edge_meta["metadata"]["kind"], "extracted_relationship");
+    assert_eq!(edge_meta["metadata"]["source_name"], "Valori");
+    assert_eq!(edge_meta["metadata"]["target_name"], "GraphRAG");
+    assert!((edge_meta["metadata"]["strength"].as_f64().unwrap() - 0.91).abs() < 1e-6);
+    assert_eq!(edge_meta["metadata"]["source_text_hash"], expected_hash);
 }
 
 /// `max_nodes` must halt BFS before visiting more nodes than the budget.

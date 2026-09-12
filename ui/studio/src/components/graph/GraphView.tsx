@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useGraph, useNodeEdges, GraphNode, GraphEdge } from "@/lib/hooks/useGraph";
+import { useGraph, useNodeEdges, GraphNode, GraphEdge } from "../../lib/hooks/useGraph";
 import { useTransport } from "@/runtime/context";
 
 // -- Types ---------------------------------------------------------------------
@@ -241,7 +241,7 @@ function GraphCanvas({
   const placedIds = new Set(canvasNodes.map((n) => n.id));
   for (const n of nodes) {
     if (!placedIds.has(n.node_id)) {
-      canvasNodes.push({ id: n.node_id, kind: n.kind, record_id: n.record_id, x: 440, y: yOffset });
+      canvasNodes.push({ id: n.node_id, kind: Number(n.kind ?? 0), record_id: n.record_id, x: 440, y: yOffset });
       yOffset += ROW_H;
     }
   }

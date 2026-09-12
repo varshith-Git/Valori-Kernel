@@ -100,7 +100,10 @@ fn resolve_dev_binary(name: &str) -> Result<PathBuf, String> {
         .and_then(|p| p.parent()) // repo root
         .unwrap_or(&manifest_dir);
     for profile in ["release", "debug"] {
-        let cand = repo_root.join("target").join(profile).join(name);
+        let mut cand = repo_root.join("target").join(profile).join(name);
+        if cfg!(windows) && cand.extension().map_or(true, |e| e != "exe") {
+            cand.as_mut_os_string().push(".exe");
+        }
         if cand.exists() {
             return Ok(cand);
         }
@@ -424,6 +427,9 @@ mod tests {
         let mut cmd = tokio::process::Command::new(&binary);
         cmd.env("VALORI_DAEMON_BIND", &bind);
         cmd.env("VALORI_HOME", home.path());
+        if let Ok(node_bin) = resolve_dev_binary("valori-node") {
+            cmd.env("VALORI_NODE_BIN", node_bin);
+        }
         cmd.kill_on_drop(true);
         let child = cmd.spawn().unwrap();
 

@@ -73,13 +73,16 @@ pub async fn start_and_navigate(
     // appears. This is the only reliable macOS approach: pre-exec() API calls
     // (CGSSetConnectionProperty, TransformProcessType) are overridden by
     // libuv's own _RegisterApplication() call in the new process image.
-    let helper_node_bin = app
+    let mut helper_node_bin = app
         .path()
         .resolve(
             "ValoriUIServer.app/Contents/MacOS/node",
             tauri::path::BaseDirectory::Resource,
         )
         .map_err(|e| format!("could not resolve helper node binary: {e}"))?;
+    if cfg!(windows) {
+        helper_node_bin.as_mut_os_string().push(".exe");
+    }
     eprintln!(
         "[ui-server] helper node bin={} (exists: {})",
         helper_node_bin.display(),
@@ -153,5 +156,25 @@ pub async fn start_and_navigate(
 pub fn stop(state: &UiServerState) {
     if let Some(child) = state.0.lock().unwrap().take() {
         let _ = child.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_helper_node_binary_exists() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut path = manifest_dir
+            .join("resources")
+            .join("ValoriUIServer.app")
+            .join("Contents")
+            .join("MacOS")
+            .join("node");
+        if cfg!(windows) {
+            path.as_mut_os_string().push(".exe");
+        }
+        assert!(path.exists(), "helper node binary does not exist at {}", path.display());
     }
 }

@@ -305,6 +305,9 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 | `VALORI_MAX_RECORDS` | 1 000 000 | Record slab capacity |
 | `VALORI_MAX_NODES` / `VALORI_MAX_EDGES` | 100k / 500k | Graph slab capacity |
 | `VALORI_BIND` | 0.0.0.0:3000 | HTTP listen address |
+| `VALORI_SHARED_ROOT` | — | Dedicated persistent root enabling shared free-project hosting; mutually exclusive with Raft mode |
+| `VALORI_SHARED_ADMIN_TOKEN` | — | Shared worker management secret (at least 32 characters); required in shared mode |
+| `VALORI_SHARED_MAX_PROJECTS` | 100 | Maximum registered projects per shared worker process |
 | `VALORI_EVENT_LOG_PATH` | — | Audit log path (omit = in-memory only) |
 | `VALORI_SNAPSHOT_PATH` | — | Snapshot file path |
 | `VALORI_SNAPSHOT_INTERVAL` | — | Periodic autosave interval in seconds (standalone only; needs `VALORI_SNAPSHOT_PATH`). UI-launched nodes set 60. Omit = snapshot only on graceful shutdown |

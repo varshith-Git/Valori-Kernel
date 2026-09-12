@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // collection is "default" (NamespaceId 0).  Any other name returns 400 so
 // clients get a clear error rather than silently landing in the wrong bucket.
 
-pub use valori_kernel::types::id::{NamespaceId, DEFAULT_NS};
+pub use valori_kernel::types::id::{DEFAULT_NS, NamespaceId};
 
 /// Name of the default (always-existing) collection.
 pub const DEFAULT_COLLECTION: &str = "default";
@@ -1347,10 +1347,11 @@ pub struct GraphRagHit {
     pub memory_id: String,
     /// The underlying record.
     pub record_id: u32,
-    /// Vector distance. `null` for a graph-only hit. Retained for backward
-    /// compatibility; `vector_score` is the explicit spelling of the same value.
+    /// Vector distance. Retained for backward compatibility; `vector_score` is
+    /// the explicit spelling of the same value. `null` only when the candidate
+    /// has no usable vector.
     pub score: Option<f32>,
-    /// Vector distance. `null` for a graph-only hit.
+    /// Vector distance. `null` only when the candidate has no usable vector.
     pub vector_score: Option<f32>,
     /// Normalised graph relevance in `[0, 1]`.
     pub graph_score: f32,
@@ -1365,6 +1366,10 @@ pub struct GraphRagHit {
     /// Caller-supplied metadata stored alongside the record, if any.
     #[cfg_attr(feature = "utoipa", schema(value_type = Option<std::collections::HashMap<String, serde_json::Value>>))]
     pub metadata: Option<serde_json::Value>,
+    /// Auditable explanation fields for this hit: resolved metadata key,
+    /// source/chunk fields when present, graph distance, and the bounded
+    /// evidence path through the returned subgraph.
+    pub provenance: serde_json::Value,
 }
 
 /// `POST /v1/graphrag` — K nearest vectors plus the connected subgraph around

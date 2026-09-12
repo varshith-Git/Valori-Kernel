@@ -25,6 +25,55 @@ use valori_models::provider_from_config;
 
 const MAX_INGEST_TEXT_BYTES: usize = valori_ingest::chunker::MAX_INGEST_TEXT_BYTES;
 
+/// Build and persist the deterministic enrichment plan for each written chunk.
+/// Persistence is deliberately metadata-only in this slice; graph-node/edge
+/// materialization consumes the same plan in the following sink phase.
+async fn persist_chunk_enrichment(
+    state: &SharedEngine,
+    writes: &[valori_ingest::WriteResult],
+    source: &str,
+    cfg: &valori_ingest::EmbedConfig,
+) -> Result<(), String> {
+    let client = reqwest::Client::new();
+    let llm = valori_rag::LlmConfig {
+        provider: cfg.provider.clone(),
+        model: cfg.model.clone(),
+        url: cfg.url.clone(),
+        api_key: cfg.api_key.clone(),
+    };
+    for write in writes {
+        let Some(text) = write.chunk_text.as_deref() else { continue };
+        let plan = valori_rag::CommunityExtractionService::extract(
+            text, &[], &llm, None, &client, Some(source),
+        ).await?;
+        let record_id = write.record_id.parse::<u32>().map_err(|e| e.to_string())?;
+        let payload = serde_json::json!({
+            "kind": "chunk_enrichment_plan",
+            "chunk_id": write.chunk_id,
+            "chunk_index": write.chunk_index,
+            "source_text_hash": write.source_text_hash,
+            "span_start": write.span_start,
+            "span_end": write.span_end,
+            "canonical_entities": plan.canonical_entities,
+            "mentions": plan.mentions,
+            "assertions": plan.assertions.iter().map(|a| serde_json::json!({
+                "subject": a.subject,
+                "predicate": a.predicate,
+                "object": a.object,
+                "assertion_id": a.assertion_id,
+                "strength": a.strength,
+                "evidence": a.evidence,
+            })).collect::<Vec<_>>(),
+            "source": source,
+            "extractor": "community_extraction_service",
+        });
+        let mut engine = state.write().await;
+        engine.set_meta_audited(format!("record:{record_id}:enrichment"), payload)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 // ── Request / response types ──────────────────────────────────────────────────
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -37,6 +86,9 @@ pub struct IngestRequest {
     pub chunk_size: Option<usize>,
     pub chunk_overlap: Option<usize>,
     pub r#async: Option<bool>,
+    /// Run shared entity/relation enrichment after vector ingestion.
+    #[serde(default)]
+    pub auto_enrich: bool,
 }
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::IntoParams))]
@@ -62,6 +114,8 @@ pub struct IngestAcceptedResponse {
     /// Always `processing` on this response.
     pub status: String,
     pub collection: String,
+    /// Enrichment mode requested for the background job.
+    pub auto_enrich: bool,
 }
 
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -76,6 +130,8 @@ pub struct IngestResponse {
     /// Fetch `GET /v1/operations/:id/execution` with this id for the full
     /// per-stage execution breakdown (Execution Explorer).
     pub operation_id: String,
+    /// `disabled`, `pending`, `completed`, or `failed`.
+    pub enrichment_status: String,
 }
 
 // ── GET /v1/ingest/status/:job_id ─────────────────────────────────────────────
@@ -283,6 +339,7 @@ pub async fn ingest(
             job_id: job_id.clone(),
             status: "processing".into(),
             collection: collection.clone(),
+            auto_enrich: payload.auto_enrich,
         };
         {
             let mut jobs = tasks.jobs.write().await;
@@ -320,6 +377,12 @@ pub async fn ingest(
                 .await
             {
                 Ok(result) => {
+                    let enrichment_status = if payload.auto_enrich {
+                        match persist_chunk_enrichment(&state_cl, &result.writes, &source_cl, &embed_cfg).await {
+                            Ok(()) => "completed",
+                            Err(_) => "failed",
+                        }
+                    } else { "disabled" };
                     let record_ids: Vec<u32> = result
                         .writes
                         .iter()
@@ -365,6 +428,7 @@ pub async fn ingest(
                             "record_ids": record_ids, "collection": collection_cl,
                             "strategy_used": strategy_cl,
                             "operation_id": op_id_cl,
+                            "enrichment_status": enrichment_status,
                         }),
                     );
                 }
@@ -450,6 +514,13 @@ pub async fn ingest(
         Some(state_after),
     ));
 
+    let enrichment_status = if payload.auto_enrich {
+        match persist_chunk_enrichment(&state, &result.writes, &source, &embed_cfg).await {
+            Ok(()) => "completed".into(),
+            Err(_) => "failed".into(),
+        }
+    } else { "disabled".into() };
+
     Json(IngestResponse {
         ok: true,
         document_node_id: doc_node_id,
@@ -458,6 +529,7 @@ pub async fn ingest(
         record_ids,
         collection,
         operation_id,
+        enrichment_status,
     })
     .into_response()
 }

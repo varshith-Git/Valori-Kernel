@@ -70,18 +70,20 @@ pub trait KernelCapability: Capability {
     ///                          this count; `None` = unlimited (depth is still the primary bound).
     /// `max_edges`            — Phase 5.4: halt edge emission for a node once this count is
     ///                          reached; `None` = unlimited.
-    /// `graph_weight`         — Phase 5.4: β in the combined ranking formula
-    ///                          `final_score = (1-β)×vector_relevance + β×graph_relevance`
-    ///                          where both signals are normalised to [0,1]. α = 1-β.
+    /// `graph_weight`         — β in the capped evidence boost
+    ///                          `final_score = semantic_rel + β×graph_rel×(1-semantic_rel)`.
     ///                          Range [0,1]; default 0.3 (vector-dominant).
+    /// `edge_kinds`           — RG4: optional allowed edge-kind allowlist. None = all kinds.
+    /// `reverse_parent_of`    — RG4: whether chunks may traverse incoming ParentOf to parents.
     ///
     /// Returns `{"hits":[…],"seed_nodes":[…],"subgraph":{"nodes":[…],"edges":[…]}}`.
     /// Each hit carries `source` ("vector"|"vector_and_graph"|"graph"),
     /// `graph_distance` (0 for seeds, N for graph-expanded, null for vector-only w/o node),
-    /// `score`/`vector_score` (L2 distance for vector hits, null for graph-only — deprecated alias),
-    /// `graph_score` (normalised graph relevance ∈ [0,1]; 0.0 when no graph node),
+    /// `score`/`vector_score` (L2 distance for any hit with a stored vector),
+    /// `graph_score` (normalised graph relevance ∈ [0,1]; seed status alone is 0.0),
     /// and `final_score` (combined score ∈ [0,1]; higher = better; present on ALL hits).
-    /// Hits are sorted by `final_score` descending, `record_id` ascending as tie-breaker.
+    /// Hits are sorted by `final_score` descending, semantic relevance descending,
+    /// graph distance ascending, then `record_id` ascending.
     async fn graph_rag(
         &self,
         _shard_id: u8,
@@ -94,6 +96,8 @@ pub trait KernelCapability: Capability {
         _max_nodes: Option<u32>,
         _max_edges: Option<u32>,
         _graph_weight: f32,
+        _edge_kinds: Option<Vec<u8>>,
+        _reverse_parent_of: bool,
     ) -> Result<serde_json::Value, EffectError> {
         Err(EffectError::CapabilityUnavailable("graph_rag"))
     }

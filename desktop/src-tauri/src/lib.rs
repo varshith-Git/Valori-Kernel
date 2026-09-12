@@ -485,7 +485,7 @@ pub fn run() {
             credential_delete
         ])
         .setup(move |app| {
-            let shutting_down = shutting_down_setup;
+            let _shutting_down = shutting_down_setup;
 
             // As early as possible — a panic hook installed later could
             // miss a panic during the rest of setup(). Only ever writes a
@@ -783,7 +783,7 @@ pub fn run() {
             #[cfg(unix)]
             {
                 let handle = app.handle().clone();
-                let shutting_down = shutting_down.clone();
+                let shutting_down = _shutting_down.clone();
                 tauri::async_runtime::spawn(async move {
                     let mut sigterm = match tokio::signal::unix::signal(
                         tokio::signal::unix::SignalKind::terminate(),

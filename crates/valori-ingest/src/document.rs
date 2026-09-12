@@ -107,6 +107,22 @@ pub struct WriteResult {
     /// (`KernelWriter` does; `NoopWriter` and other writers may not).
     #[serde(default)]
     pub chunk_node_id: Option<u32>,
+    /// Deterministic source chunk identity for enrichment and replay.
+    #[serde(default)]
+    pub chunk_id: Option<String>,
+    /// BLAKE3 hash of the exact chunk text.
+    #[serde(default)]
+    pub source_text_hash: Option<String>,
+    /// Exact source span when the chunker provides one.
+    #[serde(default)]
+    pub span_start: Option<u64>,
+    #[serde(default)]
+    pub span_end: Option<u64>,
+    #[serde(default)]
+    pub chunk_index: Option<usize>,
+    /// Exact text used for enrichment; optional for compatibility with remote writers.
+    #[serde(default)]
+    pub chunk_text: Option<String>,
 }
 
 // ── Error hierarchy ───────────────────────────────────────────────────────────

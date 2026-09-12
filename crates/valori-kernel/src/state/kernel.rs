@@ -17,6 +17,31 @@ use crate::types::id::{EdgeId, NodeId, RecordId};
 use crate::types::id::{Version, DEFAULT_NS, MAX_NAMESPACES, NS_LIST_NIL};
 use crate::types::vector::FxpVector;
 
+/// Iterator over the intrusive per-namespace record linked list.
+/// Yields only active (non-deleted, non-shredded) records.
+pub struct NsRecordIter<'a> {
+    records: &'a alloc::vec::Vec<Option<crate::storage::record::Record>>,
+    cursor: u32,
+}
+
+impl<'a> Iterator for NsRecordIter<'a> {
+    type Item = &'a crate::storage::record::Record;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.cursor == NS_LIST_NIL {
+                return None;
+            }
+            let slot = self.records.get(self.cursor as usize)?.as_ref()?;
+            let next = slot.next_in_ns;
+            self.cursor = next;
+            if slot.is_active() {
+                return Some(slot);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct KernelState {
     /// The legacy, single, process-wide dimension fallback — used ONLY by
@@ -329,13 +354,22 @@ impl KernelState {
     }
 
     /// Iterate over all live records in a given namespace.
+    ///
+    /// Walks the intrusive per-namespace linked list — O(N_ns), not O(N_total).
     pub fn iter_records_in_ns(
         &self,
         namespace_id: u16,
     ) -> impl Iterator<Item = &crate::storage::record::Record> {
-        self.records
-            .iter()
-            .filter(move |r| r.namespace_id == namespace_id)
+        let ns = namespace_id as usize;
+        let head = if ns < MAX_NAMESPACES {
+            self.namespace_record_heads[ns]
+        } else {
+            NS_LIST_NIL
+        };
+        NsRecordIter {
+            records: &self.records.records,
+            cursor: head,
+        }
     }
 
     pub fn next_record_id(&self) -> RecordId {

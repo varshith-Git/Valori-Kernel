@@ -28,6 +28,19 @@ async fn main() {
     // why CPU percent can't be measured in a handler.
     valori_node::process_metrics::spawn_process_metrics_task();
 
+    if let Some(root) = std::env::var_os("VALORI_SHARED_ROOT") {
+        assert!(std::env::var_os("VALORI_CLUSTER_MEMBERS").is_none(), "shared hosting cannot run in Raft mode");
+        let token = std::env::var("VALORI_SHARED_ADMIN_TOKEN").expect("VALORI_SHARED_ADMIN_TOKEN is required");
+        let capacity = std::env::var("VALORI_SHARED_MAX_PROJECTS").unwrap_or_else(|_| "100".into())
+            .parse().expect("VALORI_SHARED_MAX_PROJECTS must be a positive integer");
+        let host = valori_node::shared::SharedHost::open(std::path::Path::new(&root), &token, capacity)
+            .unwrap_or_else(|e| panic!("shared hosting startup failed: {e}"));
+        let bind = std::env::var("VALORI_BIND").unwrap_or_else(|_| "0.0.0.0:3000".into());
+        let listener = TcpListener::bind(&bind).await.expect("cannot bind shared node");
+        axum::serve(listener, host.router()).with_graceful_shutdown(cluster_shutdown_signal()).await.unwrap();
+        return;
+    }
+
     // ── Boot-mode decision (Phase 2) ──────────────────────────────────────────
     // VALORI_CLUSTER_MEMBERS present → Raft cluster mode.
     // Absent → the standalone path below, unchanged.

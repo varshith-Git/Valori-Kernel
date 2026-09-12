@@ -6,6 +6,93 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### RG6 — Evidence-backed assertions
+
+- Extracted relationships now carry an optional predicate and exact source evidence.
+- Audited metadata records deterministic assertion IDs, extraction provenance, and confidence-compatible strength fields in standalone and Raft paths.
+- Existing RG5 source and source-text-hash fields remain unchanged.
+
+### RG5 — GraphRAG extraction provenance
+
+- Add `source` to `/v1/ingest/extract-entities` and Python SDK
+  `extract_entities(...)` calls.
+- Persist extracted-entity record/node metadata and extracted-relationship edge
+  metadata with `source`, BLAKE3 `source_text_hash`, collection, endpoint IDs,
+  and relationship `strength`.
+- Return relationship `strength` in extraction responses and add a live
+  mock-provider test proving generated graph evidence is queryable through the
+  metadata API.
+
+### RG4 — GraphRAG traversal semantics
+
+- Add `edge_kinds` and `reverse_parent_of` controls to `POST /v1/graphrag`, the
+  effect/planner GraphRAG task, standalone/Raft capabilities, and all Python
+  GraphRAG clients.
+- Keep the default retrieval behavior unchanged: all edge kinds are traversable,
+  and incoming `ParentOf` can be followed so chunk hits can reach their parent
+  document and siblings.
+- Add reachability and HTTP GraphRAG tests proving edge-kind filters change
+  retrieval results without changing the input vectors.
+
+### RG3 — GraphRAG candidate scoring
+
+- Score graph-expanded candidates with usable vectors against the original query
+  before `final_k` truncation, so graph discovery can promote relevant evidence
+  into the answer set.
+- Remove the old seed-status graph bonus: having a graph node no longer gives a
+  vector seed maximum graph relevance by itself.
+- Replace the old linear blend with a capped evidence boost:
+  `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
+- Add deterministic tie-breakers after `final_score`: semantic relevance
+  descending, graph distance ascending, then `record_id` ascending.
+- Add regression coverage proving a useful graph candidate can enter `final_k`,
+  a weak graph neighbor does not outrank a stronger vector hit, and standalone
+  and Raft remain aligned.
+
+### RG2 — GraphRAG provenance
+
+- Resolve GraphRAG hit metadata from `record:<id>` first and `rec:<id>` second,
+  so records produced by document ingest expose their source/chunk metadata in
+  retrieval responses while memory IDs remain backward compatible.
+- Add per-hit `provenance` with resolved metadata key, source/chunk fields,
+  graph distance, and a shortest graph evidence path inside the returned
+  budgeted subgraph.
+- Keep standalone and Raft GraphRAG response shaping aligned and add regression
+  coverage for both direct HTTP provenance and standalone/Raft parity.
+- Candidate scoring, configurable traversal semantics, and extraction quality
+  remain follow-up work.
+
+### RG1 — GraphRAG reachability
+
+- Resolve all graph nodes attached to each vector-hit record in standalone and
+  cluster GraphRAG; preserve the representative `node_id` on vector hits.
+- Follow incoming `ParentOf` links as well as outgoing links, enabling
+  chunk → document → sibling discovery without reversing semantic relations.
+- Compute subgraph and hop distances in one budgeted walk, return both endpoints
+  of every edge, and apply `max_edges` to total adjacency entries examined.
+- Add graph regression tests and a standalone/Raft HTTP parity test. This phase
+  changes reachability only; provenance, candidate scoring, configurable
+  traversal semantics, and extraction quality remain follow-up work.
+
+### Live retrieval benchmark
+
+- Add `benchmarks/live_local_db_comparison.py`, a repeatable public BEIR
+  SciFact retrieval-quality harness using cached MiniLM embeddings.
+- Record a same-data live result in `benchmarks/LIVE_LOCAL_RESULTS.json`:
+  FAISS and Valori pure-vector retrieval match exactly at Recall@3 `0.7857`,
+  while Valori HTTP GraphRAG improves Recall@3 to `0.9035`, NDCG to `0.8735`,
+  and complete-context rate to `0.89` on the evidence-preserving 300-document
+  slice.
+- Document a follow-up finding: embedded Python FFI graph traversal did not
+  expose created edges during smoke testing, while the HTTP graph endpoints did.
+
+### Shared free-tier hosting
+
+- Add an opt-in shared worker mode with per-project engine, credential, and
+  persistence isolation; free project creation requires no new container.
+- Add scoped project lifecycle and verified event-log transfer to dedicated
+  standalone nodes; preserve existing standalone and Raft behavior.
+
 ### Phase G2.3.2-F — Caddy Route Order Bug (valori-ui, backend)
 
 Real live evidence confirmed the terminal wildcard 404 fallback route

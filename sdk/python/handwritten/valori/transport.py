@@ -131,6 +131,13 @@ class Transport:
 
     __str__ = __repr__
 
+    def request_json(self, method: str, path: str, body: Any = None) -> Any:
+        """Call an additive endpoint while generated bindings catch up."""
+        response = self._client.get_httpx_client().request(method, path, json=body)
+        if response.is_error:
+            raise ValoriAPIError(response.text, status_code=response.status_code, body=response.text)
+        return response.json()
+
     # ── the funnel ───────────────────────────────────────────────────────────
 
     def raw(self) -> Union[AuthenticatedClient, Client]:

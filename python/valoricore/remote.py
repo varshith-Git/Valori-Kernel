@@ -496,6 +496,8 @@ class _SyncSearchMixin:
         max_nodes: Optional[int] = None,
         max_edges: Optional[int] = None,
         graph_weight: Optional[float] = None,
+        edge_kinds: Optional[List[int]] = None,
+        reverse_parent_of: bool = True,
     ) -> Dict[str, Any]:
         """GraphRAG: vector KNN + graph expansion in one call.
 
@@ -506,22 +508,28 @@ class _SyncSearchMixin:
 
         Phase 5.4 additions:
           max_nodes    — halt BFS before visiting more than this many nodes; None = unlimited.
-          max_edges    — halt edge emission after this many edges; None = unlimited.
-          graph_weight — β in combined ranking: final_score = (1-β)×vector_rel + β×graph_rel.
+          max_edges    — bound adjacency entries examined across the walk; None = unlimited.
+          graph_weight — β in the capped evidence boost:
+                         final_score = semantic_rel + β×graph_rel×(1-semantic_rel).
                          Range [0.0, 1.0]; None = server default (0.3).
+          edge_kinds   — optional RG4 edge-kind allowlist; None = all kinds.
+          reverse_parent_of — whether chunk hits may climb incoming ParentOf links.
 
         Each hit in ``response["hits"]`` carries:
           source        : "vector" | "vector_and_graph" | "graph"
-          vector_score  : L2 distance for vector hits, null for graph-only.
-          graph_score   : normalised graph relevance ∈ [0, 1]; 0.0 = no graph node.
-          final_score   : combined ranking score ∈ [0, 1]; always present (Phase 5.4).
+          vector_score  : L2 distance; null only when no usable vector exists.
+          graph_score   : bounded evidence-path relevance; seed status alone is 0.0.
+          final_score   : semantic score plus capped path boost ∈ [0, 1].
           graph_distance: 0 for seeds, N hops for graph-only, null if no graph node.
+          provenance    : resolved metadata key, source/chunk fields, graph distance,
+                          and the bounded graph_path used as evidence.
         Hits are sorted by ``final_score`` descending.
         """
         data: Dict[str, Any] = {
             "query_vector": query_vector,
             "k": retrieval_k if retrieval_k is not None else k,
             "depth": depth,
+            "reverse_parent_of": reverse_parent_of,
         }
         if collection is not None:
             data["collection"] = collection
@@ -539,6 +547,8 @@ class _SyncSearchMixin:
             data["max_edges"] = max_edges
         if graph_weight is not None:
             data["graph_weight"] = graph_weight
+        if edge_kinds is not None:
+            data["edge_kinds"] = edge_kinds
         return self._t.post_rpc("/v1/graphrag", data)
 
     def search_multi(
@@ -1035,17 +1045,33 @@ class _SyncCommunityMixin:
         text: str,
         *,
         namespace: Optional[str] = None,
+        source: Optional[str] = None,
         entity_types: Optional[List[str]] = None,
         model: Optional[str] = None,
     ) -> dict:
         body: dict = {"text": text}
         if namespace is not None:
             body["namespace"] = namespace
+        if source is not None:
+            body["source"] = source
         if entity_types is not None:
             body["entity_types"] = entity_types
         if model is not None:
             body["model"] = model
         return self._t.post_rpc("/v1/ingest/extract-entities", body)
+
+    def verify_claims(self, left: dict, right: dict, left_assertion_id: str, right_assertion_id: str, evidence_refs: Optional[List[dict]] = None) -> dict:
+        """Structurally verify two assertions and persist the auditable receipt."""
+        body = {"left": left, "right": right, "left_assertion_id": left_assertion_id, "right_assertion_id": right_assertion_id}
+        if evidence_refs is not None:
+            body["evidence_refs"] = evidence_refs
+        return self._t.post_rpc("/v1/assertions/verify", body)
+
+    def get_verification(self, verification_id: str) -> Optional[dict]:
+        """Retrieve a persisted RG8 verification receipt."""
+        resp = self._t.get(self._t.base_url + f"/v1/assertions/verification/{verification_id}", timeout=30)
+        _raise_for_status(resp)
+        return resp.json()
 
 
 class _SyncIngestMixin:
@@ -1720,6 +1746,8 @@ class _AsyncSearchMixin:
         max_nodes: Optional[int] = None,
         max_edges: Optional[int] = None,
         graph_weight: Optional[float] = None,
+        edge_kinds: Optional[List[int]] = None,
+        reverse_parent_of: bool = True,
     ) -> Dict[str, Any]:
         """GraphRAG: vector KNN + graph expansion in one call.
 
@@ -1730,22 +1758,28 @@ class _AsyncSearchMixin:
 
         Phase 5.4 additions:
           max_nodes    — halt BFS before visiting more than this many nodes; None = unlimited.
-          max_edges    — halt edge emission after this many edges; None = unlimited.
-          graph_weight — β in combined ranking: final_score = (1-β)×vector_rel + β×graph_rel.
+          max_edges    — bound adjacency entries examined across the walk; None = unlimited.
+          graph_weight — β in the capped evidence boost:
+                         final_score = semantic_rel + β×graph_rel×(1-semantic_rel).
                          Range [0.0, 1.0]; None = server default (0.3).
+          edge_kinds   — optional RG4 edge-kind allowlist; None = all kinds.
+          reverse_parent_of — whether chunk hits may climb incoming ParentOf links.
 
         Each hit in ``response["hits"]`` carries:
           source        : "vector" | "vector_and_graph" | "graph"
-          vector_score  : L2 distance for vector hits, null for graph-only.
-          graph_score   : normalised graph relevance ∈ [0, 1]; 0.0 = no graph node.
-          final_score   : combined ranking score ∈ [0, 1]; always present (Phase 5.4).
+          vector_score  : L2 distance; null only when no usable vector exists.
+          graph_score   : bounded evidence-path relevance; seed status alone is 0.0.
+          final_score   : semantic score plus capped path boost ∈ [0, 1].
           graph_distance: 0 for seeds, N hops for graph-only, null if no graph node.
+          provenance    : resolved metadata key, source/chunk fields, graph distance,
+                          and the bounded graph_path used as evidence.
         Hits are sorted by ``final_score`` descending.
         """
         data: Dict[str, Any] = {
             "query_vector": query_vector,
             "k": retrieval_k if retrieval_k is not None else k,
             "depth": depth,
+            "reverse_parent_of": reverse_parent_of,
         }
         if collection is not None:
             data["collection"] = collection
@@ -1763,6 +1797,8 @@ class _AsyncSearchMixin:
             data["max_edges"] = max_edges
         if graph_weight is not None:
             data["graph_weight"] = graph_weight
+        if edge_kinds is not None:
+            data["edge_kinds"] = edge_kinds
         return await self._t.post_rpc("/v1/graphrag", data)
 
     async def search_multi(
@@ -2234,16 +2270,32 @@ class _AsyncCommunityMixin:
 
     async def extract_entities(
         self, text: str, *, namespace: Optional[str] = None,
+        source: Optional[str] = None,
         entity_types: Optional[List[str]] = None, model: Optional[str] = None
     ) -> dict:
         body: dict = {"text": text}
         if namespace is not None:
             body["namespace"] = namespace
+        if source is not None:
+            body["source"] = source
         if entity_types is not None:
             body["entity_types"] = entity_types
         if model is not None:
             body["model"] = model
         return await self._t.post_rpc("/v1/ingest/extract-entities", body)
+
+    async def verify_claims(self, left: dict, right: dict, left_assertion_id: str, right_assertion_id: str, evidence_refs: Optional[List[dict]] = None) -> dict:
+        """Structurally verify two assertions and persist the auditable receipt."""
+        body = {"left": left, "right": right, "left_assertion_id": left_assertion_id, "right_assertion_id": right_assertion_id}
+        if evidence_refs is not None:
+            body["evidence_refs"] = evidence_refs
+        return await self._t.post_rpc("/v1/assertions/verify", body)
+
+    async def get_verification(self, verification_id: str) -> Optional[dict]:
+        """Retrieve a persisted RG8 verification receipt."""
+        resp = await self._t.get(self._t.base_url + f"/v1/assertions/verification/{verification_id}")
+        _raise_for_status(resp)
+        return resp.json()
 
 
 class _AsyncIngestMixin:
@@ -3134,12 +3186,15 @@ class ClusterClient:
                  retrieval_k: Optional[int] = None, final_k: Optional[int] = None,
                  max_graph_candidates: Optional[int] = None,
                  max_nodes: Optional[int] = None, max_edges: Optional[int] = None,
-                 graph_weight: Optional[float] = None) -> Dict[str, Any]:
+                 graph_weight: Optional[float] = None,
+                 edge_kinds: Optional[List[int]] = None,
+                 reverse_parent_of: bool = True) -> Dict[str, Any]:
         return self._read_client(consistency).graphrag(
             query_vector, k=k, depth=depth, collection=collection,
             consistency=consistency, retrieval_k=retrieval_k,
             final_k=final_k, max_graph_candidates=max_graph_candidates,
-            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight)
+            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight,
+            edge_kinds=edge_kinds, reverse_parent_of=reverse_parent_of)
 
     def consolidate(self, old_record_id: int, new_vector: Vector,
                     collection: Optional[str] = None,
@@ -3292,12 +3347,15 @@ class AsyncClusterClient:
                        retrieval_k: Optional[int] = None, final_k: Optional[int] = None,
                        max_graph_candidates: Optional[int] = None,
                        max_nodes: Optional[int] = None, max_edges: Optional[int] = None,
-                       graph_weight: Optional[float] = None) -> Dict[str, Any]:
+                       graph_weight: Optional[float] = None,
+                       edge_kinds: Optional[List[int]] = None,
+                       reverse_parent_of: bool = True) -> Dict[str, Any]:
         return await self._read_client(consistency).graphrag(
             query_vector, k=k, depth=depth, collection=collection,
             consistency=consistency, retrieval_k=retrieval_k,
             final_k=final_k, max_graph_candidates=max_graph_candidates,
-            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight)
+            max_nodes=max_nodes, max_edges=max_edges, graph_weight=graph_weight,
+            edge_kinds=edge_kinds, reverse_parent_of=reverse_parent_of)
 
     async def consolidate(self, old_record_id: int, new_vector: Vector,
                           collection: Optional[str] = None,

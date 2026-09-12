@@ -37,6 +37,7 @@ export { CommunityTab } from "./components/collections/CommunityTab";
 export { EntityExtractionTab } from "./components/collections/EntityExtractionTab";
 export { DiffTab } from "./components/collections/DiffTab";
 export { ContradictionTab } from "./components/collections/ContradictionTab";
+export { AssertionsTab } from "./components/collections/AssertionsTab";
 export { VerifyTab } from "./components/collections/VerifyTab";
 export { CompliancePackTab } from "./components/collections/CompliancePackTab";
 export { EvalTab } from "./components/collections/EvalTab";
@@ -53,8 +54,6 @@ export type { MemberView, ClusterStatusResponse } from "./lib/hooks/useCluster";
 export { useProof } from "./lib/hooks/useProof";
 export { useGraph, useNodeEdges } from "./lib/hooks/useGraph";
 export type { GraphNode, GraphEdge, DocumentTree } from "./lib/hooks/useGraph";
-export { useSearch } from "./lib/hooks/useSearch";
-export type { SearchQuery, SearchState } from "./lib/hooks/useSearch";
 export { useCollections } from "./lib/hooks/useCollections";
 export type { CollectionRef } from "./lib/hooks/useCollections";
 export {

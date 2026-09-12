@@ -142,13 +142,22 @@ $PYTHON_CMD -m pip install -e python/ --quiet
 ok "Python SDK installed"
 echo ""
 
-# ── UI deps (optional) ────────────────────────────────────────────────────────
-if [ "$NODE_OK" = true ] && [ -d "ui" ]; then
-    echo -e "${BLUE}[bonus] UI dependencies${NC}"
-    info "Running: npm ci in ui/ (exact lockfile install)"
-    (cd ui && npm ci --silent)
-    ok "UI dependencies installed (lockfile-exact)"
-    echo ""
+# ── UI & Desktop deps (optional) ──────────────────────────────────────────────
+if [ "$NODE_OK" = true ]; then
+    if [ -d "ui" ]; then
+        echo -e "${BLUE}[bonus] UI dependencies${NC}"
+        info "Running: npm ci in ui/ (exact lockfile install)"
+        (cd ui && npm ci --silent)
+        ok "UI dependencies installed (lockfile-exact)"
+        echo ""
+    fi
+    if [ -d "desktop" ]; then
+        echo -e "${BLUE}[bonus] Desktop dependencies${NC}"
+        info "Running: npm ci in desktop/ (exact lockfile install)"
+        (cd desktop && npm ci --silent)
+        ok "Desktop dependencies installed (lockfile-exact)"
+        echo ""
+    fi
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
@@ -165,6 +174,9 @@ echo ""
 if [ "$NODE_OK" = true ]; then
 echo -e "  Start the UI (in a second terminal, after the node is running):"
 echo -e "  ${YELLOW}cd ui && npm run dev${NC}  →  http://localhost:3001"
+echo ""
+echo -e "  Or start the Desktop App (Tauri control plane):"
+echo -e "  ${YELLOW}cd desktop && npm run dev${NC}"
 echo ""
 fi
 echo -e "  Try the Python SDK:"

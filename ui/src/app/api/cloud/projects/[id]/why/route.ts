@@ -88,6 +88,8 @@ interface WhyRequest {
   max_context_chunks?: number;
   llm?: LLMConfig;
   reranker?: RerankerConfig;
+  /** `vector` disables graph expansion; `graph` preserves the current behavior. */
+  retrieval_mode?: "vector" | "graph";
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -108,8 +110,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const body: WhyRequest = await req.json();
     const { record_id, query_vector, k = 5, collection = "default", question, max_context_chunks, llm, reranker } = body;
+    const retrievalMode = body.retrieval_mode ?? "graph";
+    let nativeGraphUsed = false;
 
-    const results: { record_id: number; score?: number; metadata: Record<string, unknown> | null }[] = [];
+    const results: { record_id: number; score?: number; metadata: Record<string, unknown> | null; source?: string; provenance?: unknown }[] = [];
 
     if (record_id !== undefined) {
       const metaRes = await fetchWithTimeout(`${nodeUrl}/v1/memory/meta/get?target_id=record:${record_id}`, { headers: JSON_HEADERS });
@@ -152,6 +156,41 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "provide record_id or query_vector" }, { status: 400 });
     }
 
+    // Use the planner-backed native GraphRAG operation for graph mode. The
+    // legacy search result remains a safe fallback for older nodes/deployments.
+    if (retrievalMode === "graph" && query_vector && record_id === undefined) {
+      try {
+        const graphRes = await fetchWithTimeout(`${nodeUrl}/v1/graphrag`, {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({
+            query_vector,
+            retrieval_k: Math.min(Math.max(k * 3, k), 48),
+            final_k: Math.max(k, 1),
+            collection,
+            depth: 2,
+            max_graph_candidates: 100,
+            max_nodes: 256,
+            max_edges: 1024,
+          }),
+        });
+        if (graphRes.ok) {
+          const graph = await graphRes.json() as { hits?: Array<{ record_id: number; score?: number; vector_score?: number; final_score?: number; source?: string; metadata?: Record<string, unknown> | null; provenance?: unknown }> };
+          if (Array.isArray(graph.hits) && graph.hits.length > 0) {
+            results.length = 0;
+            results.push(...graph.hits.map((hit) => ({
+              record_id: hit.record_id,
+              score: hit.vector_score ?? hit.score ?? (hit.final_score !== undefined ? 1 - hit.final_score : undefined),
+              metadata: hit.metadata ?? null,
+              source: hit.source,
+              provenance: hit.provenance,
+            })));
+            nativeGraphUsed = true;
+          }
+        }
+      } catch { /* fall back to the compatible vector + adjacency path */ }
+    }
+
     // Tier-2 reranking (optional)
     let reranked = false;
     let rankedResults: RerankResult[] = results as RerankResult[];
@@ -167,7 +206,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const graphContextChunks: { record_id: number; chunk_index: number; text: string; source: string }[] = [];
     const qTerms = question ? contentTerms(question) : [];
 
-    if (rankedResults.length > 0) {
+    if (retrievalMode === "graph" && !nativeGraphUsed && rankedResults.length > 0) {
       const expandable = rankedResults.slice(0, GRAPH_EXPAND_TOP);
       const alreadyRetrieved = new Set(rankedResults.map((r) => r.record_id));
       const docNodeIds = new Set<number>();
@@ -297,6 +336,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         enriched: !!(m?.enriched),
         content_sha256: text ? sha256(text) : null,
         content_length: text.length,
+        retrieval_source: (r as typeof results[number]).source ?? (nativeGraphUsed ? "graph" : "vector"),
+        provenance: (r as typeof results[number]).provenance ?? null,
       };
     });
     const graphChunkRefs = graphContextChunks.map((c) => ({
@@ -349,7 +390,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const rawText = String(m.text ?? "");
         const text = rawText.length > MAX_CHUNK_CHARS ? rawText.slice(0, MAX_CHUNK_CHARS) + "…" : rawText;
         const ctx = m.context_sentence ? `\nContext: ${m.context_sentence}` : "";
-        return `[Source ${i + 1}: ${m.source ?? "unknown"}, chunk ${m.chunk_index ?? "?"}]${ctx}\n${text}`;
+        const retrievalInfo = r as typeof results[number];
+        const retrieval = retrievalInfo.source ? `\nRetrieved via: ${retrievalInfo.source}` : "";
+        const provenance = retrievalInfo.provenance ? `\nProvenance: ${JSON.stringify(retrievalInfo.provenance)}` : "";
+        return `[Source ${i + 1}: ${m.source ?? "unknown"}, chunk ${m.chunk_index ?? "?"}]${ctx}${retrieval}${provenance}\n${text}`;
       }).join("\n\n---\n\n");
       const expandedContext = graphContextChunks.length > 0
         ? "\n\n--- Adjacent context ---\n\n" +
@@ -380,7 +424,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`));
         };
         try {
-          emit({ type: "results", results: rankedResults, graph_context: graphContextChunks, receipt: serverReceipt });
+          emit({ type: "results", retrieval_mode: retrievalMode, results: rankedResults, graph_context: graphContextChunks, receipt: serverReceipt });
           if (extractive) {
             emit({ type: "mode", mode: "extractive" });
             emit({ type: "token", content: extractive });

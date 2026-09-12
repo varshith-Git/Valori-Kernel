@@ -23,6 +23,25 @@ No circular dependencies. `valori-rag` knows nothing about axum routing beyond t
 
 ## Modules
 
+### GraphRAG reachability and traversal policy (RG1/RG4)
+
+`reachability::resolve_all_seed_nodes` resolves every node attached to each
+vector-hit record in the requested namespace, ordered by node ID.
+`reachability::expand_retrieval_subgraph` follows outgoing edges and incoming
+`ParentOf` edges, allowing chunk → parent → sibling retrieval at depth two.
+Semantic relations retain their stored direction. Its returned distances and
+subgraph come from the same traversal; every returned edge has both endpoints
+in the returned nodes. `max_nodes` includes seeds and `max_edges` limits examined
+adjacency entries, including skipped incoming entries. Missing limits remain
+unbounded, with depth capped at four. Legacy `graph::expand_subgraph` keeps its
+outgoing-only contract for existing graph API callers.
+
+`reachability::expand_retrieval_subgraph_with_policy` adds RG4 controls for
+retrieval callers: `TraversalPolicy.edge_kinds` is an optional edge-kind
+allowlist, and `TraversalPolicy.reverse_parent_of` controls whether chunk hits
+may climb incoming `ParentOf` links before walking back down to sibling chunks.
+The default policy preserves RG1 behavior.
+
 ### `graph` — GraphRAG
 
 ```rust
@@ -106,6 +125,9 @@ let output = extract_entities_via_llm(
 ```
 
 `LlmConfig` mirrors the 4 fields of `valori-node`'s `EmbedConfig` that entity extraction needs. The node constructs `LlmConfig` from its `EmbedConfig` at the call site — no circular dependency.
+Node ingestion attaches the caller's `source`, a BLAKE3 `source_text_hash`, and
+relationship `strength` as metadata on generated entity records/nodes and
+relationship edges so extracted graph evidence is auditable.
 
 ## Design invariants
 
@@ -161,4 +183,3 @@ the same struct the handler returns, so a field added or renamed here shows up
 in the contract automatically instead of drifting away from a hand-copied mirror
 in `valori-node/src/api.rs`. `scripts/verify-api-route-contract.py` and the
 byte-equality test in `crates/valori-node/tests/openapi_generated.rs` enforce it.
-

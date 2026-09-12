@@ -18,7 +18,7 @@
 
 import { useState, useEffect } from "react";
 import { TabShell } from "@/components/collections/TabShell";
-import { useCollectionIndex, type IndexStatusResponse } from "@/lib/hooks/useCollectionIndex";
+import { useCollectionIndex, type IndexStatusResponse } from "../../lib/hooks/useCollectionIndex";
 import { useTransport } from "@/runtime/context";
 import type { ProjectRef } from "@/runtime/project";
 import { cn } from "@/lib/utils";

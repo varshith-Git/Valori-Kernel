@@ -315,6 +315,18 @@ class Community(Resource):
         """``GET /v1/community/overview``."""
         return self._t.call(_community_overview)
 
+    def verify_claims(self, left: Mapping[str, Any], right: Mapping[str, Any], left_assertion_id: str, right_assertion_id: str, evidence_refs: Optional[Sequence[Mapping[str, Any]]] = None) -> Any:
+        """``POST /v1/assertions/verify``. Persist a structural RG8 receipt."""
+        body = {"left": dict(left), "right": dict(right), "left_assertion_id": left_assertion_id, "right_assertion_id": right_assertion_id}
+        if evidence_refs is not None:
+            body["evidence_refs"] = list(evidence_refs)
+        return self._t.request_json("POST", "/v1/assertions/verify", body)
+
+    def get_verification(self, verification_id: str) -> Any:
+        """``GET /v1/assertions/verification/{id}``."""
+        from urllib.parse import quote
+        return self._t.request_json("GET", f"/v1/assertions/verification/{quote(verification_id, safe='')}" )
+
 
 class Proof(Resource):
     """``client.proof`` — the verifiability surface."""

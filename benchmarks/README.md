@@ -13,9 +13,26 @@ Built in direct response to the 2026-06-12 review (Mayur, Rahul). Three asks, th
 | Script | What it measures | Run it |
 |---|---|---|
 | [`local_perf.py`](local_perf.py) | Insert throughput, search latency, index comparison, snapshot — up to 1M records, no server required | `python3 benchmarks/local_perf.py --million` |
+| [`live_local_db_comparison.py`](live_local_db_comparison.py) | Public BEIR SciFact retrieval quality with same MiniLM vectors; compares pure vector retrieval to Valori HTTP GraphRAG relation expansion | `python benchmarks/live_local_db_comparison.py --dbs faiss valori-http --queries 100 --docs 300 --k 3 --valori-url http://127.0.0.1:3307` |
 | [`run_benchmark.py`](run_benchmark.py) | Three-arm RAG quality (float32 vs Q16.16 vs Q16.16+graph) | `python3 benchmarks/run_benchmark.py` |
 | [`multi_arch_hash.py`](multi_arch_hash.py) | Identical BLAKE3 state hash across CPU architectures | `python3 benchmarks/multi_arch_hash.py --url http://localhost:3000` |
 | [`q16_precision.py`](q16_precision.py) | Recall@10 of Q16.16 vs float32 ground truth at 384/768/1536/3072 dims | `python3 benchmarks/q16_precision.py --dim 384 [--st] [--openai]` |
+
+### live_local_db_comparison.py — public retrieval quality
+
+This script downloads the public BEIR SciFact dataset, embeds papers and claims
+once with `sentence-transformers/all-MiniLM-L6-v2`, and caches the vectors under
+`benchmarks/public-data/scifact/`. Hosted/API-only systems are deliberately
+excluded from local runs.
+
+The recorded live run in `LIVE_LOCAL_RESULTS.json` used 300 evidence-preserving
+documents, 100 claims, 72 public claim-to-evidence edges, and `k=3`:
+
+- FAISS vector-only: Recall `0.7857`, NDCG `0.7745`, complete context `0.76`.
+- Valori HTTP vector-only: identical retrieval quality to FAISS.
+- Valori HTTP vector+graph: Recall `0.9035`, NDCG `0.8735`, complete context
+  `0.89`, with event-log state hash
+  `9a21caf3162921ee998a225714c9f0bf96a6e0b60c2be1a2efd51834175c9a7a`.
 
 ### local_perf.py — usage
 

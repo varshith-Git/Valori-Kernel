@@ -112,13 +112,17 @@ flowchart TB
 
 ## Key Features
 
+**Cloud shared hosting:** `valori-node` also supports isolated free-tier projects
+inside one worker process via `VALORI_SHARED_ROOT`. Paid projects retain their
+dedicated containers. See [shared hosting and rollout](docs/shared-hosting.md).
+
 | | |
 |---|---|
 | **Determinism** | Q16.16 fixed-point — bit-identical across x86, ARM, RISC-V, Cortex-M4; NEON/AVX2/SSE4.1 SIMD with scalar fallback |
 | **Audit trail** | Append-only BLAKE3-chained event log; offline verifiable with no server |
 | **Tamper detection** | Locates the exact altered event, byte offset, and commit timestamp |
 | **Raft cluster** | 3/5-node consensus via openraft 0.9 + tonic/gRPC + mTLS |
-| **GraphRAG** | Vector search + subgraph traversal in one call, one consistent snapshot |
+| **GraphRAG** | Vector search + subgraph traversal in one call, one consistent snapshot; follows chunk-parent-sibling paths, scores graph discoveries against the query, lets callers filter traversal edge kinds, and returns auditable per-hit provenance paths |
 | **Agent memory (MCP)** | `valori-mcp` — verifiable recall with BLAKE3 receipt; works with Claude Desktop |
 | **Recency decay** | `decay_half_life_secs` fades older memories in ranking without touching the state hash |
 | **Valori Reranker** | Server-side hybrid retrieval — vector top-K pooled then re-scored by term frequency; 90% accuracy on hard lexical queries, 0.4 s latency, no external dependency |

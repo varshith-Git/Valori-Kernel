@@ -159,6 +159,7 @@ export function AskTab({
   const [k, setK] = useState(5);
   const [maxContextChunks, setMaxContextChunks] = useState(3);
   const [useLLM, setUseLLM] = useState(true);
+  const [retrievalMode, setRetrievalMode] = useState<"vector" | "graph">("graph");
   const [status, setStatus] = useState<"idle" | "embedding" | "searching" | "answering" | "done" | "error">("idle");
   const [result, setResult] = useState<AskResult | null>(null);
   const [history, setHistory] = useState<AskResult[]>([]);
@@ -196,8 +197,8 @@ export function AskTab({
     abortRef.current = ctrl;
     const { signal } = ctrl;
 
-    setResult(null);
     setSelectedHistoryItem(null);
+    // Keep old result visible while loading — clear it only when the new one arrives.
 
     if (treeCache) {
       setStatus("searching");
@@ -259,6 +260,7 @@ export function AskTab({
         signal,
         body: JSON.stringify({
           query_vector: vector, k, collection: namespace, question: q,
+          retrieval_mode: retrievalMode,
           max_context_chunks: maxContextChunks,
           llm: useLLM && llmReady ? { provider: llmCfg.provider, model: llmCfg.model, apiKey: llmCfg.apiKey || undefined, endpoint: llmCfg.endpoint || undefined } : undefined,
           reranker: rerankerCfg ? { provider: rerankerCfg.provider, apiKey: rerankerCfg.apiKey || undefined, model: rerankerCfg.model || undefined, endpoint: rerankerCfg.endpoint || undefined } : undefined,
@@ -379,10 +381,19 @@ export function AskTab({
   };
 
   const displayResult = selectedHistoryItem ?? result;
+  const isViewingHistory = selectedHistoryItem !== null;
+
+  // Escape key dismisses history selection
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isViewingHistory) setSelectedHistoryItem(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isViewingHistory]);
 
   // History display
   const historyWithoutCurrent = history.filter((h) => h !== result);
-  const visibleHistory = showAllHistory ? historyWithoutCurrent : historyWithoutCurrent.slice(0, 20);
   const groups = groupByDate(history);
 
   return (
@@ -419,6 +430,11 @@ export function AskTab({
               <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors select-none">
                 <input type="checkbox" checked={useLLM} onChange={(e) => setUseLLM(e.target.checked)} className="rounded" />
                 LLM answer
+              </label>
+
+              <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground transition-colors select-none">
+                <input type="checkbox" checked={retrievalMode === "graph"} onChange={(e) => setRetrievalMode(e.target.checked ? "graph" : "vector")} className="rounded" />
+                Graph context
               </label>
 
               <span className="text-muted-foreground/40">|</span>
@@ -499,13 +515,26 @@ export function AskTab({
           </div>
         )}
 
+        {/* Back-to-current banner — shown when browsing history */}
+        {isViewingHistory && result && (
+          <div className="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2">
+            <span className="text-xs text-muted-foreground">Viewing history</span>
+            <button
+              onClick={() => setSelectedHistoryItem(null)}
+              className="text-xs font-medium text-[var(--v-accent)] hover:opacity-80 transition-opacity"
+            >
+              ← Back to current
+            </button>
+          </div>
+        )}
+
         {/* Result */}
         {displayResult && (
           <ResultBlock result={displayResult} />
         )}
 
-        {/* Follow-up input (shown after a result) */}
-        {displayResult && (
+        {/* Follow-up input — only for the live result, not history */}
+        {displayResult && !isViewingHistory && (
           <form onSubmit={handleFollowUp} className="flex gap-2 items-center rounded-xl border border-border bg-background px-4 py-2.5">
             <input
               type="text"
@@ -555,9 +584,7 @@ export function AskTab({
                   return (
                     <button
                       key={`${item.askedAt}-${i}`}
-                      onClick={() => {
-                        setSelectedHistoryItem(item === selectedHistoryItem ? null : item);
-                      }}
+                      onClick={() => setSelectedHistoryItem(item)}
                       className={cn(
                         "w-full text-left rounded-lg px-3 py-2 text-xs transition-colors",
                         isActive

@@ -445,6 +445,8 @@ pub fn build_router_with_keys(
         )
         .route("/v1/ingest/update", post(crate::ingest::ingest_update))
         .route("/v1/ingest/extract-entities", post(extract_entities))
+        .route("/v1/assertions/verify", post(verify_assertion))
+        .route("/v1/assertions/verification/:id", axum::routing::get(get_assertion_verification))
         .route("/v1/tree/build", post(tree_build))
         .route("/v1/tree/query", post(tree_query))
         .route("/v1/tree/hybrid", post(tree_hybrid))
@@ -483,13 +485,29 @@ pub fn build_router_with_keys(
         .layer(axum::middleware::from_fn(deprecation_warning));
 
     // ── Protected routes = canonical v1 + deprecated legacy ──────────────────
-    let protected = Router::new().merge(v1).merge(legacy).with_state(state);
+    let protected = Router::new()
+        .merge(v1)
+        .merge(legacy)
+        .with_state(state.clone());
 
     let auth = Arc::new(AuthState {
         key_store: key_store.clone(),
         legacy_token: auth_token,
     });
     let has_auth = auth.has_any_auth();
+    // The control-plane transfer budget is separate from the public API's.
+    let transfer = Router::new()
+        .route(
+            "/internal/shared-import",
+            post(crate::shared::import_project),
+        )
+        .with_state(state)
+        .layer(axum::extract::DefaultBodyLimit::max(256 * 1024 * 1024))
+        .layer(tower_http::limit::RequestBodyLimitLayer::new(
+            256 * 1024 * 1024,
+        ))
+        .layer(axum::middleware::from_fn(auth_guard_v2))
+        .layer(Extension(auth.clone()));
     if has_auth {
         tracing::info!("Auth Enabled");
     } else {
@@ -524,6 +542,7 @@ pub fn build_router_with_keys(
         .layer(axum::middleware::from_fn(
             crate::error_codes::attach_error_code,
         ));
+    router = router.merge(transfer);
     if let Some(cors) = make_cors_layer(&cors_origin, has_auth) {
         tracing::info!("CORS enabled: origin = {:?}", cors_origin);
         router = router.layer(cors);
@@ -1328,6 +1347,20 @@ async fn meta_get(
     Query(payload): Query<MetadataGetRequest>,
 ) -> Json<MetadataGetResponse> {
     crate::routes::meta::meta_get(&state, payload).await
+}
+
+async fn verify_assertion(
+    State(state): State<SharedEngine>,
+    Json(payload): Json<valori_rag::community::VerifyClaimRequest>,
+) -> Result<Json<valori_rag::community::VerificationReceipt>, Response> {
+    crate::routes::assertions::verify(&state, payload).await
+}
+
+async fn get_assertion_verification(
+    State(state): State<SharedEngine>,
+    path: axum::extract::Path<String>,
+) -> Json<Option<valori_rag::community::VerificationReceipt>> {
+    crate::routes::assertions::get(&state, path).await
 }
 
 #[cfg_attr(feature = "utoipa", utoipa::path(
@@ -2639,12 +2672,18 @@ pub(crate) struct GraphRagRequest {
     /// Phase 5.4: halt BFS before visiting a node that would exceed this count.
     #[serde(default)]
     max_nodes: Option<usize>,
-    /// Phase 5.4: halt edge emission once this count is reached per BFS round.
+    /// Bound adjacency entries examined across the whole GraphRAG traversal.
     #[serde(default)]
     max_edges: Option<usize>,
-    /// Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].
+    /// RG3: β in the capped graph-evidence boost. Range [0,1].
     #[serde(default = "default_graph_weight")]
     graph_weight: f32,
+    /// RG4: optional allowed edge-kind IDs for traversal. Absent = all edge kinds.
+    #[serde(default)]
+    edge_kinds: Option<Vec<u8>>,
+    /// RG4: whether incoming ParentOf edges may be traversed from chunk to parent.
+    #[serde(default = "default_reverse_parent_of")]
+    reverse_parent_of: bool,
     #[serde(default = "default_depth")]
     depth: u32,
     #[serde(default)]
@@ -2655,13 +2694,17 @@ fn default_graph_weight() -> f32 {
     0.3
 }
 
+fn default_reverse_parent_of() -> bool {
+    true
+}
+
 #[cfg_attr(feature = "utoipa", utoipa::path(
     post,
     path = "/v1/graphrag",
     operation_id = "graphrag",
     tag = "graph",
     summary = "Vector search plus graph expansion in one read",
-    description = "Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = (1-graph_weight)*vector_rel + graph_weight*graph_rel`.",
+    description = "Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.",
     request_body = GraphRagRequest,
     security(("BearerAuth" = [])),
     responses(
@@ -2715,6 +2758,8 @@ async fn graphrag(
         "max_nodes": max_nodes,
         "max_edges": max_edges,
         "graph_weight": graph_weight,
+        "edge_kinds": payload.edge_kinds,
+        "reverse_parent_of": payload.reverse_parent_of,
     }))
     .unwrap_or_default();
 
@@ -5538,12 +5583,13 @@ async fn extract_entities(
         url: embed_cfg.url.clone(),
         api_key: embed_cfg.api_key.clone(),
     };
-    let extracted = valori_rag::extract_entities_via_llm(
+    let enrichment = valori_rag::CommunityExtractionService::extract(
         &payload.text,
         &payload.entity_types,
         &llm_cfg,
         payload.model.as_deref(),
         &http,
+        payload.source.as_deref(),
     )
     .await
     .map_err(|e| {
@@ -5554,12 +5600,15 @@ async fn extract_entities(
     })?;
 
     // Resolve namespace.
+    let extracted = enrichment.extraction;
     let ns_id = {
         let eng = engine.read().await;
         eng.namespaces
             .resolve(payload.namespace.as_deref())
             .unwrap_or(0)
     };
+    let text_hash = enrichment.source_text_hash;
+    let extraction_source = payload.source.clone();
 
     // Embed entity descriptions → insert records → create Concept nodes.
     let descriptions: Vec<String> = extracted
@@ -5604,12 +5653,59 @@ async fn extract_entities(
                 })?;
 
             entity_name_to_node_id.insert(entity.name.clone(), node_id);
+            let metadata = serde_json::json!({
+                "kind": "extracted_entity",
+                "name": entity.name,
+                "entity_type": entity.kind,
+                "description": entity.description,
+                "source": extraction_source,
+                "source_text_hash": text_hash,
+                "node_id": node_id,
+                "collection": payload.namespace.as_deref().unwrap_or("default"),
+            });
+            let mention_id = format!(
+                "mention_{}",
+                blake3::hash(format!("{}|{}|{}", text_hash, entity.name, node_id).as_bytes()).to_hex()
+            );
+            let mention = valori_rag::community::EntityMention {
+                mention_id: mention_id.clone(),
+                entity_id: String::new(),
+                source: extraction_source.clone(),
+                document_id: None,
+                chunk_id: None,
+                passage_id: None,
+                span_start: None,
+                span_end: None,
+                surface_form: entity.name.clone(),
+                source_text_hash: Some(text_hash.clone()),
+                assertion_ids: Vec::new(),
+            };
+            let canonical = valori_rag::community::resolve_canonical_entity(
+                &entity.name, &entity.kind, &[], &mention,
+            );
+            let _ = eng.set_meta_audited(format!("entity:{}", canonical.entity_id), serde_json::json!({
+                "kind": "canonical_entity",
+                "entity_id": canonical.entity_id.clone(),
+                "canonical_name": canonical.canonical_name.clone(),
+                "entity_type": canonical.entity_type.clone(),
+                "aliases": canonical.aliases.clone(),
+                "mention_ids": canonical.mention_ids.clone(),
+                "source": extraction_source,
+                "source_text_hash": text_hash,
+                "collection": payload.namespace.as_deref().unwrap_or("default"),
+            }));
+            let _ = eng.set_meta_audited(format!("record:{record_id}"), metadata.clone());
+            let _ = eng.set_meta_audited(format!("node:{node_id}"), metadata);
             inserted_entities.push(valori_rag::community::InsertedEntity {
                 name: entity.name.clone(),
                 kind: entity.kind.clone(),
                 description: entity.description.clone(),
                 node_id,
                 record_id: Some(record_id),
+                entity_id: canonical.entity_id,
+                canonical_name: canonical.canonical_name,
+                aliases: canonical.aliases,
+                mention_id,
             });
         }
     }
@@ -5626,6 +5722,12 @@ async fn extract_entities(
             match (from, to) {
                 (Some(from_id), Some(to_id)) => {
                     use valori_kernel::types::enums::EdgeKind;
+                    let predicate = rel.predicate.as_deref().unwrap_or(&rel.description);
+                    let mut evidence = rel.evidence.clone().unwrap_or_default();
+                    if let Some(source) = extraction_source.clone() { evidence.source.get_or_insert(source); }
+                    evidence.source_text_hash.get_or_insert(text_hash.clone());
+                    let assertion_id = valori_rag::community::assertion_identity(
+                        &text_hash, &rel.source, predicate, &rel.target, &evidence);
                     let edge_id = eng
                         .create_edge_ns(from_id, to_id, EdgeKind::Relation as u8, ns_id)
                         .map_err(|e| {
@@ -5634,11 +5736,33 @@ async fn extract_entities(
                                 Json(serde_json::json!({"error": e.to_string()})),
                             )
                         })?;
+                    let _ = eng.set_meta_audited(
+                        format!("edge:{edge_id}"),
+                        serde_json::json!({
+                            "kind": "extracted_relationship",
+                            "assertion_version": 1,
+                            "assertion_id": assertion_id,
+                            "assertion": { "subject": rel.source, "predicate": predicate, "object": rel.target, "evidence": evidence },
+                            "extraction": { "extractor": "llm", "model": payload.model, "config": embed_cfg.provider },
+                            "source_name": rel.source,
+                            "target_name": rel.target,
+                            "description": rel.description,
+                            "strength": rel.strength,
+                            "source": extraction_source,
+                            "source_text_hash": text_hash,
+                            "from_node_id": from_id,
+                            "to_node_id": to_id,
+                            "collection": payload.namespace.as_deref().unwrap_or("default"),
+                        }),
+                    );
                     inserted_rels.push(valori_rag::community::InsertedRelationship {
                         source_name: rel.source.clone(),
                         target_name: rel.target.clone(),
                         description: rel.description.clone(),
+                        strength: rel.strength,
                         edge_id,
+                        assertion_id,
+                        evidence,
                     });
                 }
                 _ => {

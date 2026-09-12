@@ -37,6 +37,12 @@ impl Writer for NoopWriter {
         Ok(WriteResult {
             record_id: format!("noop-{}", chunk.index),
             chunk_node_id: None,
+            chunk_id: Some(chunk.id.clone()),
+            source_text_hash: Some(blake3::hash(chunk.text.as_bytes()).to_hex().to_string()),
+            span_start: chunk.metadata.get("span_start").and_then(|v| v.as_u64()),
+            span_end: chunk.metadata.get("span_end").and_then(|v| v.as_u64()),
+            chunk_index: Some(chunk.index),
+            chunk_text: Some(chunk.text.clone()),
         })
     }
 }

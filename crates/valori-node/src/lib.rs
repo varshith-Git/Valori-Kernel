@@ -15,6 +15,7 @@ pub mod execution_registry;
 pub mod ingest;
 pub mod kernel_writer;
 pub mod server;
+pub mod shared;
 // embedder and chunking logic now live in the valori-ingest crate.
 pub mod metadata;
 pub mod persistence;

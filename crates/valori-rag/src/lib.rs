@@ -8,8 +8,10 @@
 //! - **LLM** — minimal HTTP wrapper for entity extraction (uses community provider creds).
 
 pub mod community;
+pub mod community_service;
 pub mod graph;
 pub mod llm;
+pub mod reachability;
 pub mod tree;
 
 // Flat re-exports for the most commonly used items.
@@ -21,4 +23,5 @@ pub use community::{
 };
 pub use graph::{expand_subgraph, expand_subgraph_budgeted, resolve_seed_nodes, MAX_DEPTH};
 pub use llm::{extract_entities_via_llm, LlmConfig};
+pub use community_service::{AssertionDraft, CommunityEnrichment, CommunityExtractionService};
 pub use tree::{Receipt, TreeIndex, TreeNode, GENESIS};

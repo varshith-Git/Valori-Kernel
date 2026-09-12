@@ -1,0 +1,33 @@
+{
+  "dataset": "BEIR SciFact",
+  "documents": 300,
+  "queries": 100,
+  "dimension": 384,
+  "relation_edges": 72,
+  "systems": {
+    "faiss": {
+      "recall": 0.7857,
+      "ndcg": 0.7745,
+      "complete_context": 0.76,
+      "build_s": 0.0001,
+      "search_ms": 0.136
+    },
+    "valori_http_vector": {
+      "recall": 0.7857,
+      "ndcg": 0.7745,
+      "complete_context": 0.76,
+      "build_s": 56.2132,
+      "search_ms": 64.7675
+    },
+    "valori_http_vector_graph": {
+      "recall": 0.9035,
+      "ndcg": 0.8735,
+      "complete_context": 0.89,
+      "graph_edges": 72,
+      "graphrag_ms": 65.9647,
+      "state_hash": "9a21caf3162921ee998a225714c9f0bf96a6e0b60c2be1a2efd51834175c9a7a",
+      "collection": "scifact_live_1789101330346",
+      "note": "same paper+claim vectors as FAISS; Valori follows public SciFact claim-to-evidence graph edges"
+    }
+  }
+}

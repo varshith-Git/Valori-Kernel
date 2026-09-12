@@ -47,6 +47,7 @@ futures = "0.3.31"
 tokio-stream = "0.1.17"
 opendal = { version = "0.58", features = ["services-s3", "services-fs"] }
 bytes = "1.0"
+tower = { version = "0.5.2", features = ["util"] }
 tap = "1.0.1"
 base64 = "0.22.1"
 # Crypto-shredding (Phase 3.6)

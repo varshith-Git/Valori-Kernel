@@ -16,25 +16,25 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
+use valori_node::EngineFromNodeConfig;
 use valori_node::capabilities::CapabilityRegistryBuilder;
-use valori_node::cluster::{bootstrap_cluster, ClusterConfig};
+use valori_node::cluster::{ClusterConfig, bootstrap_cluster};
 use valori_node::cluster_server::build_cluster_router;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
-use valori_node::runner::{run_graph_inline, TaskRegistry};
+use valori_node::runner::{TaskRegistry, run_graph_inline};
 use valori_node::server::build_router;
-use valori_node::EngineFromNodeConfig;
 
 use valori_planner::context::{
     CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
 };
 use valori_planner::graph::{ExecutionGraph, ExecutionRetentionPolicy, TaskId, TaskKind, TaskSpec};
 use valori_planner::operation::{
-    compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
+    ExecutionPolicy, OperationInputs, OperationKind, compute_operation_hash,
 };
 
 // ── Environment builders ──────────────────────────────────────────────────────
@@ -391,6 +391,110 @@ async fn run_both(
 }
 
 // ── Parity tests ──────────────────────────────────────────────────────────────
+
+/// A chunk's second graph node owns its ParentOf link. Both data planes must
+/// seed that node, walk back to the document, and discover a sibling record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn graph_rag_parent_sibling_and_multiple_seed_reachability_match() {
+    let standalone = standalone_env();
+    let cluster = cluster_env().await;
+    let mut results = Vec::new();
+    for env in [&standalone, &cluster] {
+        create_default_collection(env).await;
+        let records = seed_vectors(env).await;
+        let mut nodes = Vec::new();
+        for record in [Some(records[0]), Some(records[0]), None, Some(records[1])] {
+            let (status, body) = post(
+                &env.router,
+                "/v1/graph/node",
+                json!({
+                    "kind": if record.is_some() { 1 } else { 0 },
+                    "record_id": record, "collection": "default",
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            nodes.push(body["node_id"].as_u64().unwrap());
+        }
+        for child in [nodes[1], nodes[3]] {
+            let (status, body) = post(
+                &env.router,
+                "/v1/graph/edge",
+                json!({
+                    "from": nodes[2], "to": child, "kind": 6, "collection": "default",
+                }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+        let (status, body) = post(
+            &env.router,
+            "/v1/memory/meta/set",
+            json!({
+                "target_id": format!("record:{}", records[1]),
+                "metadata": {
+                    "source": "public/scifact",
+                    "chunk_index": 2,
+                    "section_title": "Sibling evidence",
+                    "document_node_id": nodes[2],
+                    "chunk_node_id": nodes[3],
+                },
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let query = json!({
+            "query_vector": [1.0, 0.0, 0.0, 0.0], "collection": "default",
+            "retrieval_k": 1, "final_k": 10, "depth": 2,
+        });
+        let (status, body) = post(&env.router, "/v1/graphrag", query.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["seed_nodes"], json!([nodes[0], nodes[1]]));
+        let hits = body["hits"].as_array().unwrap();
+        let sibling = hits
+            .iter()
+            .find(|h| h["record_id"] == records[1])
+            .expect("parent traversal must discover the sibling");
+        assert_eq!(sibling["graph_distance"], 2);
+        assert_eq!(sibling["source"], "graph");
+        assert_eq!(
+            sibling["provenance"]["metadata_key"],
+            format!("record:{}", records[1])
+        );
+        assert_eq!(sibling["provenance"]["source"], "public/scifact");
+        assert_eq!(sibling["provenance"]["graph_distance"], 2);
+        assert_eq!(
+            sibling["provenance"]["graph_path"],
+            json!([
+                {"from": nodes[1], "to": nodes[2], "edge_id": 0, "kind": 6},
+                {"from": nodes[2], "to": nodes[3], "edge_id": 1, "kind": 6},
+            ])
+        );
+        assert_eq!(
+            hits.iter().filter(|h| h["record_id"] == records[0]).count(),
+            1
+        );
+        assert_eq!(body["subgraph"]["edges"].as_array().unwrap().len(), 2);
+        results.push(body);
+
+        let mut bounded = query;
+        bounded["max_nodes"] = json!(2);
+        let (status, body) = post(&env.router, "/v1/graphrag", bounded).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            !body["hits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|h| h["record_id"] == records[1])
+        );
+    }
+    assert_eq!(
+        results[0], results[1],
+        "standalone and Raft GraphRAG must agree"
+    );
+}
 
 /// MemorySearch with no decay/rerank: both paths must return the same record
 /// IDs in the same rank order given the same inserted vectors.

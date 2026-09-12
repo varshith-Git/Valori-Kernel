@@ -15,7 +15,7 @@ import { ChevronDown, ChevronRight, Users, Wrench, Terminal, Database, Layers, B
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useHealth } from '@/lib/hooks/useHealth'
 import { useCollections } from '@/lib/hooks/useCollections'
-import { useCollectionIndex } from '@/lib/hooks/useCollectionIndex'
+import { useCollectionIndex } from '../../lib/hooks/useCollectionIndex'
 import { useTransport } from '@/runtime/context'
 import type { StudioCapabilities } from '@/runtime/capabilities'
 import { cn } from '@/lib/utils'
@@ -34,6 +34,7 @@ import { CertifyTab } from '@/components/collections/CertifyTab'
 import { GdprTab } from '@/components/collections/GdprTab'
 import { DiffTab } from '@/components/collections/DiffTab'
 import { ContradictionTab } from '@/components/collections/ContradictionTab'
+import { AssertionsTab } from '@/components/collections/AssertionsTab'
 import { CompliancePackTab } from '@/components/collections/CompliancePackTab'
 import { IndexLifecycleTab } from '@/components/collections/IndexLifecycleTab'
 import { TabShell } from '@/components/collections/TabShell'
@@ -59,6 +60,7 @@ const ANALYZE_TABS = [
     { value: 'eval', label: 'Eval', tip: 'Score retrieval quality with ground-truth QA pairs: Precision@K, MRR' },
     { value: 'diff', label: 'Diff', tip: 'Compare two namespaces by record/node ID set difference' },
     { value: 'contradict', label: 'Contradictions', tip: 'Find semantically opposing chunks by negating embeddings' },
+    { value: 'assertions', label: 'Assertions', tip: 'Verify structured claims with auditable support and contradiction receipts' },
     { value: 'info', label: 'Info', tip: 'Collection metadata: namespace ID, vector dimension, storage details' },
 ]
 
@@ -338,7 +340,7 @@ export function ToolsWorkspace({
     // Prefer the collection-specific dimension from GET /v1/namespaces (available
     // even when no records exist). Fall back to health dim for legacy hosts that
     // don't include `dimension` in the namespace list.
-    const dim = currentCollectionRef?.dimension ?? healthDim
+    const dim = (currentCollectionRef as (typeof currentCollectionRef & { dimension?: number }) | undefined)?.dimension ?? healthDim
     // Live collection-specific index status — drives the header badge and the
     // Index tab. This is a per-collection GET, not the project-wide /health index field.
     const { data: collectionIndexData } = useCollectionIndex(projectId, rawNamespace)
@@ -461,6 +463,9 @@ export function ToolsWorkspace({
                 </TabsContent>
                 <TabsContent value="contradict" className="mt-5">
                     <ContradictionTab projectId={projectId} namespace={rawNamespace} />
+                </TabsContent>
+                <TabsContent value="assertions" className="mt-5">
+                    <AssertionsTab projectId={projectId} namespace={rawNamespace} />
                 </TabsContent>
                 <TabsContent value="verify" className="mt-5">
                     <VerifyTab projectId={projectId} namespace={rawNamespace} />

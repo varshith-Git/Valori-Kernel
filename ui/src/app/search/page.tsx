@@ -279,6 +279,16 @@ export default function SearchPage() {
   const { results, stateHash, queriedAt, isLoading, error, search, latencyMs } = useSearch();
   const [enrichedResults, setEnrichedResults] = useState<EnrichedSearchHit[]>([]);
 
+  // Live vector parse for inline feedback
+  const parsedNums = input.trim()
+    ? input.split(/[\s,]+/).map(Number).filter((n) => !isNaN(n))
+    : [];
+  const dimStatus: "ok" | "mismatch" | "empty" | "unknown" =
+    parsedNums.length === 0 ? "empty"
+    : !dim ? "unknown"
+    : parsedNums.length === dim ? "ok"
+    : "mismatch";
+
   const hasRun = results.length > 0 || (!!error && !isLoading);
 
   // Enrich results with metadata
@@ -327,11 +337,11 @@ export default function SearchPage() {
   };
 
   const run = () => {
-    const nums = input.split(/[\s,]+/).map(Number).filter((n) => !isNaN(n));
-    if (nums.length === 0) return;
+    if (parsedNums.length === 0) return;
+    if (dimStatus === "mismatch") return;
     const metadataFilter = parseFilter(filterRaw);
     if (filterRaw.trim() && filterError) return;
-    search({ vector: nums, k, collection: collection || undefined, consistency, metadataFilter });
+    search({ vector: parsedNums, k, collection: collection || undefined, consistency, metadataFilter });
   };
 
   return (
@@ -359,8 +369,25 @@ export default function SearchPage() {
           onKeyDown={(e) => e.key === "Enter" && e.metaKey && run()}
           placeholder="0.12, 0.34, 0.56, 0.78, ..."
           rows={3}
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs text-card-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--v-accent-ring)] resize-none transition-shadow"
+          className={cn(
+            "w-full rounded-lg border bg-background px-3 py-2 font-mono text-xs text-card-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[var(--v-accent-ring)] resize-none transition-shadow",
+            dimStatus === "mismatch" ? "border-red-500/60" : "border-input"
+          )}
         />
+        {/* Inline dim feedback */}
+        {parsedNums.length > 0 && (
+          <p className={cn(
+            "text-[11px] font-mono",
+            dimStatus === "ok"       ? "text-emerald-600 dark:text-emerald-400"
+            : dimStatus === "mismatch" ? "text-red-600 dark:text-red-400"
+            : "text-muted-foreground"
+          )}>
+            {parsedNums.length} value{parsedNums.length !== 1 ? "s" : ""}
+            {dimStatus === "ok"       && ` · ${dim}D ✓`}
+            {dimStatus === "mismatch" && ` · need ${dim}D ✗`}
+            {dimStatus === "unknown"  && " · dim unknown"}
+          </p>
+        )}
 
         {/* Controls */}
         <div className="grid grid-cols-2 gap-3">
@@ -437,7 +464,7 @@ export default function SearchPage() {
         <div className="flex items-center gap-3">
           <Button
             onClick={run}
-            disabled={isLoading || !input.trim()}
+            disabled={isLoading || parsedNums.length === 0 || dimStatus === "mismatch"}
             className="bg-[var(--v-accent)] text-white hover:opacity-90 disabled:opacity-40 transition-opacity"
             size="sm"
           >

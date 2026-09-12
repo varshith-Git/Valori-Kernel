@@ -3,6 +3,14 @@
 HTTP API server and orchestration layer for Valori. Runs in standalone mode
 or as a member of a Raft cluster (`VALORI_CLUSTER_MEMBERS`).
 
+With `VALORI_SHARED_ROOT` and `VALORI_SHARED_ADMIN_TOKEN`, the same binary hosts
+free projects in one process with independent engines, credentials, collections,
+and logs. `VALORI_SHARED_MAX_PROJECTS` bounds admission (default 100). Existing
+standalone and Raft boot paths remain unchanged when shared mode is unset.
+The private `/shared/projects/:id` lifecycle API and admin-scoped standalone
+`/internal/shared-import` transfer endpoint are control-plane APIs, not SDK
+operations. See [configuration, restrictions, and rollout](../../docs/shared-hosting.md).
+
 ## Base URL
 
 - **Local**: `http://localhost:3000`
@@ -642,12 +650,45 @@ curl -X POST http://localhost:3000/v1/memory/contradict \
   -d '{"record_a": 3, "record_b": 9, "threshold": 0.9}'
 ```
 
-### GraphRAG — `POST /v1/graphrag` (Phase 3.15, hardened Phase 5.3/5.4)
+### GraphRAG — `POST /v1/graphrag` (Phase 3.15, hardened through RG5)
 
 Retrieve the K nearest vectors **and** the connected knowledge subgraph around
 them in a single call, from one consistent kernel snapshot — no second store, no
 cross-system drift. Vectors and graph live in the same kernel, so the KNN, the
 record→node resolution, and the subgraph BFS all run under one read lock.
+
+RG1 reachability (standalone and cluster): every graph node referencing a vector
+hit is eligible as a seed. Traversal follows outgoing edges plus incoming
+`ParentOf` edges, so a chunk can reach its parent at depth one and siblings at
+depth two. Other relation types are not reversed. Hop distances use the same
+bounded traversal as the returned subgraph. Edges retain their original
+orientation and both endpoints are returned. This expands candidate reach;
+the existing scoring and `final_k` rules still determine which candidates
+appear in `hits`.
+
+RG2 provenance (standalone and cluster): each hit resolves metadata from the
+ingest key (`record:<id>`) first and the memory key (`rec:<id>`) second, then
+returns a `provenance` object with the resolved key, source/chunk fields when
+available, graph distance, and the shortest evidence path inside the returned
+bounded subgraph. `memory_id` remains `rec:<id>` for backward compatibility.
+
+RG3 candidate scoring (standalone and cluster): graph-expanded records with a
+usable vector are scored against the original query before `final_k`
+truncation. Having a graph node no longer gives a seed a graph bonus by itself.
+`final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`,
+where semantic relevance is `1/(1+vector_distance)` and graph relevance is a
+bounded evidence-path boost for graph-only candidates.
+
+RG4 traversal semantics (standalone and cluster): callers can pass
+`edge_kinds` to restrict expansion to specific edge kinds and
+`reverse_parent_of=false` to disable chunk → parent climbing. Defaults preserve
+the RG1 behavior: all edge kinds are allowed, and incoming `ParentOf` can be
+followed so chunks can retrieve their parent document and siblings.
+
+RG5 extraction provenance (standalone and cluster): `/v1/ingest/extract-entities`
+accepts `source`, stores BLAKE3 `source_text_hash` metadata for each extracted
+entity record/node and relationship edge, and returns relationship `strength`.
+That makes generated graph edges auditable and reusable by later GraphRAG calls.
 
 **Request** (Phase 5.4 contract):
 
@@ -663,6 +704,8 @@ curl -X POST http://localhost:3000/v1/graphrag \
     "max_nodes": 500,
     "max_edges": 2000,
     "graph_weight": 0.3,
+    "edge_kinds": [0, 5, 6],
+    "reverse_parent_of": true,
     "collection": "knowledge"
   }'
 ```
@@ -676,8 +719,10 @@ curl -X POST http://localhost:3000/v1/graphrag \
 | `depth` | 2 | BFS hop depth (clamped to MAX_DEPTH=4) |
 | `max_graph_candidates` | 100 | Budget on graph-only hits before `final_k` |
 | `max_nodes` | unlimited | Halt BFS once this many nodes are visited |
-| `max_edges` | unlimited | Halt edge emission once this many edges are emitted |
-| `graph_weight` | 0.3 | β in `final_score = (1-β)×vector_rel + β×graph_rel`; range [0,1] |
+| `max_edges` | unlimited | Maximum adjacency entries examined across the walk, including skipped incoming entries |
+| `graph_weight` | 0.3 | β in `final_score = semantic_rel + β×graph_rel×(1-semantic_rel)`; range [0,1] |
+| `edge_kinds` | all kinds | Optional edge-kind allowlist (`0=Relation`, `5=RefersTo`, `6=ParentOf`, etc.) |
+| `reverse_parent_of` | `true` | Whether expansion may follow incoming `ParentOf` from chunk to parent |
 
 **Response hit shape** (Phase 5.4):
 
@@ -685,30 +730,52 @@ curl -X POST http://localhost:3000/v1/graphrag \
 // Vector hit with graph node (seed):
 { "record_id": 15, "source": "vector_and_graph",
   "score": 0.05, "vector_score": 0.05,
-  "graph_score": 1.0, "final_score": 0.966,
-  "graph_distance": 0, "node_id": 3, "memory_id": "rec:15", "metadata": null }
+  "graph_score": 0.0, "final_score": 0.952,
+  "graph_distance": 0, "node_id": 3, "memory_id": "rec:15",
+  "metadata": {"source": "paper.pdf", "chunk_index": 2},
+  "provenance": {
+    "record_id": 15,
+    "metadata_key": "record:15",
+    "source": "paper.pdf",
+    "chunk_index": 2,
+    "section_title": null,
+    "document_node_id": null,
+    "chunk_node_id": null,
+    "graph_distance": 0,
+    "graph_path": []
+  } }
 
 // Vector hit without graph node:
 { "record_id": 42, "source": "vector",
   "score": 0.12, "vector_score": 0.12,
-  "graph_score": 0.0, "final_score": 0.614,
-  "graph_distance": null, "node_id": null, "memory_id": "rec:42", "metadata": null }
+  "graph_score": 0.0, "final_score": 0.893,
+  "graph_distance": null, "node_id": null, "memory_id": "rec:42",
+  "metadata": null, "provenance": {"metadata_key": null, "graph_path": []} }
 
 // Graph-only hit (not in top-k vector results, reached via expansion):
 { "record_id": 57, "source": "graph",
-  "score": null, "vector_score": null,
-  "graph_score": 0.5, "final_score": 0.15,
-  "graph_distance": 1, "node_id": 7, "memory_id": "rec:57", "metadata": null }
+  "score": 0.14, "vector_score": 0.14,
+  "graph_score": 0.333, "final_score": 0.889,
+  "graph_distance": 1, "node_id": 7, "memory_id": "rec:57",
+  "metadata": null,
+  "provenance": {
+    "metadata_key": null,
+    "graph_distance": 1,
+    "graph_path": [{"from": 3, "to": 7, "edge_id": 11, "kind": 6}]
+  } }
 ```
 
 `score` is a backward-compat deprecated alias for `vector_score`. All hits are
 merged into one list sorted by `final_score` descending (higher = better),
-with `record_id` ascending as tie-breaker. `graph_score` = `1/(1+hop_distance)`,
-always in [0, 1]. `graph_distance` is the minimum hop count from any seed
-(guaranteed shortest path). At `graph_weight=1.0` the ranking is purely
-graph-based — graph-only candidates can outrank pure vector hits with no graph
-node. On a cluster the request also honours `consistency` (linearizable by
-default). For agents, prefer the `memory_graph_recall` MCP tool.
+with semantic relevance, `graph_distance`, and `record_id` as deterministic
+tie-breakers. `graph_score` is zero for seeds and vector-only hits; for
+graph-only hits it is `1/(2+hop_distance)`, a bounded path boost in [0, 0.5].
+`graph_distance` is the minimum hop count from any seed (guaranteed shortest
+path). Graph-expanded candidates with vectors are scored against the original
+query, so useful evidence can enter `final_k` while weak graph neighbors remain
+below stronger vector hits. On a cluster the request also honours `consistency`
+(linearizable by default). For agents, prefer the `memory_graph_recall` MCP
+tool.
 
 ### Recency-aware search — `decay_half_life_secs` (Phase C4.1)
 

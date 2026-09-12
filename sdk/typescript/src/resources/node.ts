@@ -257,6 +257,22 @@ export class Community {
   overview(): Promise<V1Data<"communityOverview">> {
     return this.t.call(() => this.t.api.v1.communityOverview(this.t.params()));
   }
+
+  /** `POST /v1/assertions/verify` — deterministic structural verification. */
+  verifyClaims(request: {
+    left: { subject: string; predicate: string; object: string; negated?: boolean; time_scope?: string | null };
+    right: { subject: string; predicate: string; object: string; negated?: boolean; time_scope?: string | null };
+    left_assertion_id: string;
+    right_assertion_id: string;
+    evidence_refs?: unknown[];
+  }): Promise<unknown> {
+    return this.t.requestJson("POST", "/v1/assertions/verify", request);
+  }
+
+  /** `GET /v1/assertions/verification/:id`. */
+  getVerification(id: string): Promise<unknown> {
+    return this.t.requestJson("GET", `/v1/assertions/verification/${encodeURIComponent(id)}`);
+  }
 }
 
 export class Proof {

@@ -245,6 +245,7 @@ pub fn required_scope(method: &axum::http::Method, path: &str) -> ApiScope {
     // Admin-only: key management, snapshot operations, storage operations,
     // and replication endpoints (H-4: replication streams expose ALL namespaces).
     if path.starts_with("/v1/keys")
+        || path.starts_with("/internal/")
         || path.starts_with("/v1/snapshot")
         || path.starts_with("/v1/storage")
         || path.starts_with("/v1/replication")

@@ -137,6 +137,17 @@ export class Transport {
     return this.#authenticated;
   }
 
+  /** Additive endpoint helper used until the generated contract is regenerated. */
+  requestJson<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+    return this.call(() => this.http.request<T, unknown>({
+      method,
+      path,
+      body,
+      type: "application/json",
+      ...this.params(),
+    }));
+  }
+
   /** §6: never leak the key — not in a log line, not in a stringified client. */
   toJSON(): Record<string, unknown> {
     return {

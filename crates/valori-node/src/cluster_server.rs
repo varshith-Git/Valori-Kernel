@@ -920,6 +920,8 @@ pub fn build_cluster_router_with_keys(
             "/v1/ingest/extract-entities",
             post(cluster_extract_entities),
         )
+        .route("/v1/assertions/verify", post(cluster_verify_assertion))
+        .route("/v1/assertions/verification/:id", get(cluster_get_assertion_verification))
         .route("/v1/tree/build", post(cluster_tree_build))
         .route("/v1/tree/query", post(cluster_tree_query))
         .route("/v1/tree/hybrid", post(cluster_tree_hybrid))
@@ -3142,12 +3144,18 @@ struct ClusterGraphRagRequest {
     /// Phase 5.4: halt BFS before visiting a node that would exceed this count.
     #[serde(default)]
     max_nodes: Option<usize>,
-    /// Phase 5.4: halt edge emission once this count is reached per BFS round.
+    /// Bound adjacency entries examined across the whole GraphRAG traversal.
     #[serde(default)]
     max_edges: Option<usize>,
-    /// Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].
+    /// RG3: β in the capped graph-evidence boost. Range [0,1].
     #[serde(default = "default_cluster_graph_weight")]
     graph_weight: f32,
+    /// RG4: optional allowed edge-kind IDs for traversal. Absent = all edge kinds.
+    #[serde(default)]
+    edge_kinds: Option<Vec<u8>>,
+    /// RG4: whether incoming ParentOf edges may be traversed from chunk to parent.
+    #[serde(default = "default_cluster_reverse_parent_of")]
+    reverse_parent_of: bool,
     #[serde(default = "default_subgraph_depth")]
     depth: u32,
     #[serde(default)]
@@ -3160,6 +3168,10 @@ struct ClusterGraphRagRequest {
 
 fn default_cluster_graph_weight() -> f32 {
     0.3
+}
+
+fn default_cluster_reverse_parent_of() -> bool {
+    true
 }
 
 async fn cluster_graphrag(
@@ -3245,6 +3257,8 @@ async fn cluster_graphrag(
         "max_nodes": max_nodes,
         "max_edges": max_edges,
         "graph_weight": graph_weight,
+        "edge_kinds": req.edge_kinds,
+        "reverse_parent_of": req.reverse_parent_of,
     })
     .to_string();
 
@@ -4420,6 +4434,20 @@ async fn cluster_meta_get(
     crate::routes::meta::meta_get(&state, q).await
 }
 
+async fn cluster_verify_assertion(
+    State(state): State<DataPlaneState>,
+    Json(payload): Json<valori_rag::community::VerifyClaimRequest>,
+) -> Result<Json<valori_rag::community::VerificationReceipt>, Response> {
+    crate::routes::assertions::verify(&state, payload).await
+}
+
+async fn cluster_get_assertion_verification(
+    State(state): State<DataPlaneState>,
+    path: axum::extract::Path<String>,
+) -> Json<Option<valori_rag::community::VerificationReceipt>> {
+    crate::routes::assertions::get(&state, path).await
+}
+
 // ── Phase I4: Full chunk→embed→insert pipeline replicated via Raft ────────────
 // through raft.client_write() so all peers replicate the vectors, graph
 // nodes/edges, and metadata sidecar on ALL nodes.
@@ -4980,6 +5008,7 @@ async fn cluster_ingest(
         record_ids,
         collection,
         operation_id,
+        enrichment_status: if payload.auto_enrich { "pending".into() } else { "disabled".into() },
     })
     .into_response()
 }
@@ -5982,12 +6011,13 @@ async fn cluster_extract_entities(
         url: embed_cfg.url.clone(),
         api_key: embed_cfg.api_key.clone(),
     };
-    let extracted = valori_rag::extract_entities_via_llm(
+    let enrichment = valori_rag::CommunityExtractionService::extract(
         &payload.text,
         &payload.entity_types,
         &llm_cfg,
         payload.model.as_deref(),
         &s.http,
+        payload.source.as_deref(),
     )
     .await
     .map_err(|e| {
@@ -5996,6 +6026,9 @@ async fn cluster_extract_entities(
             Json(serde_json::json!({"error": e})),
         )
     })?;
+
+    let extracted = enrichment.extraction;
+    let text_hash = enrichment.source_text_hash;
 
     // Embed entity descriptions.
     let descriptions: Vec<String> = extracted
@@ -6032,6 +6065,11 @@ async fn cluster_extract_entities(
     use valori_kernel::event::KernelEvent;
     use valori_kernel::types::id::{NodeId, RecordId};
     use valori_kernel::types::vector::FxpVector;
+    let extraction_source = payload.source.clone();
+    let collection_name = payload
+        .namespace
+        .clone()
+        .unwrap_or_else(|| "default".into());
 
     for (entity, vec) in extracted.entities.iter().zip(vecs.iter()) {
         let fxp_data: Vec<FxpScalar> = vec
@@ -6081,12 +6119,65 @@ async fn cluster_extract_entities(
         };
 
         entity_name_to_node_id.insert(entity.name.clone(), node_id);
+        let mention_id = format!(
+            "mention_{}",
+            blake3::hash(format!("{}|{}|{}", text_hash, entity.name, node_id).as_bytes()).to_hex()
+        );
+        let mention = valori_rag::community::EntityMention {
+            mention_id: mention_id.clone(),
+            entity_id: String::new(),
+            source: extraction_source.clone(),
+            document_id: None,
+            chunk_id: None,
+            passage_id: None,
+            span_start: None,
+            span_end: None,
+            surface_form: entity.name.clone(),
+            source_text_hash: Some(text_hash.clone()),
+            assertion_ids: Vec::new(),
+        };
+        let canonical = valori_rag::community::resolve_canonical_entity(
+            &entity.name, &entity.kind, &[], &mention,
+        );
+        let metadata = serde_json::json!({
+            "kind": "extracted_entity",
+            "name": entity.name,
+            "entity_type": entity.kind,
+            "description": entity.description,
+            "source": extraction_source,
+            "source_text_hash": text_hash,
+            "node_id": node_id,
+            "collection": collection_name,
+            "entity_id": canonical.entity_id.clone(),
+            "canonical_name": canonical.canonical_name.clone(),
+            "aliases": canonical.aliases.clone(),
+            "mention_id": mention_id.clone(),
+        });
+        for key in [format!("record:{record_id}"), format!("node:{node_id}")] {
+            let _ = raft_write_data(
+                shard_raft,
+                ClientRequest {
+                    event: KernelEvent::SetMeta {
+                        key,
+                        value: metadata.to_string(),
+                    },
+                    request_id: None,
+                    schema_version: CURRENT_SCHEMA_VERSION,
+                    namespace_id: ns_id,
+                },
+            )
+            .await;
+        }
         inserted_entities.push(valori_rag::community::InsertedEntity {
             name: entity.name.clone(),
             kind: entity.kind.clone(),
             description: entity.description.clone(),
             node_id,
             record_id: Some(record_id),
+            entity_id: canonical.entity_id,
+            canonical_name: canonical.canonical_name,
+            aliases: canonical.aliases,
+            mention_id,
         });
     }
 
@@ -6100,6 +6191,12 @@ async fn cluster_extract_entities(
             entity_name_to_node_id.get(&rel.target),
         ) {
             (Some(&from_id), Some(&to_id)) => {
+                let predicate = rel.predicate.as_deref().unwrap_or(&rel.description);
+                let mut evidence = rel.evidence.clone().unwrap_or_default();
+                if let Some(source) = extraction_source.clone() { evidence.source.get_or_insert(source); }
+                evidence.source_text_hash.get_or_insert(text_hash.clone());
+                let assertion_id = valori_rag::community::assertion_identity(
+                    &text_hash, &rel.source, predicate, &rel.target, &evidence);
                 let ev = KernelEvent::AutoCreateEdge {
                     from: NodeId(from_id),
                     to: NodeId(to_id),
@@ -6116,12 +6213,47 @@ async fn cluster_extract_entities(
                 )
                 .await
                 {
-                    Ok(resp) => inserted_rels.push(valori_rag::community::InsertedRelationship {
-                        source_name: rel.source.clone(),
-                        target_name: rel.target.clone(),
-                        description: rel.description.clone(),
-                        edge_id: resp.allocated_edge_id.unwrap_or(0),
-                    }),
+                    Ok(resp) => {
+                        let edge_id = resp.allocated_edge_id.unwrap_or(0);
+                        let _ = raft_write_data(
+                            shard_raft,
+                            ClientRequest {
+                                event: KernelEvent::SetMeta {
+                                    key: format!("edge:{edge_id}"),
+                                    value: serde_json::json!({
+                                    "kind": "extracted_relationship",
+                                        "assertion_version": 1,
+                                        "assertion_id": assertion_id,
+                                        "assertion": { "subject": rel.source, "predicate": predicate, "object": rel.target, "evidence": evidence },
+                                        "extraction": { "extractor": "llm", "model": payload.model, "config": embed_cfg.provider },
+                                        "source_name": rel.source,
+                                        "target_name": rel.target,
+                                        "description": rel.description,
+                                        "strength": rel.strength,
+                                        "source": extraction_source,
+                                        "source_text_hash": text_hash,
+                                        "from_node_id": from_id,
+                                        "to_node_id": to_id,
+                                        "collection": collection_name,
+                                    })
+                                    .to_string(),
+                                },
+                                request_id: None,
+                                schema_version: CURRENT_SCHEMA_VERSION,
+                                namespace_id: ns_id,
+                            },
+                        )
+                        .await;
+                        inserted_rels.push(valori_rag::community::InsertedRelationship {
+                            source_name: rel.source.clone(),
+                            target_name: rel.target.clone(),
+                            description: rel.description.clone(),
+                            strength: rel.strength,
+                            edge_id,
+                            assertion_id,
+                            evidence,
+                        });
+                    }
                     Err(_) => {
                         skipped += 1;
                     }

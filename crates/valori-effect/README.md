@@ -68,6 +68,10 @@ and respect resource budgets (RFC-0004 §5).
 | `TreeHybridTask` | `Counter("tree_hybrid_queries", 1)` — ephemeral |
 | `NoOpTask` | `Counter("noop_runs", 1)` — ephemeral |
 
+`GraphRagTask` accepts the RG4 traversal controls `edge_kinds` and
+`reverse_parent_of`, passing them through to `KernelCapability::graph_rag` so
+standalone and Raft execution share the same retrieval semantics.
+
 ## Deduplication
 
 `EffectId` is deterministic:

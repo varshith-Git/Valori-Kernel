@@ -83,7 +83,10 @@ impl LocalRuntime {
             .map(PathBuf::from)
             .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
         for rel in ["target/release/valori-node", "target/debug/valori-node"] {
-            let cand = root.join(rel);
+            let mut cand = root.join(rel);
+            if cfg!(target_os = "windows") {
+                cand.set_extension("exe");
+            }
             if cand.exists() {
                 return Ok(cand);
             }

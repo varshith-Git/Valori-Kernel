@@ -11,7 +11,8 @@
 //! `k` = retrieval_k (how many vector seeds); `final_k` = result cap (defaults to k);
 //! `max_graph_candidates` = budget on graph-only candidates before final_k;
 //! `max_nodes`/`max_edges` = Phase 5.4 BFS traversal budgets;
-//! `graph_weight` = Phase 5.4 β coefficient for the combined reranking score.
+//! `graph_weight` = RG3 β coefficient for the capped evidence boost;
+//! `edge_kinds`/`reverse_parent_of` = RG4 traversal policy.
 use crate::effect::{Effect, EffectId, EffectPayload};
 use crate::error::{EffectError, EffectResult};
 use crate::task::{Task, TaskContext, TaskOutput};
@@ -42,6 +43,10 @@ struct GraphRagInputs {
     /// Phase 5.4: β coefficient for combined reranking (0.0–1.0; default 0.3).
     #[serde(default = "default_graph_weight")]
     graph_weight: f32,
+    #[serde(default)]
+    edge_kinds: Option<Vec<u8>>,
+    #[serde(default = "default_reverse_parent_of")]
+    reverse_parent_of: bool,
 }
 
 fn default_depth() -> u32 {
@@ -54,6 +59,10 @@ fn default_max_graph_candidates() -> u32 {
 
 fn default_graph_weight() -> f32 {
     0.3
+}
+
+fn default_reverse_parent_of() -> bool {
+    true
 }
 
 pub struct GraphRagTask;
@@ -87,6 +96,8 @@ impl Task for GraphRagTask {
                 inputs.max_nodes,
                 inputs.max_edges,
                 inputs.graph_weight,
+                inputs.edge_kinds,
+                inputs.reverse_parent_of,
             )
             .await?;
 
