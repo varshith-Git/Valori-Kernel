@@ -6,6 +6,101 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### SH2 — Cloud control-plane integration for shared Free projects
+
+**Status: `READY FOR STAGING VALIDATION` / `NOT READY FOR PRODUCTION
+FREE-TIER ONBOARDING`. Not deployed to Azure.**
+
+- `valori-ui`'s Cloud control plane (`backend/apps/api`) now actually
+  registers new Free projects on the configured shared `valori-node`
+  worker instead of provisioning a dedicated container — closing the gap
+  SH-H1's live verification found. Branches on a new, data-driven
+  `runtime_profiles.hosting_mode` column (additive Supabase migration),
+  never a hardcoded plan-id check.
+- New `SharedWorkerClient` trait + `HttpSharedWorkerClient`
+  (`backend/apps/api/src/provision/shared_worker.rs`), validated
+  `SHARED_WORKER_URL`/`SHARED_WORKER_ADMIN_TOKEN`/`SHARED_WORKER_REGION`
+  config (all-or-nothing, fails closed), and lifecycle routing
+  (stop/start/delete branch to the shared worker's API; restart correctly
+  rejected for shared projects rather than restarting the shared process).
+- Root-caused and fixed SH-H1's Docker volume-permission finding: the
+  production image already pre-owns `/data` for its non-root user: the
+  fix was mounting the persistent volume there (not at `/data/shared`),
+  not a code or Dockerfile change. Documented in `docs/shared-hosting.md`.
+- **Three rounds of live local verification found and fixed real P0 bugs,
+  none caught by unit tests:**
+  1. `authenticated` held a broad, un-narrowed `INSERT`/`DELETE` grant on
+     `public.projects` — either would let an org member bypass
+     provisioning or, for a shared project, delete the row directly
+     without ever calling `DELETE /shared/projects/{id}`, orphaning its
+     engine/WAL/credentials on the worker. Both revoked; live-confirmed a
+     raw authenticated `DELETE` now returns `403 permission denied`.
+  2. `hosting_mode` was written only AFTER worker registration succeeded
+     — if that final write failed, the row kept lying about its own
+     runtime, misrouting every lifecycle operation. Fixed by recording
+     intent (`hosting_mode='shared'`, a new `status='provisioning'`,
+     `assigned_shared_worker`) BEFORE contacting the worker
+     (`begin_shared_provisioning`).
+  3. The Next.js `DELETE /api/projects/[id]` route's fallback — a direct
+     Supabase `status='deleted'` update whenever the Rust backend errored
+     or was unreachable — imitated infrastructure cleanup without
+     performing any. Removed: unreachable/errored now fails visibly
+     (`503`/the backend's own status) with the project left unchanged, so
+     the caller can retry. `status` itself is now control-plane/
+     service-role only — `authenticated`'s UPDATE grant narrowed off it.
+     Live-confirmed: raw authenticated `status` update → `403`; `name`
+     update still works.
+  4. `provisioning_generation` is now a real, enforced fence, not
+     informational: a new `SECURITY DEFINER` RPC
+     (`increment_shared_provisioning`) atomically bumps it and sets the
+     target runtime/worker in one statement; `mark_shared_project_active`'s
+     PATCH now requires the expected generation AND worker to still
+     match. Live-verified with the exact scenario: begin generation 1 →
+     begin generation 2 → activate generation 1 → **rejected** → activate
+     generation 2 → succeeds → retry generation 2 → idempotent success.
+  5. `SECURITY DEFINER` audit on that RPC: added explicit per-role
+     revokes for `anon`/`authenticated` (not just the `public`
+     pseudo-target), documented why it doesn't need to re-check project
+     ownership (only reachable via service-role, after the HTTP handler
+     already verified it), and rewrote it (`language sql` → `plpgsql`) to
+     guard `status <> 'deleted'` and raise explicitly on zero matching
+     rows instead of silently returning `NULL`. Live-confirmed: a
+     deleted project's row is unresurrected after the call raises;
+     `authenticated` calling the RPC directly → `403`.
+  6. `last_active_at` — which the real autosuspend sweep reads directly —
+     was still `authenticated`-writable, letting a Free project be kept
+     "warm" forever via a raw PostgREST PATCH bypassing all real
+     activity. Fixed by switching its one legitimate writer
+     (`resolveProjectNodeUrl` in `ui/src/lib/server/project.ts`) to the
+     service-role client and narrowing the table grant to `(name)` only.
+     Live-confirmed: raw authenticated `last_active_at` update → `403`.
+  7. That RPC's `set search_path = public` was more permissive than a
+     `SECURITY DEFINER` function should use — hardened to
+     `pg_catalog, public`, the standard pattern preventing a later
+     same-named object in `public` from hijacking unqualified resolution.
+     Live-confirmed via `pg_proc.proconfig`.
+  8. Corrupt-project quarantine (hardening roadmap Phase 4A, already
+     documented there as a "production blocker") remains required before
+     public Free-tier onboarding — not before the disposable staging
+     deployment this phase's Follow-ups now specify as the next step.
+- Real local verification (two Free orgs + one Pro org, real Postgres +
+  PostgREST + shared-worker container): plan→hosting_mode resolution,
+  worker registration + retry idempotency + the generation-fencing
+  scenario above, multiple collections per project, cross-project rejection,
+  independent state roots, restart recovery, and Pro-project non-contact
+  with the shared worker all confirmed live. This is composed
+  component-level integration (each real component called directly, in
+  the real order), not a full run through the provisioning HTTP endpoint
+  itself — that endpoint remains unverified end-to-end, a diagnosed
+  environment blocker (`reqwest`'s `rustls-tls-webpki-roots` can't trust a
+  local self-signed cert without a networking code change), not a skipped
+  step. A real paid dedicated-deployment run was also not freshly
+  exercised this session.
+- Normal backend suite: 135 passed, 3 ignored, 0 failed. Explicit live
+  `#[ignore]`d tests, run separately: 3 passed, 0 failed. No
+  `Valori-Kernel`/`valori-node` code changed — this phase is entirely in
+  `valori-ui`.
+
 ### SH-H1 — Shared Free-tier hosting: live end-to-end verification
 
 - Live-verified `crates/valori-node/src/shared.rs` against a real Docker

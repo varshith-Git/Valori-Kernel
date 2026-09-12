@@ -257,3 +257,44 @@ projects" does not match the checked-out code. Added 4 regression tests
 (9/9 shared_hosting, 641/641 full suite, clippy clean). See
 [phase-SH-H1-shared-hosting-live-verification.md](phase-SH-H1-shared-hosting-live-verification.md)
 and [docs/reviews/shared-free-hosting-live-verification.md](../reviews/shared-free-hosting-live-verification.md).
+
+# SH2 — Cloud control-plane integration for shared Free projects
+
+`valori-ui` repo, `master` (uncommitted) —
+`READY FOR STAGING VALIDATION`, `NOT READY FOR PRODUCTION FREE-TIER
+ONBOARDING`. **Not deployed to Azure.** Closed the gap SH-H1 found: Free
+projects now register on the configured `SHARED_WORKER_*` worker
+(`provision_shared_project`, branching on a data-driven
+`runtime_profiles.hosting_mode` column, not a hardcoded plan check)
+instead of getting a dedicated container. Four rounds of review each
+correctly rejected an earlier "complete"/"fixed" claim and each round's
+live verification found and fixed a real bug unit tests couldn't catch:
+(1) `authenticated` had a broad, un-narrowed `INSERT`/`DELETE` grant on
+`projects`; (2) `hosting_mode` was written only AFTER worker registration
+succeeded, misrouting lifecycle ops on failure — fixed by recording
+intent BEFORE contacting the worker; (3) the Next.js delete route's
+fallback to a direct Supabase status update could imitate infrastructure
+cleanup without performing any, `status` remained directly UPDATEable by
+`authenticated`, and `provisioning_generation` existed but wasn't
+enforced — all fixed: the fallback is removed, `status` and every SH2
+column are control-plane/service-role only, and activation is genuinely
+generation-and-worker-fenced via an atomic `SECURITY DEFINER` RPC,
+live-confirmed rejecting a stale generation and accepting/idempotently
+retrying the current one; (4) that RPC lacked explicit per-role revokes,
+an ownership-boundary invariant, and a guard against resurrecting a
+deleted project, and `last_active_at` (which real autosuspend logic
+reads) was still directly writable by `authenticated`, letting a Free
+project be kept artificially "warm" — all fixed and live-confirmed
+(`403` on direct RPC/column access from a real signed JWT; a deleted
+project's row confirmed unresurrected); (5) that same RPC's
+`search_path = public` was more permissive than a `SECURITY DEFINER`
+function should use — hardened to `pg_catalog, public`, live-confirmed
+via `pg_proc.proconfig`. SH2's own tests/build pass and it introduces no
+new Clippy findings; repository-wide Clippy remains blocked by 7
+pre-existing findings (unchanged from before this phase). Corrupt-project
+quarantine (hardening roadmap Phase 4A, already a "production blocker"
+there) is required before public Free-tier onboarding — not before the
+disposable staging deployment this phase's Follow-ups now specify as the
+next step: review the full diff, branch, commit, PR, deploy that exact
+commit to staging. See
+[phase-SH2-cloud-shared-free-provisioning.md](phase-SH2-cloud-shared-free-provisioning.md).

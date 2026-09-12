@@ -5,9 +5,18 @@ an independent `Engine`, collection registry, graph, metadata, execution/receipt
 registries, and event log. CPU, memory, the HTTP listener, and the process are
 shared; this is not a container, process, or cgroup per free project.
 
-The Cloud control plane chooses shared hosting for **new free projects** and
-keeps the existing dedicated-container provisioner for paid plans. Existing
-dedicated projects, including legacy free ones, are not moved automatically.
+The Cloud control plane chooses shared hosting for **new free projects**
+(SH2, `backend/apps/api/src/main.rs`'s `provision_shared_project`, branching
+on `runtime_profiles.hosting_mode` — see `valori-ui`'s
+`docs/phases/phase-SH2-cloud-shared-free-provisioning.md`) and keeps the
+existing dedicated-container provisioner for paid plans. This is
+implemented and locally verified as of SH2; it is **not yet deployed to
+the production Azure environment** — see that phase doc's Azure section
+for the exact deployment steps and required approval gate. Before SH2,
+this line was aspirational documentation with no corresponding
+control-plane code (see `docs/reviews/shared-free-hosting-live-verification.md`,
+the audit that found the gap). Existing dedicated projects, including
+legacy free ones, are not moved automatically.
 
 ## Worker configuration
 
@@ -17,6 +26,23 @@ Run the existing `valori-node` binary with:
 - `VALORI_SHARED_ADMIN_TOKEN`: an operator secret of at least 32 characters.
 - `VALORI_SHARED_MAX_PROJECTS`: maximum registered projects; default `100`.
 - `VALORI_BIND`: the worker listener, e.g. `0.0.0.0:3000`.
+
+**Persistent volume mount point (Docker):** the production image runs as a
+non-root user (UID/GID `65532`, distroless `nonroot`) and pre-owns exactly
+one directory in the image, `/data`, so Docker's own "seed a fresh named
+volume from the image path it's mounted over" behavior gives that volume
+correct ownership automatically. **Mount your persistent volume at `/data`,
+not at `/data/shared`** — a volume mounted directly at `/data/shared` has no
+matching pre-owned image path to seed from, so Docker creates it root-owned
+and the non-root process cannot write to it (`PUT /shared/projects/{id}`
+fails with a 500 wrapping "Permission denied", confirmed live in
+`docs/reviews/shared-free-hosting-live-verification.md`). Set
+`VALORI_SHARED_ROOT=/data/shared`; the worker process itself creates that
+subdirectory inside the (correctly-owned) `/data` volume on first use via
+`SharedHost::open()`'s own `create_dir_all`. Do not `chmod 777` the volume
+and do not run the container as root — neither is necessary once the mount
+point is correct, and both were explicitly rejected as fixes for this
+issue.
 
 The shared root contains `<project-uuid>/project.json`, `events.log`, and
 project-specific sidecars. Only the hash of each project's worker token is
