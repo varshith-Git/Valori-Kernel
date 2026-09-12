@@ -921,7 +921,10 @@ pub fn build_cluster_router_with_keys(
             post(cluster_extract_entities),
         )
         .route("/v1/assertions/verify", post(cluster_verify_assertion))
-        .route("/v1/assertions/verification/:id", get(cluster_get_assertion_verification))
+        .route(
+            "/v1/assertions/verification/:id",
+            get(cluster_get_assertion_verification),
+        )
         .route("/v1/tree/build", post(cluster_tree_build))
         .route("/v1/tree/query", post(cluster_tree_query))
         .route("/v1/tree/hybrid", post(cluster_tree_hybrid))
@@ -5008,7 +5011,11 @@ async fn cluster_ingest(
         record_ids,
         collection,
         operation_id,
-        enrichment_status: if payload.auto_enrich { "pending".into() } else { "disabled".into() },
+        enrichment_status: if payload.auto_enrich {
+            "pending".into()
+        } else {
+            "disabled".into()
+        },
     })
     .into_response()
 }
@@ -6137,7 +6144,10 @@ async fn cluster_extract_entities(
             assertion_ids: Vec::new(),
         };
         let canonical = valori_rag::community::resolve_canonical_entity(
-            &entity.name, &entity.kind, &[], &mention,
+            &entity.name,
+            &entity.kind,
+            &[],
+            &mention,
         );
         let metadata = serde_json::json!({
             "kind": "extracted_entity",
@@ -6193,10 +6203,17 @@ async fn cluster_extract_entities(
             (Some(&from_id), Some(&to_id)) => {
                 let predicate = rel.predicate.as_deref().unwrap_or(&rel.description);
                 let mut evidence = rel.evidence.clone().unwrap_or_default();
-                if let Some(source) = extraction_source.clone() { evidence.source.get_or_insert(source); }
+                if let Some(source) = extraction_source.clone() {
+                    evidence.source.get_or_insert(source);
+                }
                 evidence.source_text_hash.get_or_insert(text_hash.clone());
                 let assertion_id = valori_rag::community::assertion_identity(
-                    &text_hash, &rel.source, predicate, &rel.target, &evidence);
+                    &text_hash,
+                    &rel.source,
+                    predicate,
+                    &rel.target,
+                    &evidence,
+                );
                 let ev = KernelEvent::AutoCreateEdge {
                     from: NodeId(from_id),
                     to: NodeId(to_id),

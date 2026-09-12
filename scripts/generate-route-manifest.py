@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -72,6 +72,7 @@ PUBLIC_UNAUTH_PATHS = {"/health"}
 
 OPERATOR_INTERNAL_PATHS = {
     "/metrics",
+    "/internal/shared-import",
     "/v1/replication/wal",
     "/v1/replication/events",
     "/v1/replication/state",
@@ -403,6 +404,26 @@ def collect_units(path: Path) -> dict[str, RouterUnit]:
         else:
             units[name] = unit
 
+    # 1b. `NAME = NAME.merge(...)...;` — captures router reassignments used to
+    # add late layers/routes after optional setup. These mutate the logical
+    # router binding and must be folded into the same unit as the original let.
+    for m in re.finditer(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", src):
+        name = m.group(1)
+        rest = src[m.end() :]
+        if not rest.lstrip().startswith(name):
+            continue
+        start = m.end()
+        end = chain_end(src, start)
+        unit = parse_unit(src, name, label, start, end)
+        if not unit.routes and not unit.merges:
+            continue
+        let_spans.append((start, end))
+        if name in units:
+            units[name].routes.extend(unit.routes)
+            units[name].merges.extend(unit.merges)
+        else:
+            units[name] = unit
+
     # A function-shaped builder's body *contains* the `let` chains above. Parsing
     # the raw body would attribute the same routes to both the function and the
     # binding, double-counting them and giving the function's copy the wrong
@@ -517,8 +538,7 @@ def resolve(
             return
         seen.add(unit.qualified)
         for r in unit.routes:
-            r.mode = mode
-            out.append(r)
+            out.append(replace(r, mode=mode))
         for target, line in unit.merges:
             walk(target, unit.source_file, line)
 
@@ -689,6 +709,11 @@ def main() -> int:
                     r.source_line,
                     f"{r.method} {r.path} classified differently in standalone vs cluster",
                 )
+            elif existing.mode == "cluster" and r.mode == "standalone":
+                # The public contract should point at the canonical standalone
+                # handler when both routers expose the same method/path. Cluster
+                # handlers are alternate implementations of the same API surface.
+                all_routes[r.key()] = r
 
     utoipa = find_utoipa_annotations()
     registered_fns = registered_in_valori_api()

@@ -207,7 +207,7 @@ fn test_fresh_start_when_nothing_exists() {
 #[test]
 fn test_rotation_recovers_across_multiple_segments() {
     let dir = tempdir().unwrap();
-    let mut cfg = make_cfg(dir.path());
+    let cfg = make_cfg(dir.path());
 
     // Phase 1: insert a record, set metadata, then "crash" (drop).
     {

@@ -42,10 +42,18 @@ async fn persist_chunk_enrichment(
         api_key: cfg.api_key.clone(),
     };
     for write in writes {
-        let Some(text) = write.chunk_text.as_deref() else { continue };
+        let Some(text) = write.chunk_text.as_deref() else {
+            continue;
+        };
         let plan = valori_rag::CommunityExtractionService::extract(
-            text, &[], &llm, None, &client, Some(source),
-        ).await?;
+            text,
+            &[],
+            &llm,
+            None,
+            &client,
+            Some(source),
+        )
+        .await?;
         let record_id = write.record_id.parse::<u32>().map_err(|e| e.to_string())?;
         let payload = serde_json::json!({
             "kind": "chunk_enrichment_plan",
@@ -68,7 +76,8 @@ async fn persist_chunk_enrichment(
             "extractor": "community_extraction_service",
         });
         let mut engine = state.write().await;
-        engine.set_meta_audited(format!("record:{record_id}:enrichment"), payload)
+        engine
+            .set_meta_audited(format!("record:{record_id}:enrichment"), payload)
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -378,11 +387,20 @@ pub async fn ingest(
             {
                 Ok(result) => {
                     let enrichment_status = if payload.auto_enrich {
-                        match persist_chunk_enrichment(&state_cl, &result.writes, &source_cl, &embed_cfg).await {
+                        match persist_chunk_enrichment(
+                            &state_cl,
+                            &result.writes,
+                            &source_cl,
+                            &embed_cfg,
+                        )
+                        .await
+                        {
                             Ok(()) => "completed",
                             Err(_) => "failed",
                         }
-                    } else { "disabled" };
+                    } else {
+                        "disabled"
+                    };
                     let record_ids: Vec<u32> = result
                         .writes
                         .iter()
@@ -519,7 +537,9 @@ pub async fn ingest(
             Ok(()) => "completed".into(),
             Err(_) => "failed".into(),
         }
-    } else { "disabled".into() };
+    } else {
+        "disabled".into()
+    };
 
     Json(IngestResponse {
         ok: true,

@@ -16,25 +16,25 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tower::ServiceExt;
 
 use valori_consensus::types::ValoriNode;
-use valori_node::EngineFromNodeConfig;
 use valori_node::capabilities::CapabilityRegistryBuilder;
-use valori_node::cluster::{ClusterConfig, bootstrap_cluster};
+use valori_node::cluster::{bootstrap_cluster, ClusterConfig};
 use valori_node::cluster_server::build_cluster_router;
 use valori_node::config::NodeConfig;
 use valori_node::engine::Engine;
-use valori_node::runner::{TaskRegistry, run_graph_inline};
+use valori_node::runner::{run_graph_inline, TaskRegistry};
 use valori_node::server::build_router;
+use valori_node::EngineFromNodeConfig;
 
 use valori_planner::context::{
     CapabilitySet, PlannerFingerprint, PlanningContext, PlanningContextHash,
 };
 use valori_planner::graph::{ExecutionGraph, ExecutionRetentionPolicy, TaskId, TaskKind, TaskSpec};
 use valori_planner::operation::{
-    ExecutionPolicy, OperationInputs, OperationKind, compute_operation_hash,
+    compute_operation_hash, ExecutionPolicy, OperationInputs, OperationKind,
 };
 
 // ── Environment builders ──────────────────────────────────────────────────────
@@ -482,13 +482,11 @@ async fn graph_rag_parent_sibling_and_multiple_seed_reachability_match() {
         bounded["max_nodes"] = json!(2);
         let (status, body) = post(&env.router, "/v1/graphrag", bounded).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(
-            !body["hits"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|h| h["record_id"] == records[1])
-        );
+        assert!(!body["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["record_id"] == records[1]));
     }
     assert_eq!(
         results[0], results[1],

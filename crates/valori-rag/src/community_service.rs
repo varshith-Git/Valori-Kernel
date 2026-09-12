@@ -4,7 +4,10 @@
 //! Storage is supplied by the caller so standalone and Raft sinks can use the
 //! same plan without making HTTP calls or re-running the model during replay.
 
-use crate::community::{assertion_identity, resolve_canonical_entity, AssertionEvidence, CanonicalEntity, EntityMention, ExtractedRelationship, LlmExtractionOutput};
+use crate::community::{
+    assertion_identity, resolve_canonical_entity, AssertionEvidence, CanonicalEntity,
+    EntityMention, ExtractedRelationship, LlmExtractionOutput,
+};
 use crate::{extract_entities_via_llm, LlmConfig};
 
 #[derive(Debug, Clone)]
@@ -65,14 +68,37 @@ impl CommunityExtractionService {
             canonical_entities.push(canonical);
             mentions.push(resolved_mention);
         }
-        let assertions = extraction.relationships.iter().map(|rel: &ExtractedRelationship| {
-            let predicate = rel.predicate.as_deref().unwrap_or(&rel.description).to_string();
-            let mut evidence = rel.evidence.clone().unwrap_or_default();
-            if let Some(s) = source { evidence.source.get_or_insert(s.to_string()); }
-            evidence.source_text_hash.get_or_insert(hash.clone());
-            let id = assertion_identity(&hash, &rel.source, &predicate, &rel.target, &evidence);
-            AssertionDraft { subject: rel.source.clone(), predicate, object: rel.target.clone(), evidence, strength: rel.strength, assertion_id: id }
-        }).collect();
-        Ok(CommunityEnrichment { extraction, assertions, canonical_entities, mentions, source_text_hash: hash })
+        let assertions = extraction
+            .relationships
+            .iter()
+            .map(|rel: &ExtractedRelationship| {
+                let predicate = rel
+                    .predicate
+                    .as_deref()
+                    .unwrap_or(&rel.description)
+                    .to_string();
+                let mut evidence = rel.evidence.clone().unwrap_or_default();
+                if let Some(s) = source {
+                    evidence.source.get_or_insert(s.to_string());
+                }
+                evidence.source_text_hash.get_or_insert(hash.clone());
+                let id = assertion_identity(&hash, &rel.source, &predicate, &rel.target, &evidence);
+                AssertionDraft {
+                    subject: rel.source.clone(),
+                    predicate,
+                    object: rel.target.clone(),
+                    evidence,
+                    strength: rel.strength,
+                    assertion_id: id,
+                }
+            })
+            .collect();
+        Ok(CommunityEnrichment {
+            extraction,
+            assertions,
+            canonical_entities,
+            mentions,
+            source_text_hash: hash,
+        })
     }
 }

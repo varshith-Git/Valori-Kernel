@@ -113,7 +113,7 @@ def _all_rust_sources() -> list[tuple[Path, str]]:
     if not _RS_CACHE:
         for p in sorted((ROOT / "crates").rglob("*.rs")):
             try:
-                _RS_CACHE.append((p, p.read_text()))
+                _RS_CACHE.append((p, p.read_text(encoding="utf-8")))
             except OSError:
                 continue
     return _RS_CACHE
@@ -137,7 +137,7 @@ def find_handler_signature(source_file: str, handler: str) -> str | None:
     handler = handler.rsplit("::", 1)[-1]
     path = ROOT / source_file
     if path.exists():
-        src = path.read_text()
+        src = path.read_text(encoding="utf-8")
         sig = _sig_in(src, handler)
         if sig is not None:
             return sig
@@ -479,8 +479,8 @@ def main() -> int:
         )
         return 2
 
-    doc = yaml.safe_load(CANONICAL.read_text()) or {}
-    manifest = json.loads(MANIFEST.read_text())
+    doc = yaml.safe_load(CANONICAL.read_text(encoding="utf-8")) or {}
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     routes = {
         (r["method"].lower(), axum_to_openapi_path(r["path"])): r
         for r in manifest["routes"]

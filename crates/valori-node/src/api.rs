@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 // collection is "default" (NamespaceId 0).  Any other name returns 400 so
 // clients get a clear error rather than silently landing in the wrong bucket.
 
-pub use valori_kernel::types::id::{DEFAULT_NS, NamespaceId};
+pub use valori_kernel::types::id::{NamespaceId, DEFAULT_NS};
 
 /// Name of the default (always-existing) collection.
 pub const DEFAULT_COLLECTION: &str = "default";
@@ -1369,7 +1369,31 @@ pub struct GraphRagHit {
     /// Auditable explanation fields for this hit: resolved metadata key,
     /// source/chunk fields when present, graph distance, and the bounded
     /// evidence path through the returned subgraph.
+    #[cfg_attr(feature = "utoipa", schema(value_type = GraphRagProvenance))]
     pub provenance: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct GraphRagProvenance {
+    pub record_id: u32,
+    pub metadata_key: Option<String>,
+    pub source: Option<String>,
+    pub chunk_index: Option<u32>,
+    pub section_title: Option<String>,
+    pub document_node_id: Option<u32>,
+    pub chunk_node_id: Option<u32>,
+    pub graph_distance: Option<u32>,
+    pub graph_path: Vec<GraphRagProvenanceEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct GraphRagProvenanceEdge {
+    pub from: u32,
+    pub to: u32,
+    pub edge_id: u32,
+    pub kind: u32,
 }
 
 /// `POST /v1/graphrag` — K nearest vectors plus the connected subgraph around

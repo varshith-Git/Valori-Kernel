@@ -15,18 +15,18 @@
     }
   ],
   "totals": {
-    "routes": 100,
-    "public_sdk_routes": 74,
-    "utoipa_annotated_public_routes": 74,
+    "routes": 103,
+    "public_sdk_routes": 76,
+    "utoipa_annotated_public_routes": 76,
     "by_classification": {
       "ADMIN": 7,
       "DEPRECATED": 14,
-      "OPERATOR_INTERNAL": 5,
-      "PUBLIC_SDK": 73,
+      "OPERATOR_INTERNAL": 6,
+      "PUBLIC_SDK": 75,
       "PUBLIC_UNAUTH": 1
     },
-    "standalone_routes": 92,
-    "cluster_routes": 93
+    "standalone_routes": 95,
+    "cluster_routes": 95
   },
   "routes": [
     {
@@ -34,8 +34,8 @@
       "path": "/graph/edge",
       "handler": "create_edge",
       "operation_id": "create_edge",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 478,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 483,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -54,8 +54,8 @@
       "path": "/graph/edges/:id",
       "handler": "get_edges",
       "operation_id": "get_edges",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 479,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 484,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -74,8 +74,8 @@
       "path": "/graph/node",
       "handler": "create_node",
       "operation_id": "create_node",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 472,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 477,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -94,8 +94,8 @@
       "path": "/graph/node/:id",
       "handler": "delete_node",
       "operation_id": "delete_node",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 473,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 478,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -114,8 +114,8 @@
       "path": "/graph/node/:id",
       "handler": "get_node",
       "operation_id": "get_node",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 473,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 478,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -134,8 +134,8 @@
       "path": "/graph/nodes",
       "handler": "list_nodes",
       "operation_id": "list_nodes",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 477,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 482,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -153,8 +153,8 @@
       "path": "/graph/subgraph",
       "handler": "get_subgraph",
       "operation_id": "get_subgraph",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 480,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 485,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -173,7 +173,7 @@
       "path": "/health",
       "handler": "health_check",
       "operation_id": "get_health",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 335,
       "router_binding": "public",
       "classification": "PUBLIC_UNAUTH",
@@ -186,14 +186,33 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_health",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
+    },
+    {
+      "method": "POST",
+      "path": "/internal/shared-import",
+      "handler": "crate::shared::import_project",
+      "operation_id": "import_project",
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 503,
+      "router_binding": "transfer",
+      "classification": "OPERATOR_INTERNAL",
+      "public_sdk_export": false,
+      "modes": [
+        "standalone"
+      ],
+      "utoipa_registered": false,
+      "utoipa_annotated": false,
+      "utoipa_registered_in_api": false,
+      "utoipa_operation_id": null,
+      "utoipa_source_file": null
     },
     {
       "method": "GET",
       "path": "/metrics",
       "handler": "metrics_handler",
       "operation_id": "metrics_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 336,
       "router_binding": "public",
       "classification": "OPERATOR_INTERNAL",
@@ -213,8 +232,8 @@
       "path": "/operations",
       "handler": "get_operations",
       "operation_id": "get_operations",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 470,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 475,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -233,8 +252,8 @@
       "path": "/operations/:id",
       "handler": "get_operation_by_id",
       "operation_id": "get_operation_by_id",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 471,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 476,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -253,8 +272,8 @@
       "path": "/records",
       "handler": "insert_record",
       "operation_id": "insert_record",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 467,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 472,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -273,8 +292,8 @@
       "path": "/search",
       "handler": "search",
       "operation_id": "search",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 468,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 473,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -293,8 +312,8 @@
       "path": "/timeline",
       "handler": "get_timeline",
       "operation_id": "get_timeline",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 469,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 474,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -308,11 +327,51 @@
       "utoipa_source_file": null
     },
     {
+      "method": "GET",
+      "path": "/v1/assertions/verification/:id",
+      "handler": "get_assertion_verification",
+      "operation_id": "get_assertion_verification",
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 449,
+      "router_binding": "v1",
+      "classification": "PUBLIC_SDK",
+      "public_sdk_export": true,
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "utoipa_registered": true,
+      "utoipa_annotated": true,
+      "utoipa_registered_in_api": true,
+      "utoipa_operation_id": "get_assertion_verification",
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/assertions/verify",
+      "handler": "verify_assertion",
+      "operation_id": "verify_assertion",
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 448,
+      "router_binding": "v1",
+      "classification": "PUBLIC_SDK",
+      "public_sdk_export": true,
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "utoipa_registered": true,
+      "utoipa_annotated": true,
+      "utoipa_registered_in_api": true,
+      "utoipa_operation_id": "verify_assertion",
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
+    },
+    {
       "method": "POST",
       "path": "/v1/cluster/add-node",
       "handler": "add_node",
       "operation_id": "add_node",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 68,
       "router_binding": "cluster_router",
       "classification": "ADMIN",
@@ -331,7 +390,7 @@
       "path": "/v1/cluster/health",
       "handler": "health",
       "operation_id": "get_cluster_health",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 65,
       "router_binding": "cluster_router",
       "classification": "PUBLIC_SDK",
@@ -343,14 +402,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_cluster_health",
-      "utoipa_source_file": "crates/valori-node/src/cluster_api.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\cluster_api.rs"
     },
     {
       "method": "GET",
       "path": "/v1/cluster/proof",
       "handler": "cluster_proof",
       "operation_id": "get_cluster_proof",
-      "source_file": "crates/valori-node/src/cluster_server.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_server.rs",
       "source_line": 888,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -362,14 +421,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_cluster_proof",
-      "utoipa_source_file": "crates/valori-node/src/cluster_server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\cluster_server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/cluster/read-index",
       "handler": "read_index",
       "operation_id": "read_index",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 66,
       "router_binding": "cluster_router",
       "classification": "OPERATOR_INTERNAL",
@@ -388,7 +447,7 @@
       "path": "/v1/cluster/remove-node",
       "handler": "remove_node",
       "operation_id": "remove_node",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 69,
       "router_binding": "cluster_router",
       "classification": "ADMIN",
@@ -407,7 +466,7 @@
       "path": "/v1/cluster/role",
       "handler": "role",
       "operation_id": "get_cluster_role",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 67,
       "router_binding": "cluster_router",
       "classification": "PUBLIC_SDK",
@@ -419,14 +478,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_cluster_role",
-      "utoipa_source_file": "crates/valori-node/src/cluster_api.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\cluster_api.rs"
     },
     {
       "method": "POST",
       "path": "/v1/cluster/snapshot",
       "handler": "trigger_snapshot",
       "operation_id": "trigger_snapshot",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 70,
       "router_binding": "cluster_router",
       "classification": "ADMIN",
@@ -445,7 +504,7 @@
       "path": "/v1/cluster/status",
       "handler": "status",
       "operation_id": "get_cluster_status",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "source_line": 64,
       "router_binding": "cluster_router",
       "classification": "PUBLIC_SDK",
@@ -457,15 +516,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_cluster_status",
-      "utoipa_source_file": "crates/valori-node/src/cluster_api.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\cluster_api.rs"
     },
     {
       "method": "POST",
       "path": "/v1/community/detect",
       "handler": "community_detect",
       "operation_id": "community_detect",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 456,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 461,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -477,15 +536,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "community_detect",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/community/overview",
       "handler": "community_overview",
       "operation_id": "community_overview",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 458,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 463,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -497,15 +556,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "community_overview",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/community/search",
       "handler": "community_search",
       "operation_id": "community_search",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 457,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 462,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -517,14 +576,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "community_search",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "DELETE",
       "path": "/v1/crypto/shred/:key_id",
       "handler": "shred_key_handler",
       "operation_id": "shred_key_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 432,
       "router_binding": "v1",
       "classification": "ADMIN",
@@ -544,7 +603,7 @@
       "path": "/v1/crypto/status/:key_id",
       "handler": "crypto_status_handler",
       "operation_id": "get_key_status",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 433,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -557,14 +616,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_key_status",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/delete",
       "handler": "delete_record",
       "operation_id": "delete_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 367,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -577,14 +636,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "delete_record",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/graph/edge",
       "handler": "create_edge",
       "operation_id": "create_graph_edge",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 363,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -597,14 +656,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "create_graph_edge",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/graph/edges/:id",
       "handler": "get_edges",
       "operation_id": "list_node_edges",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 364,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -617,14 +676,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_node_edges",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/graph/node",
       "handler": "create_node",
       "operation_id": "create_graph_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 357,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -637,14 +696,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "create_graph_node",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "DELETE",
       "path": "/v1/graph/node/:id",
       "handler": "delete_node",
       "operation_id": "delete_graph_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 358,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -657,14 +716,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "delete_graph_node",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/graph/node/:id",
       "handler": "get_node",
       "operation_id": "get_graph_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 358,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -677,14 +736,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_graph_node",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/graph/nodes",
       "handler": "list_nodes",
       "operation_id": "list_graph_nodes",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 362,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -697,14 +756,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_graph_nodes",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/graph/query",
       "handler": "graph_query",
       "operation_id": "graph_query",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 366,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -717,14 +776,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "graph_query",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/graph/subgraph",
       "handler": "get_subgraph",
       "operation_id": "get_subgraph",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 365,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -737,14 +796,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_subgraph",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/graphrag",
       "handler": "graphrag",
       "operation_id": "graphrag",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 370,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -757,14 +816,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "graphrag",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/index/config",
       "handler": "index_config_handler",
       "operation_id": "get_index_config",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 434,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -777,14 +836,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_index_config",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/index/rebuild",
       "handler": "index_rebuild_handler",
       "operation_id": "rebuild_indexes",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 435,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -797,14 +856,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "rebuild_indexes",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/ingest",
       "handler": "crate::ingest::ingest",
       "operation_id": "ingest_document",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 441,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -817,14 +876,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "ingest_document",
-      "utoipa_source_file": "crates/valori-node/src/ingest.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\ingest.rs"
     },
     {
       "method": "POST",
       "path": "/v1/ingest/document",
       "handler": "valori_ingest::ingest_document",
       "operation_id": "chunk_document",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 440,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -837,14 +896,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "chunk_document",
-      "utoipa_source_file": "crates/valori-ingest/src/handler.rs"
+      "utoipa_source_file": "crates\\valori-ingest\\src\\handler.rs"
     },
     {
       "method": "POST",
       "path": "/v1/ingest/extract-entities",
       "handler": "extract_entities",
       "operation_id": "extract_entities",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 447,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -857,14 +916,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "extract_entities",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/ingest/status/:job_id",
       "handler": "crate::ingest::get_ingest_status",
       "operation_id": "get_ingest_status",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 442,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -877,14 +936,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_ingest_status",
-      "utoipa_source_file": "crates/valori-node/src/ingest.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\ingest.rs"
     },
     {
       "method": "POST",
       "path": "/v1/ingest/update",
       "handler": "crate::ingest::ingest_update",
       "operation_id": "update_ingested_document",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 446,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -897,14 +956,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "update_ingested_document",
-      "utoipa_source_file": "crates/valori-node/src/ingest.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\ingest.rs"
     },
     {
       "method": "GET",
       "path": "/v1/keys",
       "handler": "list_keys_handler",
       "operation_id": "list_keys_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 341,
       "router_binding": "key_routes",
       "classification": "ADMIN",
@@ -924,7 +983,7 @@
       "path": "/v1/keys",
       "handler": "create_key_handler",
       "operation_id": "create_key_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 341,
       "router_binding": "key_routes",
       "classification": "ADMIN",
@@ -944,7 +1003,7 @@
       "path": "/v1/keys/:id",
       "handler": "revoke_key_handler",
       "operation_id": "revoke_key_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 342,
       "router_binding": "key_routes",
       "classification": "ADMIN",
@@ -964,7 +1023,7 @@
       "path": "/v1/memory/consolidate",
       "handler": "memory_consolidate",
       "operation_id": "memory_consolidate",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 379,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -977,14 +1036,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_consolidate",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/contradict",
       "handler": "memory_contradict",
       "operation_id": "memory_contradict",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 380,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -997,14 +1056,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_contradict",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/memory/meta/get",
       "handler": "meta_get",
       "operation_id": "get_metadata_sidecar",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 382,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1017,14 +1076,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_metadata_sidecar",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/meta/set",
       "handler": "meta_set",
       "operation_id": "set_metadata_sidecar",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 381,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1037,14 +1096,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "set_metadata_sidecar",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/search",
       "handler": "memory_search_vector",
       "operation_id": "memory_search",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 377,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1057,14 +1116,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_search",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/search_vector",
       "handler": "memory_search_vector_alias",
       "operation_id": "memory_search_vector",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 378,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1077,14 +1136,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_search_vector",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/upsert",
       "handler": "memory_upsert_vector",
       "operation_id": "memory_upsert",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 375,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1097,14 +1156,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_upsert",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/memory/upsert_vector",
       "handler": "memory_upsert_vector_alias",
       "operation_id": "memory_upsert_vector",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 376,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1117,15 +1176,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "memory_upsert_vector",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/models/health",
       "handler": "models_health",
       "operation_id": "get_models_health",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 459,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 464,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1137,14 +1196,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_models_health",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/namespaces",
       "handler": "list_collections_handler",
       "operation_id": "list_collections",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 410,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1157,14 +1216,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_collections",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/namespaces",
       "handler": "create_collection_handler",
       "operation_id": "create_collection",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 410,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1177,14 +1236,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "create_collection",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "DELETE",
       "path": "/v1/namespaces/:name",
       "handler": "drop_collection_handler",
       "operation_id": "delete_collection",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 414,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1197,14 +1256,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "delete_collection",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/namespaces/:name/index",
       "handler": "index_lifecycle_status_handler",
       "operation_id": "get_collection_index",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 415,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1217,14 +1276,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_collection_index",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/namespaces/:name/index",
       "handler": "index_lifecycle_create_handler",
       "operation_id": "set_collection_index",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 415,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1237,14 +1296,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "set_collection_index",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/operations",
       "handler": "get_operations",
       "operation_id": "list_operations",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 401,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1257,14 +1316,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_operations",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/operations/:id",
       "handler": "get_operation_by_id",
       "operation_id": "get_operation",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 402,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1277,14 +1336,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_operation",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/operations/:id/execution",
       "handler": "get_operation_execution",
       "operation_id": "get_operation_execution",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 406,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1297,14 +1356,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_operation_execution",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/proof/event-log",
       "handler": "get_event_proof",
       "operation_id": "get_event_log_proof",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 385,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1317,14 +1376,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_event_log_proof",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/proof/receipt",
       "handler": "get_latest_receipt",
       "operation_id": "get_latest_receipt",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 386,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1337,14 +1396,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_latest_receipt",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/proof/receipt/:id",
       "handler": "get_receipt_by_id",
       "operation_id": "get_receipt",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 387,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1357,14 +1416,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_receipt",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/proof/state",
       "handler": "get_proof",
       "operation_id": "get_state_proof",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 384,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1377,14 +1436,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_state_proof",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/records",
       "handler": "insert_record",
       "operation_id": "insert_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 349,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1397,14 +1456,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "insert_record",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/records/:id",
       "handler": "get_record_by_id",
       "operation_id": "get_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 350,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1417,14 +1476,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_record",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "PATCH",
       "path": "/v1/records/:id/metadata",
       "handler": "update_record_metadata",
       "operation_id": "update_record_metadata",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 351,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1437,14 +1496,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "update_record_metadata",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/records/encrypted",
       "handler": "insert_encrypted_handler",
       "operation_id": "insert_encrypted_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 431,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1457,14 +1516,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "insert_encrypted_record",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/replication/events",
       "handler": "get_replication_events",
       "operation_id": "get_replication_events",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 392,
       "router_binding": "v1",
       "classification": "OPERATOR_INTERNAL",
@@ -1483,7 +1542,7 @@
       "path": "/v1/replication/state",
       "handler": "get_replication_state",
       "operation_id": "get_replication_state",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 396,
       "router_binding": "v1",
       "classification": "OPERATOR_INTERNAL",
@@ -1502,7 +1561,7 @@
       "path": "/v1/replication/wal",
       "handler": "get_wal_stream",
       "operation_id": "get_wal_stream",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 391,
       "router_binding": "v1",
       "classification": "OPERATOR_INTERNAL",
@@ -1521,7 +1580,7 @@
       "path": "/v1/search",
       "handler": "search",
       "operation_id": "search",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 355,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1534,14 +1593,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "search",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/search/multi",
       "handler": "multi_search",
       "operation_id": "search_multi",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 356,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1554,14 +1613,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "search_multi",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/shard/routing",
       "handler": "shard_routing_handler",
       "operation_id": "get_shard_routing",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 436,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1574,14 +1633,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_shard_routing",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/snapshot/download",
       "handler": "snapshot",
       "operation_id": "download_snapshot",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 371,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1594,14 +1653,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "download_snapshot",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/snapshot/restore",
       "handler": "snapshot_restore",
       "operation_id": "restore_snapshot",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 374,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1614,14 +1673,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "restore_snapshot",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/snapshot/save",
       "handler": "snapshot_save",
       "operation_id": "save_snapshot",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 373,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1634,14 +1693,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "save_snapshot",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/snapshot/upload",
       "handler": "restore",
       "operation_id": "upload_snapshot",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 372,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1653,14 +1712,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "upload_snapshot",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/soft-delete",
       "handler": "soft_delete_record",
       "operation_id": "soft_delete_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 368,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1673,14 +1732,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "soft_delete_record",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/storage/manifest",
       "handler": "get_manifest",
       "operation_id": "get_storage_manifest",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 428,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1693,14 +1752,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_storage_manifest",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/storage/snapshots",
       "handler": "list_remote_snapshots",
       "operation_id": "list_object_store_snapshots",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 419,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1713,14 +1772,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_object_store_snapshots",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/storage/snapshots/restore",
       "handler": "restore_from_store",
       "operation_id": "restore_snapshot_from_object_store",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 427,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1733,14 +1792,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "restore_snapshot_from_object_store",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/storage/snapshots/upload",
       "handler": "upload_snapshot_to_store",
       "operation_id": "upload_snapshot_to_object_store",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 423,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1753,14 +1812,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "upload_snapshot_to_object_store",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/storage/wal",
       "handler": "list_remote_wal",
       "operation_id": "list_archived_wal_segments",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 429,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1773,14 +1832,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "list_archived_wal_segments",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/storage/wal/archive",
       "handler": "archive_wal_segment",
       "operation_id": "archive_wal_segment",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 430,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1793,14 +1852,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "archive_wal_segment",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "GET",
       "path": "/v1/timeline",
       "handler": "get_timeline",
       "operation_id": "get_timeline",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 400,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1813,15 +1872,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_timeline",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/tree/build",
       "handler": "tree_build",
       "operation_id": "tree_build",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 448,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 453,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1833,15 +1892,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "tree_build",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/tree/chain-verify",
       "handler": "valori_rag::tree::tree_chain_verify",
       "operation_id": "tree_chain_verify",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 452,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 457,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1853,15 +1912,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "tree_chain_verify",
-      "utoipa_source_file": "crates/valori-rag/src/tree.rs"
+      "utoipa_source_file": "crates\\valori-rag\\src\\tree.rs"
     },
     {
       "method": "POST",
       "path": "/v1/tree/hybrid",
       "handler": "tree_hybrid",
       "operation_id": "tree_hybrid",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 450,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 455,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1873,15 +1932,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "tree_hybrid",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/tree/query",
       "handler": "tree_query",
       "operation_id": "tree_query",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 449,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 454,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1893,15 +1952,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "tree_query",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/tree/verify",
       "handler": "valori_rag::tree::tree_verify",
       "operation_id": "tree_verify",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 451,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 456,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
       "public_sdk_export": true,
@@ -1913,14 +1972,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "tree_verify",
-      "utoipa_source_file": "crates/valori-rag/src/tree.rs"
+      "utoipa_source_file": "crates\\valori-rag\\src\\tree.rs"
     },
     {
       "method": "GET",
       "path": "/v1/usage",
       "handler": "usage_handler",
       "operation_id": "get_usage",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 383,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1933,14 +1992,14 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_usage",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/vectors/batch-insert",
       "handler": "batch_insert",
       "operation_id": "insert_records_batch",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 369,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1953,15 +2012,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "insert_records_batch",
-      "utoipa_source_file": "crates/valori-node/src/server.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\server.rs"
     },
     {
       "method": "POST",
       "path": "/v1/vectors/batch_insert",
       "handler": "batch_insert",
       "operation_id": "batch_insert",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 482,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 487,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,
@@ -1980,7 +2039,7 @@
       "path": "/v1/version",
       "handler": "version_handler",
       "operation_id": "get_version",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "source_line": 348,
       "router_binding": "v1",
       "classification": "PUBLIC_SDK",
@@ -1993,15 +2052,15 @@
       "utoipa_annotated": true,
       "utoipa_registered_in_api": true,
       "utoipa_operation_id": "get_version",
-      "utoipa_source_file": "crates/valori-node/src/routes/mod.rs"
+      "utoipa_source_file": "crates\\valori-node\\src\\routes\\mod.rs"
     },
     {
       "method": "GET",
       "path": "/version",
       "handler": "version_handler",
       "operation_id": "version_handler",
-      "source_file": "crates/valori-node/src/server.rs",
-      "source_line": 466,
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "source_line": 471,
       "router_binding": "legacy",
       "classification": "DEPRECATED",
       "public_sdk_export": false,

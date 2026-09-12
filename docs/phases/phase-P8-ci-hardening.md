@@ -27,7 +27,6 @@ configurable so it can serve all job types without repetition.
 | `wasm-build` | `kernel-abi.yml` | yes (path-filtered) | `valori-kernel` + `valori-core` compile for `wasm32-unknown-unknown` |
 | `regression` | `write-regression.yml` | soft-fail | p99 insert latency + batch throughput vs baseline |
 | `cargo-deny` | `cargo-deny.yml` | yes | dependency audit (advisories, licenses, bans) |
-| `count-tests` | `test-count.yml` | no (main only) | badge update |
 
 ## Coverage job design
 

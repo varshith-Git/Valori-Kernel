@@ -39,6 +39,37 @@ components:
       - key
       - size_bytes
       type: object
+    AssertionEvidence:
+      properties:
+        chunk_id:
+          type:
+          - string
+          - 'null'
+        passage_id:
+          type:
+          - string
+          - 'null'
+        source:
+          type:
+          - string
+          - 'null'
+        source_text_hash:
+          type:
+          - string
+          - 'null'
+        span_end:
+          format: int64
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        span_start:
+          format: int64
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+      type: object
     BatchInsertRequest:
       properties:
         batch:
@@ -810,6 +841,10 @@ components:
           type:
           - string
           - 'null'
+        source:
+          type:
+          - string
+          - 'null'
         text:
           type: string
       required:
@@ -953,6 +988,12 @@ components:
           type:
           - integer
           - 'null'
+        provenance:
+          $ref: '#/components/schemas/GraphRagProvenance'
+          description: |-
+            Auditable explanation fields for this hit: resolved metadata key,
+            source/chunk fields when present, graph distance, and the bounded
+            evidence path through the returned subgraph.
         record_id:
           description: The underlying record.
           format: int32
@@ -960,8 +1001,9 @@ components:
           type: integer
         score:
           description: |-
-            Vector distance. `null` for a graph-only hit. Retained for backward
-            compatibility; `vector_score` is the explicit spelling of the same value.
+            Vector distance. Retained for backward compatibility; `vector_score` is
+            the explicit spelling of the same value. `null` only when the candidate
+            has no usable vector.
           format: float
           type:
           - number
@@ -970,7 +1012,7 @@ components:
           description: How this hit entered the result set — e.g. `vector`, `graph`.
           type: string
         vector_score:
-          description: Vector distance. `null` for a graph-only hit.
+          description: Vector distance. `null` only when the candidate has no usable vector.
           format: float
           type:
           - number
@@ -981,6 +1023,81 @@ components:
       - graph_score
       - final_score
       - source
+      - provenance
+      type: object
+    GraphRagProvenance:
+      properties:
+        chunk_index:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        chunk_node_id:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        document_node_id:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        graph_distance:
+          format: int32
+          minimum: 0
+          type:
+          - integer
+          - 'null'
+        graph_path:
+          items:
+            $ref: '#/components/schemas/GraphRagProvenanceEdge'
+          type: array
+        metadata_key:
+          type:
+          - string
+          - 'null'
+        record_id:
+          format: int32
+          minimum: 0
+          type: integer
+        section_title:
+          type:
+          - string
+          - 'null'
+        source:
+          type:
+          - string
+          - 'null'
+      required:
+      - record_id
+      - graph_path
+      type: object
+    GraphRagProvenanceEdge:
+      properties:
+        edge_id:
+          format: int32
+          minimum: 0
+          type: integer
+        from:
+          format: int32
+          minimum: 0
+          type: integer
+        kind:
+          format: int32
+          minimum: 0
+          type: integer
+        to:
+          format: int32
+          minimum: 0
+          type: integer
+      required:
+      - from
+      - to
+      - edge_id
+      - kind
       type: object
     GraphRagRequest:
       properties:
@@ -992,6 +1109,15 @@ components:
           format: int32
           minimum: 0
           type: integer
+        edge_kinds:
+          description: 'RG4: optional allowed edge-kind IDs for traversal. Absent = all edge kinds.'
+          items:
+            format: int32
+            minimum: 0
+            type: integer
+          type:
+          - array
+          - 'null'
         final_k:
           description: Maximum returned hits. Absent = defaults to `retrieval_k` (Phase 5.4).
           minimum: 0
@@ -999,7 +1125,7 @@ components:
           - integer
           - 'null'
         graph_weight:
-          description: 'Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].'
+          description: 'RG3: β in the capped graph-evidence boost. Range [0,1].'
           format: float
           type: number
         k:
@@ -1009,7 +1135,7 @@ components:
           - integer
           - 'null'
         max_edges:
-          description: 'Phase 5.4: halt edge emission once this count is reached per BFS round.'
+          description: Bound adjacency entries examined across the whole GraphRAG traversal.
           minimum: 0
           type:
           - integer
@@ -1037,6 +1163,9 @@ components:
           type:
           - integer
           - 'null'
+        reverse_parent_of:
+          description: 'RG4: whether incoming ParentOf edges may be traversed from chunk to parent.'
+          type: boolean
       required:
       - query_vector
       type: object
@@ -1451,6 +1580,9 @@ components:
         async flow depends on, since it is what `GET /v1/ingest/status/{job_id}`
         takes.
       properties:
+        auto_enrich:
+          description: Enrichment mode requested for the background job.
+          type: boolean
         collection:
           type: string
         job_id:
@@ -1466,6 +1598,7 @@ components:
       - job_id
       - status
       - collection
+      - auto_enrich
       type: object
     IngestChunk:
       description: One chunk produced by a chunking strategy.
@@ -1634,6 +1767,9 @@ components:
           type:
           - boolean
           - 'null'
+        auto_enrich:
+          description: Run shared entity/relation enrichment after vector ingestion.
+          type: boolean
         chunk_overlap:
           minimum: 0
           type:
@@ -1672,6 +1808,9 @@ components:
           format: int32
           minimum: 0
           type: integer
+        enrichment_status:
+          description: '`disabled`, `pending`, `completed`, or `failed`.'
+          type: string
         ok:
           type: boolean
         operation_id:
@@ -1695,6 +1834,7 @@ components:
       - record_ids
       - collection
       - operation_id
+      - enrichment_status
       type: object
     IngestUpdateRequest:
       properties:
@@ -1925,7 +2065,18 @@ components:
       type: object
     InsertedEntity:
       properties:
+        aliases:
+          items:
+            type: string
+          type: array
+        canonical_name:
+          type: string
         description:
+          type: string
+        entity_id:
+          description: RG7 deterministic identity for this source-resolved entity.
+          type: string
+        mention_id:
           type: string
         name:
           type: string
@@ -1946,24 +2097,38 @@ components:
       - type
       - description
       - node_id
+      - entity_id
+      - canonical_name
+      - aliases
+      - mention_id
       type: object
     InsertedRelationship:
       properties:
+        assertion_id:
+          type: string
         description:
           type: string
         edge_id:
           format: int32
           minimum: 0
           type: integer
+        evidence:
+          $ref: '#/components/schemas/AssertionEvidence'
         source_name:
           type: string
+        strength:
+          format: float
+          type: number
         target_name:
           type: string
       required:
       - source_name
       - target_name
       - description
+      - strength
       - edge_id
+      - assertion_id
+      - evidence
       type: object
     ListCollectionsResponse:
       properties:
@@ -3561,6 +3726,25 @@ components:
       - title
       - summary
       type: object
+    StructuredClaim:
+      properties:
+        negated:
+          type: boolean
+        object:
+          type: string
+        predicate:
+          type: string
+        subject:
+          type: string
+        time_scope:
+          type:
+          - string
+          - 'null'
+      required:
+      - subject
+      - predicate
+      - object
+      type: object
     SubgraphEdge:
       description: |-
         One edge in an expanded subgraph, as emitted by
@@ -4176,6 +4360,72 @@ components:
       - snapshot_bytes
       - total_bytes
       type: object
+    VerificationOutcome:
+      enum:
+      - Supports
+      - Contradicts
+      - Neutral
+      - Unknown
+      type: string
+    VerificationReceipt:
+      properties:
+        confidence:
+          type:
+          - string
+          - 'null'
+        confidence_source:
+          type: string
+        config_hash:
+          type: string
+        evidence_refs:
+          items:
+            $ref: '#/components/schemas/AssertionEvidence'
+          type: array
+        input_assertion_ids:
+          items:
+            type: string
+          type: array
+        outcome:
+          $ref: '#/components/schemas/VerificationOutcome'
+        receipt_hash:
+          type: string
+        verification_id:
+          type: string
+        verifier_type:
+          type: string
+        verifier_version:
+          type: string
+      required:
+      - verification_id
+      - outcome
+      - verifier_type
+      - verifier_version
+      - config_hash
+      - input_assertion_ids
+      - evidence_refs
+      - confidence_source
+      - receipt_hash
+      type: object
+    VerifyClaimRequest:
+      properties:
+        evidence_refs:
+          items:
+            $ref: '#/components/schemas/AssertionEvidence'
+          type: array
+        left:
+          $ref: '#/components/schemas/StructuredClaim'
+        left_assertion_id:
+          type: string
+        right:
+          $ref: '#/components/schemas/StructuredClaim'
+        right_assertion_id:
+          type: string
+      required:
+      - left
+      - right
+      - left_assertion_id
+      - right_assertion_id
+      type: object
     WalEntry:
       properties:
         key:
@@ -4229,6 +4479,93 @@ paths:
       summary: Node health and capacity snapshot
       tags:
       - meta
+      x-sdk: true
+  /v1/assertions/verification/{id}:
+    get:
+      description: Returns the deterministic verification receipt for an assertion verification id, or null when no receipt exists.
+      operationId: get_assertion_verification
+      parameters:
+      - description: Verification id returned by `POST /v1/assertions/verify`
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: 'null'
+                - $ref: '#/components/schemas/VerificationReceipt'
+          description: Stored verification receipt, or null
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: 'Missing or invalid credentials. The auth middleware rejects the request before the handler runs; `attach_error_code` renders the rejection as a canonical `ApiError` with `code: "unauthorized"`.'
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: 'The presented key authenticated but its scope does not satisfy this operation''s `x-required-scope`. Rendered as a canonical `ApiError` with `code: "forbidden"`.'
+      security:
+      - BearerAuth: []
+      summary: Fetch a stored assertion verification receipt
+      tags:
+      - assertions
+      x-required-scope: read_only
+      x-sdk: true
+  /v1/assertions/verify:
+    post:
+      description: Compares two normalized structured claims and stores a deterministic verification receipt in metadata.
+      operationId: verify_assertion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyClaimRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerificationReceipt'
+          description: Verification receipt
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: Malformed request
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: 'Missing or invalid credentials. The auth middleware rejects the request before the handler runs; `attach_error_code` renders the rejection as a canonical `ApiError` with `code: "unauthorized"`.'
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: 'The presented key authenticated but its scope does not satisfy this operation''s `x-required-scope`. Rendered as a canonical `ApiError` with `code: "forbidden"`.'
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+          description: Internal error
+      security:
+      - BearerAuth: []
+      summary: Verify two structured assertions
+      tags:
+      - assertions
+      x-required-scope: read_write
       x-sdk: true
   /v1/cluster/health:
     get:
@@ -5045,7 +5382,7 @@ paths:
       x-sdk: true
   /v1/graphrag:
     post:
-      description: Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = (1-graph_weight)*vector_rel + graph_weight*graph_rel`.
+      description: Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
       operationId: graphrag
       requestBody:
         content:

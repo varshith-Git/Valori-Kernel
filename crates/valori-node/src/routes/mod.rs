@@ -30,8 +30,8 @@
 //! built through [`crate::errors::EngineError`] so both paths emit the same
 //! canonical `{"error": …}` body shape.
 
-pub mod collections;
 pub mod assertions;
+pub mod collections;
 pub mod explain;
 pub mod graph;
 pub mod index_lifecycle;

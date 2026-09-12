@@ -24,6 +24,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/assertions/verification/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch a stored assertion verification receipt
+         * @description Returns the deterministic verification receipt for an assertion verification id, or null when no receipt exists.
+         */
+        get: operations["get_assertion_verification"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/assertions/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify two structured assertions
+         * @description Compares two normalized structured claims and stores a deterministic verification receipt in metadata.
+         */
+        post: operations["verify_assertion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/cluster/health": {
         parameters: {
             query?: never;
@@ -353,7 +393,7 @@ export interface paths {
         put?: never;
         /**
          * Vector search plus graph expansion in one read
-         * @description Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = (1-graph_weight)*vector_rel + graph_weight*graph_rel`.
+         * @description Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
          */
         post: operations["graphrag"];
         delete?: never;
@@ -1451,6 +1491,16 @@ export interface components {
             /** Format: int64 */
             size_bytes: number;
         };
+        AssertionEvidence: {
+            chunk_id?: string | null;
+            passage_id?: string | null;
+            source?: string | null;
+            source_text_hash?: string | null;
+            /** Format: int64 */
+            span_end?: number | null;
+            /** Format: int64 */
+            span_start?: number | null;
+        };
         BatchInsertRequest: {
             batch: number[][];
             collection?: string | null;
@@ -1776,6 +1826,7 @@ export interface components {
             entity_types?: string[];
             model?: string | null;
             namespace?: string | null;
+            source?: string | null;
             text: string;
         };
         ExtractEntitiesResponse: {
@@ -1849,38 +1900,73 @@ export interface components {
              */
             node_id?: number | null;
             /**
+             * @description Auditable explanation fields for this hit: resolved metadata key,
+             *     source/chunk fields when present, graph distance, and the bounded
+             *     evidence path through the returned subgraph.
+             */
+            provenance: components["schemas"]["GraphRagProvenance"];
+            /**
              * Format: int32
              * @description The underlying record.
              */
             record_id: number;
             /**
              * Format: float
-             * @description Vector distance. `null` for a graph-only hit. Retained for backward
-             *     compatibility; `vector_score` is the explicit spelling of the same value.
+             * @description Vector distance. Retained for backward compatibility; `vector_score` is
+             *     the explicit spelling of the same value. `null` only when the candidate
+             *     has no usable vector.
              */
             score?: number | null;
             /** @description How this hit entered the result set — e.g. `vector`, `graph`. */
             source: string;
             /**
              * Format: float
-             * @description Vector distance. `null` for a graph-only hit.
+             * @description Vector distance. `null` only when the candidate has no usable vector.
              */
             vector_score?: number | null;
+        };
+        GraphRagProvenance: {
+            /** Format: int32 */
+            chunk_index?: number | null;
+            /** Format: int32 */
+            chunk_node_id?: number | null;
+            /** Format: int32 */
+            document_node_id?: number | null;
+            /** Format: int32 */
+            graph_distance?: number | null;
+            graph_path: components["schemas"]["GraphRagProvenanceEdge"][];
+            metadata_key?: string | null;
+            /** Format: int32 */
+            record_id: number;
+            section_title?: string | null;
+            source?: string | null;
+        };
+        GraphRagProvenanceEdge: {
+            /** Format: int32 */
+            edge_id: number;
+            /** Format: int32 */
+            from: number;
+            /** Format: int32 */
+            kind: number;
+            /** Format: int32 */
+            to: number;
         };
         GraphRagRequest: {
             collection?: string | null;
             /** Format: int32 */
             depth?: number;
+            /** @description RG4: optional allowed edge-kind IDs for traversal. Absent = all edge kinds. */
+            edge_kinds?: number[] | null;
             /** @description Maximum returned hits. Absent = defaults to `retrieval_k` (Phase 5.4). */
             final_k?: number | null;
             /**
              * Format: float
-             * @description Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].
+             * @description RG3: β in the capped graph-evidence boost. Range [0,1].
              */
             graph_weight?: number;
             /** @description Legacy alias for `retrieval_k`. When `retrieval_k` is absent, `k` is used. */
             k?: number | null;
-            /** @description Phase 5.4: halt edge emission once this count is reached per BFS round. */
+            /** @description Bound adjacency entries examined across the whole GraphRAG traversal. */
             max_edges?: number | null;
             /** @description Budget on graph-only candidates (applied before `final_k`). Absent = 100. */
             max_graph_candidates?: number | null;
@@ -1889,6 +1975,8 @@ export interface components {
             query_vector: number[];
             /** @description How many vector candidates to use as seeds for graph expansion. */
             retrieval_k?: number | null;
+            /** @description RG4: whether incoming ParentOf edges may be traversed from chunk to parent. */
+            reverse_parent_of?: boolean;
         };
         /**
          * @description `POST /v1/graphrag` — K nearest vectors plus the connected subgraph around
@@ -2127,6 +2215,8 @@ export interface components {
          *     takes.
          */
         IngestAcceptedResponse: {
+            /** @description Enrichment mode requested for the background job. */
+            auto_enrich: boolean;
             collection: string;
             /** @description Poll `GET /v1/ingest/status/{job_id}` with this id. */
             job_id: string;
@@ -2222,6 +2312,8 @@ export interface components {
         };
         IngestRequest: {
             async?: boolean | null;
+            /** @description Run shared entity/relation enrichment after vector ingestion. */
+            auto_enrich?: boolean;
             chunk_overlap?: number | null;
             chunk_size?: number | null;
             collection?: string | null;
@@ -2234,6 +2326,8 @@ export interface components {
             collection: string;
             /** Format: int32 */
             document_node_id: number;
+            /** @description `disabled`, `pending`, `completed`, or `failed`. */
+            enrichment_status: string;
             ok: boolean;
             /**
              * @description Fetch `GET /v1/operations/:id/execution` with this id for the full
@@ -2345,7 +2439,12 @@ export interface components {
             receipt: components["schemas"]["InsertReceiptJson"];
         };
         InsertedEntity: {
+            aliases: string[];
+            canonical_name: string;
             description: string;
+            /** @description RG7 deterministic identity for this source-resolved entity. */
+            entity_id: string;
+            mention_id: string;
             name: string;
             /** Format: int32 */
             node_id: number;
@@ -2354,10 +2453,14 @@ export interface components {
             type: string;
         };
         InsertedRelationship: {
+            assertion_id: string;
             description: string;
             /** Format: int32 */
             edge_id: number;
+            evidence: components["schemas"]["AssertionEvidence"];
             source_name: string;
+            /** Format: float */
+            strength: number;
             target_name: string;
         };
         ListCollectionsResponse: {
@@ -3203,6 +3306,13 @@ export interface components {
             summary: string;
             title: string;
         };
+        StructuredClaim: {
+            negated?: boolean;
+            object: string;
+            predicate: string;
+            subject: string;
+            time_scope?: string | null;
+        };
         /**
          * @description One edge in an expanded subgraph, as emitted by
          *     `valori_rag::graph::expand_subgraph`.
@@ -3480,6 +3590,27 @@ export interface components {
             /** Format: int64 */
             total_bytes: number;
         };
+        /** @enum {string} */
+        VerificationOutcome: "Supports" | "Contradicts" | "Neutral" | "Unknown";
+        VerificationReceipt: {
+            confidence?: string | null;
+            confidence_source: string;
+            config_hash: string;
+            evidence_refs: components["schemas"]["AssertionEvidence"][];
+            input_assertion_ids: string[];
+            outcome: components["schemas"]["VerificationOutcome"];
+            receipt_hash: string;
+            verification_id: string;
+            verifier_type: string;
+            verifier_version: string;
+        };
+        VerifyClaimRequest: {
+            evidence_refs?: components["schemas"]["AssertionEvidence"][];
+            left: components["schemas"]["StructuredClaim"];
+            left_assertion_id: string;
+            right: components["schemas"]["StructuredClaim"];
+            right_assertion_id: string;
+        };
         WalEntry: {
             /** @description Full object key. */
             key: string;
@@ -3525,6 +3656,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthResponse"];
+                };
+            };
+        };
+    };
+    get_assertion_verification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Verification id returned by `POST /v1/assertions/verify` */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored verification receipt, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": null | components["schemas"]["VerificationReceipt"];
+                };
+            };
+            /** @description Missing or invalid credentials. The auth middleware rejects the request before the handler runs; `attach_error_code` renders the rejection as a canonical `ApiError` with `code: "unauthorized"`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description The presented key authenticated but its scope does not satisfy this operation's `x-required-scope`. Rendered as a canonical `ApiError` with `code: "forbidden"`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+        };
+    };
+    verify_assertion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerifyClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Verification receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReceipt"];
+                };
+            };
+            /** @description Malformed request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Missing or invalid credentials. The auth middleware rejects the request before the handler runs; `attach_error_code` renders the rejection as a canonical `ApiError` with `code: "unauthorized"`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description The presented key authenticated but its scope does not satisfy this operation's `x-required-scope`. Rendered as a canonical `ApiError` with `code: "forbidden"`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
+            /** @description Internal error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
                 };
             };
         };

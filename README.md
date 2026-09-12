@@ -11,7 +11,6 @@
 [![Build](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valori-Kernel/docker-build.yml?style=flat-square&label=CI)](https://github.com/varshith-Git/Valori-Kernel/actions)
 [![Determinism](https://img.shields.io/badge/determinism-multi--arch%20verified-brightgreen?style=flat-square)](.github/workflows/multi-arch-determinism.yml)
 [![arXiv](https://img.shields.io/badge/arXiv-2512.22280-b31b1b?style=flat-square)](https://arxiv.org/abs/2512.22280)
-[![Tests](https://img.shields.io/github/actions/workflow/status/varshith-Git/Valori-Kernel/test-count.yml?label=tests&style=flat-square)](https://github.com/varshith-Git/Valori-Kernel/actions/workflows/test-count.yml)
 
 *Q16.16 fixed-point arithmetic · BLAKE3 hash-chained audit log · openraft consensus · offline verifiable proofs*
 

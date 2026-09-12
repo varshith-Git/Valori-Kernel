@@ -4,13 +4,13 @@
   "contract": "api/openapi/valori-v1.yaml",
   "openapi_version": "3.1.0",
   "totals": {
-    "public_operations": 74,
-    "complete": 74,
+    "public_operations": 76,
+    "complete": 76,
     "incomplete": 0,
-    "operations_with_request_body": 37,
-    "complete_requests": 37,
+    "operations_with_request_body": 38,
+    "complete_requests": 38,
     "incomplete_requests": 0,
-    "complete_responses": 74,
+    "complete_responses": 76,
     "incomplete_responses": 0,
     "untyped_parameters": 0,
     "parameter_mismatches": 0,
@@ -28,7 +28,7 @@
       "path": "/health",
       "classification": "PUBLIC_UNAUTH",
       "handler": "health_check",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -75,12 +75,122 @@
       "completeness_status": "COMPLETE"
     },
     {
+      "operationId": "get_assertion_verification",
+      "method": "GET",
+      "path": "/v1/assertions/verification/{id}",
+      "classification": "PUBLIC_SDK",
+      "handler": "get_assertion_verification",
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_only",
+      "path_parameters": [
+        "id"
+      ],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": false,
+      "request_media_type": null,
+      "request_schema": null,
+      "request_body_required": null,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "oneOf[null, VerificationReceipt]"
+      },
+      "error_response_schemas": {
+        "401": "ApiError",
+        "403": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "401",
+        "403"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": false,
+        "has_query_extractor": false,
+        "has_path_extractor": true,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
+      "operationId": "verify_assertion",
+      "method": "POST",
+      "path": "/v1/assertions/verify",
+      "classification": "PUBLIC_SDK",
+      "handler": "verify_assertion",
+      "source_file": "crates\\valori-node\\src\\server.rs",
+      "modes": [
+        "cluster",
+        "standalone"
+      ],
+      "security": [
+        "BearerAuth"
+      ],
+      "required_scope": "read_write",
+      "path_parameters": [],
+      "query_parameters": [],
+      "header_parameters": [],
+      "untyped_parameters": [],
+      "request_body_present": true,
+      "request_media_type": "application/json",
+      "request_schema": "VerifyClaimRequest",
+      "request_body_required": true,
+      "has_untyped_request": false,
+      "success_response_schema": {
+        "200": "VerificationReceipt"
+      },
+      "error_response_schemas": {
+        "400": "ApiError",
+        "401": "ApiError",
+        "403": "ApiError",
+        "500": "ApiError"
+      },
+      "success_statuses": [
+        "200"
+      ],
+      "error_statuses": [
+        "400",
+        "401",
+        "403",
+        "500"
+      ],
+      "has_untyped_success": false,
+      "untyped_success_statuses": [],
+      "errors_without_body": [],
+      "errors_not_api_error": [],
+      "source_crosscheck": {
+        "has_body_extractor": true,
+        "has_query_extractor": false,
+        "has_path_extractor": false,
+        "has_header_extractor": false
+      },
+      "findings": [],
+      "notes": [],
+      "completeness_status": "COMPLETE"
+    },
+    {
       "operationId": "get_cluster_health",
       "method": "GET",
       "path": "/v1/cluster/health",
       "classification": "PUBLIC_SDK",
       "handler": "health",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "modes": [
         "cluster"
       ],
@@ -137,7 +247,7 @@
       "path": "/v1/cluster/proof",
       "classification": "PUBLIC_SDK",
       "handler": "cluster_proof",
-      "source_file": "crates/valori-node/src/cluster_server.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_server.rs",
       "modes": [
         "cluster"
       ],
@@ -188,7 +298,7 @@
       "path": "/v1/cluster/role",
       "classification": "PUBLIC_SDK",
       "handler": "role",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "modes": [
         "cluster"
       ],
@@ -239,7 +349,7 @@
       "path": "/v1/cluster/status",
       "classification": "PUBLIC_SDK",
       "handler": "status",
-      "source_file": "crates/valori-node/src/cluster_api.rs",
+      "source_file": "crates\\valori-node\\src\\cluster_api.rs",
       "modes": [
         "cluster"
       ],
@@ -290,7 +400,7 @@
       "path": "/v1/community/detect",
       "classification": "PUBLIC_SDK",
       "handler": "community_detect",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -344,7 +454,7 @@
       "path": "/v1/community/overview",
       "classification": "PUBLIC_SDK",
       "handler": "community_overview",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -398,7 +508,7 @@
       "path": "/v1/community/search",
       "classification": "PUBLIC_SDK",
       "handler": "community_search",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -454,7 +564,7 @@
       "path": "/v1/crypto/status/{key_id}",
       "classification": "PUBLIC_SDK",
       "handler": "crypto_status_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -510,7 +620,7 @@
       "path": "/v1/delete",
       "classification": "PUBLIC_SDK",
       "handler": "delete_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -568,7 +678,7 @@
       "path": "/v1/graph/edge",
       "classification": "PUBLIC_SDK",
       "handler": "create_edge",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -624,7 +734,7 @@
       "path": "/v1/graph/edges/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "get_edges",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -682,7 +792,7 @@
       "path": "/v1/graph/node",
       "classification": "PUBLIC_SDK",
       "handler": "create_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -738,7 +848,7 @@
       "path": "/v1/graph/node/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "delete_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -796,7 +906,7 @@
       "path": "/v1/graph/node/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "get_node",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -854,7 +964,7 @@
       "path": "/v1/graph/nodes",
       "classification": "PUBLIC_SDK",
       "handler": "list_nodes",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -913,7 +1023,7 @@
       "path": "/v1/graph/query",
       "classification": "PUBLIC_SDK",
       "handler": "graph_query",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -977,7 +1087,7 @@
       "path": "/v1/graph/subgraph",
       "classification": "PUBLIC_SDK",
       "handler": "get_subgraph",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1037,7 +1147,7 @@
       "path": "/v1/graphrag",
       "classification": "PUBLIC_SDK",
       "handler": "graphrag",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1093,7 +1203,7 @@
       "path": "/v1/index/config",
       "classification": "PUBLIC_SDK",
       "handler": "index_config_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1145,7 +1255,7 @@
       "path": "/v1/index/rebuild",
       "classification": "PUBLIC_SDK",
       "handler": "index_rebuild_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1197,7 +1307,7 @@
       "path": "/v1/ingest",
       "classification": "PUBLIC_SDK",
       "handler": "crate::ingest::ingest",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1263,7 +1373,7 @@
       "path": "/v1/ingest/document",
       "classification": "PUBLIC_SDK",
       "handler": "valori_ingest::ingest_document",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1317,7 +1427,7 @@
       "path": "/v1/ingest/extract-entities",
       "classification": "PUBLIC_SDK",
       "handler": "extract_entities",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1375,7 +1485,7 @@
       "path": "/v1/ingest/status/{job_id}",
       "classification": "PUBLIC_SDK",
       "handler": "crate::ingest::get_ingest_status",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1431,7 +1541,7 @@
       "path": "/v1/ingest/update",
       "classification": "PUBLIC_SDK",
       "handler": "crate::ingest::ingest_update",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1495,7 +1605,7 @@
       "path": "/v1/memory/consolidate",
       "classification": "PUBLIC_SDK",
       "handler": "memory_consolidate",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1553,7 +1663,7 @@
       "path": "/v1/memory/contradict",
       "classification": "PUBLIC_SDK",
       "handler": "memory_contradict",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1611,7 +1721,7 @@
       "path": "/v1/memory/meta/get",
       "classification": "PUBLIC_SDK",
       "handler": "meta_get",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1665,7 +1775,7 @@
       "path": "/v1/memory/meta/set",
       "classification": "PUBLIC_SDK",
       "handler": "meta_set",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1719,7 +1829,7 @@
       "path": "/v1/memory/search",
       "classification": "PUBLIC_SDK",
       "handler": "memory_search_vector",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1777,7 +1887,7 @@
       "path": "/v1/memory/search_vector",
       "classification": "PUBLIC_SDK",
       "handler": "memory_search_vector_alias",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1835,7 +1945,7 @@
       "path": "/v1/memory/upsert",
       "classification": "PUBLIC_SDK",
       "handler": "memory_upsert_vector",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1891,7 +2001,7 @@
       "path": "/v1/memory/upsert_vector",
       "classification": "PUBLIC_SDK",
       "handler": "memory_upsert_vector_alias",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1947,7 +2057,7 @@
       "path": "/v1/models/health",
       "classification": "PUBLIC_SDK",
       "handler": "models_health",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -1999,7 +2109,7 @@
       "path": "/v1/namespaces",
       "classification": "PUBLIC_SDK",
       "handler": "list_collections_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2051,7 +2161,7 @@
       "path": "/v1/namespaces",
       "classification": "PUBLIC_SDK",
       "handler": "create_collection_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2109,7 +2219,7 @@
       "path": "/v1/namespaces/{name}",
       "classification": "PUBLIC_SDK",
       "handler": "drop_collection_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2165,7 +2275,7 @@
       "path": "/v1/namespaces/{name}/index",
       "classification": "PUBLIC_SDK",
       "handler": "index_lifecycle_status_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2221,7 +2331,7 @@
       "path": "/v1/namespaces/{name}/index",
       "classification": "PUBLIC_SDK",
       "handler": "index_lifecycle_create_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2285,7 +2395,7 @@
       "path": "/v1/operations",
       "classification": "PUBLIC_SDK",
       "handler": "get_operations",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2339,7 +2449,7 @@
       "path": "/v1/operations/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "get_operation_by_id",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2397,7 +2507,7 @@
       "path": "/v1/operations/{id}/execution",
       "classification": "PUBLIC_SDK",
       "handler": "get_operation_execution",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2453,7 +2563,7 @@
       "path": "/v1/proof/event-log",
       "classification": "PUBLIC_SDK",
       "handler": "get_event_proof",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2507,7 +2617,7 @@
       "path": "/v1/proof/receipt",
       "classification": "PUBLIC_SDK",
       "handler": "get_latest_receipt",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2561,7 +2671,7 @@
       "path": "/v1/proof/receipt/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "get_receipt_by_id",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2617,7 +2727,7 @@
       "path": "/v1/proof/state",
       "classification": "PUBLIC_SDK",
       "handler": "get_proof",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2669,7 +2779,7 @@
       "path": "/v1/records",
       "classification": "PUBLIC_SDK",
       "handler": "insert_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2729,7 +2839,7 @@
       "path": "/v1/records/encrypted",
       "classification": "PUBLIC_SDK",
       "handler": "insert_encrypted_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2785,7 +2895,7 @@
       "path": "/v1/records/{id}",
       "classification": "PUBLIC_SDK",
       "handler": "get_record_by_id",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2843,7 +2953,7 @@
       "path": "/v1/records/{id}/metadata",
       "classification": "PUBLIC_SDK",
       "handler": "update_record_metadata",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2903,7 +3013,7 @@
       "path": "/v1/search",
       "classification": "PUBLIC_SDK",
       "handler": "search",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -2961,7 +3071,7 @@
       "path": "/v1/search/multi",
       "classification": "PUBLIC_SDK",
       "handler": "multi_search",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3017,7 +3127,7 @@
       "path": "/v1/shard/routing",
       "classification": "PUBLIC_SDK",
       "handler": "shard_routing_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3069,7 +3179,7 @@
       "path": "/v1/snapshot/download",
       "classification": "PUBLIC_SDK",
       "handler": "snapshot",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3123,7 +3233,7 @@
       "path": "/v1/snapshot/restore",
       "classification": "PUBLIC_SDK",
       "handler": "snapshot_restore",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3177,7 +3287,7 @@
       "path": "/v1/snapshot/save",
       "classification": "PUBLIC_SDK",
       "handler": "snapshot_save",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3233,7 +3343,7 @@
       "path": "/v1/snapshot/upload",
       "classification": "PUBLIC_SDK",
       "handler": "restore",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "standalone"
       ],
@@ -3286,7 +3396,7 @@
       "path": "/v1/soft-delete",
       "classification": "PUBLIC_SDK",
       "handler": "soft_delete_record",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3344,7 +3454,7 @@
       "path": "/v1/storage/manifest",
       "classification": "PUBLIC_SDK",
       "handler": "get_manifest",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3398,7 +3508,7 @@
       "path": "/v1/storage/snapshots",
       "classification": "PUBLIC_SDK",
       "handler": "list_remote_snapshots",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3452,7 +3562,7 @@
       "path": "/v1/storage/snapshots/restore",
       "classification": "PUBLIC_SDK",
       "handler": "restore_from_store",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3508,7 +3618,7 @@
       "path": "/v1/storage/snapshots/upload",
       "classification": "PUBLIC_SDK",
       "handler": "upload_snapshot_to_store",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3564,7 +3674,7 @@
       "path": "/v1/storage/wal",
       "classification": "PUBLIC_SDK",
       "handler": "list_remote_wal",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3618,7 +3728,7 @@
       "path": "/v1/storage/wal/archive",
       "classification": "PUBLIC_SDK",
       "handler": "archive_wal_segment",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3674,7 +3784,7 @@
       "path": "/v1/timeline",
       "classification": "PUBLIC_SDK",
       "handler": "get_timeline",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3733,7 +3843,7 @@
       "path": "/v1/tree/build",
       "classification": "PUBLIC_SDK",
       "handler": "tree_build",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3787,7 +3897,7 @@
       "path": "/v1/tree/chain-verify",
       "classification": "PUBLIC_SDK",
       "handler": "valori_rag::tree::tree_chain_verify",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3841,7 +3951,7 @@
       "path": "/v1/tree/hybrid",
       "classification": "PUBLIC_SDK",
       "handler": "tree_hybrid",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3895,7 +4005,7 @@
       "path": "/v1/tree/query",
       "classification": "PUBLIC_SDK",
       "handler": "tree_query",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -3949,7 +4059,7 @@
       "path": "/v1/tree/verify",
       "classification": "PUBLIC_SDK",
       "handler": "valori_rag::tree::tree_verify",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -4003,7 +4113,7 @@
       "path": "/v1/usage",
       "classification": "PUBLIC_SDK",
       "handler": "usage_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -4055,7 +4165,7 @@
       "path": "/v1/vectors/batch-insert",
       "classification": "PUBLIC_SDK",
       "handler": "batch_insert",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"
@@ -4111,7 +4221,7 @@
       "path": "/v1/version",
       "classification": "PUBLIC_SDK",
       "handler": "version_handler",
-      "source_file": "crates/valori-node/src/server.rs",
+      "source_file": "crates\\valori-node\\src\\server.rs",
       "modes": [
         "cluster",
         "standalone"

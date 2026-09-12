@@ -446,7 +446,10 @@ pub fn build_router_with_keys(
         .route("/v1/ingest/update", post(crate::ingest::ingest_update))
         .route("/v1/ingest/extract-entities", post(extract_entities))
         .route("/v1/assertions/verify", post(verify_assertion))
-        .route("/v1/assertions/verification/:id", axum::routing::get(get_assertion_verification))
+        .route(
+            "/v1/assertions/verification/:id",
+            axum::routing::get(get_assertion_verification),
+        )
         .route("/v1/tree/build", post(tree_build))
         .route("/v1/tree/query", post(tree_query))
         .route("/v1/tree/hybrid", post(tree_hybrid))
@@ -1349,6 +1352,21 @@ async fn meta_get(
     crate::routes::meta::meta_get(&state, payload).await
 }
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    post,
+    path = "/v1/assertions/verify",
+    operation_id = "verify_assertion",
+    tag = "assertions",
+    summary = "Verify two structured assertions",
+    description = "Compares two normalized structured claims and stores a deterministic verification receipt in metadata.",
+    request_body = valori_rag::community::VerifyClaimRequest,
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Verification receipt", body = valori_rag::community::VerificationReceipt),
+        (status = 400, description = "Malformed request", body = ApiError),
+        (status = 500, description = "Internal error", body = ApiError),
+    ),
+))]
 async fn verify_assertion(
     State(state): State<SharedEngine>,
     Json(payload): Json<valori_rag::community::VerifyClaimRequest>,
@@ -1356,6 +1374,21 @@ async fn verify_assertion(
     crate::routes::assertions::verify(&state, payload).await
 }
 
+#[cfg_attr(feature = "utoipa", utoipa::path(
+    get,
+    path = "/v1/assertions/verification/{id}",
+    operation_id = "get_assertion_verification",
+    tag = "assertions",
+    summary = "Fetch a stored assertion verification receipt",
+    description = "Returns the deterministic verification receipt for an assertion verification id, or null when no receipt exists.",
+    params(
+        ("id" = String, Path, description = "Verification id returned by `POST /v1/assertions/verify`"),
+    ),
+    security(("BearerAuth" = [])),
+    responses(
+        (status = 200, description = "Stored verification receipt, or null", body = Option<valori_rag::community::VerificationReceipt>),
+    ),
+))]
 async fn get_assertion_verification(
     State(state): State<SharedEngine>,
     path: axum::extract::Path<String>,
@@ -5665,7 +5698,8 @@ async fn extract_entities(
             });
             let mention_id = format!(
                 "mention_{}",
-                blake3::hash(format!("{}|{}|{}", text_hash, entity.name, node_id).as_bytes()).to_hex()
+                blake3::hash(format!("{}|{}|{}", text_hash, entity.name, node_id).as_bytes())
+                    .to_hex()
             );
             let mention = valori_rag::community::EntityMention {
                 mention_id: mention_id.clone(),
@@ -5681,19 +5715,25 @@ async fn extract_entities(
                 assertion_ids: Vec::new(),
             };
             let canonical = valori_rag::community::resolve_canonical_entity(
-                &entity.name, &entity.kind, &[], &mention,
+                &entity.name,
+                &entity.kind,
+                &[],
+                &mention,
             );
-            let _ = eng.set_meta_audited(format!("entity:{}", canonical.entity_id), serde_json::json!({
-                "kind": "canonical_entity",
-                "entity_id": canonical.entity_id.clone(),
-                "canonical_name": canonical.canonical_name.clone(),
-                "entity_type": canonical.entity_type.clone(),
-                "aliases": canonical.aliases.clone(),
-                "mention_ids": canonical.mention_ids.clone(),
-                "source": extraction_source,
-                "source_text_hash": text_hash,
-                "collection": payload.namespace.as_deref().unwrap_or("default"),
-            }));
+            let _ = eng.set_meta_audited(
+                format!("entity:{}", canonical.entity_id),
+                serde_json::json!({
+                    "kind": "canonical_entity",
+                    "entity_id": canonical.entity_id.clone(),
+                    "canonical_name": canonical.canonical_name.clone(),
+                    "entity_type": canonical.entity_type.clone(),
+                    "aliases": canonical.aliases.clone(),
+                    "mention_ids": canonical.mention_ids.clone(),
+                    "source": extraction_source,
+                    "source_text_hash": text_hash,
+                    "collection": payload.namespace.as_deref().unwrap_or("default"),
+                }),
+            );
             let _ = eng.set_meta_audited(format!("record:{record_id}"), metadata.clone());
             let _ = eng.set_meta_audited(format!("node:{node_id}"), metadata);
             inserted_entities.push(valori_rag::community::InsertedEntity {
@@ -5724,10 +5764,17 @@ async fn extract_entities(
                     use valori_kernel::types::enums::EdgeKind;
                     let predicate = rel.predicate.as_deref().unwrap_or(&rel.description);
                     let mut evidence = rel.evidence.clone().unwrap_or_default();
-                    if let Some(source) = extraction_source.clone() { evidence.source.get_or_insert(source); }
+                    if let Some(source) = extraction_source.clone() {
+                        evidence.source.get_or_insert(source);
+                    }
                     evidence.source_text_hash.get_or_insert(text_hash.clone());
                     let assertion_id = valori_rag::community::assertion_identity(
-                        &text_hash, &rel.source, predicate, &rel.target, &evidence);
+                        &text_hash,
+                        &rel.source,
+                        predicate,
+                        &rel.target,
+                        &evidence,
+                    );
                     let edge_id = eng
                         .create_edge_ns(from_id, to_id, EdgeKind::Relation as u8, ns_id)
                         .map_err(|e| {

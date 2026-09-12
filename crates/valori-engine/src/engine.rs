@@ -213,15 +213,12 @@ impl Engine {
     /// replay rather than `create_collection_with_config`.
     pub fn ensure_collection_index(&mut self, namespace_id: u16, dim: usize, index_kind_wire: u8) {
         let kind = IndexKind::from_u8(index_kind_wire).unwrap_or(IndexKind::BruteForce);
-        if !self.namespaces.configs.contains_key(&namespace_id) {
-            self.namespaces.configs.insert(
-                namespace_id,
-                valori_metadata::collection::CollectionVectorConfig {
-                    dim: dim as u32,
-                    metric: valori_domain::Metric::SquaredL2,
-                },
-            );
-        }
+        self.namespaces.configs.entry(namespace_id).or_insert(
+            valori_metadata::collection::CollectionVectorConfig {
+                dim: dim as u32,
+                metric: valori_domain::Metric::SquaredL2,
+            },
+        );
         self.namespaces.set_desired_index(
             namespace_id,
             match kind {
@@ -268,10 +265,7 @@ impl Engine {
             IndexKind::Bq => "bq",
             _ => return,
         };
-        let state = self
-            .index_states
-            .entry(namespace_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(namespace_id).or_default();
         // Only set up the default state if no lifecycle-managed generation exists
         if state.active_generation.is_none() && state.building_generation.is_none() {
             let lsn = self
@@ -1908,10 +1902,7 @@ impl Engine {
             .map(|c| c.journal().committed_height())
             .unwrap_or(0);
 
-        let state = self
-            .index_states
-            .entry(namespace_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(namespace_id).or_default();
 
         if state.is_building() {
             return Err(EngineError::InvalidInput(
@@ -1992,10 +1983,7 @@ impl Engine {
         self.collection_indexes.insert(namespace_id, new_idx);
 
         // Step 5: advance lifecycle state BUILDING → READY → ACTIVE.
-        let state = self
-            .index_states
-            .entry(namespace_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(namespace_id).or_default();
         state.mark_ready(generation);
         let retired = state.activate(generation);
 
@@ -2068,10 +2056,7 @@ impl Engine {
     /// Mark an in-progress build as FAILED (e.g. due to a build error).
     /// The active index (if any) is unaffected.
     pub fn fail_index_build(&mut self, namespace_id: u16, generation: u32, reason: String) {
-        let state = self
-            .index_states
-            .entry(namespace_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(namespace_id).or_default();
         state.mark_failed(generation, reason);
     }
 
@@ -2091,10 +2076,7 @@ impl Engine {
         });
 
         self.collection_indexes.remove(&namespace_id);
-        let state = self
-            .index_states
-            .entry(namespace_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(namespace_id).or_default();
         state.set_none();
 
         // Best-effort: clear manifest index fields and delete artifact.
@@ -2280,15 +2262,12 @@ impl Engine {
             let ns = valori_kernel::types::id::NamespaceId(ns_id);
 
             // Sync the namespace config mirror (same as ensure_collection_index does).
-            if !self.namespaces.configs.contains_key(&ns_id) {
-                self.namespaces.configs.insert(
-                    ns_id,
-                    valori_metadata::collection::CollectionVectorConfig {
-                        dim,
-                        metric: valori_domain::Metric::SquaredL2,
-                    },
-                );
-            }
+            self.namespaces.configs.entry(ns_id).or_insert(
+                valori_metadata::collection::CollectionVectorConfig {
+                    dim,
+                    metric: valori_domain::Metric::SquaredL2,
+                },
+            );
 
             // Read the manifest to know the desired index type.
             let manifest = self.read_collection_manifest(ns);
@@ -2308,7 +2287,7 @@ impl Engine {
                             "bq" => valori_domain::IndexKind::Bq,
                             _ => valori_domain::IndexKind::Brute,
                         })
-                        .or_else(|| m.desired_index)
+                        .or(m.desired_index)
                 })
                 .unwrap_or(valori_domain::IndexKind::Brute);
 
@@ -2440,10 +2419,7 @@ impl Engine {
         self.collection_indexes.insert(ns_id, idx);
 
         // Reconstruct in-memory lifecycle state.
-        let state = self
-            .index_states
-            .entry(ns_id)
-            .or_insert_with(crate::index_manager::CollectionIndexState::new);
+        let state = self.index_states.entry(ns_id).or_default();
         if state.active_generation.is_none() && state.building_generation.is_none() {
             let spec = crate::index_manager::IndexSpec {
                 index_type: index_type.clone(),

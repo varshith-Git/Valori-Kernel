@@ -251,6 +251,7 @@ pub fn resolve_canonical_entity(
 
 // ── RG8 structural claim verification ─────────────────────────────────────
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VerificationOutcome {
     Supports,
@@ -259,6 +260,7 @@ pub enum VerificationOutcome {
     Unknown,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerificationReceipt {
     pub verification_id: String,
@@ -273,6 +275,7 @@ pub struct VerificationReceipt {
     pub receipt_hash: String,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StructuredClaim {
     pub subject: String,
@@ -284,6 +287,7 @@ pub struct StructuredClaim {
     pub time_scope: Option<String>,
 }
 
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VerifyClaimRequest {
     pub left: StructuredClaim,
@@ -305,19 +309,14 @@ pub fn verify_structured_claims(
 ) -> VerificationReceipt {
     let same_subject = normalized_entity_text(left.0) == normalized_entity_text(right.0);
     let same_predicate = normalized_entity_text(left.1) == normalized_entity_text(right.1);
+    let same_object = normalized_entity_text(left.2) == normalized_entity_text(right.2);
     let same_scope = left.4 == right.4;
     let outcome = if !same_subject || !same_predicate || !same_scope {
         VerificationOutcome::Unknown
-    } else if normalized_entity_text(left.2) == normalized_entity_text(right.2) && left.3 == right.3
-    {
+    } else if same_object && left.3 == right.3 {
         VerificationOutcome::Supports
-    } else if left.3 != right.3 && normalized_entity_text(left.2) == normalized_entity_text(right.2)
-    {
-        VerificationOutcome::Contradicts
-    } else if left.2 != right.2 {
-        VerificationOutcome::Contradicts
     } else {
-        VerificationOutcome::Unknown
+        VerificationOutcome::Contradicts
     };
     let inputs = vec![left_id.to_owned(), right_id.to_owned()];
     let raw = serde_json::json!({"outcome": outcome, "inputs": inputs, "evidence": evidence_refs});
