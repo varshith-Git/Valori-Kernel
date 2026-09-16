@@ -253,21 +253,26 @@ def main():
     ap.add_argument("--out", default=None, help="Output JSON path; default benchmarks/LIVE_LOCAL_RESULTS.json")
     args = ap.parse_args()
     corpus, queries, qrels = download()
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     docs = [x["title"] + "\n" + x["text"] for x in corpus]; ids = [x["_id"] for x in corpus]
     selected = [q for q in qrels if q in queries][:args.queries]
     emb_cache = CACHE / "all-MiniLM-L6-v2-corpus.npy"
     query_cache = CACHE / f"all-MiniLM-L6-v2-test-q{len(selected)}.npy"
+    model = None
+    def get_model():
+        nonlocal model
+        if model is None:
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        return model
     if emb_cache.exists():
         emb = np.load(emb_cache).astype("float32")
     else:
-        emb = model.encode(docs, batch_size=256, normalize_embeddings=True, show_progress_bar=True).astype("float32")
+        emb = get_model().encode(docs, batch_size=256, normalize_embeddings=True, show_progress_bar=True).astype("float32")
         np.save(emb_cache, emb)
     if query_cache.exists():
         qemb = np.load(query_cache).astype("float32")
     else:
-        qemb = model.encode([queries[q]["text"] for q in selected], batch_size=256, normalize_embeddings=True).astype("float32")
+        qemb = get_model().encode([queries[q]["text"] for q in selected], batch_size=256, normalize_embeddings=True).astype("float32")
         np.save(query_cache, qemb)
     rel_edges = public_claim_edges(selected, queries)
     if args.docs and args.docs < len(ids):
