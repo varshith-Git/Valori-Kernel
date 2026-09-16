@@ -1,0 +1,70 @@
+{
+  "dataset": "BEIR SciFact",
+  "documents": 300,
+  "queries": 100,
+  "dimension": 384,
+  "relation_edges": 72,
+  "systems": {
+    "valori_http_vector": {
+      "recall_at_3": 0.8885,
+      "ndcg_at_3": 0.8646,
+      "recall_at_5": 0.913,
+      "ndcg_at_5": 0.8719,
+      "recall_at_10": 0.925,
+      "ndcg_at_10": 0.8767,
+      "mrr_at_10": 0.8633,
+      "complete_context": 0.92,
+      "query_count": 100,
+      "latency_mean_ms": 5.7242,
+      "latency_p50_ms": 5.6743,
+      "latency_p95_ms": 6.127,
+      "latency_p99_ms": 6.3061,
+      "build_s": 1.5763
+    },
+    "valori_http_vector_graph": {
+      "recall_at_3": 0.8985,
+      "ndcg_at_3": 0.8637,
+      "recall_at_5": 0.936,
+      "ndcg_at_5": 0.8756,
+      "recall_at_10": 0.95,
+      "ndcg_at_10": 0.8812,
+      "mrr_at_10": 0.8579,
+      "complete_context": 0.95,
+      "query_count": 100,
+      "latency_mean_ms": 6.3143,
+      "latency_p50_ms": 6.1457,
+      "latency_p95_ms": 6.8411,
+      "latency_p99_ms": 8.1778,
+      "graph_edges": 72,
+      "state_hash": null,
+      "collection": "scifact_live_1789542058952",
+      "note": "same paper+claim vectors as FAISS; Valori follows public SciFact claim-to-evidence graph edges"
+    }
+  },
+  "ingestion": {
+    "documents_inserted": 300,
+    "vectors_inserted": 400,
+    "oracle_edges_inserted": 72,
+    "ingestion_duration_s": 1.5763
+  },
+  "meta": {
+    "phase": "B1.1",
+    "git_commit": "4eecce63c9d5c5bacfec317d9a5fed0e287e5c93",
+    "timestamp_utc": "2026-09-16T07:01:01.775665+00:00",
+    "dataset": "BEIR SciFact",
+    "documents": 300,
+    "queries": 100,
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_dim": 384,
+    "index": "valori-http (brute-force default)",
+    "graph_source": "oracle_scifact",
+    "graphrag_params": {
+      "retrieval_k": 10,
+      "final_k": 20,
+      "depth": 1,
+      "graph_weight": 0.3
+    },
+    "valori_url": "http://127.0.0.1:3410",
+    "node_version": "0.3.1"
+  }
+}
