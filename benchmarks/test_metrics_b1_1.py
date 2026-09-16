@@ -110,3 +110,35 @@ def test_validate_ab_does_not_compare_graph_to_vector_quality():
     graph_arm["recall_at_3"] = 0.08
     out = {"queries": 100, "systems": {"valori_http_vector": vector_arm, "valori_http_vector_graph": graph_arm}}
     validate_ab(out)  # must not raise
+
+
+from live_local_db_comparison import validate_abc
+
+
+def test_validate_abc_passes_when_vector_arms_match():
+    arm = _valid_arm()
+    out = {
+        "queries": 100,
+        "systems": {
+            "valori_http_vector": arm,
+            "valori_http_vector_graph": _valid_arm(),
+            "valori_http_vector_from_autokg_run": dict(arm),
+        },
+    }
+    validate_abc(out)  # must not raise
+
+
+def test_validate_abc_rejects_mismatched_vector_arms():
+    arm_a = _valid_arm()
+    arm_a2 = dict(arm_a)
+    arm_a2["recall_at_10"] = 0.10  # different collection somehow produced a different vector-only result
+    out = {
+        "queries": 100,
+        "systems": {
+            "valori_http_vector": arm_a,
+            "valori_http_vector_graph": _valid_arm(),
+            "valori_http_vector_from_autokg_run": arm_a2,
+        },
+    }
+    with pytest.raises(AssertionError):
+        validate_abc(out)

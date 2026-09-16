@@ -245,6 +245,85 @@ def validate_ab(out):
         if "queries" in out:
             assert m["query_count"] == out["queries"], f"{name}: query_count does not match dataset query count"
 
+def valori_http_autokg(base_url, ids, emb, selected, queries, qrels, qemb, co_mention_edges, k):
+    """Sibling of valori_http() for arm C -- a FRESH collection so C's graph
+    can never mix with B's oracle edges. Deliberately duplicates some of
+    valori_http()'s shape rather than refactoring it: valori_http() is frozen
+    (Phase B1.1) and this keeps that code path completely unmodified."""
+    import requests
+    session = requests.Session()
+    collection = f"scifact_autokg_{int(time.time() * 1000)}"
+    post_json(session, base_url, "/v1/namespaces", {
+        "name": collection, "dimension": int(emb.shape[1]), "metric": "squared_l2",
+    })
+    rec_to_doc, doc_to_node = {}, {}
+    t = time.perf_counter()
+    for doc_id, vec in zip(ids, emb):
+        up = post_json(session, base_url, "/v1/memory/upsert_vector", {"collection": collection, "vector": vec.tolist()})
+        rec_to_doc[up["record_id"]] = doc_id
+        doc_to_node[doc_id] = up["chunk_node_id"]
+    for q, vec in zip(selected, qemb):
+        claim_id = f"claim:{q}"
+        up = post_json(session, base_url, "/v1/memory/upsert_vector", {"collection": collection, "vector": vec.tolist()})
+        rec_to_doc[up["record_id"]] = claim_id
+        doc_to_node[claim_id] = up["chunk_node_id"]
+    graph_edges = 0
+    for a, b in co_mention_edges:
+        if a in doc_to_node and b in doc_to_node:
+            post_json(session, base_url, "/v1/graph/edge", {
+                "collection": collection, "from": doc_to_node[a], "to": doc_to_node[b], "kind": 5,
+            })
+            graph_edges += 1
+    build = time.perf_counter() - t
+
+    vector_results, graph_results = {}, {}
+    vector_durations, graph_durations = [], []
+    for q, vec in zip(selected, qemb):
+        t0 = time.perf_counter()
+        data = post_json(session, base_url, "/v1/memory/search_vector", {
+            "collection": collection, "query_vector": vec.tolist(), "k": k, "rerank": False,
+        })
+        vector_durations.append(time.perf_counter() - t0)
+        vector_results[q] = [rec_to_doc[x["record_id"]] for x in data["results"] if not rec_to_doc[x["record_id"]].startswith("claim:")]
+    for q, vec in zip(selected, qemb):
+        t0 = time.perf_counter()
+        data = post_json(session, base_url, "/v1/graphrag", {
+            "collection": collection, "query_vector": vec.tolist(),
+            "retrieval_k": k, "final_k": k + 10, "depth": 1, "graph_weight": 0.3,
+        })
+        graph_durations.append(time.perf_counter() - t0)
+        graph_results[q] = [rec_to_doc[x["record_id"]] for x in data["hits"] if not rec_to_doc[x["record_id"]].startswith("claim:")]
+    assert set(vector_results) == set(graph_results) == set(selected), "vector/graph/query id sets must match exactly"
+
+    return {
+        "vector": {**metrics(vector_results, qrels), **latency_stats(vector_durations), "build_s": round(build, 4)},
+        "vector_graph": {
+            **metrics(graph_results, qrels), **latency_stats(graph_durations),
+            "graph_edges": graph_edges, "collection": collection,
+            "note": "same paper+claim vectors as B1.1; edges are automatically constructed (co_mentions_entity), not oracle",
+        },
+        "ingestion": {
+            "documents_inserted": len(ids), "vectors_inserted": len(ids) + len(selected),
+            "auto_edges_inserted": graph_edges, "ingestion_duration_s": round(build, 4),
+        },
+    }
+
+
+def validate_abc(out):
+    """Extends validate_ab() with the one invariant specific to the 3-arm
+    design: the vector-only arm must be identical regardless of which graph
+    (oracle or autokg) was layered on top of it, since vector search doesn't
+    consult edges. A mismatch means the two collections' vectors diverged --
+    a real bug, not an experimental outcome."""
+    validate_ab(out)
+    va = out["systems"].get("valori_http_vector")
+    va2 = out["systems"].get("valori_http_vector_from_autokg_run")
+    if va and va2:
+        for key in ("recall_at_3", "recall_at_5", "recall_at_10", "ndcg_at_3", "ndcg_at_5",
+                    "ndcg_at_10", "mrr_at_10", "complete_context", "query_count"):
+            assert va[key] == va2[key], f"vector-only arm diverged between runs (key={key}): {va[key]} != {va2[key]}"
+
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--dbs", nargs="+", default=["valori", "faiss", "qdrant", "milvus", "weaviate"])
     ap.add_argument("--valori-url", default=os.environ.get("VALORI_BENCH_URL", "http://127.0.0.1:3307"))
@@ -353,10 +432,43 @@ def main():
             out["ingestion"] = http_res["ingestion"]
         except Exception as e:
             out["systems"]["valori_http"] = {"status": "unavailable", "error": str(e)}
+    if "valori-http-autokg" in args.dbs:
+        if "valori_http_vector" not in out["systems"] or "valori_http_vector_graph" not in out["systems"]:
+            raise SystemExit("valori-http-autokg requires valori-http to also run in the same invocation (recovery needs A and B)")
+        from autokg_extract import extract_graph_for_texts
+        from autokg_adapter import collapse_co_mentions, construction_stats, build_provenance, evaluate_edge_quality, compute_recovery
+        try:
+            id_text_pairs = [(ids[i], docs[i]) for i in range(len(ids))] + [(f"claim:{q}", queries[q]["text"]) for q in selected]
+            t0 = time.perf_counter()
+            graph = extract_graph_for_texts(id_text_pairs)
+            extraction_duration = time.perf_counter() - t0
+            t0 = time.perf_counter()
+            co_mention_edges = collapse_co_mentions(graph)
+            graph_build_duration = time.perf_counter() - t0
+            autokg_res = valori_http_autokg(args.valori_url.rstrip("/"), ids, emb, selected, queries, qrels, qemb, co_mention_edges, args.k)
+            out["systems"]["valori_http_vector_from_autokg_run"] = autokg_res["vector"]
+            out["systems"]["valori_http_vector_autokg"] = autokg_res["vector_graph"]
+            out["autokg"] = {
+                "construction_stats": construction_stats(graph, co_mention_edges, extraction_duration, graph_build_duration),
+                "edge_quality": evaluate_edge_quality(co_mention_edges, qrels),
+            }
+            recovery = {}
+            va, vb, vc = out["systems"]["valori_http_vector"], out["systems"]["valori_http_vector_graph"], out["systems"]["valori_http_vector_autokg"]
+            for metric_key in ("recall_at_3", "recall_at_5", "recall_at_10", "ndcg_at_3", "ndcg_at_5", "ndcg_at_10", "mrr_at_10", "complete_context"):
+                recovery[metric_key] = compute_recovery(va[metric_key], vb[metric_key], vc[metric_key])
+            out["recovery"] = recovery
+            provenance_path = CACHE / "auto_kg_graph_b1_2.json"
+            provenance_path.write_text(json.dumps({
+                "graph": json.loads(graph.model_dump_json()),
+                "co_mention_edges": co_mention_edges,
+                "provenance": build_provenance(graph, co_mention_edges),
+            }, indent=2), encoding="utf-8")
+        except Exception as e:
+            out["systems"]["valori_http_autokg"] = {"status": "unavailable", "error": str(e)}
     for name in ("qdrant", "milvus", "weaviate"):
         if name in args.dbs: out["systems"][name] = {"status": "not-run", "note": "local adapter pending; no fabricated result"}
     out["meta"] = {
-        "phase": "B1.1",
+        "phase": "B1.2" if "valori-http-autokg" in args.dbs else "B1.1",
         "git_commit": git_commit(),
         "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "dataset": "BEIR SciFact",
@@ -370,7 +482,7 @@ def main():
         "valori_url": args.valori_url if "valori-http" in args.dbs else None,
         "node_version": node_version(args.valori_url.rstrip("/")) if "valori-http" in args.dbs else None,
     }
-    validate_ab(out)
+    validate_abc(out)
     out_path = Path(args.out) if args.out else (ROOT / "LIVE_LOCAL_RESULTS.json")
     out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(json.dumps(out, indent=2))
