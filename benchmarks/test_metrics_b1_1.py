@@ -45,3 +45,14 @@ def test_metrics_no_hits_scores_zero():
     assert out["ndcg_at_3"] == 0.0
     assert out["mrr_at_10"] == 0.0
     assert out["complete_context"] == 0.0
+
+
+from live_local_db_comparison import latency_stats
+
+
+def test_latency_stats_percentiles():
+    durations_s = [0.010, 0.020, 0.030, 0.040, 0.100]  # 10,20,30,40,100 ms
+    out = latency_stats(durations_s)
+    assert out["latency_mean_ms"] == 40.0
+    assert out["latency_p50_ms"] == 30.0
+    assert out["latency_p99_ms"] >= out["latency_p95_ms"] >= out["latency_p50_ms"]

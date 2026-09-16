@@ -105,6 +105,15 @@ def post_json(session, base_url, path, payload):
     r.raise_for_status()
     return r.json()
 
+def latency_stats(durations_s):
+    ms = [d * 1000 for d in durations_s]
+    return {
+        "latency_mean_ms": round(float(np.mean(ms)), 4),
+        "latency_p50_ms": round(float(np.percentile(ms, 50)), 4),
+        "latency_p95_ms": round(float(np.percentile(ms, 95)), 4),
+        "latency_p99_ms": round(float(np.percentile(ms, 99)), 4),
+    }
+
 def valori_http(base_url, ids, emb, selected, queries, qrels, qemb, rel_edges, k):
     import requests
     session = requests.Session()
@@ -143,21 +152,22 @@ def valori_http(base_url, ids, emb, selected, queries, qrels, qemb, rel_edges, k
             graph_edges += 1
     build = time.perf_counter() - t
     vector_results, graph_results = {}, {}
-    t = time.perf_counter()
+    vector_durations, graph_durations = [], []
     for q, vec in zip(selected, qemb):
+        t0 = time.perf_counter()
         data = post_json(session, base_url, "/v1/memory/search_vector", {
             "collection": collection,
             "query_vector": vec.tolist(),
             "k": k,
             "rerank": False,
         })
+        vector_durations.append(time.perf_counter() - t0)
         vector_results[q] = [
             rec_to_doc[x["record_id"]] for x in data["results"]
             if not rec_to_doc[x["record_id"]].startswith("claim:")
         ]
-    vector_elapsed = time.perf_counter() - t
-    t = time.perf_counter()
     for q, vec in zip(selected, qemb):
+        t0 = time.perf_counter()
         data = post_json(session, base_url, "/v1/graphrag", {
             "collection": collection,
             "query_vector": vec.tolist(),
@@ -166,11 +176,13 @@ def valori_http(base_url, ids, emb, selected, queries, qrels, qemb, rel_edges, k
             "depth": 1,
             "graph_weight": 0.3,
         })
+        graph_durations.append(time.perf_counter() - t0)
         graph_results[q] = [
             rec_to_doc[x["record_id"]] for x in data["hits"]
             if not rec_to_doc[x["record_id"]].startswith("claim:")
         ]
-    graph_elapsed = time.perf_counter() - t
+    assert set(vector_results) == set(graph_results) == set(selected), \
+        "vector/graph/query id sets must match exactly"
     state_hash = None
     try:
         proof_resp = session.get(base_url + "/v1/proof/event-log", timeout=60)
@@ -180,14 +192,20 @@ def valori_http(base_url, ids, emb, selected, queries, qrels, qemb, rel_edges, k
     except Exception:
         state_hash = None
     return {
-        "vector": {**metrics(vector_results, qrels, k), "build_s": round(build, 4), "search_ms": round(vector_elapsed * 1000 / len(selected), 4)},
+        "vector": {**metrics(vector_results, qrels), **latency_stats(vector_durations), "build_s": round(build, 4)},
         "vector_graph": {
-            **metrics(graph_results, qrels, k),
+            **metrics(graph_results, qrels),
+            **latency_stats(graph_durations),
             "graph_edges": graph_edges,
-            "graphrag_ms": round(graph_elapsed * 1000 / len(selected), 4),
             "state_hash": state_hash,
             "collection": collection,
             "note": "same paper+claim vectors as FAISS; Valori follows public SciFact claim-to-evidence graph edges",
+        },
+        "ingestion": {
+            "documents_inserted": len(ids),
+            "vectors_inserted": len(ids) + len(selected),
+            "oracle_edges_inserted": graph_edges,
+            "ingestion_duration_s": round(build, 4),
         },
     }
 
