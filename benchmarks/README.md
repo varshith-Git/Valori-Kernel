@@ -34,6 +34,22 @@ documents, 100 claims, 72 public claim-to-evidence edges, and `k=3`:
   `0.89`, with event-log state hash
   `9a21caf3162921ee998a225714c9f0bf96a6e0b60c2be1a2efd51834175c9a7a`.
 
+**Phase B1.1** added a `--out` flag (so a run never overwrites another run's
+JSON), `Recall@3/5/10` and `nDCG@3/5/10` computed together from one ranked
+list per query, `mrr_at_10`, latency `mean`/`p50`/`p95`/`p99` (previously
+mean-only), an `ingestion` block (documents/vectors/edges inserted, duration),
+and a `meta` block (git commit, node version, timestamp, dataset/embedding/
+index/GraphRAG config, `graph_source`). `validate_ab()` asserts data/math
+invariants only (recall monotonicity, `[0,1]` ranges, latency percentile
+ordering, matching query-id sets across arms) — it deliberately does not
+assert nDCG monotonicity (nDCG's ideal-DCG denominator changes with the
+cutoff, so it isn't guaranteed monotonic in `k`) or that the graph arm beats
+the vector arm (a regression is a valid result, not a benchmark failure). The
+frozen run is recorded in `LIVE_LOCAL_RESULTS_B1_1.json` (the original
+`LIVE_LOCAL_RESULTS.json` above is untouched) — see
+[phase-B1.1-multi-k-metrics-baseline.md](../docs/phases/phase-B1.1-multi-k-metrics-baseline.md)
+for the full A/B table.
+
 ### local_perf.py — usage
 
 ```bash

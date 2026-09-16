@@ -200,6 +200,26 @@ FREE-TIER ONBOARDING`. Not deployed to Azure.**
 - Document a follow-up finding: embedded Python FFI graph traversal did not
   expose created edges during smoke testing, while the HTTP graph endpoints did.
 
+### Live retrieval benchmark — Phase B1.1 multi-cutoff metrics baseline
+
+- Extend `metrics()` to report `Recall@3/5/10` and `nDCG@3/5/10` together from
+  one ranked list per query, plus `mrr_at_10`; add `latency_stats()` for
+  per-query `mean`/`p50`/`p95`/`p99` search latency (previously mean-only).
+- Add a `--out` flag so a run never overwrites another run's result file, a
+  `meta` block (git commit, node version, timestamp, dataset/embedding/index/
+  GraphRAG config, `graph_source`), and an `ingestion` block (documents/
+  vectors/edges inserted, duration).
+- Add `validate_ab()`, asserting data/math invariants only (recall
+  monotonicity, `[0,1]` ranges, latency percentile ordering, matching
+  query-id sets across arms) — deliberately not nDCG monotonicity (its
+  ideal-DCG denominator changes with the cutoff) and not "graph beats
+  vector" (a regression is a valid result, not a failure).
+- Record a frozen baseline in `benchmarks/LIVE_LOCAL_RESULTS_B1_1.json`
+  (original `LIVE_LOCAL_RESULTS.json` untouched): oracle-graph GraphRAG
+  improved Recall/nDCG/CompleteContext@3/5/10 over vector-only, but
+  regressed MRR@10 (`0.8633`→`0.8579`) and added p99 latency
+  (`6.31ms`→`8.18ms`) on the same 300-doc/100-query SciFact slice.
+
 ### Shared free-tier hosting
 
 - Add an opt-in shared worker mode with per-project engine, credential, and
