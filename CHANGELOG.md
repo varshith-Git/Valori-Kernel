@@ -220,6 +220,32 @@ FREE-TIER ONBOARDING`. Not deployed to Azure.**
   regressed MRR@10 (`0.8633`→`0.8579`) and added p99 latency
   (`6.31ms`→`8.18ms`) on the same 300-doc/100-query SciFact slice.
 
+### Live retrieval benchmark — Phase B1.2 automatic KG construction (arm C)
+
+- Add `benchmarks/autokg_extract.py` — `SpacyEntityRelationExtractor`, a
+  non-LLM subclass of `neo4j_graphrag`'s `EntityRelationExtractor` interface
+  (noun-chunk entities + SVO-heuristic relations). No LLM credential, no API
+  cost, fully offline and deterministic — chosen over Neo4j KG Builder's
+  shipped LLM extractor since no `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` is
+  available. Includes `assert_no_leakage()`, a fail-loud guard against
+  SciFact evidence/qrel data reaching graph construction.
+- Add `benchmarks/autokg_adapter.py` — collapses the extracted graph's
+  natural two-hop claim→entity→document shape into direct claim↔document
+  edges (keeps GraphRAG's fixed `depth=1` comparable to the oracle graph),
+  plus provenance, edge-quality evaluation, and `Recovery = (C-A)/(B-A)`
+  math (`"N/A"` when the oracle's own gain is ≤ 0; never computed for
+  latency; negative recovery reported as-is).
+- Extend `live_local_db_comparison.py` with `--dbs valori-http-autokg` and
+  `validate_abc()` (adds one invariant: the vector-only arm must be
+  bit-identical whether computed alongside the oracle or auto-kg graph).
+- Record a frozen A/B/C baseline in `benchmarks/LIVE_LOCAL_RESULTS_B1_2.json`
+  (B1/B1.1 untouched): Recall@10 A=`0.925`→B=`0.950`→C=`0.940`, a **60%
+  recovery** of the oracle graph's gain from a fully offline, zero-cost
+  extractor. Auto-kg edge quality vs. hidden SciFact evidence: precision
+  `0.1491`/recall `0.1917`/F1 `0.1677`. nDCG@3 and MRR@10 recovery are
+  `N/A` (the oracle graph itself regressed on those metrics) — recorded,
+  not hidden.
+
 ### Shared free-tier hosting
 
 - Add an opt-in shared worker mode with per-project engine, credential, and

@@ -50,6 +50,21 @@ frozen run is recorded in `LIVE_LOCAL_RESULTS_B1_1.json` (the original
 [phase-B1.1-multi-k-metrics-baseline.md](../docs/phases/phase-B1.1-multi-k-metrics-baseline.md)
 for the full A/B table.
 
+**Phase B1.2** added a third arm, `--dbs valori-http-autokg` (run alongside
+`valori-http` in the same invocation -- recovery math needs A and B present).
+It automatically constructs a graph from the same raw SciFact text using a
+non-LLM `SpacyEntityRelationExtractor` (`benchmarks/autokg_extract.py`,
+subclasses `neo4j_graphrag`'s `EntityRelationExtractor` interface -- no LLM
+credential, no API cost, fully offline) and `benchmarks/autokg_adapter.py`
+(collapses the extracted graph's shared-entity mentions into direct
+claim<->document edges, matching the oracle graph's shape so GraphRAG's fixed
+`depth=1` stays comparable). Reports the same metrics as B1.1 for arm C, plus
+`Recovery = (C-A)/(B-A)` per metric (`"N/A"` when the oracle itself didn't
+improve on vector-only) and a graph-quality precision/recall/F1 against
+SciFact's hidden evidence edges. Frozen result: `LIVE_LOCAL_RESULTS_B1_2.json`
++ `public-data/scifact/auto_kg_graph_b1_2.json` (the full extracted graph) --
+see [phase-B1.2-auto-kg-benchmark.md](../docs/phases/phase-B1.2-auto-kg-benchmark.md).
+
 ### local_perf.py — usage
 
 ```bash
