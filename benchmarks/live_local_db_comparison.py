@@ -8,7 +8,7 @@ available. Hosted/API-only systems are intentionally excluded.
 Run: python benchmarks/live_local_db_comparison.py --dbs valori faiss qdrant
 """
 from __future__ import annotations
-import argparse, json, os, shutil, statistics, subprocess, tempfile, time, urllib.request, zipfile
+import argparse, datetime, json, os, shutil, statistics, subprocess, tempfile, time, urllib.request, zipfile
 from pathlib import Path
 import numpy as np
 
@@ -17,6 +17,19 @@ CACHE = ROOT / "public-data" / "scifact"
 URL = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
 
 def sh(*args): return subprocess.run(args, text=True, capture_output=True, check=False)
+
+def git_commit():
+    r = sh("git", "rev-parse", "HEAD")
+    return r.stdout.strip() if r.returncode == 0 else None
+
+def node_version(base_url):
+    try:
+        import requests
+        r = requests.get(base_url + "/v1/version", timeout=10)
+        return r.text.strip() if r.ok else None
+    except Exception:
+        return None
+
 def download():
     CACHE.mkdir(parents=True, exist_ok=True)
     z = CACHE / "scifact.zip"
@@ -209,11 +222,36 @@ def valori_http(base_url, ids, emb, selected, queries, qrels, qemb, rel_edges, k
         },
     }
 
+def validate_ab(out):
+    """Data/math sanity checks only. Deliberately does NOT assert that the
+    graph arm outperforms the vector arm -- a regression there is a valid
+    experimental result, not a benchmark failure. Also deliberately does NOT
+    assert any ordering across ndcg_at_3/5/10 -- nDCG's ideal-DCG denominator
+    changes with the cutoff, so a correct implementation is not guaranteed to
+    be monotonic in k (e.g. ndcg_at_3=0.91, ndcg_at_5=0.87, ndcg_at_10=0.89
+    is legitimate)."""
+    for name, m in out.get("systems", {}).items():
+        if not isinstance(m, dict) or "recall_at_10" not in m:
+            continue
+        assert 0.0 <= m["recall_at_3"] <= m["recall_at_5"] <= m["recall_at_10"] <= 1.0, \
+            f"{name}: recall_at_k not monotonic/in-range"
+        assert 0.0 <= m["ndcg_at_3"] <= 1.0, f"{name}: ndcg_at_3 out of range"
+        assert 0.0 <= m["ndcg_at_5"] <= 1.0, f"{name}: ndcg_at_5 out of range"
+        assert 0.0 <= m["ndcg_at_10"] <= 1.0, f"{name}: ndcg_at_10 out of range"
+        assert 0.0 <= m["mrr_at_10"] <= 1.0, f"{name}: mrr_at_10 out of range"
+        assert 0.0 <= m["complete_context"] <= 1.0, f"{name}: complete_context out of range"
+        assert m["latency_p99_ms"] >= m["latency_p95_ms"] >= m["latency_p50_ms"] >= 0.0, \
+            f"{name}: latency percentiles not ordered"
+        if "queries" in out:
+            assert m["query_count"] == out["queries"], f"{name}: query_count does not match dataset query count"
+
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--dbs", nargs="+", default=["valori", "faiss", "qdrant", "milvus", "weaviate"])
     ap.add_argument("--valori-url", default=os.environ.get("VALORI_BENCH_URL", "http://127.0.0.1:3307"))
     ap.add_argument("--docs", type=int, default=1000, help="Document cap; always keeps judged evidence docs for selected queries.")
-    ap.add_argument("--k", type=int, default=10); ap.add_argument("--queries", type=int, default=200); args = ap.parse_args()
+    ap.add_argument("--k", type=int, default=10); ap.add_argument("--queries", type=int, default=200)
+    ap.add_argument("--out", default=None, help="Output JSON path; default benchmarks/LIVE_LOCAL_RESULTS.json")
+    args = ap.parse_args()
     corpus, queries, qrels = download()
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -307,9 +345,28 @@ def main():
             http_res = valori_http(args.valori_url.rstrip("/"), ids, emb, selected, queries, qrels, qemb, rel_edges, args.k)
             out["systems"]["valori_http_vector"] = http_res["vector"]
             out["systems"]["valori_http_vector_graph"] = http_res["vector_graph"]
+            out["ingestion"] = http_res["ingestion"]
         except Exception as e:
             out["systems"]["valori_http"] = {"status": "unavailable", "error": str(e)}
     for name in ("qdrant", "milvus", "weaviate"):
         if name in args.dbs: out["systems"][name] = {"status": "not-run", "note": "local adapter pending; no fabricated result"}
-    path = ROOT / "LIVE_LOCAL_RESULTS.json"; path.write_text(json.dumps(out, indent=2), encoding="utf-8"); print(json.dumps(out, indent=2))
+    out["meta"] = {
+        "phase": "B1.1",
+        "git_commit": git_commit(),
+        "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "dataset": "BEIR SciFact",
+        "documents": len(docs),
+        "queries": len(selected),
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "embedding_dim": int(emb.shape[1]),
+        "index": "valori-http (brute-force default)" if "valori-http" in args.dbs else None,
+        "graph_source": "oracle_scifact",
+        "graphrag_params": {"retrieval_k": args.k, "final_k": args.k + 10, "depth": 1, "graph_weight": 0.3},
+        "valori_url": args.valori_url if "valori-http" in args.dbs else None,
+        "node_version": node_version(args.valori_url.rstrip("/")) if "valori-http" in args.dbs else None,
+    }
+    validate_ab(out)
+    out_path = Path(args.out) if args.out else (ROOT / "LIVE_LOCAL_RESULTS.json")
+    out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    print(json.dumps(out, indent=2))
 if __name__ == "__main__": main()
