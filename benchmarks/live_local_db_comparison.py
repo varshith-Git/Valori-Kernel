@@ -38,18 +38,37 @@ def download():
         qrels.setdefault(q, {})[d] = int(score)
     return corpus, queries, qrels
 
-def metrics(results, qrels, k):
-    rec, ndcg, complete = [], [], []
+def metrics(results, qrels, ks=(3, 5, 10)):
+    """results[q] must already be ranked and truncated to at least max(ks) items."""
+    max_k = max(ks)
+    recall = {k: [] for k in ks}
+    ndcg = {k: [] for k in ks}
+    mrr, complete = [], []
     for q in results:
         goldmap = qrels[q]
-        gold = {d for d, s in goldmap.items() if s > 0}; got = results.get(q, [])[:k]
-        rec.append(len(set(got) & gold) / max(1, len(gold)))
-        dcg = sum(1 / np.log2(i + 2) for i, d in enumerate(got) if d in gold)
-        ideal = sum(1 / np.log2(i + 2) for i in range(min(k, len(gold))))
-        ndcg.append(dcg / ideal if ideal else 0)
-        complete.append(set(gold).issubset(got))
-    return {"recall": round(float(np.mean(rec)), 4), "ndcg": round(float(np.mean(ndcg)), 4),
-            "complete_context": round(float(np.mean(complete)), 4)}
+        gold = {d for d, s in goldmap.items() if s > 0}
+        got = results.get(q, [])[:max_k]
+        for k in ks:
+            got_k = got[:k]
+            recall[k].append(len(set(got_k) & gold) / max(1, len(gold)))
+            dcg = sum(1 / np.log2(i + 2) for i, d in enumerate(got_k) if d in gold)
+            ideal = sum(1 / np.log2(i + 2) for i in range(min(k, len(gold))))
+            ndcg[k].append(dcg / ideal if ideal else 0)
+        rr = 0.0
+        for i, d in enumerate(got):
+            if d in gold:
+                rr = 1 / (i + 1)
+                break
+        mrr.append(rr)
+        complete.append(set(gold).issubset(set(got)))
+    out = {}
+    for k in ks:
+        out[f"recall_at_{k}"] = round(float(np.mean(recall[k])), 4)
+        out[f"ndcg_at_{k}"] = round(float(np.mean(ndcg[k])), 4)
+    out["mrr_at_10"] = round(float(np.mean(mrr)), 4)
+    out["complete_context"] = round(float(np.mean(complete)), 4)
+    out["query_count"] = len(results)
+    return out
 
 def graph_boost(vector_results, selected, doc_to_node, rec_to_doc, client, k, depth):
     """Expand Valori graph seeds, then keep vector order and append graph-only records."""
@@ -220,7 +239,7 @@ def main():
         idx = faiss.IndexFlatIP(emb.shape[1]); t = time.perf_counter(); idx.add(all_emb); build = time.perf_counter() - t
         t = time.perf_counter(); _, pos = idx.search(qemb, args.k); elapsed = time.perf_counter() - t
         res = {q: [all_ids[i] for i in row if not all_ids[i].startswith("claim:")] for q, row in zip(selected, pos)}
-        out["systems"]["faiss"] = {**metrics(res, qrels, args.k), "build_s": round(build, 4), "search_ms": round(elapsed * 1000 / len(selected), 4)}
+        out["systems"]["faiss"] = {**metrics(res, qrels), "build_s": round(build, 4), "search_ms": round(elapsed * 1000 / len(selected), 4)}
     if "valori" in args.dbs:
         try:
             from valoricore import MemoryClient
@@ -248,7 +267,7 @@ def main():
             for q, v in zip(selected, qemb):
                 res[q] = [rec_to_doc[x["id"]] for x in c.semantic_search(queries[q]["text"], embed=lambda _: v.tolist(), k=args.k) if not rec_to_doc[x["id"]].startswith("claim:")]
             elapsed = time.perf_counter() - t
-            out["systems"]["valori_vector"] = {**metrics(res, qrels, args.k), "build_s": round(build, 4), "search_ms": round(elapsed * 1000 / len(selected), 4)}
+            out["systems"]["valori_vector"] = {**metrics(res, qrels), "build_s": round(build, 4), "search_ms": round(elapsed * 1000 / len(selected), 4)}
             t = time.perf_counter()
             seed_results = {}
             for q, v in zip(selected, qemb):
@@ -257,7 +276,7 @@ def main():
             boosted = {q: [d for d in docs if not d.startswith("claim:")][:args.k] for q, docs in boosted.items()}
             graph_elapsed = time.perf_counter() - t
             out["systems"]["valori_vector_graph"] = {
-                **metrics(boosted, qrels, args.k),
+                **metrics(boosted, qrels),
                 "graph_edges": graph_edges,
                 "graph_expand_ms": round(graph_elapsed * 1000 / len(selected), 4),
                 "state_hash": c.get_state_hash(),
