@@ -144,7 +144,12 @@ create policy user_preferences_update on public.user_preferences
   for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 revoke all on public.user_preferences from public, anon, authenticated;
-grant select, insert, update (last_login_method, updated_at) on public.user_preferences to authenticated;
+grant select on public.user_preferences to authenticated;
+-- user_id must be grantable on INSERT too — it's the primary key, not
+-- nullable or defaulted, so the authenticated role needs explicit
+-- column-level INSERT privilege on it to set their own row's id at all.
+grant insert (user_id, last_login_method, updated_at) on public.user_preferences to authenticated;
+grant update (last_login_method, updated_at) on public.user_preferences to authenticated;
 ```
 
 The upsert in `recordSuccessfulLogin` runs through the caller's own
