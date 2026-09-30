@@ -11,7 +11,7 @@
 // The generated layer never imports anything from here. The arrow points one
 // way: handwritten → generated → HTTP.
 
-import { ContentType, GeneratedApi, HttpClient } from "../generated/valori-api.js";
+import { GeneratedApi, HttpClient } from "../generated/valori-api.js";
 import type { HttpResponse, RequestParams } from "../generated/valori-api.js";
 import {
   ValoriAPIError,
@@ -135,17 +135,6 @@ export class Transport {
 
   get authenticated(): boolean {
     return this.#authenticated;
-  }
-
-  /** Additive endpoint helper used until the generated contract is regenerated. */
-  requestJson<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-    return this.call(() => this.http.request<T, unknown>({
-      method,
-      path,
-      body,
-      type: ContentType.Json,
-      ...this.params(),
-    }));
   }
 
   /** §6: never leak the key — not in a log line, not in a stringified client. */

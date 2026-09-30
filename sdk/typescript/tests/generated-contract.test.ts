@@ -43,16 +43,16 @@ describe("generated client", () => {
     expect([...produced].filter((n) => !expected.has(n))).toEqual([]);
   });
 
-  it("still describes 74 public operations", () => {
+  it("still describes 76 public operations", () => {
     // Not a magic number for its own sake: the SDK, both coverage manifests and
-    // the docs all state 74, and a contract that quietly grows or shrinks should
+    // the docs all state 76, and a contract that quietly grows or shrinks should
     // make those statements fail rather than become stale.
-    expect(contractOperationIds().length).toBe(74);
-    expect(generatedMethods().size).toBe(74);
+    expect(contractOperationIds().length).toBe(76);
+    expect(generatedMethods().size).toBe(76);
   });
 
   it("declares one @request line per operation", () => {
-    expect(source.match(/@request /g)?.length).toBe(74);
+    expect(source.match(/@request /g)?.length).toBe(76);
   });
 
   it("targets the contract's method and path for every operation", () => {
@@ -60,7 +60,7 @@ describe("generated client", () => {
       method,
       path: p.replace(/\$?\{[^}]*\}/g, "{}"),
     }));
-    expect(declared.length).toBe(74);
+    expect(declared.length).toBe(76);
 
     const raw = readFileSync(path.join(SDK_ROOT, "../../api/openapi/valori-v1.yaml"), "utf8");
     const contractPairs = new Set<string>();

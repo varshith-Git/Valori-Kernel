@@ -15,6 +15,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the locked `rustls` dependency from `0.23.43` to `0.23.45`, addressing
   `RUSTSEC-2026-0285` without adding a new advisory ignore.
 
+### TypeScript SDK — contract drift fix (assertions endpoints)
+
+- The OpenAPI contract had grown from 74 to 76 operations (`GET
+  /v1/assertions/verification/{id}`, `POST /v1/assertions/verify`) without a
+  matching TypeScript SDK regeneration — `generated/valori-api.ts` was stale
+  and `api-coverage.yaml` had no entries for the two new operations.
+  Regenerated the client (`sdk/typescript/scripts/generate.sh`), added
+  `assertions` coverage entries mapping both to the existing
+  `client.community.verifyClaims`/`client.community.getVerification`
+  wrappers, and updated every hardcoded "74 operations" reference
+  (`generated-contract.test.ts`, `package.json`'s `apiContract.operations`,
+  `README.md`).
+- `verifyClaims`/`getVerification` now call the generated, typed
+  `verifyAssertion`/`getAssertionVerification` methods instead of the
+  `Transport.requestJson` string-typed shim (which predated regeneration and
+  is now removed as unused) — closes a `tsc` error where `"application/json"`
+  wasn't assignable to the generated `ContentType` enum. Added wire-level
+  tests for both wrappers in `tests/resources.test.ts`.
+
 ### SH2 — Cloud control-plane integration for shared Free projects
 
 **Status: `READY FOR STAGING VALIDATION` / `NOT READY FOR PRODUCTION

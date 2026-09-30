@@ -10,6 +10,7 @@ import type {
   IndexKindInput,
   TreeIndex,
   TreeReceipt,
+  VerifyClaimRequest,
 } from "../../generated/valori-api.js";
 import type { Transport, V1Data, HealthData } from "../transport.js";
 
@@ -259,19 +260,13 @@ export class Community {
   }
 
   /** `POST /v1/assertions/verify` — deterministic structural verification. */
-  verifyClaims(request: {
-    left: { subject: string; predicate: string; object: string; negated?: boolean; time_scope?: string | null };
-    right: { subject: string; predicate: string; object: string; negated?: boolean; time_scope?: string | null };
-    left_assertion_id: string;
-    right_assertion_id: string;
-    evidence_refs?: unknown[];
-  }): Promise<unknown> {
-    return this.t.requestJson("POST", "/v1/assertions/verify", request);
+  verifyClaims(request: VerifyClaimRequest): Promise<V1Data<"verifyAssertion">> {
+    return this.t.call(() => this.t.api.v1.verifyAssertion(request, this.t.params()));
   }
 
   /** `GET /v1/assertions/verification/:id`. */
-  getVerification(id: string): Promise<unknown> {
-    return this.t.requestJson("GET", `/v1/assertions/verification/${encodeURIComponent(id)}`);
+  getVerification(id: string): Promise<V1Data<"getAssertionVerification">> {
+    return this.t.call(() => this.t.api.v1.getAssertionVerification(id, this.t.params()));
   }
 }
 

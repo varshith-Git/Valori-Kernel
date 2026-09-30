@@ -337,6 +337,19 @@ describe("node-scoped resources", () => {
     ["community detect", (c) => c.community.detect(), "POST", "/v1/community/detect"],
     ["community search", (c) => c.community.search([0.1]), "POST", "/v1/community/search"],
     ["community overview", (c) => c.community.overview(), "GET", "/v1/community/overview"],
+    [
+      "verify assertion",
+      (c) =>
+        c.community.verifyClaims({
+          left: { subject: "a", predicate: "p", object: "b" },
+          right: { subject: "a", predicate: "p", object: "b" },
+          left_assertion_id: "left-1",
+          right_assertion_id: "right-1",
+        }),
+      "POST",
+      "/v1/assertions/verify",
+    ],
+    ["get assertion verification", (c) => c.community.getVerification("ver-1"), "GET", "/v1/assertions/verification/ver-1"],
     ["proof event log", (c) => c.proof.eventLog(), "GET", "/v1/proof/event-log"],
     ["proof state", (c) => c.proof.state(), "GET", "/v1/proof/state"],
     ["proof receipt", (c) => c.proof.receipt("r-1"), "GET", "/v1/proof/receipt/r-1"],

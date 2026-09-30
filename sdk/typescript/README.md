@@ -3,7 +3,7 @@
 The official, fully-typed TypeScript client for the **Valori Data Plane API** —
 a deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts.
 
-Every one of the contract's **74 operations** is reachable through a
+Every one of the contract's **76 operations** is reachable through a
 handwritten, ergonomic wrapper (see [`api-coverage.yaml`](./api-coverage.yaml)).
 
 API Reference: [app.valori.systems/api-reference](https://app.valori.systems/api-reference/overview)
@@ -176,7 +176,7 @@ the key as `***`.
 ## Architecture
 
 ```
-api/openapi/valori-v1.yaml     ← canonical contract, 74 operations
+api/openapi/valori-v1.yaml     ← canonical contract, 76 operations
         ↓  swagger-typescript-api (pinned in sdk/generator.lock.json)
 generated/valori-api.ts        ← machine-owned, disposable, DO NOT EDIT
         ↓

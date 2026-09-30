@@ -68,6 +68,6 @@
     "apiContractVersion": "1.0",
     "openapiVersion": "3.1.0",
     "contract": "api/openapi/valori-v1.yaml",
-    "operations": 74
+    "operations": 76
   }
 }
