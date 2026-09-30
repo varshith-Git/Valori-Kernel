@@ -3,6 +3,14 @@
 All notable changes to `@valori/studio` are documented here. Versioning
 policy is documented in `README.md`.
 
+## 0.3.1 — Republish of 0.3.0
+
+`0.3.0`'s published tarball 404s on the npm registry (`npm install`
+fails, README does not render) despite valid registry metadata — a bad
+upload, not a code problem. npm does not allow overwriting a published
+version, so this is a content-identical republish. See 0.3.0 below for
+the actual changes.
+
 ## 0.3.0 — Assertions tab + Cloud/Desktop parity fixes
 
 The last published version (registry `0.2.2`) predates this entry; the
@@ -36,7 +44,9 @@ published from.
   the collection-dimension lookup no longer assumes `dimension` exists on
   the narrower ref type used here.
 
-## 0.3.1 — Cluster ANN support (Phase 4.3, unpublished)
+## Cluster ANN support (Phase 4.3)
+
+_Already present in the current published version — this entry predates real version numbering and never had one; kept for phase history._
 
 Patch. Phase 4.3 removes the cluster-mode ANN limitation at the backend level.
 
@@ -47,7 +57,9 @@ Patch. Phase 4.3 removes the cluster-mode ANN limitation at the backend level.
   stale. Error messages from any other unexpected backend failure still surface inline
   via the existing `actionError` display.
 
-## 0.3.0 — Index Lifecycle UI (Phase 4.2, unpublished)
+## Index Lifecycle UI (Phase 4.2)
+
+_Already present in the current published version — this entry predates real version numbering and never had one; kept for phase history._
 
 Additive release. All 0.2.0 exports and props remain unchanged.
 
