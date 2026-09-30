@@ -186,7 +186,7 @@ function CardMenu({ onDelete, href }: { onDelete: () => void; href: string }) {
         <MoreHorizontal size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-36 rounded-xl border border-border bg-card shadow-lg py-1 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 z-50 w-36 rounded-xl border border-border bg-popover shadow-e-md py-1 overflow-hidden">
           <Link
             href={href}
             onClick={() => setOpen(false)}

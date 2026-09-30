@@ -28,7 +28,7 @@ export default function ProjectPage({
     <div className="flex flex-col gap-5 w-full max-w-[1600px]">
       {/* Tabs */}
       <Tabs defaultValue="collections">
-        <TabsList className="inline-flex bg-[#e4e8ec] dark:bg-zinc-800 rounded-lg p-1 h-auto gap-0.5 w-auto justify-start">
+        <TabsList className="inline-flex bg-muted rounded-lg p-1 h-auto gap-0.5 w-auto justify-start">
           {[
             { value: "collections", label: "Collections" },
             { value: "metrics",     label: "Metrics" },
@@ -37,7 +37,7 @@ export default function ProjectPage({
             <TabsTrigger
               key={value}
               value={value}
-              className="rounded-md border-0 text-muted-foreground bg-transparent px-4 py-1.5 text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:dark:bg-zinc-700 data-[state=active]:text-foreground data-[state=active]:shadow-sm hover:text-foreground"
+              className="rounded-md border-0 text-muted-foreground bg-transparent px-4 py-1.5 text-sm font-medium transition-all data-[state=active]:bg-popover data-[state=active]:text-foreground data-[state=active]:shadow-e-sm hover:text-foreground"
             >
               {label}
             </TabsTrigger>

@@ -36,7 +36,7 @@ export function LocalRenameDialog({ name, onClose, onSuccess }: {
       <form
         onSubmit={submit}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 space-y-4"
+        className="w-full max-w-sm rounded-2xl border border-border bg-popover shadow-e-lg p-6 space-y-4"
       >
         <h2 className="text-base font-semibold text-foreground">Rename project</h2>
         <input

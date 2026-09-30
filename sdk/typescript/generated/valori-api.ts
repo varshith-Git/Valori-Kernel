@@ -43,6 +43,23 @@ export interface ArchiveWalResponse {
   size_bytes: number;
 }
 
+export interface AssertionEvidence {
+  chunk_id?: string | null;
+  passage_id?: string | null;
+  source?: string | null;
+  source_text_hash?: string | null;
+  /**
+   * @format int64
+   * @min 0
+   */
+  span_end?: number | null;
+  /**
+   * @format int64
+   * @min 0
+   */
+  span_start?: number | null;
+}
+
 export interface BatchInsertRequest {
   batch: number[][];
   collection?: string | null;
@@ -546,6 +563,7 @@ export interface ExtractEntitiesRequest {
   entity_types?: string[];
   model?: string | null;
   namespace?: string | null;
+  source?: string | null;
   text: string;
 }
 
@@ -650,24 +668,86 @@ export interface GraphRagHit {
    */
   node_id?: number | null;
   /**
+   * Auditable explanation fields for this hit: resolved metadata key,
+   * source/chunk fields when present, graph distance, and the bounded
+   * evidence path through the returned subgraph.
+   */
+  provenance: GraphRagProvenance;
+  /**
    * The underlying record.
    * @format int32
    * @min 0
    */
   record_id: number;
   /**
-   * Vector distance. `null` for a graph-only hit. Retained for backward
-   * compatibility; `vector_score` is the explicit spelling of the same value.
+   * Vector distance. Retained for backward compatibility; `vector_score` is
+   * the explicit spelling of the same value. `null` only when the candidate
+   * has no usable vector.
    * @format float
    */
   score?: number | null;
   /** How this hit entered the result set — e.g. `vector`, `graph`. */
   source: string;
   /**
-   * Vector distance. `null` for a graph-only hit.
+   * Vector distance. `null` only when the candidate has no usable vector.
    * @format float
    */
   vector_score?: number | null;
+}
+
+export interface GraphRagProvenance {
+  /**
+   * @format int32
+   * @min 0
+   */
+  chunk_index?: number | null;
+  /**
+   * @format int32
+   * @min 0
+   */
+  chunk_node_id?: number | null;
+  /**
+   * @format int32
+   * @min 0
+   */
+  document_node_id?: number | null;
+  /**
+   * @format int32
+   * @min 0
+   */
+  graph_distance?: number | null;
+  graph_path: GraphRagProvenanceEdge[];
+  metadata_key?: string | null;
+  /**
+   * @format int32
+   * @min 0
+   */
+  record_id: number;
+  section_title?: string | null;
+  source?: string | null;
+}
+
+export interface GraphRagProvenanceEdge {
+  /**
+   * @format int32
+   * @min 0
+   */
+  edge_id: number;
+  /**
+   * @format int32
+   * @min 0
+   */
+  from: number;
+  /**
+   * @format int32
+   * @min 0
+   */
+  kind: number;
+  /**
+   * @format int32
+   * @min 0
+   */
+  to: number;
 }
 
 export interface GraphRagRequest {
@@ -677,13 +757,15 @@ export interface GraphRagRequest {
    * @min 0
    */
   depth?: number;
+  /** RG4: optional allowed edge-kind IDs for traversal. Absent = all edge kinds. */
+  edge_kinds?: number[] | null;
   /**
    * Maximum returned hits. Absent = defaults to `retrieval_k` (Phase 5.4).
    * @min 0
    */
   final_k?: number | null;
   /**
-   * Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].
+   * RG3: β in the capped graph-evidence boost. Range [0,1].
    * @format float
    */
   graph_weight?: number;
@@ -693,7 +775,7 @@ export interface GraphRagRequest {
    */
   k?: number | null;
   /**
-   * Phase 5.4: halt edge emission once this count is reached per BFS round.
+   * Bound adjacency entries examined across the whole GraphRAG traversal.
    * @min 0
    */
   max_edges?: number | null;
@@ -713,6 +795,8 @@ export interface GraphRagRequest {
    * @min 0
    */
   retrieval_k?: number | null;
+  /** RG4: whether incoming ParentOf edges may be traversed from chunk to parent. */
+  reverse_parent_of?: boolean;
 }
 
 /**
@@ -1017,6 +1101,8 @@ export interface IndexStatusResponse {
  * takes.
  */
 export interface IngestAcceptedResponse {
+  /** Enrichment mode requested for the background job. */
+  auto_enrich: boolean;
   collection: string;
   /** Poll `GET /v1/ingest/status/{job_id}` with this id. */
   job_id: string;
@@ -1137,6 +1223,8 @@ export interface IngestJobStatusResponse {
 
 export interface IngestRequest {
   async?: boolean | null;
+  /** Run shared entity/relation enrichment after vector ingestion. */
+  auto_enrich?: boolean;
   /** @min 0 */
   chunk_overlap?: number | null;
   /** @min 0 */
@@ -1156,6 +1244,8 @@ export interface IngestResponse {
    * @min 0
    */
   document_node_id: number;
+  /** `disabled`, `pending`, `completed`, or `failed`. */
+  enrichment_status: string;
   ok: boolean;
   /**
    * Fetch `GET /v1/operations/:id/execution` with this id for the full
@@ -1312,7 +1402,12 @@ export interface InsertRecordResponse {
 }
 
 export interface InsertedEntity {
+  aliases: string[];
+  canonical_name: string;
   description: string;
+  /** RG7 deterministic identity for this source-resolved entity. */
+  entity_id: string;
+  mention_id: string;
   name: string;
   /**
    * @format int32
@@ -1328,13 +1423,17 @@ export interface InsertedEntity {
 }
 
 export interface InsertedRelationship {
+  assertion_id: string;
   description: string;
   /**
    * @format int32
    * @min 0
    */
   edge_id: number;
+  evidence: AssertionEvidence;
   source_name: string;
+  /** @format float */
+  strength: number;
   target_name: string;
 }
 
@@ -2436,6 +2535,14 @@ export interface StructureNode {
   title: string;
 }
 
+export interface StructuredClaim {
+  negated?: boolean;
+  object: string;
+  predicate: string;
+  subject: string;
+  time_scope?: string | null;
+}
+
 /**
  * One edge in an expanded subgraph, as emitted by
  * `valori_rag::graph::expand_subgraph`.
@@ -2799,6 +2906,34 @@ export interface UsageStorage {
    * @min 0
    */
   total_bytes: number;
+}
+
+export enum VerificationOutcome {
+  Supports = "Supports",
+  Contradicts = "Contradicts",
+  Neutral = "Neutral",
+  Unknown = "Unknown",
+}
+
+export interface VerificationReceipt {
+  confidence?: string | null;
+  confidence_source: string;
+  config_hash: string;
+  evidence_refs: AssertionEvidence[];
+  input_assertion_ids: string[];
+  outcome: VerificationOutcome;
+  receipt_hash: string;
+  verification_id: string;
+  verifier_type: string;
+  verifier_version: string;
+}
+
+export interface VerifyClaimRequest {
+  evidence_refs?: AssertionEvidence[];
+  left: StructuredClaim;
+  left_assertion_id: string;
+  right: StructuredClaim;
+  right_assertion_id: string;
 }
 
 export interface WalEntry {
@@ -3370,6 +3505,24 @@ export class GeneratedApi<SecurityDataType extends unknown> {
       }),
 
     /**
+     * @description Returns the deterministic verification receipt for an assertion verification id, or null when no receipt exists.
+     *
+     * @tags assertions
+     * @name GetAssertionVerification
+     * @summary Fetch a stored assertion verification receipt
+     * @request GET:/v1/assertions/verification/{id}
+     * @secure
+     */
+    getAssertionVerification: (id: string, params: RequestParams = {}) =>
+      this.http.request<null | VerificationReceipt, ApiError>({
+        path: `/v1/assertions/verification/${id}`,
+        method: "GET",
+        secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
      * @description 503 with `status: no-leader` during an election. Distinct from `GET /health`, which reports this node's own serving capacity.
      *
      * @tags cluster
@@ -3912,7 +4065,7 @@ export class GeneratedApi<SecurityDataType extends unknown> {
       }),
 
     /**
-     * @description Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = (1-graph_weight)*vector_rel + graph_weight*graph_rel`.
+     * @description Retrieves the K nearest vectors and the connected subgraph around them from a single consistent kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
      *
      * @tags graph
      * @name Graphrag
@@ -4684,6 +4837,26 @@ export class GeneratedApi<SecurityDataType extends unknown> {
         path: `/v1/storage/snapshots/upload`,
         method: "POST",
         secure: true,
+        format: "json",
+        ...params,
+      }),
+
+    /**
+     * @description Compares two normalized structured claims and stores a deterministic verification receipt in metadata.
+     *
+     * @tags assertions
+     * @name VerifyAssertion
+     * @summary Verify two structured assertions
+     * @request POST:/v1/assertions/verify
+     * @secure
+     */
+    verifyAssertion: (data: VerifyClaimRequest, params: RequestParams = {}) =>
+      this.http.request<VerificationReceipt, ApiError>({
+        path: `/v1/assertions/verify`,
+        method: "POST",
+        body: data,
+        secure: true,
+        type: ContentType.Json,
         format: "json",
         ...params,
       }),

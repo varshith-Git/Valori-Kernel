@@ -412,7 +412,7 @@ function ProjectRowMenu({ name, onRename, onDuplicate, onArchive }: {
         <MoreVertical size={13} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-card shadow-lg py-1 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-popover shadow-e-md py-1 overflow-hidden">
           <button
             onClick={(e) => { e.stopPropagation(); setOpen(false); onRename(); }}
             className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors text-left"

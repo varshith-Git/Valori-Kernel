@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### CI
+
+- Fixed the `@valori/studio` build in clean CI checkouts by tracking the
+  `ui/studio/src/lib` helper and hook sources that components and the
+  public package entrypoint import.
+- Fixed the failing `License & Security Audit (cargo-deny)` gate by updating
+  the locked `rustls` dependency from `0.23.43` to `0.23.45`, addressing
+  `RUSTSEC-2026-0285` without adding a new advisory ignore.
+
 ### SH2 — Cloud control-plane integration for shared Free projects
 
 **Status: `READY FOR STAGING VALIDATION` / `NOT READY FOR PRODUCTION

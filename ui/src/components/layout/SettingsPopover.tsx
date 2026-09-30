@@ -49,7 +49,7 @@ export function SettingsPopover({
     <div
       ref={popoverRef}
       style={{ position: "fixed", left: pos.left, bottom: pos.bottom, zIndex: 9999, width: "14rem" }}
-      className="rounded-xl border border-border bg-card shadow-lg ring-1 ring-border/30 overflow-hidden"
+      className="rounded-xl border border-border bg-popover shadow-e-md ring-1 ring-foreground/10 overflow-hidden"
     >
       {/* Appearance */}
       <div className="p-2.5">

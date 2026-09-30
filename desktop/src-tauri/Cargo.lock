@@ -4945,7 +4945,7 @@ dependencies = [
 
 [[package]]
 name = "valori-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "getrandom 0.2.17",
  "serde",
@@ -4986,7 +4986,7 @@ dependencies = [
 
 [[package]]
 name = "valori-domain"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -4996,7 +4996,7 @@ dependencies = [
 
 [[package]]
 name = "valori-studio-storage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "redb",

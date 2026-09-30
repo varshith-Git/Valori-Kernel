@@ -11,7 +11,7 @@
 // The generated layer never imports anything from here. The arrow points one
 // way: handwritten → generated → HTTP.
 
-import { GeneratedApi, HttpClient } from "../generated/valori-api.js";
+import { ContentType, GeneratedApi, HttpClient } from "../generated/valori-api.js";
 import type { HttpResponse, RequestParams } from "../generated/valori-api.js";
 import {
   ValoriAPIError,
@@ -143,7 +143,7 @@ export class Transport {
       method,
       path,
       body,
-      type: "application/json",
+      type: ContentType.Json,
       ...this.params(),
     }));
   }

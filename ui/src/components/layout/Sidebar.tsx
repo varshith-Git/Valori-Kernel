@@ -134,7 +134,7 @@ function StatusFooter({
   }
 
   return (
-    <div className="border-t border-border/80 p-3 flex flex-col gap-2">
+    <div className="border-t border-sidebar-border p-3 flex flex-col gap-2">
       <SettingsPopover open={settingsOpen} onClose={handleSettingsToggle} pos={popoverPos} />
 
       {collapsed ? (
@@ -288,14 +288,14 @@ export function Sidebar() {
     <>
       <aside
         className={cn(
-          "flex h-screen flex-col border-r border-border/80 bg-card flex-shrink-0 transition-[width] duration-200 overflow-hidden",
+          "flex h-screen flex-col border-r border-sidebar-border bg-sidebar flex-shrink-0 transition-[width] duration-200 overflow-hidden",
           collapsed ? "w-[52px]" : "w-56"
         )}
         aria-label="Valori application navigation sidebar"
       >
 
         {/* Logo + collapse toggle — h-11 matches the TopBar height exactly */}
-        <div className={cn("h-11 shrink-0 border-b border-border/80 flex items-center", collapsed ? "px-1.5 justify-center" : "px-4 justify-between")}>
+        <div className={cn("h-11 shrink-0 border-b border-sidebar-border flex items-center", collapsed ? "px-1.5 justify-center" : "px-4 justify-between")}>
           {collapsed ? (
             <button
               onClick={toggleCollapse}
@@ -370,7 +370,7 @@ export function Sidebar() {
           )}
 
           {/* Divider */}
-          <div className={cn("border-t border-border/80", collapsed ? "mx-1 my-2" : "mx-1 my-3")} />
+          <div className={cn("border-t border-sidebar-border", collapsed ? "mx-1 my-2" : "mx-1 my-3")} />
 
           {/* Projects */}
           {!collapsed && (
