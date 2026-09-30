@@ -29,7 +29,7 @@ __all__ = [
     "check_api_compatibility",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 #: major.minor of the contract in api/openapi/valori-v1.yaml (info.version 1.0.0).
 API_CONTRACT_VERSION = "1.0"

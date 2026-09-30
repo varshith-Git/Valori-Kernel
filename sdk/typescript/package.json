@@ -1,6 +1,6 @@
 {
   "name": "@valori/client-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official TypeScript SDK for the Valori Data Plane REST API \u2014 deterministic vector + knowledge-graph store with BLAKE3-verifiable receipts.",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
