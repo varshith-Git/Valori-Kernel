@@ -140,7 +140,7 @@ function CardMenu({ onRename, onDuplicate, onArchive, onDelete }: {
         <MoreVertical size={14} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-card shadow-lg py-1 overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 z-50 w-40 rounded-xl border border-border bg-popover shadow-e-md py-1 overflow-hidden">
           {onRename && (
             <button
               onClick={e => { e.stopPropagation(); setOpen(false); onRename(); }}

@@ -286,12 +286,19 @@ python3 benchmarks/q16_precision.py --dim 384
 
 ## Snapshot format versions
 
+Current version lives in code, not in this table — check before trusting any version history here:
+```
+crates/valori-kernel/src/snapshot/encode.rs:  pub const SCHEMA_VERSION: u32 = 8;
+```
 | Version | What changed |
 |---|---|
 | V5 | BruteForce + HNSW index payload |
-| V6 (current) | Adds per-record `namespace_id` + `next_in_ns` + `prev_in_ns`; 2 × 1024 × 4 B namespace heads; NSRG JSON section at end |
+| V6 | Adds per-record `namespace_id` + `next_in_ns` + `prev_in_ns`; 2 × 1024 × 4 B namespace heads; NSRG JSON section at end |
+| V7–V8 (current) | See `docs/SNAPSHOT_FORMAT.md`'s versioning section and `encode.rs`'s inline comment on `SCHEMA_VERSION` — V8 adds `KernelState.namespace_configs` (per-collection dim/metric/index_kind). This table was found stale (still said "V6 current") during the 2026-09 agent-instruction audit — see `.claude/skills/migration/SKILL.md` for the process going forward; update this table whenever `SCHEMA_VERSION` changes. |
 
-Backward-compat: V5 snapshots restore into an empty namespace registry (all records land in `DEFAULT_NS`).
+Backward-compat: older snapshot versions restore via the decoder's documented compatibility path — see
+`docs/SNAPSHOT_FORMAT.md` and `crates/valori-kernel/tests/format.rs` for exactly which old versions are
+still supported.
 
 ---
 
@@ -339,10 +346,10 @@ Backward-compat: V5 snapshots restore into an empty namespace registry (all reco
 
 | Var | Default | Purpose |
 |---|---|---|
-| `VALORI_OBJECT_STORE_URL` | — | `s3://bucket/prefix` or `file:///path`; absent = disabled |
+| `VALORI_OBJECT_STORE_URL` | — | `s3://bucket/prefix` (AWS, or MinIO/R2/Localstack via `_ENDPOINT`), `b2://bucket/prefix` (Backblaze B2 — derives `https://s3.{region}.backblazeb2.com`, so set `_REGION` and leave `_ENDPOINT` unset), or `file:///path`; absent = disabled. **If set, the node write/read-tests it at startup (before binding its listener) and exits non-zero if unreachable — a misconfigured store fails deployment instead of silently losing durability.** |
 | `VALORI_OBJECT_STORE_KEEP` | 7 | Snapshots to retain in object store after pruning |
-| `VALORI_OBJECT_STORE_REGION` | `us-east-1` | S3 region (also reads `AWS_DEFAULT_REGION`) |
-| `VALORI_OBJECT_STORE_ENDPOINT` | — | Custom endpoint for MinIO / Localstack / R2 |
+| `VALORI_OBJECT_STORE_REGION` | `us-east-1` | S3 region (also reads `AWS_DEFAULT_REGION`). **Required, no default, for `b2://`** — every B2 endpoint is region-specific (e.g. `us-west-004`). |
+| `VALORI_OBJECT_STORE_ENDPOINT` | — | Custom endpoint for MinIO / Localstack / R2. Leave unset for `b2://`, which derives its own; setting it still overrides. |
 
 ---
 
@@ -353,15 +360,16 @@ from valoricore.remote import SyncRemoteClient
 
 c = SyncRemoteClient("http://localhost:3000")
 
-# Collections
-c.create_collection("tenant-acme")
-c.list_collections()           # → ["default", "tenant-acme"]
+# Collections — a brand-new project has zero; "default" has no special
+# meaning and dimension/metric are always required
+c.create_collection("tenant-acme", dimension=3, metric="squared_l2")
+c.list_collections()           # → [] on a fresh project, else [{"name": "tenant-acme", "id": 0}, ...]
 c.drop_collection("tenant-acme")
 
 # Node health
 c.health()  # → "ok"
 
-# Data (collection= defaults to "default")
+# Data (collection= is required — no implicit namespace to fall back to)
 c.insert([0.1, 0.2, 0.3], collection="tenant-acme")
 c.insert([0.1, 0.2, 0.3], text="Section 3.1 Training — AdamW optimizer")  # Phase C5: index for Valori Reranker
 c.batch_insert([[...], [...]], collection="tenant-acme")
@@ -415,12 +423,12 @@ c.get_cluster_status()
 c.chunk_document(text, strategy="auto")  # chunking only — no embed
 # → {"strategy_used":"tree","chunk_count":31,"chunks":[{"index","title","text"},...]}
 
-c.ingest(text, source="paper.pdf", strategy="auto", collection="default")
+c.ingest(text, source="paper.pdf", strategy="auto", collection="tenant-acme")
 # → {"ok":True,"document_node_id":42,"chunk_count":31,"record_ids":[...],"strategy_used":"tree"}
 # Requires VALORI_EMBED_PROVIDER on the node. Returns 422 if not configured.
 
 # Document update (Phase I8) — diff by BLAKE3 content hash, re-embed only changed chunks
-c.ingest_update(42, new_text, source="paper-v2.pdf", collection="default")
+c.ingest_update(42, new_text, source="paper-v2.pdf", collection="tenant-acme")
 # → {"ok":True,"document_node_id":42,"new_chunk_count":35,"kept_count":28,
 #    "removed_count":3,"added_count":7,"record_ids":[...]}
 ```
@@ -486,6 +494,31 @@ Every UI change must work in **both** dark and light mode. The app ships with a 
 | `--v-accent` | indigo-500 bright | indigo-500 slightly darker |
 
 ---
+
+## Security expectations
+
+This repo has **no SaaS/billing control plane** — no Postgres, no Supabase, no tenant provisioning (that
+belongs to the separate `valori-ui` repo). Real in-scope threats, verified against `docs/THREAT_MODEL.md`:
+silent state drift across replicas, tampered audit log, snapshot corruption, replay of duplicate commands,
+unauthorized writes in cluster mode, namespace cross-contamination. Never construct a `KernelEvent`
+outside `KernelState::apply_event_ns()`; never skip `request_id` dedup on a cluster command; never let an
+object-storage credential (`VALORI_OBJECT_STORE_*`) reach a log line or committed file. Deep dive:
+`.claude/rules/security.md`.
+
+## Safe git behavior
+
+Before any command that could discard uncommitted work (`git checkout`/`restore`/`reset`/`clean`), run
+`git status` first. Never force-push. Never `git reset --hard` without the user explicitly asking for it.
+Create new commits rather than amending, unless told otherwise.
+
+## How to verify work
+
+State exactly which command you ran and on which scope — "tests pass" without naming the crate/test
+filter is a claim, not verification. Minimum per change type: a `valori-kernel` change needs
+`cargo test -p valori-kernel` at least; an HTTP endpoint needs `cargo test -p valori-node --test
+route_parity` (this repo enforces standalone/cluster parity mechanically — see "MANDATORY: single-node
+AND multi-node" above); a `ui/**` change needs `cd ui && npx tsc --noEmit -p .` at minimum. Full matrix:
+`.claude/rules/testing.md`.
 
 ## Docs index (short)
 

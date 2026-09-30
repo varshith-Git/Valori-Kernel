@@ -14,6 +14,20 @@
       "runtimeArgs": ["-c", "cd /Users/as-mac-0272/Desktop/sass/valori-ui/ui && npm run dev -- -p 3002"],
       "port": 3002,
       "autoPort": false
+    },
+    {
+      "name": "valori-docs-preview",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/as-mac-0272/Desktop/sass/valori-docs-preview/ui && npm run dev -- -p 3003"],
+      "port": 3003,
+      "autoPort": false
+    },
+    {
+      "name": "valori-customers-preview",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/as-mac-0272/Desktop/sass/valori-customers-preview/ui && npm run dev -- -p 3004"],
+      "port": 3004,
+      "autoPort": false
     }
   ]
 }
