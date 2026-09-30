@@ -3,6 +3,39 @@
 All notable changes to `@valori/studio` are documented here. Versioning
 policy is documented in `README.md`.
 
+## 0.3.0 — Assertions tab + Cloud/Desktop parity fixes
+
+The last published version (registry `0.2.2`) predates this entry; the
+0.3.0/0.3.1 entries below it describe work that had already shipped inside
+0.2.x without ever being logged here, and the numbering does not line up
+with npm's actual `0.1.0 → 0.2.0 → 0.2.1 → 0.2.2` publish history. This
+entry covers only what changed since the commit `0.2.2` was actually
+published from.
+
+**New tab component:**
+- `AssertionsTab` — verify two structured claims (subject/predicate/object,
+  optional negation/time-scope) against `POST /v1/assertions/verify` and
+  look up a stored receipt via `GET /v1/assertions/verification/{id}`.
+  Wired into `ToolsWorkspace`'s Analyze tabs as "Assertions".
+
+**Breaking (allowed under 0.x semver, no known in-repo consumer):**
+- Removed the `useSearch` hook and its `SearchQuery`/`SearchState` types
+  from the public export surface (`src/index.ts`) — the underlying hook
+  file was deleted. Nothing in Cloud Web, Desktop Local, or Desktop Cloud
+  imports `useSearch` from `@valori/studio`; each has its own local search
+  hook. An external consumer of the published package that used it would
+  need to bring their own replacement.
+
+**Fixed:**
+- `main`/`module`/`types`/`exports` in `package.json` now point at
+  `./dist/studio/src/index.js` (matching `tsconfig.json`'s `rootDir: ".."`
+  output layout) instead of `./dist/index.js`, which did not match what
+  the build actually produced.
+- `ToolsWorkspace`: `useCollectionIndex` import switched to a relative path
+  (works around a resolution issue with the `@/` alias in this build), and
+  the collection-dimension lookup no longer assumes `dimension` exists on
+  the narrower ref type used here.
+
 ## 0.3.1 — Cluster ANN support (Phase 4.3, unpublished)
 
 Patch. Phase 4.3 removes the cluster-mode ANN limitation at the backend level.
