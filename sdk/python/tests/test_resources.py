@@ -323,6 +323,17 @@ def test_memory_maintenance_and_sidecar():
     (lambda c: c.community.detect(), "POST", "/v1/community/detect"),
     (lambda c: c.community.search([0.1]), "POST", "/v1/community/search"),
     (lambda c: c.community.overview(), "GET", "/v1/community/overview"),
+    (
+        lambda c: c.community.verify_claims(
+            {"subject": "a", "predicate": "p", "object": "b"},
+            {"subject": "a", "predicate": "p", "object": "b"},
+            "left-1",
+            "right-1",
+        ),
+        "POST",
+        "/v1/assertions/verify",
+    ),
+    (lambda c: c.community.get_verification("ver-1"), "GET", "/v1/assertions/verification/ver-1"),
     (lambda c: c.proof.event_log(), "GET", "/v1/proof/event-log"),
     (lambda c: c.proof.state(), "GET", "/v1/proof/state"),
     (lambda c: c.proof.receipt("r-1"), "GET", "/v1/proof/receipt/r-1"),

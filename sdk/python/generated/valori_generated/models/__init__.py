@@ -3,6 +3,7 @@
 from .api_error import ApiError
 from .archive_wal_request import ArchiveWalRequest
 from .archive_wal_response import ArchiveWalResponse
+from .assertion_evidence import AssertionEvidence
 from .batch_insert_request import BatchInsertRequest
 from .batch_insert_response import BatchInsertResponse
 from .buildable_index_kind import BuildableIndexKind
@@ -42,6 +43,8 @@ from .graph_query_hit_dto import GraphQueryHitDto
 from .graph_query_response import GraphQueryResponse
 from .graph_rag_hit import GraphRagHit
 from .graph_rag_hit_metadata_type_0 import GraphRagHitMetadataType0
+from .graph_rag_provenance import GraphRagProvenance
+from .graph_rag_provenance_edge import GraphRagProvenanceEdge
 from .graph_rag_request import GraphRagRequest
 from .graph_rag_response import GraphRagResponse
 from .graph_rerank_request import GraphRerankRequest
@@ -157,6 +160,7 @@ from .state_proof_response import StateProofResponse
 from .status_view import StatusView
 from .storage_snapshot_upload_response import StorageSnapshotUploadResponse
 from .structure_node import StructureNode
+from .structured_claim import StructuredClaim
 from .subgraph_edge import SubgraphEdge
 from .subgraph_node import SubgraphNode
 from .subgraph_response import SubgraphResponse
@@ -183,12 +187,16 @@ from .update_metadata_response import UpdateMetadataResponse
 from .update_record_metadata_body import UpdateRecordMetadataBody
 from .usage_response import UsageResponse
 from .usage_storage import UsageStorage
+from .verification_outcome import VerificationOutcome
+from .verification_receipt import VerificationReceipt
+from .verify_claim_request import VerifyClaimRequest
 from .wal_entry import WalEntry
 
 __all__ = (
     "ApiError",
     "ArchiveWalRequest",
     "ArchiveWalResponse",
+    "AssertionEvidence",
     "BatchInsertRequest",
     "BatchInsertResponse",
     "BuildableIndexKind",
@@ -228,6 +236,8 @@ __all__ = (
     "GraphQueryResponse",
     "GraphRagHit",
     "GraphRagHitMetadataType0",
+    "GraphRagProvenance",
+    "GraphRagProvenanceEdge",
     "GraphRagRequest",
     "GraphRagResponse",
     "GraphRerankRequest",
@@ -334,6 +344,7 @@ __all__ = (
     "StateProofResponse",
     "StatusView",
     "StorageSnapshotUploadResponse",
+    "StructuredClaim",
     "StructureNode",
     "SubgraphEdge",
     "SubgraphNode",
@@ -361,5 +372,8 @@ __all__ = (
     "UpdateRecordMetadataBody",
     "UsageResponse",
     "UsageStorage",
+    "VerificationOutcome",
+    "VerificationReceipt",
+    "VerifyClaimRequest",
     "WalEntry",
 )

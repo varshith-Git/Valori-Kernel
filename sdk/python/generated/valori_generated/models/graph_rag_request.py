@@ -21,19 +21,24 @@ class GraphRagRequest:
         query_vector (list[float]):
         collection (Union[None, Unset, str]):
         depth (Union[Unset, int]):
+        edge_kinds (Union[None, Unset, list[int]]): RG4: optional allowed edge-kind IDs for traversal. Absent = all edge
+            kinds.
         final_k (Union[None, Unset, int]): Maximum returned hits. Absent = defaults to `retrieval_k` (Phase 5.4).
-        graph_weight (Union[Unset, float]): Phase 5.4: β in `final_score = (1-β)×vector_rel + β×graph_rel`. Range [0,1].
+        graph_weight (Union[Unset, float]): RG3: β in the capped graph-evidence boost. Range [0,1].
         k (Union[None, Unset, int]): Legacy alias for `retrieval_k`. When `retrieval_k` is absent, `k` is used.
-        max_edges (Union[None, Unset, int]): Phase 5.4: halt edge emission once this count is reached per BFS round.
+        max_edges (Union[None, Unset, int]): Bound adjacency entries examined across the whole GraphRAG traversal.
         max_graph_candidates (Union[None, Unset, int]): Budget on graph-only candidates (applied before `final_k`).
             Absent = 100.
         max_nodes (Union[None, Unset, int]): Phase 5.4: halt BFS before visiting a node that would exceed this count.
         retrieval_k (Union[None, Unset, int]): How many vector candidates to use as seeds for graph expansion.
+        reverse_parent_of (Union[Unset, bool]): RG4: whether incoming ParentOf edges may be traversed from chunk to
+            parent.
     """
 
     query_vector: list[float]
     collection: Union[None, Unset, str] = UNSET
     depth: Union[Unset, int] = UNSET
+    edge_kinds: Union[None, Unset, list[int]] = UNSET
     final_k: Union[None, Unset, int] = UNSET
     graph_weight: Union[Unset, float] = UNSET
     k: Union[None, Unset, int] = UNSET
@@ -41,6 +46,7 @@ class GraphRagRequest:
     max_graph_candidates: Union[None, Unset, int] = UNSET
     max_nodes: Union[None, Unset, int] = UNSET
     retrieval_k: Union[None, Unset, int] = UNSET
+    reverse_parent_of: Union[Unset, bool] = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,6 +59,15 @@ class GraphRagRequest:
             collection = self.collection
 
         depth = self.depth
+
+        edge_kinds: Union[None, Unset, list[int]]
+        if isinstance(self.edge_kinds, Unset):
+            edge_kinds = UNSET
+        elif isinstance(self.edge_kinds, list):
+            edge_kinds = self.edge_kinds
+
+        else:
+            edge_kinds = self.edge_kinds
 
         final_k: Union[None, Unset, int]
         if isinstance(self.final_k, Unset):
@@ -92,6 +107,8 @@ class GraphRagRequest:
         else:
             retrieval_k = self.retrieval_k
 
+        reverse_parent_of = self.reverse_parent_of
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -103,6 +120,8 @@ class GraphRagRequest:
             field_dict["collection"] = collection
         if depth is not UNSET:
             field_dict["depth"] = depth
+        if edge_kinds is not UNSET:
+            field_dict["edge_kinds"] = edge_kinds
         if final_k is not UNSET:
             field_dict["final_k"] = final_k
         if graph_weight is not UNSET:
@@ -117,6 +136,8 @@ class GraphRagRequest:
             field_dict["max_nodes"] = max_nodes
         if retrieval_k is not UNSET:
             field_dict["retrieval_k"] = retrieval_k
+        if reverse_parent_of is not UNSET:
+            field_dict["reverse_parent_of"] = reverse_parent_of
 
         return field_dict
 
@@ -135,6 +156,23 @@ class GraphRagRequest:
         collection = _parse_collection(d.pop("collection", UNSET))
 
         depth = d.pop("depth", UNSET)
+
+        def _parse_edge_kinds(data: object) -> Union[None, Unset, list[int]]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                edge_kinds_type_0 = cast(list[int], data)
+
+                return edge_kinds_type_0
+            except:  # noqa: E722
+                pass
+            return cast(Union[None, Unset, list[int]], data)
+
+        edge_kinds = _parse_edge_kinds(d.pop("edge_kinds", UNSET))
 
         def _parse_final_k(data: object) -> Union[None, Unset, int]:
             if data is None:
@@ -194,10 +232,13 @@ class GraphRagRequest:
 
         retrieval_k = _parse_retrieval_k(d.pop("retrieval_k", UNSET))
 
+        reverse_parent_of = d.pop("reverse_parent_of", UNSET)
+
         graph_rag_request = cls(
             query_vector=query_vector,
             collection=collection,
             depth=depth,
+            edge_kinds=edge_kinds,
             final_k=final_k,
             graph_weight=graph_weight,
             k=k,
@@ -205,6 +246,7 @@ class GraphRagRequest:
             max_graph_candidates=max_graph_candidates,
             max_nodes=max_nodes,
             retrieval_k=retrieval_k,
+            reverse_parent_of=reverse_parent_of,
         )
 
         graph_rag_request.additional_properties = d

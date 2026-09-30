@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.graph_rag_hit_metadata_type_0 import GraphRagHitMetadataType0
+    from ..models.graph_rag_provenance import GraphRagProvenance
 
 
 T = TypeVar("T", bound="GraphRagHit")
@@ -35,20 +36,23 @@ class GraphRagHit:
             final_score (float): Combined score in `[0, 1]`. Always present; rank on this.
             graph_score (float): Normalised graph relevance in `[0, 1]`.
             memory_id (str): Stable memory identity, `rec:<record_id>`.
+            provenance (GraphRagProvenance):
             record_id (int): The underlying record.
             source (str): How this hit entered the result set — e.g. `vector`, `graph`.
             graph_distance (Union[None, Unset, int]): Hop count from the nearest seed node, when reachable.
             metadata (Union['GraphRagHitMetadataType0', None, Unset]): Caller-supplied metadata stored alongside the record,
                 if any.
             node_id (Union[None, Unset, int]): Graph node for this record, when it has one.
-            score (Union[None, Unset, float]): Vector distance. `null` for a graph-only hit. Retained for backward
-                compatibility; `vector_score` is the explicit spelling of the same value.
-            vector_score (Union[None, Unset, float]): Vector distance. `null` for a graph-only hit.
+            score (Union[None, Unset, float]): Vector distance. Retained for backward compatibility; `vector_score` is
+                the explicit spelling of the same value. `null` only when the candidate
+                has no usable vector.
+            vector_score (Union[None, Unset, float]): Vector distance. `null` only when the candidate has no usable vector.
     """
 
     final_score: float
     graph_score: float
     memory_id: str
+    provenance: "GraphRagProvenance"
     record_id: int
     source: str
     graph_distance: Union[None, Unset, int] = UNSET
@@ -66,6 +70,8 @@ class GraphRagHit:
         graph_score = self.graph_score
 
         memory_id = self.memory_id
+
+        provenance = self.provenance.to_dict()
 
         record_id = self.record_id
 
@@ -110,6 +116,7 @@ class GraphRagHit:
                 "final_score": final_score,
                 "graph_score": graph_score,
                 "memory_id": memory_id,
+                "provenance": provenance,
                 "record_id": record_id,
                 "source": source,
             }
@@ -130,6 +137,7 @@ class GraphRagHit:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.graph_rag_hit_metadata_type_0 import GraphRagHitMetadataType0
+        from ..models.graph_rag_provenance import GraphRagProvenance
 
         d = dict(src_dict)
         final_score = d.pop("final_score")
@@ -137,6 +145,8 @@ class GraphRagHit:
         graph_score = d.pop("graph_score")
 
         memory_id = d.pop("memory_id")
+
+        provenance = GraphRagProvenance.from_dict(d.pop("provenance"))
 
         record_id = d.pop("record_id")
 
@@ -201,6 +211,7 @@ class GraphRagHit:
             final_score=final_score,
             graph_score=graph_score,
             memory_id=memory_id,
+            provenance=provenance,
             record_id=record_id,
             source=source,
             graph_distance=graph_distance,

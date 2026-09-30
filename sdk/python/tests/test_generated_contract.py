@@ -56,14 +56,14 @@ def test_the_generated_tree_covers_every_contract_operation(contract):
     assert produced - expected == set(), f"generated modules with no contract operation: {produced - expected}"
 
 
-def test_the_contract_still_has_74_public_operations(contract):
+def test_the_contract_still_has_76_public_operations(contract):
     """The API-3.3 baseline this phase was built on.
 
     Not a magic number for its own sake: the SDK, the coverage manifests and the
-    docs all state 74, and a contract that quietly grows or shrinks should make
+    docs all state 76, and a contract that quietly grows or shrinks should make
     those statements fail rather than become stale.
     """
-    assert len(contract_operations(contract)) == 74
+    assert len(contract_operations(contract)) == 76
 
 
 def test_every_generated_module_exposes_the_four_call_forms():

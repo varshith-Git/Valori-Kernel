@@ -22,12 +22,14 @@ class ExtractEntitiesRequest:
         entity_types (Union[Unset, list[str]]):
         model (Union[None, Unset, str]):
         namespace (Union[None, Unset, str]):
+        source (Union[None, Unset, str]):
     """
 
     text: str
     entity_types: Union[Unset, list[str]] = UNSET
     model: Union[None, Unset, str] = UNSET
     namespace: Union[None, Unset, str] = UNSET
+    source: Union[None, Unset, str] = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,6 +51,12 @@ class ExtractEntitiesRequest:
         else:
             namespace = self.namespace
 
+        source: Union[None, Unset, str]
+        if isinstance(self.source, Unset):
+            source = UNSET
+        else:
+            source = self.source
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -62,6 +70,8 @@ class ExtractEntitiesRequest:
             field_dict["model"] = model
         if namespace is not UNSET:
             field_dict["namespace"] = namespace
+        if source is not UNSET:
+            field_dict["source"] = source
 
         return field_dict
 
@@ -90,11 +100,21 @@ class ExtractEntitiesRequest:
 
         namespace = _parse_namespace(d.pop("namespace", UNSET))
 
+        def _parse_source(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        source = _parse_source(d.pop("source", UNSET))
+
         extract_entities_request = cls(
             text=text,
             entity_types=entity_types,
             model=model,
             namespace=namespace,
+            source=source,
         )
 
         extract_entities_request.additional_properties = d

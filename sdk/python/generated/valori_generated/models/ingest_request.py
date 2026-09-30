@@ -20,6 +20,7 @@ class IngestRequest:
     Attributes:
         text (str):
         async_ (Union[None, Unset, bool]):
+        auto_enrich (Union[Unset, bool]): Run shared entity/relation enrichment after vector ingestion.
         chunk_overlap (Union[None, Unset, int]):
         chunk_size (Union[None, Unset, int]):
         collection (Union[None, Unset, str]):
@@ -29,6 +30,7 @@ class IngestRequest:
 
     text: str
     async_: Union[None, Unset, bool] = UNSET
+    auto_enrich: Union[Unset, bool] = UNSET
     chunk_overlap: Union[None, Unset, int] = UNSET
     chunk_size: Union[None, Unset, int] = UNSET
     collection: Union[None, Unset, str] = UNSET
@@ -44,6 +46,8 @@ class IngestRequest:
             async_ = UNSET
         else:
             async_ = self.async_
+
+        auto_enrich = self.auto_enrich
 
         chunk_overlap: Union[None, Unset, int]
         if isinstance(self.chunk_overlap, Unset):
@@ -84,6 +88,8 @@ class IngestRequest:
         )
         if async_ is not UNSET:
             field_dict["async"] = async_
+        if auto_enrich is not UNSET:
+            field_dict["auto_enrich"] = auto_enrich
         if chunk_overlap is not UNSET:
             field_dict["chunk_overlap"] = chunk_overlap
         if chunk_size is not UNSET:
@@ -110,6 +116,8 @@ class IngestRequest:
             return cast(Union[None, Unset, bool], data)
 
         async_ = _parse_async_(d.pop("async", UNSET))
+
+        auto_enrich = d.pop("auto_enrich", UNSET)
 
         def _parse_chunk_overlap(data: object) -> Union[None, Unset, int]:
             if data is None:
@@ -159,6 +167,7 @@ class IngestRequest:
         ingest_request = cls(
             text=text,
             async_=async_,
+            auto_enrich=auto_enrich,
             chunk_overlap=chunk_overlap,
             chunk_size=chunk_size,
             collection=collection,

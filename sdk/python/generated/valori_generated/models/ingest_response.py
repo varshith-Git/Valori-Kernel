@@ -18,6 +18,7 @@ class IngestResponse:
         chunk_count (int):
         collection (str):
         document_node_id (int):
+        enrichment_status (str): `disabled`, `pending`, `completed`, or `failed`.
         ok (bool):
         operation_id (str): Fetch `GET /v1/operations/:id/execution` with this id for the full
             per-stage execution breakdown (Execution Explorer).
@@ -28,6 +29,7 @@ class IngestResponse:
     chunk_count: int
     collection: str
     document_node_id: int
+    enrichment_status: str
     ok: bool
     operation_id: str
     record_ids: list[int]
@@ -40,6 +42,8 @@ class IngestResponse:
         collection = self.collection
 
         document_node_id = self.document_node_id
+
+        enrichment_status = self.enrichment_status
 
         ok = self.ok
 
@@ -56,6 +60,7 @@ class IngestResponse:
                 "chunk_count": chunk_count,
                 "collection": collection,
                 "document_node_id": document_node_id,
+                "enrichment_status": enrichment_status,
                 "ok": ok,
                 "operation_id": operation_id,
                 "record_ids": record_ids,
@@ -74,6 +79,8 @@ class IngestResponse:
 
         document_node_id = d.pop("document_node_id")
 
+        enrichment_status = d.pop("enrichment_status")
+
         ok = d.pop("ok")
 
         operation_id = d.pop("operation_id")
@@ -86,6 +93,7 @@ class IngestResponse:
             chunk_count=chunk_count,
             collection=collection,
             document_node_id=document_node_id,
+            enrichment_status=enrichment_status,
             ok=ok,
             operation_id=operation_id,
             record_ids=record_ids,

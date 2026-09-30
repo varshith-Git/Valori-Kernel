@@ -22,11 +22,19 @@ package: valori
 api_contract_version: "1.0"
 openapi_version: "3.1.0"
 contract: api/openapi/valori-v1.yaml
-total_operations: 74
-wrapped: 74
+total_operations: 76
+wrapped: 76
 generated_only: 0
 
 operations:
+  # ── assertions ──────────────────────────────────────────────────
+  get_assertion_verification:
+    http: GET /v1/assertions/verification/{id}
+    wrapper: client.community.get_verification
+  verify_assertion:
+    http: POST /v1/assertions/verify
+    wrapper: client.community.verify_claims
+
   # ── cluster ─────────────────────────────────────────────────────
   get_cluster_health:
     http: GET /v1/cluster/health

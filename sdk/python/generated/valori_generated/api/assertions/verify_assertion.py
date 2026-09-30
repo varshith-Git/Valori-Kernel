@@ -6,20 +6,20 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.api_error import ApiError
-from ...models.graph_rag_request import GraphRagRequest
-from ...models.graph_rag_response import GraphRagResponse
+from ...models.verification_receipt import VerificationReceipt
+from ...models.verify_claim_request import VerifyClaimRequest
 from ...types import Response
 
 
 def _get_kwargs(
     *,
-    body: GraphRagRequest,
+    body: VerifyClaimRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/v1/graphrag",
+        "url": "/v1/assertions/verify",
     }
 
     _kwargs["json"] = body.to_dict()
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Optional[Union[ApiError, GraphRagResponse]]:
+) -> Optional[Union[ApiError, VerificationReceipt]]:
     if response.status_code == 200:
-        response_200 = GraphRagResponse.from_dict(response.json())
+        response_200 = VerificationReceipt.from_dict(response.json())
 
         return response_200
 
@@ -66,7 +66,7 @@ def _parse_response(
 
 def _build_response(
     *, client: Union[AuthenticatedClient, Client], response: httpx.Response
-) -> Response[Union[ApiError, GraphRagResponse]]:
+) -> Response[Union[ApiError, VerificationReceipt]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -78,22 +78,22 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    body: GraphRagRequest,
-) -> Response[Union[ApiError, GraphRagResponse]]:
-    """Vector search plus graph expansion in one read
+    body: VerifyClaimRequest,
+) -> Response[Union[ApiError, VerificationReceipt]]:
+    """Verify two structured assertions
 
-     Retrieves the K nearest vectors and the connected subgraph around them from a single consistent
-    kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
+     Compares two normalized structured claims and stores a deterministic verification receipt in
+    metadata.
 
     Args:
-        body (GraphRagRequest):
+        body (VerifyClaimRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[ApiError, GraphRagResponse]]
+        Response[Union[ApiError, VerificationReceipt]]
     """
 
     kwargs = _get_kwargs(
@@ -110,22 +110,22 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    body: GraphRagRequest,
-) -> Optional[Union[ApiError, GraphRagResponse]]:
-    """Vector search plus graph expansion in one read
+    body: VerifyClaimRequest,
+) -> Optional[Union[ApiError, VerificationReceipt]]:
+    """Verify two structured assertions
 
-     Retrieves the K nearest vectors and the connected subgraph around them from a single consistent
-    kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
+     Compares two normalized structured claims and stores a deterministic verification receipt in
+    metadata.
 
     Args:
-        body (GraphRagRequest):
+        body (VerifyClaimRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[ApiError, GraphRagResponse]
+        Union[ApiError, VerificationReceipt]
     """
 
     return sync_detailed(
@@ -137,22 +137,22 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    body: GraphRagRequest,
-) -> Response[Union[ApiError, GraphRagResponse]]:
-    """Vector search plus graph expansion in one read
+    body: VerifyClaimRequest,
+) -> Response[Union[ApiError, VerificationReceipt]]:
+    """Verify two structured assertions
 
-     Retrieves the K nearest vectors and the connected subgraph around them from a single consistent
-    kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
+     Compares two normalized structured claims and stores a deterministic verification receipt in
+    metadata.
 
     Args:
-        body (GraphRagRequest):
+        body (VerifyClaimRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[ApiError, GraphRagResponse]]
+        Response[Union[ApiError, VerificationReceipt]]
     """
 
     kwargs = _get_kwargs(
@@ -167,22 +167,22 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    body: GraphRagRequest,
-) -> Optional[Union[ApiError, GraphRagResponse]]:
-    """Vector search plus graph expansion in one read
+    body: VerifyClaimRequest,
+) -> Optional[Union[ApiError, VerificationReceipt]]:
+    """Verify two structured assertions
 
-     Retrieves the K nearest vectors and the connected subgraph around them from a single consistent
-    kernel snapshot. `final_score = semantic_rel + graph_weight * graph_rel * (1 - semantic_rel)`.
+     Compares two normalized structured claims and stores a deterministic verification receipt in
+    metadata.
 
     Args:
-        body (GraphRagRequest):
+        body (VerifyClaimRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[ApiError, GraphRagResponse]
+        Union[ApiError, VerificationReceipt]
     """
 
     return (

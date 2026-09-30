@@ -18,14 +18,22 @@ T = TypeVar("T", bound="InsertedEntity")
 class InsertedEntity:
     """
     Attributes:
+        aliases (list[str]):
+        canonical_name (str):
         description (str):
+        entity_id (str): RG7 deterministic identity for this source-resolved entity.
+        mention_id (str):
         name (str):
         node_id (int):
         type_ (str):
         record_id (Union[None, Unset, int]):
     """
 
+    aliases: list[str]
+    canonical_name: str
     description: str
+    entity_id: str
+    mention_id: str
     name: str
     node_id: int
     type_: str
@@ -33,7 +41,15 @@ class InsertedEntity:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        aliases = self.aliases
+
+        canonical_name = self.canonical_name
+
         description = self.description
+
+        entity_id = self.entity_id
+
+        mention_id = self.mention_id
 
         name = self.name
 
@@ -51,7 +67,11 @@ class InsertedEntity:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "aliases": aliases,
+                "canonical_name": canonical_name,
                 "description": description,
+                "entity_id": entity_id,
+                "mention_id": mention_id,
                 "name": name,
                 "node_id": node_id,
                 "type": type_,
@@ -65,7 +85,15 @@ class InsertedEntity:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        aliases = cast(list[str], d.pop("aliases"))
+
+        canonical_name = d.pop("canonical_name")
+
         description = d.pop("description")
+
+        entity_id = d.pop("entity_id")
+
+        mention_id = d.pop("mention_id")
 
         name = d.pop("name")
 
@@ -83,7 +111,11 @@ class InsertedEntity:
         record_id = _parse_record_id(d.pop("record_id", UNSET))
 
         inserted_entity = cls(
+            aliases=aliases,
+            canonical_name=canonical_name,
             description=description,
+            entity_id=entity_id,
+            mention_id=mention_id,
             name=name,
             node_id=node_id,
             type_=type_,

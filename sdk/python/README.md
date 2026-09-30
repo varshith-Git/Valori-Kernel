@@ -12,7 +12,7 @@ BLAKE3-chained and replayable.
 | | |
 |---|---|
 | API contract | **1.0** (`api/openapi/valori-v1.yaml`, OpenAPI 3.1.0) |
-| Operations covered | **74 / 74** — see [`api-coverage.yaml`](api-coverage.yaml) |
+| Operations covered | **76 / 76** — see [`api-coverage.yaml`](api-coverage.yaml) |
 | Python | 3.9 – 3.13 |
 | Transport | `httpx` |
 | API Reference | [app.valori.systems/api-reference](https://app.valori.systems/api-reference/overview) |
@@ -190,7 +190,7 @@ pytest sdk/python/tests                       # unit + wrapper + error + retry t
 VALORI_TEST_ENDPOINT=http://localhost:3000 \
   pytest sdk/python/tests -m integration      # against a real node
 ./sdk/python/scripts/generate.sh              # regenerate generated/
-python3 scripts/sdk-coverage-check.py         # prove 74/74 coverage
+python3 scripts/sdk-coverage-check.py         # prove 76/76 coverage
 ```
 
 ## Licence

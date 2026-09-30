@@ -15,13 +15,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the locked `rustls` dependency from `0.23.43` to `0.23.45`, addressing
   `RUSTSEC-2026-0285` without adding a new advisory ignore.
 
-### TypeScript SDK — contract drift fix (assertions endpoints)
+### TypeScript + Python SDK — contract drift fix (assertions endpoints)
 
 - The OpenAPI contract had grown from 74 to 76 operations (`GET
   /v1/assertions/verification/{id}`, `POST /v1/assertions/verify`) without a
-  matching TypeScript SDK regeneration — `generated/valori-api.ts` was stale
-  and `api-coverage.yaml` had no entries for the two new operations.
-  Regenerated the client (`sdk/typescript/scripts/generate.sh`), added
+  matching regeneration in **either** SDK — both `generated/` trees were
+  stale and both `api-coverage.yaml` manifests had no entries for the two
+  new operations.
+- **Python**: regenerated the client (`sdk/python/scripts/generate.sh`,
+  which also pulled in unrelated doc-string/model drift on `graphrag.py`
+  and a few `ingest`/`graph` models that had accumulated since the last
+  regen), added `assertions` coverage entries mapping both operations to
+  the existing `client.community.verify_claims`/`get_verification`
+  wrappers, and switched those wrappers from `Transport.request_json` (a
+  raw-string shim that predated regeneration, now removed as unused) to
+  the generated, typed `verify_assertion`/`get_assertion_verification`
+  calls. Updated the hardcoded "74 operations" references
+  (`test_generated_contract.py`, `README.md`) and added wire-level tests
+  for both wrappers in `test_resources.py`.
+- **TypeScript**: regenerated the client (`sdk/typescript/scripts/generate.sh`), added
   `assertions` coverage entries mapping both to the existing
   `client.community.verifyClaims`/`client.community.getVerification`
   wrappers, and updated every hardcoded "74 operations" reference

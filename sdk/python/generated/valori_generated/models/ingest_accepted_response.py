@@ -18,12 +18,14 @@ class IngestAcceptedResponse:
     takes.
 
         Attributes:
+            auto_enrich (bool): Enrichment mode requested for the background job.
             collection (str):
             job_id (str): Poll `GET /v1/ingest/status/{job_id}` with this id.
             ok (bool):
             status (str): Always `processing` on this response.
     """
 
+    auto_enrich: bool
     collection: str
     job_id: str
     ok: bool
@@ -31,6 +33,8 @@ class IngestAcceptedResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        auto_enrich = self.auto_enrich
+
         collection = self.collection
 
         job_id = self.job_id
@@ -43,6 +47,7 @@ class IngestAcceptedResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "auto_enrich": auto_enrich,
                 "collection": collection,
                 "job_id": job_id,
                 "ok": ok,
@@ -55,6 +60,8 @@ class IngestAcceptedResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        auto_enrich = d.pop("auto_enrich")
+
         collection = d.pop("collection")
 
         job_id = d.pop("job_id")
@@ -64,6 +71,7 @@ class IngestAcceptedResponse:
         status = d.pop("status")
 
         ingest_accepted_response = cls(
+            auto_enrich=auto_enrich,
             collection=collection,
             job_id=job_id,
             ok=ok,

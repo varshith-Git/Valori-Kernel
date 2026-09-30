@@ -23,6 +23,10 @@ from valori_generated.api.community import (
     community_search as _community_search,
     extract_entities as _extract_entities,
 )
+from valori_generated.api.assertions import (
+    get_assertion_verification as _get_assertion_verification,
+    verify_assertion as _verify_assertion,
+)
 from valori_generated.api.crypto import get_key_status as _get_key_status
 from valori_generated.api.ingest import (
     chunk_document as _chunk_document,
@@ -80,6 +84,7 @@ from valori_generated.models.tree_chain_verify_request import TreeChainVerifyReq
 from valori_generated.models.tree_hybrid_request import TreeHybridRequest
 from valori_generated.models.tree_query_request import TreeQueryRequest
 from valori_generated.models.tree_verify_request import TreeVerifyRequest
+from valori_generated.models.verify_claim_request import VerifyClaimRequest
 from valori_generated.types import File
 
 from .._models import build
@@ -317,15 +322,19 @@ class Community(Resource):
 
     def verify_claims(self, left: Mapping[str, Any], right: Mapping[str, Any], left_assertion_id: str, right_assertion_id: str, evidence_refs: Optional[Sequence[Mapping[str, Any]]] = None) -> Any:
         """``POST /v1/assertions/verify``. Persist a structural RG8 receipt."""
-        body = {"left": dict(left), "right": dict(right), "left_assertion_id": left_assertion_id, "right_assertion_id": right_assertion_id}
-        if evidence_refs is not None:
-            body["evidence_refs"] = list(evidence_refs)
-        return self._t.request_json("POST", "/v1/assertions/verify", body)
+        body = build(
+            VerifyClaimRequest,
+            left=left,
+            right=right,
+            left_assertion_id=left_assertion_id,
+            right_assertion_id=right_assertion_id,
+            evidence_refs=evidence_refs,
+        )
+        return self._t.call(_verify_assertion, body=body)
 
     def get_verification(self, verification_id: str) -> Any:
         """``GET /v1/assertions/verification/{id}``."""
-        from urllib.parse import quote
-        return self._t.request_json("GET", f"/v1/assertions/verification/{quote(verification_id, safe='')}" )
+        return self._t.call(_get_assertion_verification, id=verification_id)
 
 
 class Proof(Resource):
