@@ -20,7 +20,6 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@/lib/*": ["../src/lib/*"],
       "@valori/api-types": ["../api-types/src/index.ts"]
     }
   },

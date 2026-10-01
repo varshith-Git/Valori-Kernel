@@ -3,6 +3,29 @@
 All notable changes to `@valori/studio` are documented here. Versioning
 policy is documented in `README.md`.
 
+## 0.3.3 — Package no longer reaches outside its own directory
+
+**Fixed:**
+- `tsconfig.json` had `"@/lib/*": ["../src/lib/*"]` — an alias override that
+  silently redirected `@/lib/*` imports to the OUTER Next.js app's
+  `ui/src/lib/` instead of studio's own `ui/studio/src/lib/` (which has
+  equivalent files for every case this affected, already host-injected via
+  `useCredentialStore()` — see `runtime/credentials.ts`/`runtime/context.tsx`).
+  Seven components (`DocumentUploadTab`, `MultiSearch`, `AskTab`,
+  `EntityExtractionTab`, `ContradictionTab`, `EvalTab`, `CommunityTab`) used
+  this alias to reach `useEmbeddingConfig`/`useLLMConfig`, which imported the
+  outer app's `native.ts` — a Tauri-backed credential-storage module with
+  `await import("@tauri-apps/plugin-dialog")` / `"@tauri-apps/plugin-opener")`
+  calls that fail to resolve for any consumer without those packages
+  installed (every non-Desktop host, including Cloud Web). Removed the
+  override; `@/lib/*` now falls through to studio's own `@/*: ["./src/*"]`
+  rule. No component source changes were needed — they already imported via
+  the alias, which now resolves correctly. Desktop is unaffected: its real
+  runtime is the outer `ui/` app's own `LocalStudioProvider`, not studio's
+  published `dist/`. Verified the published tarball has no `tauri-apps`
+  reference anywhere and dropped from 352 to 296 files (the stray
+  `dist/src/**` tree compiled from the outer app is gone entirely).
+
 ## 0.3.2 — `DocumentUploadTab` embedded width
 
 **New prop:**
