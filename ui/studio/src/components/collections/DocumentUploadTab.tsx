@@ -83,11 +83,28 @@ interface Props {
    *  embedding provider — rendered next to the config summary only when
    *  clientEmbeddingFallback is on. Omit to hide the link. */
   settingsHref?: string;
+  /** True when mounted inside a host's own collection-workspace chrome
+   *  (e.g. a collection detail page's Data tab) rather than as a standalone
+   *  tab inside ToolsWorkspace. Relaxes TabShell's own `max-w-3xl` to the
+   *  width of whatever the host already provides, so this tab's content
+   *  lines up with sibling tabs (MultiSearch, VisualizeTab) that render
+   *  full-width instead of looking narrower than them. Same convention as
+   *  GraphView's `embedded` prop. Defaults to false so ToolsWorkspace's
+   *  existing standalone layout is unaffected. */
+  embedded?: boolean;
 }
 
 const ACCEPT = ".pdf,.txt,.md,.docx";
 
-export function DocumentUploadTab({ projectId, namespace, onAskQuestion, operationHref, capabilities, settingsHref }: Props) {
+export function DocumentUploadTab({
+  projectId,
+  namespace,
+  onAskQuestion,
+  operationHref,
+  capabilities,
+  settingsHref,
+  embedded = false,
+}: Props) {
   const transport = useTransport();
   const fileRef = useRef<HTMLInputElement>(null);
   const { config: llmCfg } = useLLMConfig();
@@ -221,7 +238,7 @@ export function DocumentUploadTab({ projectId, namespace, onAskQuestion, operati
     : true;
 
   return (
-    <TabShell>
+    <TabShell className={embedded ? "max-w-none" : undefined}>
       {clientFallback && (
         <div className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3">
           <div className="flex items-center gap-3 text-xs">

@@ -3,6 +3,20 @@
 All notable changes to `@valori/studio` are documented here. Versioning
 policy is documented in `README.md`.
 
+## 0.3.2 — `DocumentUploadTab` embedded width
+
+**New prop:**
+- `DocumentUploadTab`: `embedded?: boolean` (default `false`) — when true,
+  relaxes the internal `TabShell` wrapper's `max-w-3xl` to full width, so a
+  host that already supplies its own collection-workspace width (e.g. a
+  collection detail page's Data tab) gets content that lines up with
+  sibling tabs (`MultiSearch`, `VisualizeTab`) instead of a narrower,
+  centered column. Same naming convention as `GraphView`'s existing
+  `embedded` prop. Omitting it (every existing caller, including
+  `ToolsWorkspace`'s own standalone Upload tab) keeps exactly the prior
+  `max-w-3xl` layout — this is additive, not a behavior change for anyone
+  not passing it.
+
 ## 0.3.1 — Republish of 0.3.0
 
 `0.3.0`'s published tarball 404s on the npm registry (`npm install`
